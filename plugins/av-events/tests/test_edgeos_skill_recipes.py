@@ -427,7 +427,7 @@ def test_section_9_maps_the_script_exit_codes_to_the_fail_soft_answers():
     assert "**Exit 1** means it can't be reached right now" in flat
     assert "Never show the error text, a status code or a key." in flat
     flat0 = re.sub(r"\s+", " ", section(0))
-    assert "the directory script exits 2" in flat0
+    assert "When the script exits 2, tell the person the directory isn't connected" in flat0
     assert "never retry those calls with the API key" in flat0
 
 
@@ -438,6 +438,14 @@ def test_the_bearer_is_for_the_profile_only():
     assert "required_for: own profile (" in text
     flat0 = re.sub(r"\s+", " ", section(0))
     assert "A `401` from the profile call" in flat0 and "treat it like an unset one" in flat0
+    # OV-325 refute S2: a profile 401 or an unset bearer never closes the directory.
+    assert ("The directory does not use the bearer: for directory requests always run the §9 script; "
+            "only its exit 2 means not connected.") in flat0
+    assert "give the same answer to any profile request without calling" in flat0
+    assert "any directory or profile request" not in flat0
+    assert "can't reach the directory or their profile" not in flat0
+    first = flat0.split("When `EDGEOS_BEARER_TOKEN` is unset or empty", 1)[1].split(".", 1)[0]
+    assert "directory" not in first, first
     assert "follow §0 (not connected or expired; no retry)" in section(8)
     assert "Required for `/humans/me` only." in section(1)
     for doc in (SKILL, ESMERALDA):

@@ -189,14 +189,29 @@ function pick(source: Row, keys: readonly string[]): Row {
   return out;
 }
 
-/** One row with the §9 fields only; each ticket with its five fields only. */
-export function projectRow(raw: unknown): Row {
+/** The §9 fields of an associated attendee: a row's own, without a further `associated_attendees`. */
+const ASSOCIATED_FIELDS = FIELDS.filter((f) => f !== "associated_attendees");
+
+/** An attendee's fields from `keys`, each ticket with its five fields only. */
+function projectAttendee(raw: unknown, keys: readonly string[]): Row {
   const source = raw && typeof raw === "object" ? (raw as Row) : {};
-  const row = pick(source, FIELDS);
+  const row = pick(source, keys);
   row.participation = Array.isArray(source.participation)
     ? source.participation.map((p) => pick(p && typeof p === "object" ? (p as Row) : {}, PARTICIPATION_FIELDS))
     : [];
-  row.associated_attendees = Array.isArray(source.associated_attendees) ? source.associated_attendees : [];
+  return row;
+}
+
+/**
+ * One row with the §9 fields only; each ticket with its five fields only; each associated attendee
+ * projected the same way (one level, as the app's projection does), so nothing upstream adds widens it.
+ */
+export function projectRow(raw: unknown): Row {
+  const source = raw && typeof raw === "object" ? (raw as Row) : {};
+  const row = projectAttendee(source, FIELDS);
+  row.associated_attendees = Array.isArray(source.associated_attendees)
+    ? source.associated_attendees.map((a) => projectAttendee(a, ASSOCIATED_FIELDS))
+    : [];
   return row;
 }
 

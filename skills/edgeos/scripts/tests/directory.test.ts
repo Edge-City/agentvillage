@@ -546,3 +546,34 @@ describe("security: the key never leaves for a host off the lists (commit review
     expect((stub.calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
   });
 });
+
+describe("associated attendees are projected too (refute S1)", () => {
+  test("an extra key inside an associated item never reaches the output, on either path", async () => {
+    const spouse = {
+      id: "s1", first_name: "Ravi", last_name: "*", email: null, telegram: "ravi", role: null, organization: null,
+      residence: null, age: null, gender: null, picture_url: null, category: "spouse",
+      participation: [{ id: "t2", name: "Week 1", slug: "w1", category: "week", duration_type: "week", price: 300 }],
+      phone: "+91 98765 43210", passport: "Z1234567", associated_attendees: [{ id: "deeper", phone: "+1 555" }],
+    };
+    const body = { results: [{ ...PRIYA, associated_attendees: [spouse] }], paging: { offset: 0, limit: 20, total: 1 } };
+    const viaCp = await run(["--json"], connected(), stubBoth([200, body], [500, {}]).impl);
+    const viaDirect = await run(["--json"], connected(), stubBoth([404, {}], [200, body]).impl);
+    expect([viaCp.code, viaDirect.code]).toEqual([EXIT_OK, EXIT_OK]);
+    expect(viaDirect.out).toBe(viaCp.out);
+    for (const gone of ["phone", "passport", "98765", "Z1234567", "price", "deeper"]) expect(viaDirect.out).not.toContain(gone);
+    const associated = JSON.parse(viaDirect.out).results[0].associated_attendees;
+    expect(associated.length).toBe(1);
+    expect(Object.keys(associated[0])).toEqual(FIELDS.filter((f) => f !== "associated_attendees"));
+    expect(associated[0].last_name).toBe("*");
+    expect(associated[0].participation).toEqual([{ id: "t2", name: "Week 1", slug: "w1", category: "week", duration_type: "week" }]);
+    const lines = await run([], connected(), stubBoth([200, body], [500, {}]).impl);
+    for (const gone of ["phone", "passport", "98765", "Z1234567"]) expect(lines.out).not.toContain(gone);
+  });
+
+  test("a non-array or junk associated_attendees is an empty list or empty rows", () => {
+    expect(project({ results: [{ associated_attendees: "x" }] })!.results[0].associated_attendees).toEqual([]);
+    const junk = project({ results: [{ associated_attendees: [null, 7] }] })!.results[0].associated_attendees as Record<string, unknown>[];
+    expect(junk.length).toBe(2);
+    for (const a of junk) expect(Object.values(a).every((v) => v === null || (Array.isArray(v) && v.length === 0))).toBe(true);
+  });
+});
