@@ -6,8 +6,10 @@
   "homepage": "https://agents.edgecity.live/rolodex#gold-stars",
   "permissions": [
     { "kind": "read", "label": "Find recipients and check allowance", "description": "Search shared Rolodex recipients and read your remaining Gold Stars and draft status." },
-    { "kind": "action", "label": "Send approved gratitude", "description": "Stage an exact recipient, note and visibility preview; send only after a real manual approval. Cancel unsent drafts." }
+    { "kind": "action", "label": "Send approved gratitude", "description": "Stage an exact recipient, note and visibility preview; send only after a real manual approval. Cancel unsent drafts." },
+    { "kind": "action", "label": "Mark or undo your meetings", "description": "Mark a Rolodex meeting as met, or undo it, only when you ask. Your own marks only." },
+    { "kind": "read", "label": "Read your Skylight status", "description": "Read your own Skylight agent's current status and recent places. No Skylight changes." }
   ],
   "skills": ["gold-stars"],
-  "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]
+  "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]
 }

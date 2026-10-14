@@ -9,7 +9,13 @@ import stat
 from pathlib import Path
 
 MINI_APPS_GATE_VERSION = 1
-GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
+# BRIDGE-RESTORE (rc41, Carter's ruling, CLAIMS L7212/L7216): ov#300's native `rolodex.meeting`
+# (owner-requested mark/undo) and `skylight.status` (the owner's own read) ride the Gold Stars install,
+# appended in this exact order. The control-plane catalog's gold-stars entry must carry the same list.
+GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]}
+# The entry before the restore (ov#343). Still accepted so the overlay and the CP catalog can land in
+# either order; it carries no meeting or Skylight operation, so those stay refused under it.
+GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
 
 
 def installed(home: Path, app_id: str, operation: str) -> bool:
@@ -33,7 +39,7 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
             if name in seen or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name):
                 return False
             if name == "gold-stars":
-                if app != {"id": name, **GOLD_STARS}:
+                if app != {"id": name, **GOLD_STARS} and app != {"id": name, **GOLD_STARS_PREVIOUS}:
                     return False
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
                   or app["skills"] != [name] or app["operations"] != ["mini-app.read"]):

@@ -72,11 +72,86 @@ class BridgeTest(unittest.TestCase):
   self.sc._VAR_MAP['HERMES_SESSION_USER_ID'].set('99');self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('99')
   self.assertEqual(self.call()['error'],'private_owner_chat_required');self.transport.assert_not_called()
  def test_uninstalled_and_undeclared_operations_refuse_network(self):
-  for operation in ['rolodex.meeting','skylight.status']:
-   self.assertEqual(self.call({'operation':operation})['error'],'mini_app_not_installed')
+  # BRIDGE-RESTORE: rolodex.meeting and skylight.status are gold-stars-carried. Under the pre-restore
+  # gold-stars entry (CP catalog not yet updated), with only Dizko, after an opt-out (empty projection)
+  # or with no projection, both are refused before any credential read, network call or write.
+  attendee='550e8400-e29b-41d4-a716-446655440000'
+  native=[{'operation':'rolodex.meeting','attendeeId':attendee,'met':True},{'operation':'rolodex.meeting','attendeeId':attendee,'met':False},{'operation':'skylight.status'}]
+  dizko={'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':['mini-app.read']}
+  for apps in ([{'id':'gold-stars',**mini.GOLD_STARS_PREVIOUS},dizko],[dizko],[]):
+   Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':apps}))
+   for args in native:
+    with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
   Path(self.tmp.name,'mini-apps.json').unlink()
-  self.assertEqual(self.call()['error'],'mini_app_not_installed')
+  for args in [{'operation':'gold-stars.quota'},*native]:self.assertEqual(self.call(args)['error'],'mini_app_not_installed')
   self.transport.assert_not_called()
+ def test_previous_gold_stars_entry_keeps_its_own_operations(self):
+  Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[{'id':'gold-stars',**mini.GOLD_STARS_PREVIOUS}]}))
+  self.assertIn('data',self.call());self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.quota'})
+ def test_meeting_mark_and_undo_restore_ov300_request_shape(self):
+  attendee='550e8400-e29b-41d4-a716-446655440000'
+  with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant for a meeting mark')):
+   mark=self.call({'operation':'rolodex.meeting','attendeeId':attendee.upper(),'met':True})
+   self.assertIn('data',mark);sent=self.transport.call_args.args[1]
+   # Exactly app#185's ToolRequest variant (strict): operation, attendeeId, met, requestId. No actor field.
+   self.assertEqual(set(sent),{'operation','attendeeId','met','requestId'})
+   self.assertEqual((sent['operation'],sent['attendeeId'],sent['met']),('rolodex.meeting',attendee,True))
+   self.assertEqual(sent['requestId'],str(bridge.uuid.uuid5(bridge.uuid.NAMESPACE_URL,json.dumps(['telegram:42','9',attendee,True]))))
+   self.assertIn('historicalReceipt',mark['handling'])
+   self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':True})
+   self.assertEqual(self.transport.call_args.args[1],sent)  # a retry in the same turn is the same request
+   self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':False})
+   undo=self.transport.call_args.args[1]
+   self.assertEqual((undo['met'],undo['attendeeId']),(False,attendee));self.assertNotEqual(undo['requestId'],sent['requestId'])
+   self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('10')
+   self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':True})
+   self.assertNotEqual(self.transport.call_args.args[1]['requestId'],sent['requestId'])  # a later owner request is new
+  self.assertEqual(self.transport.call_count,4)
+ def test_meeting_arguments_are_exact(self):
+  attendee='550e8400-e29b-41d4-a716-446655440000'
+  base={'operation':'rolodex.meeting','attendeeId':attendee,'met':True}
+  bad=[{'operation':'rolodex.meeting'},{'operation':'rolodex.meeting','attendeeId':attendee},{'operation':'rolodex.meeting','met':True},
+       {**base,'met':'true'},{**base,'met':1},{**base,'met':None},{**base,'attendeeId':'Naman'},{**base,'attendeeId':''},{**base,'attendeeId':7},
+       {**base,'requestId':attendee},{**base,'humanId':'other'},{**base,'tenantId':'other'},{**base,'ownerTelegramId':'99'},{**base,'query':'Naman'},
+       {**base,'confirmed':True},{**base,'draftId':attendee}]
+  for args in bad:
+   with self.subTest(args=args):self.assertEqual(self.call(args)['error'],'village_unavailable')
+  self.transport.assert_not_called()
+ def test_skylight_status_reads_only_the_owners_own_status(self):
+  self.assertIn('data',self.call({'operation':'skylight.status'}))
+  self.transport.assert_called_once_with(self.config,{'operation':'skylight.status'})
+  self.transport.reset_mock()
+  other='550e8400-e29b-41d4-a716-446655440000'
+  for extra in [{'attendeeId':other},{'humanId':'other'},{'tenantId':'other'},{'userId':'99'},{'ownerTelegramId':'99'},{'agentId':other},{'query':'Naman'},{'appId':'skylight'},{'arguments':{}}]:
+   with self.subTest(extra=extra):self.assertEqual(self.call({'operation':'skylight.status',**extra})['error'],'village_unavailable')
+  self.transport.assert_not_called()
+  # Another person's chat, a group, cron or a delegated child cannot read it either.
+  self.sc._VAR_MAP['HERMES_SESSION_USER_ID'].set('99');self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('99')
+  self.assertEqual(self.call({'operation':'skylight.status'})['error'],'private_owner_chat_required')
+  self.sc._VAR_MAP['HERMES_SESSION_USER_ID'].set('42');self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('-12')
+  self.assertEqual(self.call({'operation':'skylight.status'})['error'],'private_owner_chat_required')
+  self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('42');self.sc._VAR_MAP['HERMES_CRON_SESSION'].set('evening')
+  for args in [{'operation':'skylight.status'},{'operation':'rolodex.meeting','attendeeId':other,'met':True}]:
+   self.assertEqual(self.call(args)['error'],'private_owner_chat_required')
+  self.sc._VAR_MAP['HERMES_CRON_SESSION'].set('');self.delegation.is_delegated_child_context=lambda:True
+  for args in [{'operation':'skylight.status'},{'operation':'rolodex.meeting','attendeeId':other,'met':False}]:
+   self.assertEqual(self.call(args)['error'],'private_owner_chat_required')
+  self.transport.assert_not_called()
+ def test_restored_operations_ride_the_existing_village_gate_entry(self):
+  # No new tool name: both operations go through `village`, the 36th gated tool (exact full-match matcher).
+  self.assertEqual(bridge.SCHEMA['name'],'village')
+  enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
+  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|{'mini-app.read'})
+  self.assertEqual(bridge.SCHEMA['parameters']['properties']['met'],{'type':'boolean','description':bridge.SCHEMA['parameters']['properties']['met']['description']})
+  self.assertFalse({'humanId','tenantId','userId','ownerTelegramId','requestId','turnId'}&set(bridge.SCHEMA['parameters']['properties']))
+  approval=(Path(__file__).parents[2]/'av-approval'/'__init__.py').read_text()
+  matchers=approval.split('GATED_MATCHERS: tuple[str, ...] = (',1)[1].split('\n)',1)[0]+'\n'
+  self.assertIn('\n    "village",\n',matchers);self.assertNotIn('village.',matchers)
+  manifest=(Path(__file__).parents[1]/'plugin.yaml').read_text()
+  self.assertIn('version: 1.3.0\n',manifest);self.assertIn('provides_tools:\n  - village\n',manifest)
+  with patch.object(bridge,'_REGISTERED',False):
+   ctx=types.SimpleNamespace(register_tool=unittest.mock.Mock());bridge.register(ctx)
+   self.assertEqual(ctx.register_tool.call_args.kwargs['name'],'village')
  def test_no_mini_app_state_is_inert_for_every_operation(self):
   # A non-cohort box (rc41): the plugin is staged and listed, the cp never ran the helper, so there is
   # no mini-apps.json. Every operation, well-formed or not, is refused before any credential read,

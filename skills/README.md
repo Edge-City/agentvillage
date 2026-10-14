@@ -21,7 +21,9 @@ Two more bundles are **opt-in and Hermes-only**, and are not part of the set abo
 - **record-intention** — the one front door for intentions, the `record_intention` tool registered by `plugins/av-events` in the [agentvillage](../README.md) repo when `AV_RECORD_INTENTION` is on: publishes explicit intents to Index by default and holds ambient ones until the resident confirms. It is installed on every Hermes tenant with the edge bundles and is inert without the tool: the text applies only if `record_intention` is available (in the tool list, or found with `tool_search`). The index-network prompts, the nightly memory pass and `AGENTS.md` carry the same condition.
 
 **Curated mini-apps are separately installed by the owner:** `gold-stars`
-(recipient search and gratitude, with exact-preview manual approval) and
+(recipient search and gratitude, with exact-preview manual approval; its
+install also carries the owner's Rolodex meeting mark/undo and Skylight status
+read used by `rolodex` and `skylight`) and
 `dizko` (public discovery through a reviewed MCP proxy). `install/install_miniapps.ts`
 stages them from the control plane's validated installed projection. `gold-stars`
 is also a baseline skill the installer ships to every box, inert until the app is

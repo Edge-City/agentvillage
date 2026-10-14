@@ -107,9 +107,21 @@ class ProjectionTest(unittest.TestCase):
             doc = {"version": 1, "apps": [app]}
             path.write_text(json.dumps(doc))
             self.assertTrue(mini.installed(home, "gold-stars", "gold-stars.send"))
-            self.assertFalse(mini.installed(home, "gold-stars", "rolodex.meeting"))
+            # BRIDGE-RESTORE: the reviewed entry carries ov#300's two native operations.
+            self.assertTrue(mini.installed(home, "gold-stars", "rolodex.meeting"))
+            self.assertTrue(mini.installed(home, "gold-stars", "skylight.status"))
             self.assertFalse(mini.installed(home, "dizko", "mini-app.read"))
-            for apps in ([{**app, "operations": app["operations"] + ["skylight.status"]}], [app, app], [], [{**app, "version": "future"}]):
+            self.assertFalse(mini.installed(home, "dizko", "rolodex.meeting"))
+            # The pre-restore entry stays valid for its own six operations only.
+            previous = {"id": "gold-stars", **mini.GOLD_STARS_PREVIOUS}
+            path.write_text(json.dumps({"version": 1, "apps": [previous]}))
+            self.assertTrue(mini.installed(home, "gold-stars", "gold-stars.send"))
+            self.assertFalse(mini.installed(home, "gold-stars", "rolodex.meeting"))
+            self.assertFalse(mini.installed(home, "gold-stars", "skylight.status"))
+            ops = app["operations"]
+            for apps in ([{**app, "operations": ops + ["rolodex.delete"]}], [{**app, "operations": [o for o in ops if o != "skylight.status"]}],
+                         [{**app, "operations": ops[::-1]}], [{**previous, "operations": previous["operations"] + ["rolodex.meeting"]}],
+                         [{**app, "skills": ["gold-stars", "rolodex"]}], [app, previous], [app, app], [], [{**app, "version": "future"}]):
                 path.write_text(json.dumps({"version": 1, "apps": apps}))
                 self.assertFalse(mini.installed(home, "gold-stars", "gold-stars.send"))
             path.unlink()
