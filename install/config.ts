@@ -6,6 +6,18 @@ import { hermesHome } from "./paths";
 
 const DEFAULT_MODEL_MAX_TOKENS = 4096;
 
+/**
+ * LLM-429: the one Hermes fallback route the installer manages (`configureModelFallback`), the
+ * only place this model string lives in the overlay. luna is the control plane's code default
+ * (`DEFAULT_MODEL`, control-plane/src/tenants.js:291), a model every box can call through its own
+ * OpenRouter key: that key restricts no model (the control plane's `HERMES_MODEL_ALLOWLIST` gates
+ * only the per-tenant model PUT, tenant-model.js), and luna turns spend the key's lifetime limit
+ * like any other. Why and the incident:
+ * private/handover/lanes-intro/LLM-429.md.
+ */
+export const FALLBACK_PROVIDER = "openrouter";
+export const FALLBACK_MODEL = "openai/gpt-6-luna";
+
 /** `$HERMES_HOME/config.yaml` as a mapping (`{}` when absent or empty). Shared by the installer steps. */
 export function readConfig(): Record<string, unknown> {
   const configPath = join(hermesHome(), "config.yaml");
@@ -143,6 +155,75 @@ export function capModelMaxTokens(): void {
   doc.model = model;
   writeConfig(doc);
   console.log(`→ capped model.max_tokens at ${model.max_tokens}`);
+}
+
+/**
+ * LLM-429: make sure top-level `fallback_providers` holds `{provider: openrouter, model:
+ * openai/gpt-6-luna}` (`FALLBACK_PROVIDER` / `FALLBACK_MODEL`), so the first upstream 429 on the
+ * primary model answers that turn on luna with no wait instead of up to two Retry-After waits
+ * and a dropped turn. Paths are per Hermes v2026.9.24 (0.21.5):
+ *
+ * - Shape: what `hermes fallback add` appends, `{provider, model}` (hermes_cli/fallback_cmd.py:37-47,
+ *   :189-191). No `api_key` or `base_url`: the openrouter route reads `OPENROUTER_API_KEY`, which
+ *   the control plane already puts in the box's env (agent/auxiliary_client.py:2309-2317).
+ * - When it fires: an OpenRouter "Provider returned error" 429 is `upstream_rate_limit`
+ *   (agent/error_classifier.py:1050-1054); the eager-fallback step switches on that first error,
+ *   before the retry wait (agent/turn_recovery.py:1826-1842, called at agent/turn_api_error.py:161;
+ *   the wait is :391-398). The primary comes back on the first turn after the cooldown
+ *   (agent/agent_runtime_helpers.py:1221-1317; cooldown agent/fallback_cooldown.py:45-76).
+ * - Primary already luna: written anyway. Hermes skips a chain entry that is the backend that just
+ *   failed (agent/chat_completion_helpers.py:1914-1926), and this step runs before the control
+ *   plane's model step (tenants.js applyModelStep after INSTALL_CMD), so the installer cannot know
+ *   the tenant's model; a per-tenant model change (PUT /tenants/:id/model) never reruns it.
+ * - The control plane's `hermes config set model` / `cron.model` rewrite single keys of the raw
+ *   file and keep this one (hermes_cli/config.py:3532-3578; bare `model` goes to `model.default`,
+ *   :3401-3410); this step rewrites only `fallback_providers`.
+ *
+ * An entry with the same provider and model (case and spaces aside, other keys ignored, like
+ * Hermes's own duplicate check, fallback_cmd.py:186) counts as present. Entries a human added are
+ * kept in order and luna is appended after them; nothing is ever removed. A single mapping (the
+ * legacy one-entry shape Hermes also reads, hermes_cli/fallback_config.py:77-78) becomes a list
+ * with that mapping first. The file is left alone, with a warning, when its top level is not a
+ * mapping or holds a YAML merge key, or when `fallback_providers` is something else (a string, a
+ * number). A config value is never echoed onto stdout. Idempotent: when luna is present the file
+ * is not rewritten. The gateway re-reads the chain before each turn, no restart needed
+ * (gateway/run_config_loaders.py:516-553).
+ */
+export function configureModelFallback(): void {
+  const key = "fallback_providers";
+  const route = `${FALLBACK_PROVIDER} / ${FALLBACK_MODEL}`;
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log(`→ warning: the top level of config.yaml is not a mapping; left ${key} unset`);
+    return;
+  }
+  if ("<<" in doc) {
+    console.log(`→ warning: YAML merge key "<<" at the top of config.yaml; left ${key} unset (add ${route} by hand)`);
+    return;
+  }
+  const raw = doc[key];
+  let entries: unknown[];
+  if (raw === undefined || raw === null) entries = [];
+  else if (Array.isArray(raw)) entries = raw;
+  else if (isMapping(raw)) entries = [raw];
+  else {
+    console.log(`→ warning: ${key} is a ${typeof raw}, not a list; left as is (add ${route} by hand)`);
+    return;
+  }
+  const same = (value: unknown, want: string): boolean =>
+    typeof value === "string" && value.trim().toLowerCase() === want.toLowerCase();
+  if (entries.some((entry) => isMapping(entry) && same(entry.provider, FALLBACK_PROVIDER) && same(entry.model, FALLBACK_MODEL))) {
+    console.log(`→ ${key} already has ${route}; left as is`);
+    return;
+  }
+  doc[key] = [...entries, { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL }];
+  writeConfig(doc);
+  if (entries.length === 0) {
+    console.log(`→ set ${key}: [${route}] (an upstream 429 on the primary model answers that turn on luna, no wait; LLM-429)`);
+  } else {
+    const n = entries.length;
+    console.log(`→ added ${route} to ${key} after ${n} existing ${n === 1 ? "entry" : "entries"}`);
+  }
 }
 
 /**

@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-12T09:32:48.358Z
+Source updated: 2026-10-13T18:14:32.822Z
 
-Last content change indexed: 2026-10-12T09:43:17.620Z
+Last content change indexed: 2026-10-13T18:28:19.266Z
 
 ---
 
@@ -352,7 +352,11 @@ All dinners are on the [calendar](https://portal.edgecity.live/portal/edge-india
 
 #### Shuttle Service & Taxi Information during Edge City India
 
-We will offer a shuttle service from weekdays 9am - 5pm from October 12th through October 31st daily. Shuttle stops include NANU Resort > RIVA Beach Resort > Lush Garden (Mandrem) > The Circle Coworking > Lush Garden (Mandrem) > RIVA Beach Resort > NANU Resort.
+We will offer a shuttle service on weekdays.
+
+Shuttle runs 11am-7pm in 20 min loops with a driver break from 4-4:30 PM
+
+Shuttle stops include RIVA Beach Resort > The Circle Coworking > RIVA Beach Resort.
 
 Shuttle times will be approximate to traffic.\
 Please plan accordingly so you do not miss your next session!

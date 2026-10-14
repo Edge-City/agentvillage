@@ -4,19 +4,19 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "5a928b76ed973416e43e3f61162c7ec1d5ae782f",
-    "commit_date": "2026-10-12T09:43:18.000Z"
+    "commit": "0c9e6fed19db6f960c8b378e3deb9aa62b25b88e",
+    "commit_date": "2026-10-13T18:28:19.000Z"
   },
-  "synced_at": "2026-10-12T17:01:35.593Z",
+  "synced_at": "2026-10-13T22:59:40.669Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "980c9a08589b9de084e91031217a3aa0c343289d1b4579dd358d55c9c4390567",
+      "sha256": "a429a3eb252998b7abb2927c6f9d1ee3927c7b784a6d9a40d33c932e76b0668e",
       "bytes": 5418
     },
     {
       "path": "manifest.json",
-      "sha256": "e35985b60ef4c560015da87b995b9bd22c25d5006ff6bb9d5bbf0b3e10a5dc77",
+      "sha256": "b678e3fb7c07af73efe87bbe0385246356da411dca7f6d446697a44e9e6cbeee",
       "bytes": 11401
     },
     {
@@ -151,8 +151,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "fe2a56ff6193436244f83be1a609114757f4e2c2879b3799a9099373208948a9",
-      "bytes": 31516
+      "sha256": "036e7003fd4bf570bc570bdb5f7dda9d7bdf0752188294791ee18da86296e9cc",
+      "bytes": 31458
     }
   ]
 }

@@ -70,6 +70,7 @@ import {
   configureIndexLinks,
   configureDashboardAuth,
   configureHostedGateway,
+  configureModelFallback,
   configureStt,
   configureVillageTimezone,
   disableTelegramLinkPreviews,
@@ -301,6 +302,7 @@ function main(): void {
   copyPluginFiles("before-approval");
   setTerminalCwd();
   capModelMaxTokens();
+  configureModelFallback();
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();

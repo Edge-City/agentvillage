@@ -11,6 +11,7 @@ import {
   configureAvEvents,
   configureHostedGateway,
   configureIndexLinks,
+  configureModelFallback,
   configureStt,
   disableTelegramLinkPreviews,
   dumpConfig,
@@ -701,4 +702,174 @@ test("configureAvApproval leaves a plugins.disabled that is not a list, or that 
   } finally {
     log.mockRestore();
   }
+});
+
+// LLM-429 (lanes-intro/LLM-429.md): a one-entry Hermes fallback chain to luna, so an upstream 429
+// on the primary model switches that turn to luna with no wait. The literal pins the shipped value.
+const LUNA = { provider: "openrouter", model: "openai/gpt-6-luna" };
+
+function quietLog(): { lines: () => string[]; restore: () => void } {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  return { lines: () => log.mock.calls.map((args) => args.map(String).join(" ")), restore: () => log.mockRestore() };
+}
+
+test("LLM-429: configureModelFallback writes the one luna entry when fallback_providers is absent, null or empty", () => {
+  const log = quietLog();
+  try {
+    for (const raw of [undefined, null, []]) {
+      const configPath = withConfig(raw === undefined ? { model: { default: "anthropic/claude-haiku-5.5" } } : { fallback_providers: raw });
+      configureModelFallback();
+      expect(readConfig(configPath).fallback_providers).toEqual([LUNA]);
+    }
+    expect(log.lines().filter((line) => line.startsWith("→ set fallback_providers")).length).toBe(3);
+  } finally {
+    log.restore();
+  }
+});
+
+test("LLM-429: configureModelFallback writes the entry on a missing config.yaml", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-config-"));
+  process.env.HERMES_HOME = home;
+  const log = quietLog();
+  try {
+    configureModelFallback();
+  } finally {
+    log.restore();
+  }
+  expect(readConfig(join(home, "config.yaml"))).toEqual({ fallback_providers: [LUNA] });
+});
+
+test("LLM-429: a second configureModelFallback run is a no-op (same bytes, says already)", () => {
+  const configPath = withConfig({ model: { default: "anthropic/claude-haiku-5.5", max_tokens: 4096 } });
+  const log = quietLog();
+  try {
+    configureModelFallback();
+    const first = readFileSync(configPath, "utf8");
+    configureModelFallback();
+    expect(readFileSync(configPath, "utf8")).toBe(first);
+    expect(log.lines().at(-1)).toStartWith("→ fallback_providers already has openrouter / openai/gpt-6-luna");
+  } finally {
+    log.restore();
+  }
+});
+
+test("LLM-429: an entry a human wrote that names the same route (case, spacing, extra keys) counts as ours: nothing is rewritten", () => {
+  const raw = "# operator note\nfallback_providers:\n  - provider: OpenRouter\n    model: ' openai/GPT-6-luna '\n    reasoning_echo: true\n";
+  const configPath = withConfig({});
+  writeFileSync(configPath, raw);
+  const log = quietLog();
+  try {
+    configureModelFallback();
+  } finally {
+    log.restore();
+  }
+  expect(readFileSync(configPath, "utf8")).toBe(raw);
+});
+
+test("LLM-429: configureModelFallback keeps a human's entries in order and appends luna once", () => {
+  const foreign = [
+    { provider: "anthropic", model: "claude-sonnet-5.5", key_env: "ANTHROPIC_API_KEY" },
+    "not-an-entry",
+    { provider: "openrouter", model: "google/gemini-3.5-flash", base_url: "https://openrouter.ai/api/v1" },
+  ];
+  const configPath = withConfig({ fallback_providers: foreign });
+  const log = quietLog();
+  try {
+    configureModelFallback();
+    configureModelFallback();
+    expect(readConfig(configPath).fallback_providers).toEqual([...foreign, LUNA]);
+    expect(log.lines()[0]).toBe("→ added openrouter / openai/gpt-6-luna to fallback_providers after 3 existing entries");
+  } finally {
+    log.restore();
+  }
+});
+
+test("LLM-429: a legacy single-mapping fallback_providers becomes a list with that mapping first, then luna", () => {
+  const single = { provider: "anthropic", model: "claude-sonnet-5.5" };
+  const configPath = withConfig({ fallback_providers: single });
+  const log = quietLog();
+  try {
+    configureModelFallback();
+  } finally {
+    log.restore();
+  }
+  expect(readConfig(configPath).fallback_providers).toEqual([single, LUNA]);
+});
+
+test("LLM-429: a fallback_providers that is neither a list nor a mapping, or a top-level merge key, is left alone with a warning", () => {
+  const log = quietLog();
+  try {
+    for (const raw of ["fallback_providers: value-never-echoed\n", "fallback_providers: 3\n", "base: &b {}\n<<: *b\n"]) {
+      const configPath = withConfig({});
+      writeFileSync(configPath, raw);
+      configureModelFallback();
+      expect(readFileSync(configPath, "utf8")).toBe(raw);
+    }
+    expect(log.lines()).toEqual([
+      "→ warning: fallback_providers is a string, not a list; left as is (add openrouter / openai/gpt-6-luna by hand)",
+      "→ warning: fallback_providers is a number, not a list; left as is (add openrouter / openai/gpt-6-luna by hand)",
+      '→ warning: YAML merge key "<<" at the top of config.yaml; left fallback_providers unset (add openrouter / openai/gpt-6-luna by hand)',
+    ]);
+  } finally {
+    log.restore();
+  }
+});
+
+test("LLM-429: configureModelFallback leaves model, model.context_length, model.max_tokens and cron.model exactly as they were", () => {
+  const before = {
+    model: { default: "anthropic/claude-haiku-5.5", model: "openai/gpt-6-luna", context_length: 90000, max_tokens: 4096 },
+    cron: { model: "anthropic/claude-haiku-5.5", script_timeout_seconds: 120, wrap_response: false },
+    fallback_model: { provider: "openrouter", model: "openai/gpt-6-luna" },
+    context_file_max_chars: 48000,
+  };
+  const configPath = withConfig(before);
+  const log = quietLog();
+  try {
+    configureModelFallback();
+  } finally {
+    log.restore();
+  }
+  const after = readConfig(configPath);
+  expect(after).toEqual({ ...before, fallback_providers: [LUNA] });
+});
+
+test("LLM-429: written even when the primary model is already luna (Hermes skips a chain entry equal to the failing backend)", () => {
+  for (const model of ["openai/gpt-6-luna", { default: "openai/gpt-6-luna", max_tokens: 4096 }]) {
+    const configPath = withConfig({ model, cron: { model: "openai/gpt-6-luna" } });
+    const log = quietLog();
+    try {
+      configureModelFallback();
+    } finally {
+      log.restore();
+    }
+    const after = readConfig(configPath);
+    expect(after.fallback_providers).toEqual([LUNA]);
+    expect(after.model).toEqual(model);
+  }
+});
+
+test("LLM-429: the dumped chain reads back as the same list under YAML 1.2, YAML 1.1 and PyYAML when present", () => {
+  const configPath = withConfig({ fallback_providers: [{ provider: "anthropic", model: "claude-sonnet-5.5" }] });
+  const log = quietLog();
+  try {
+    configureModelFallback();
+  } finally {
+    log.restore();
+  }
+  const text = readFileSync(configPath, "utf8");
+  const want = [{ provider: "anthropic", model: "claude-sonnet-5.5" }, LUNA];
+  expect(YAML.parse(text).fallback_providers).toEqual(want);
+  expect(YAML.parse(text, { version: "1.1" }).fallback_providers).toEqual(want);
+  expect(dumpConfig(YAML.parse(text))).toBe(text);
+  if (PYYAML) {
+    const script = "import json, sys, yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())['fallback_providers']))";
+    const run = Bun.spawnSync(["python3", "-c", script], { stdin: Buffer.from(text) });
+    expect(run.exitCode).toBe(0);
+    expect(JSON.parse(run.stdout.toString())).toEqual(want);
+  }
+});
+
+test("LLM-429: install.ts runs configureModelFallback right after capModelMaxTokens", () => {
+  const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  expect(install).toMatch(/\n  capModelMaxTokens\(\);\n  configureModelFallback\(\);\n/);
 });
