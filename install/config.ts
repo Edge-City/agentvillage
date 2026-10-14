@@ -564,6 +564,77 @@ export function configureSlashAccess(): string | null {
   return null;
 }
 
+/** SEC-6 half 2: the cp's MODEL_ID (= av-approval `_models.MODEL_ID`); longer ids are dropped. */
+export const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/;
+export const MODEL_ID_MAX = 100;
+/** data#539 N7: at most this many of the cp's valid ids other than FALLBACK_MODEL (first come); the fallback is
+ * added after the cap, so the list holds up to 65 ids (data accepts 65). */
+export const MODEL_ALLOW_MAX = 64;
+
+/**
+ * SEC-6 half 2: write the box's LOCAL model list, `av_approval.model_allow`, for av-approval's model observer
+ * (`plugins/av-approval/_models.py`). The list is the control plane's `AV_MODEL_ALLOWLIST` (comma-separated, put in
+ * this exec's environment by the cp, never read from `.env`) plus the overlay's own `FALLBACK_MODEL` (a 429 fallback
+ * turn on luna then reads on-list; the cp does not hard-code the fallback), each id checked against MODEL_ID (at most
+ * 100 characters, never lower-cased), invalid ids dropped, deduplicated, at most `MODEL_ALLOW_MAX` (64) of the cp's ids
+ * other than the fallback kept in their order (the rest dropped and counted in one line), then the fallback added and the list sorted. The
+ * observer's `allowlist_version` is sha256[:12] over that sorted, comma-joined union (up to 65 ids); data computes the
+ * same from its mirror of the cp's list plus the fallback (data#539).
+ *
+ * `AV_MODEL_ALLOWLIST` absent (an operator's manual install, a local runtime): the key is REMOVED, never written as an
+ * empty list, so the observer sends `off_list_local` and `allowlist_version` null (data flags such a box by design).
+ * The block's other keys are kept. Only ids and counts are printed, never another config value.
+ *
+ * Fails loudly, as `configureSlashAccess`: a config.yaml that cannot be parsed, a top level or `av_approval` that is
+ * not a mapping, or a YAML merge key `<<` anywhere (`findMergeKey`) writes nothing and returns the reason; install.ts
+ * records it as `model_allow_failed` in install-status.json, prints `agentvillage-install: model_allow_failed=<why>`
+ * and exits non-zero at the end of the run (fix round 1, S2). Idempotent: an unchanged file is not rewritten.
+ *
+ * @returns null when the key is written or removed as the environment says, else why it is not.
+ */
+export function configureModelAllow(): string | null {
+  const fail = (why: string): string => {
+    console.log(`→ error: ${why}; av_approval.model_allow NOT written (the model observer keeps its previous list)`);
+    return why;
+  };
+  let doc: unknown;
+  try {
+    doc = readConfig();
+  } catch {
+    return fail(CONFIG_PARSE_ERROR);
+  }
+  if (!isMapping(doc)) return fail("the top level of config.yaml is not a mapping");
+  const merge = findMergeKey(doc);
+  if (merge !== null) return fail(`YAML merge key "<<" under ${merge}`);
+  const block = doc.av_approval ?? {};
+  if (!isMapping(block)) return fail("av_approval is not a mapping");
+
+  const before = JSON.stringify(doc);
+  const raw = process.env.AV_MODEL_ALLOWLIST;
+  const next: Record<string, unknown> = { ...block };
+  if (raw === undefined) {
+    delete next.model_allow;
+  } else {
+    const given = raw.split(",").map((id) => id.trim()).filter((id) => id !== "");
+    const valid = given.filter((id) => id.length <= MODEL_ID_MAX && MODEL_ID.test(id));
+    // The cap counts the cp's ids other than the fallback, as av-approval `_models.parse_allow` does.
+    const unique = [...new Set(valid)].filter((id) => id !== FALLBACK_MODEL);
+    const kept = unique.slice(0, MODEL_ALLOW_MAX);
+    const ids = [...new Set([...kept, FALLBACK_MODEL])].sort();
+    next.model_allow = ids;
+    const dropped = given.length - valid.length;
+    console.log(`→ model observer: av_approval.model_allow has ${ids.length} ids (AV_MODEL_ALLOWLIST + ${FALLBACK_MODEL})` +
+      (dropped ? `; ${dropped} invalid ${dropped === 1 ? "entry" : "entries"} dropped` : ""));
+    const capped = unique.length - kept.length;
+    if (capped) console.log(`→ model observer: ${capped} valid ${capped === 1 ? "id" : "ids"} past the ${MODEL_ALLOW_MAX}-id cap dropped`);
+  }
+  if (Object.keys(next).length === 0) delete doc.av_approval;
+  else doc.av_approval = next;
+  if (JSON.stringify(doc) !== before) writeConfig(doc);
+  if (raw === undefined) console.log("→ model observer: AV_MODEL_ALLOWLIST absent; no local list (off_list_local null)");
+  return null;
+}
+
 /** The village's zone: every schedule this overlay installs is written in it (DATA-314). */
 export const VILLAGE_TIMEZONE = "Asia/Kolkata";
 /** Names Hermes's zoneinfo resolves to the village's zone (the IANA link included). */

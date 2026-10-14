@@ -121,11 +121,13 @@ def _inventory_reset(monkeypatch):
     load_plugin()
     module = importlib.import_module(MODULE_NAME + "._plugins")
     module._reset()
+    importlib.import_module(MODULE_NAME + "._models")._reset()  # SEC-6 half 2: the model observer's state too
     monkeypatch.setattr(module, "_default_manager", _no_manager)
     yield
-    module = sys.modules.get(MODULE_NAME + "._plugins")
-    if module is not None:
-        module._reset()
+    for name in ("._plugins", "._models"):
+        module = sys.modules.get(MODULE_NAME + name)
+        if module is not None:
+            module._reset()
 
 
 @pytest.fixture

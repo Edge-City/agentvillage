@@ -401,10 +401,20 @@ def test_register_subscribes_and_never_unloads_the_listener_does(box, monkeypatc
 
 def test_off_subscribes_nothing_and_sends_nothing(box):
     mod, home, manager, _ = box
-    _set_mode(home, "off")
+    _set_mode(home, "off", model_observer="off")  # SEC-6 fix round 1 S1: the observer on keeps the tick
     ctx = FakeBusCtx()
     assert mod.start(ctx, manager_factory=lambda: manager) is False
     assert manager.listeners == [] and "thread" not in mod._state() and ctx.unloads == []
+
+
+def test_observer_off_leaves_the_inventory_as_it_was(box):
+    mod, home, manager, _ = box
+    _set_mode(home, "report", model_observer="off")
+    models = __import__(mod.__name__.rsplit(".", 1)[0] + "._models", fromlist=["_models"])
+    ctx = FakeBusCtx()
+    assert models.start(ctx) is False and mod.start(ctx, manager_factory=lambda: manager)
+    manager.fire()
+    assert [e for e, _ in ctx.emitted] == ["plugin.inventory", "plugin.unknown"]
 
 
 def test_outside_the_gateway_process_nothing_runs_and_nothing_is_logged(box, caplog, monkeypatch):
@@ -789,7 +799,7 @@ manager = get_plugin_manager()
 seen = []
 real = manager._dispatch_event
 def spy(event, payload):
-    if event.startswith("av-approval:"):
+    if event.startswith("av-approval:plugin."):  # SEC-6's model.* events are pinned in test_model_observer.py
         seen.append([event, dict(payload)])
     return real(event, payload)
 manager._dispatch_event = spy

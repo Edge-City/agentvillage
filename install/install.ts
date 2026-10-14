@@ -74,6 +74,7 @@ import {
   configureDashboardAuth,
   configureHostedGateway,
   configParseFailure,
+  configureModelAllow,
   configureModelFallback,
   configureSlashAccess,
   configureStt,
@@ -98,6 +99,7 @@ import {
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 import { cronFailedLine, recordSlashAccessStatus, slashAccessFailedLine, writeInstallStatus } from "./install_status";
+import { modelAllowFailedLine, recordModelAllowStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
@@ -300,10 +302,12 @@ function main(): void {
     try {
       writeInstallStatus(hermesHome(), []);
       recordSlashAccessStatus(hermesHome(), parseFailed);
+      recordModelAllowStatus(hermesHome(), parseFailed);
     } catch {
       console.warn("  warning: could not write av-events/install-status.json");
     }
     console.log(slashAccessFailedLine(parseFailed));
+    console.log(modelAllowFailedLine(parseFailed));
     console.error("error: config.yaml could not be parsed; nothing installed, slash access not configured");
     process.exitCode = 1;
     return;
@@ -329,6 +333,8 @@ function main(): void {
   configureHostedGateway();
   // SEC-6: fail loud (fix round 1, S3): recorded below, and the run exits non-zero at its end.
   const slashAccessFailed = configureSlashAccess();
+  // SEC-6 half 2: the model observer's local list; fail loud like the step above.
+  const modelAllowFailed = configureModelAllow();
   keepTelegramBacklogOnColdBoot();
   disableTelegramLinkPreviews();
   configureVillageTimezone();
@@ -365,6 +371,11 @@ function main(): void {
     recordSlashAccessStatus(hermesHome(), slashAccessFailed);
   } catch {
     console.warn("  warning: could not record the slash access step in av-events/install-status.json");
+  }
+  try {
+    recordModelAllowStatus(hermesHome(), modelAllowFailed);
+  } catch {
+    console.warn("  warning: could not record the model_allow step in av-events/install-status.json");
   }
   installEdgeos();
   restoreWelcomeState(welcomeState);
@@ -403,6 +414,11 @@ function main(): void {
   if (slashAccessFailed) {
     console.log(slashAccessFailedLine(slashAccessFailed));
     console.error("error: slash access was not configured (residents can run /model); see the line above");
+    process.exitCode = 1;
+  }
+  if (modelAllowFailed) {
+    console.log(modelAllowFailedLine(modelAllowFailed));
+    console.error(`error: av_approval.model_allow was not written (${modelAllowFailed}); see the line above`);
     process.exitCode = 1;
   }
 

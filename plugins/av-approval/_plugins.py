@@ -28,8 +28,9 @@ AFTER `hermes gateway run` has started plugin discovery); the TUI and a standalo
 inherited, so a `hermes` command the gateway's own children run also has it.
 
 Mode (`config.yaml` `av_approval.unknown_plugins`): `report` (the default; also for an unreadable config
-or a value it does not understand, with one log line), `quarantine`, or `off` (nothing subscribed,
-nothing sent). YAML reads a bare `off` as false, which is taken as `off`. In `quarantine` an unknown
+or a value it does not understand, with one log line), `quarantine`, or `off` (no inventory: nothing
+classified, nothing sent; the listener and the tick still run for the model observer while
+`av_approval.model_observer` is on, SEC-6 half 2 fix round 1 S1, and nothing at all is subscribed when both are off). YAML reads a bare `off` as false, which is taken as `off`. In `quarantine` an unknown
 plugin is unlisted (`dashboard_set_agent_plugin_enabled(key, enabled=False)`: its key goes into
 `plugins.disabled`) before it ever loads, and a loaded one is unloaded live (`PluginManager.unload`) and
 unlisted, so the next start is clean. Its directory and metadata stay as evidence. A key that an expected
@@ -575,6 +576,12 @@ def run_pass(trigger: str, now: Optional[float] = None) -> Optional[dict]:
 def _pass(state: dict, trigger: str, now: float) -> Optional[dict]:
     home, manager, expected = state["home"], state["manager"], state["expected"]
     cfg, readable = read_config(home)
+    try:  # SEC-6 half 2: the model observer reads this same parse (no second read); it never raises
+        from . import _models
+
+        _models.on_tick(cfg if readable else None, now)
+    except Exception:  # noqa: BLE001
+        pass
     mode, _ = parse_mode(cfg if readable else None)
     if mode == "off":
         return None
@@ -638,6 +645,19 @@ def _tick_loop(stop: threading.Event) -> None:
             state["run"]("tick")
 
 
+def _tick_wanted(mode: str, cfg: Optional[dict]) -> bool:
+    """SEC-6 half 2 (fix round 1, S1): the listener and the tick run when EITHER the inventory or the model
+    observer is on; `_pass` then runs each only when its own mode is on (`on_tick` checks the observer's)."""
+    if mode != "off":
+        return True
+    try:
+        from . import _models
+
+        return _models.parse_mode(cfg) == "on"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def gateway_argv(argv: Optional[list] = None) -> bool:
     """`hermes gateway run` (and `start`): the gateway's own command line (av-events' `_gateway_argv`).
     `sys.argv[1:5]` covers the unit's `python -m hermes_cli.main [-p <profile>] gateway run`."""
@@ -671,7 +691,7 @@ def start(ctx: Any, manager_factory: Optional[Callable[[], Any]] = None) -> bool
         mode, understood = parse_mode(cfg if readable else None)
         if not understood:
             _log_once("mode", MODE_LINE)
-        if mode == "off":
+        if not _tick_wanted(mode, cfg if readable else None):
             return False
         expected = load_expected()
         manager = (manager_factory or _default_manager)()

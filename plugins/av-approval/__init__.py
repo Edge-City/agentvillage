@@ -82,6 +82,13 @@ every plugin as expected (`expected_plugins.json`), bundled (Hermes's own tree) 
 `quarantine` (L1: unlist, and unload a loaded unknown live), `off`. It touches `ctx` only to
 subscribe (`on_unload`) and to emit, never unloads from inside `register`, and never raises.
 
+MODEL OBSERVER (`_models.py`, SEC-6 half 2, observe only, every start whatever the gate's switch): after the
+inventory, `register` subscribes one `pre_api_request` callback (gateway process only) that reports the model id
+on the wire at its first sight per process, and the SEC-3 tick reports config.yaml's `model.default` at first
+sight, on change and daily, as `model.observed` (plus `model.offlist` when the local `av_approval.model_allow`
+list does not hold it) on the plugin bus for av-events (`AV_MODEL_EVENTS`). It never blocks or rewrites a request.
+Log: `av-approval: model: <id> (<source>, <on-list|off-list|no-list>)`. `av_approval.model_observer: off` turns it off.
+
 Python 3.11, standard library and PyYAML (Hermes ships it). Never raises out
 of `register`; the pre-call callback raises only to block a gated call.
 """
@@ -99,7 +106,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.5.0"
 __version__ = PLUGIN_VERSION
 
 #: The core version whose facade was read for a receipt surface.
@@ -432,13 +439,14 @@ def _log_once(key: str, line: str) -> None:
 
 
 def register(ctx: Any) -> None:
-    """Hermes plugin entrypoint: the gate's backstop, then credential custody and the plugin inventory
-    (both whatever the gate's switch)."""
+    """Hermes plugin entrypoint: the gate's backstop, then credential custody, the plugin inventory and the
+    model observer (all three whatever the gate's switch)."""
     try:
         _register_backstop(ctx)
     finally:
         apply_custody()
         start_inventory(ctx)
+        start_model_observer(ctx)
 
 
 def start_inventory(ctx: Any) -> bool:
@@ -452,6 +460,16 @@ def start_inventory(ctx: Any) -> bool:
             logging.getLogger("av-approval.plugins").warning(INVENTORY_NOT_RUNNING_LINE)
         except Exception:  # noqa: BLE001
             pass
+        return False
+
+
+def start_model_observer(ctx: Any) -> bool:
+    """SEC-6 half 2 model observer (`_models.py`): subscribe `pre_api_request` once. Never raises, never logs."""
+    try:
+        from . import _models
+
+        return _models.start(ctx)
+    except Exception:  # noqa: BLE001 - the observer must never break Hermes's plugin loading
         return False
 
 
@@ -517,4 +535,5 @@ __all__ = [
     "switch",
     "register",
     "start_inventory",
+    "start_model_observer",
 ]
