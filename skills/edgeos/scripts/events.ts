@@ -10,7 +10,10 @@
  * turns their local midnights into the UTC window EdgeOS wants, calls the events list once with the
  * popup id and `event_status=published`, and prints one line per event grouped by local day: local
  * start and end with the zone label, the title, the venue, the person's RSVP status and the event id.
- * The output opens with `Today is <Wkd YYYY-MM-DD> (<zone>)` and `Listing: <the days asked for>` (DATE-1).
+ * The output opens with `Today is <Wkd YYYY-MM-DD> (<zone>)` (DATE-1), `Now: <Wkd YYYY-MM-DD HH:MM> <zone> (<h:mm AM/PM>)`
+ * and `Listing: <the days asked for>` (DATE-1). For today it leaves out the events that already ended (their end
+ * time is at or before now) and says how many; an event in progress, or one without an end time, stays (EVENTS-NOW:
+ * a cron prompt carries no time of day, and a heartbeat offered a session hours after it ended).
  * Agents asked for "today" used to compute that window in inline Python, which the gate refuses.
  *
  * The script reads its own key. `EDGEOS_API_KEY`, `AV_POPUP_ID` and `EDGEOS_API_BASE` come from the
@@ -216,6 +219,25 @@ export function header(args: Args, wanted: string[], now: Date, tz: string): [st
   return [`Today is ${isoDay(localDate(now, tz))} (${zoneLabel(tz, now)})`, `Listing: ${named}`];
 }
 
+/**
+ * The village clock (EVENTS-NOW), e.g. `Now: Wed 2026-10-14 18:30 IST (6:30 PM)`: the 24-hour time and, in
+ * brackets, the 12-hour form the event lines use. A cron run's prompt has no time of day, so this is how a
+ * scheduled job knows which of today's sessions are over.
+ */
+export function nowLine(now: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", hour: "2-digit", minute: "2-digit" })
+    .formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)!.value;
+  return `Now: ${isoDay(localDate(now, tz))} ${get("hour")}:${get("minute")} ${zoneLabel(tz, now)} (${clock(now.toISOString(), tz)})`;
+}
+
+/** True when the event's end time is at or before `now`. No end time, or one that does not parse, never counts as ended. */
+export function hasEnded(event: EdgeEvent, now: Date): boolean {
+  if (!event.end_time) return false;
+  const end = new Date(event.end_time).getTime();
+  return !Number.isNaN(end) && end <= now.getTime();
+}
+
 export function dayHeading(date: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" })
     .format(new Date(`${date}T00:00:00Z`));
@@ -291,16 +313,28 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   events = events
     .filter((e) => typeof e.start_time === "string" && !Number.isNaN(new Date(e.start_time).getTime()))
     .sort((a, b) => new Date(a.start_time!).getTime() - new Date(b.start_time!).getTime());
+  // EVENTS-NOW: today's events that already ended are left out (counted); other days are listed whole.
+  const today = localDate(now, tz);
+  const endedToday = (e: EdgeEvent) => localDate(new Date(e.start_time!), tz) === today && hasEnded(e, now);
+  const ended = events.filter(endedToday).length;
+  events = events.filter((e) => !endedToday(e));
   const [todayLine, listingLine] = header(parsed, wanted, now, tz);
+  const clockLine = nowLine(now, tz);
   if (parsed.json) {
-    // One JSON document, so the two header lines ride as its first fields rather than as text above it.
-    return { code: 0, out: `${JSON.stringify({ today: todayLine, listing: listingLine, time_zone: tz, start_after: startIso, start_before: endIso, results: events })}\n`, err: "" };
+    // One JSON document, so the header lines ride as its first fields rather than as text above it.
+    return { code: 0, out: `${JSON.stringify({ today: todayLine, now: clockLine, listing: listingLine, time_zone: tz, start_after: startIso, start_before: endIso, ended_earlier_today: ended, results: events })}\n`, err: "" };
   }
-  const lines: string[] = [todayLine, listingLine];
+  const lines: string[] = [todayLine, clockLine, listingLine];
+  const filtered = Boolean(parsed.search || parsed.rsvped);
   for (const day of wanted) {
     const todays = events.filter((e) => localDate(new Date(e.start_time!), tz) === day);
+    const gone = day === today ? ended : 0;
     lines.push(`${dayHeading(day)} (${tz})`);
-    if (todays.length === 0) lines.push(parsed.search || parsed.rsvped ? "  nothing matching" : "  no published events");
+    if (gone > 0) lines.push(`  ${gone} earlier ${gone === 1 ? "event" : "events"} today already ended (not listed)`);
+    if (todays.length === 0) {
+      if (gone > 0) lines.push(filtered ? "  nothing more matching today" : "  nothing more today");
+      else lines.push(filtered ? "  nothing matching" : "  no published events");
+    }
     for (const event of todays) lines.push(`  ${eventLine(event, tz)}`);
   }
   return { code: 0, out: `${lines.join("\n")}\n`, err: "" };
