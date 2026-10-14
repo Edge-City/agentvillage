@@ -229,6 +229,8 @@ def test_disabling_the_llm_hooks_disables_messages(plugin, ctx, monkeypatch, av)
 
 def test_a_failing_message_builder_fails_open(live, ctx, av, monkeypatch):
     monkeypatch.setattr(live, "message_payload", lambda *a, **k: 1 / 0)
-    assert ctx.fire("pre_llm_call", session_id=SESSION, turn_id="t0", user_message="hi") == []
+    # The telemetry body fails open (no return); CLOCK-1's Now line sits outside it and still comes.
+    results = ctx.fire("pre_llm_call", session_id=SESSION, turn_id="t0", user_message="hi")
+    assert len(results) == 1 and results[0]["context"].startswith("Now: ")
     assert live._COLLECTOR.total_failures == 1
     assert messages(av, live) == []

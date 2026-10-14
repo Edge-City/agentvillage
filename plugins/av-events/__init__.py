@@ -21,10 +21,11 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _approval, _approvals_reminder, _edgeos, _edgeos_guard, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._ask_village import register_ask_village_tool
 from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
+from ._clock import with_clock_line
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
@@ -1076,7 +1077,11 @@ def build_subscriptions(collector_ref=_collector) -> dict:
 
 
 def with_terminal_args_fix(telemetry: Callable) -> Callable:
-    """`pre_tool_call` = the telemetry counter, then the DATA-312 terminal fix.
+    """`pre_tool_call` = the telemetry counter, the EDGEOS-CURL-GUARD refusal, then the DATA-312 fix.
+
+    The guard (`_edgeos_guard`) blocks a `terminal`/`execute_code` call that hand-writes an HTTP call
+    to EdgeOS's directory or `/humans/me`; its block wins over any other return. Its own kill
+    switch is `AV_EDGEOS_CURL_GUARD`, and like the fix it ignores every telemetry switch.
 
     The counter (`guarded`) returns None today; if it ever returns a directive,
     that directive wins and the fix adds nothing. Otherwise the fix may return
@@ -1091,6 +1096,15 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
 
     def pre_tool_call(*args: Any, **kwargs: Any) -> Any:
         result = telemetry(*args, **kwargs)
+        # EDGEOS-CURL-GUARD (BUG 1, 14 Oct): a hand-written curl to EdgeOS's directory or
+        # /humans/me is refused with the script to run instead. A block beats anything else.
+        guard = _edgeos_guard.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
+        if guard is not None:
+            try:
+                logger.info("av-events: edgeos_curl_guard refused tool=%s", kwargs.get("tool_name"))
+            except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
+                pass
+            return guard
         if result is not None:
             return result
         fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
@@ -1187,8 +1201,8 @@ def build_hooks(collector_ref=_collector) -> dict:
 
     `pre_tool_call` is then wrapped once more by `with_terminal_args_fix`
     (DATA-312), which is the only thing in this plugin that returns a directive,
-    and `pre_llm_call` by `with_approvals_reminder` (DATA-444), the only thing
-    that returns context.
+    and `pre_llm_call` by `with_clock_line` (CLOCK-1, the Now line on every turn)
+    inside `with_approvals_reminder` (DATA-444), the two things that return context.
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
@@ -1203,7 +1217,9 @@ def build_hooks(collector_ref=_collector) -> dict:
         if name == "pre_tool_call":
             wrapped = with_terminal_args_fix(wrapped)
         elif name == "pre_llm_call":
-            wrapped = with_approvals_reminder(wrapped, collector_ref)
+            # CLOCK-1 (`_clock.py`): the Now line on every turn, cron and subagents included,
+            # between the telemetry return and the DATA-444 reminder; outside `guarded`.
+            wrapped = with_approvals_reminder(with_clock_line(wrapped, collector_ref), collector_ref)
         hooks[name] = wrapped
     return hooks
 
