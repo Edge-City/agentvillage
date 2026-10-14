@@ -333,7 +333,7 @@ classes:
   # The village marketplace (reserved namespace marketplace.*) and the model reviewer: reserved, R2.
   marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
   marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
-  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app reads for the agent; recorded
+  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; the village tool (Rolodex search, a reviewed mini-app's public reads, Gold Star previews and status) reaches it through the hook; a star send needs its own marketplace.app.action grant; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
   opportunity.accept:            { autonomy: autonomous, agent_may_request: true }   # reserved; accepting or declining an Index opportunity (a connection or meeting) on the resident's behalf; Index's tools for it reach it through the hook; R3
@@ -417,4 +417,7 @@ tools:
   - { match: text_to_speech,                   class: network.call }
   - { match: vision_analyze,                   class: network.call }
   - { match: video_analyze,                    class: network.call }
+  # The village-bridge plugin's entry tool, exactly `village` (no wildcard). A star send also
+  # needs its own marketplace.app.action grant; an install or enable is never reached through this line.
+  - { match: village,                          class: marketplace.app.read }
 ```

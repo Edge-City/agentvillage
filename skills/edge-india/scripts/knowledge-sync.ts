@@ -12,14 +12,15 @@
  *     `.env` file, no variable): the built-in DEFAULT_SNAPSHOT_URL, Edge City's
  *     mirror in this repo (kept by sync-edge-india-references.yml):
  *     https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json
- *     The mirror is not reviewed by a person: its workflow forwards the
+ *     The mirror moves only when a person merges: its workflow checks the
  *     upstream indexer (`p2p-lanes/edge-agent-skill`, branch `main`) every 15
- *     minutes, but only complete trees this job accepts, each file's sha256
- *     recorded in SNAPSHOT.json with the upstream commit it came from, under our
- *     org's audit log; disabling that workflow (or reverting the mirror) is the
- *     kill switch. The upstream itself stays allowed as an operator override
- *     only: a push there reaches every agent within one run, with none of the
- *     mirror's checks.
+ *     minutes and forwards a change as one pull request (branch
+ *     `bot/india-refs`, SEC-5 fix a), only complete trees this job accepts,
+ *     each file's sha256 recorded in SNAPSHOT.json with the upstream commit it
+ *     came from; freshness is the merge cadence. Disabling that workflow (or
+ *     reverting the mirror) is the kill switch. The upstream itself stays
+ *     allowed as an operator override only: a push there reaches every agent
+ *     within one run, with none of the mirror's checks or its merge.
  *
  *   Trust boundary. The decision: Carter's choice of upstream (GRANT
  *   2026-10-06 09:06Z named aromeoes/edge-agent-skill; moved to
@@ -28,8 +29,9 @@
  *   found in p2p-lanes, the EdgeOS org). The mirror follows
  *   `p2p-lanes/edge-agent-skill@main`: an org branch written by Fran's AWS
  *   publisher (CodeBuild, committer `edge-india-indexer[bot]`, commits unsigned),
- *   unpinned, forwarded automatically every 15 minutes by the sync workflow,
- *   with no person reviewing it. What protects the fleet: the sync's
+ *   unpinned, checked every 15 minutes by the sync workflow and forwarded as
+ *   one pull request that a person reviews and merges (SEC-5 fix a, 14 Oct
+ *   2026). What protects the fleet: that merge; the sync's
  *   checks (sizes, names, encoding, HTML, complete India-only trees, manifest
  *   links only to the guide's hosts) and the upstream commit it records per
  *   publish, refusing to publish when that commit cannot be read; this job's
@@ -38,9 +40,9 @@
  *   UTF-8, sha256 per file); `refs.ts`'s treat_as frame with a per-run token;
  *   and the host allowlist on manifest urls. What is NOT protected: the
  *   content itself. A sentence changed upstream (a price, a date, a contact,
- *   a false claim) reaches residents as information, typically within the
- *   hour (the 15-minute sync, the CDN's 5-minute cache, this job's 30-minute
- *   period), cited with its source link.
+ *   a false claim) that the reviewer misses reaches residents as information
+ *   within about 35 minutes of the merge (the CDN's 5-minute cache, this job's
+ *   30-minute period), cited with its source link.
  *     Set empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off, status
  *     `unconfigured`, exit 0, no knowledge file written.
  *   KNOWLEDGE_SNAPSHOT_HOSTS  optional, comma-separated extra host names.

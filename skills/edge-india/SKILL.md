@@ -10,7 +10,7 @@ tags: [edge-city, edge-india, india, community, popup-village, logistics, backgr
 
 A background job ("Edge — knowledge sync", every 30 minutes, no model) copies
 the published Edge City India guide (Edge City's mirror, checked file by
-file but not reviewed by a person) onto this machine: the wiki, the website
+file, and changed only when a person merges an update) onto this machine: the wiki, the website
 and the Substack newsletter, indexed into
 Markdown. You read that local copy. You never fetch it, and nothing you run
 here fetches it either: the background job keeps the copy fresh, so a
@@ -227,8 +227,8 @@ indexed change; `refs.ts list` prints the same compactly.
 Path: the official sources → the upstream indexer (`p2p-lanes/edge-agent-skill`,
 every 15 minutes, best effort) → Edge City's mirror in the agentvillage repo
 (`skills/edge-india/references/` on `main`, complete snapshots only, each
-file's sha256 and the upstream commit in `SNAPSHOT.json`, every 15 minutes,
-forwarded automatically, not reviewed by a person) → the background job on
+file's sha256 and the upstream commit in `SNAPSHOT.json`, checked every 15
+minutes, updated when a person merges the forwarded change) → the background job on
 this machine (every 30 minutes; it verifies every file against
 `SNAPSHOT.json`, stores that record with the copy, and keeps the last good
 copy if anything fails) → `knowledge/edge-india/`, which you read. A recent copy can still hold an old

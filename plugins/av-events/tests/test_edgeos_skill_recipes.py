@@ -85,9 +85,8 @@ def label(edgeos, command):
 
 @pytest.mark.parametrize("section,operations", [
     (3, ["edgeos.events_list"] * 5 + ["edgeos.event_read"]),
-    # The profile update's body carries `"picture_url":"https://..."`: a URL
-    # inside a request body is content, not a target, so it is recognised.
-    (8, ["edgeos.profile_read", "edgeos.profile_update"]),
+    # DATA-454b: §8 has no curl; the profile goes through the script (pinned below).
+    (8, []),
     # DATA-454: §9 has no curl; the directory goes through the script (pinned below).
     (9, []),
 ])
@@ -168,8 +167,6 @@ RECIPE_OPERATIONS = {
     "Cancel a previous RSVP": "edgeos.cancel_rsvp",
     "List who is going to one event": "edgeos.participants_list",
     "List active venues for a popup": "edgeos.venues_list",
-    "Read the calling user's profile": "edgeos.profile_read",
-    "Update basic profile fields": "edgeos.profile_update",
 }
 
 
@@ -240,10 +237,9 @@ def test_the_skill_says_the_api_key_cannot_reach_the_directory_or_profile():
     assert "cannot** reach the attendee directory" in section0
     assert "never retry those calls with the API key" in section0
     body = re.search(r"^## 8\..*?(?=^## )", text, re.S | re.M).group(0)
-    assert "human session token only" in body.splitlines()[0]
-    # The profile recipes carry the human bearer, never the key; the directory has no curl (DATA-454).
-    for heading in ("Read the calling user's profile", "Update basic profile fields"):
-        assert "$EDGEOS_BEARER_TOKEN" in recipe(heading) and "EDGEOS_API_KEY" not in recipe(heading), heading
+    assert "through the Agent Village control plane; read only" in body.splitlines()[0]
+    # Neither the profile (DATA-454b) nor the directory (DATA-454) has a curl: both go through a script.
+    assert "```bash" not in body and "curl -" not in body
 
 
 def test_the_participants_recipe_names_one_event():
@@ -373,10 +369,19 @@ def test_the_participants_prose_says_what_a_missing_occurrence_start_does():
 
 def test_the_profile_read_returns_only_the_self_fields():
     """`GET /humans/me` answers `HumanSelfPublic`: no application content,
-    participation or platform handles."""
+    participation or platform handles. DATA-454b: the profile script prints
+    eight of its fields (not EdgeOS's `id` or `tenant_id`), and §8 names
+    exactly those."""
     text = SKILL.read_text(encoding="utf-8")
     assert "your own application content, registered participation" not in text
     assert "X handles" not in text
+    fields = ("first_name", "last_name", "email", "telegram", "gender", "age", "residence", "picture_url")
+    script = PROFILE_SCRIPT.read_text(encoding="utf-8")
+    listed = re.search(r"PROFILE_FIELDS = \[(.*?)\]", script, re.S).group(1)
+    assert re.findall(r'"([a-z_]+)"', listed) == list(fields)
+    flat8 = re.sub(r"\s+", " ", section(8))
+    assert "one line per filled-in field: " + ", ".join(f"`{f}`" for f in fields) + "." in flat8
+    assert "`tenant_id`" not in flat8
 
 
 def test_the_cancel_seed_path_is_the_portal_route():
@@ -398,6 +403,7 @@ def test_the_cancel_seed_path_is_the_portal_route():
 # --------------------------------------------------------------------------
 
 DIRECTORY_SCRIPT = SKILL.parent / "scripts" / "directory.ts"
+PROFILE_SCRIPT = SKILL.parent / "scripts" / "profile.ts"
 
 
 def section(number: int) -> str:
@@ -431,22 +437,54 @@ def test_section_9_maps_the_script_exit_codes_to_the_fail_soft_answers():
     assert "never retry those calls with the API key" in flat0
 
 
-def test_the_bearer_is_for_the_profile_only():
-    """§8's /humans/me still uses the bearer and keeps the 401-as-unset rule
-    (DATA-454 AC #5); nothing names the bearer for the directory."""
+def test_the_skill_no_longer_uses_the_bearer():
+    """DATA-454b: the box's EDGEOS_BEARER_TOKEN dies 15 minutes after the agent
+    is made, so the profile goes through the profile script as the directory
+    does, and nothing in the skill names the bearer any more. The script exits
+    4 when the person's sign-in to the app has lapsed."""
     text = SKILL.read_text(encoding="utf-8")
-    assert "required_for: own profile (" in text
+    assert "EDGEOS_BEARER_TOKEN" not in text
+    assert "required_for: own profile (" not in text
+    assert "directory, own profile (the directory and profile scripts send it to the Agent Village control plane only)" in text
     flat0 = re.sub(r"\s+", " ", section(0))
-    assert "A `401` from the profile call" in flat0 and "treat it like an unset one" in flat0
-    # OV-325 refute S2: a profile 401 or an unset bearer never closes the directory.
-    assert ("The directory does not use the bearer: for directory requests always run the §9 script; "
-            "only its exit 2 means not connected.") in flat0
-    assert "give the same answer to any profile request without calling" in flat0
-    assert "any directory or profile request" not in flat0
-    assert "can't reach the directory or their profile" not in flat0
-    first = flat0.split("When `EDGEOS_BEARER_TOKEN` is unset or empty", 1)[1].split(".", 1)[0]
-    assert "directory" not in first, first
-    assert "follow §0 (not connected or expired; no retry)" in section(8)
-    assert "Required for `/humans/me` only." in section(1)
+    assert "the person's own profile through the profile script (§8), the directory through the directory script (§9)" in flat0
+    # The old expired-token rule is gone: signing in again is now exactly the fix.
+    assert "don't suggest that signing in again will reconnect you" not in flat0
+    assert "treat it like an unset one" not in flat0
+    assert ("**Exit 4** (profile or directory script) means the person's Edge City sign-in in the Agent Village "
+            "app has lapsed.") in flat0
+    assert "Sign in once at https://agents.edgecity.live/signin and I can look them up again." in flat0
+    assert "Never ask for a code, password or token." in flat0
+    assert "Don't call again in this conversation unless the person says they have signed in; then try once." in flat0
+    assert "Required for `/humans/me` only." not in section(1)
     for doc in (SKILL, ESMERALDA):
         assert "/applications/my/directory" not in doc.read_text(encoding="utf-8"), doc.name
+
+
+def test_section_8_runs_the_profile_script_reads_only_and_sends_edits_to_the_app():
+    body = section(8)
+    runs = re.findall(r"```sh\n(.*?)```", body, re.S)
+    assert len(runs) == 1
+    commands = runs[0].strip().splitlines()
+    assert commands and all(c.startswith("bun skills/edgeos/scripts/profile.ts") for c in commands)
+    assert PROFILE_SCRIPT.is_file()
+    assert "curl -" not in body and "```bash" not in body
+    assert "PATCH" not in SKILL.read_text(encoding="utf-8")
+    assert "Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else." in body
+    flat = re.sub(r"\s+", " ", body)
+    assert "**Edits are made in the Edge City portal app, never by you.** There is no write call" in flat
+    # Refute O-N3: the owner's profile is read and shared in their private chat only.
+    assert ("**Private chat only.** Read and share the person's profile only in your private chat with them "
+            "(or in your own scheduled job delivering to that private chat); never in a group or shared chat, "
+            "and never for anyone but the person whose agent you are.") in flat
+    # Refute O-N2: no bare "in the app" for edits anywhere in the skill.
+    assert "themselves, in the app" not in SKILL.read_text(encoding="utf-8")
+    assert "**Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0" in flat
+    assert "**Exit 2** means the profile isn't connected to this agent" in flat
+    assert "Never show the error text, a status code or a key." in flat
+    script = PROFILE_SCRIPT.read_text(encoding="utf-8")
+    assert "BEARER_TOKEN" not in script
+    assert "/edgeos/profile" in script and "/humans/me" in script
+    # The directory script gives the same exit 4 for the same cause.
+    assert "**Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0." in re.sub(r"\s+", " ", section(9))
+    assert 'signinLapsed("directory"' in DIRECTORY_SCRIPT.read_text(encoding="utf-8")

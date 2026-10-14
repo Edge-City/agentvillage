@@ -47,27 +47,29 @@ row). In plain words, for the consent screen:
 - **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
-  village question or their vote on the daily treasury ballot. Seven more are
-  reserved now and built later, so week two needs no policy amendment: filing
+  village question or their vote on the daily treasury ballot. Curated Gold Stars
+  sends now propose `marketplace.app.action`, binding the exact immutable preview.
+  These other classes remain reserved:
   a treasury proposal the agent drafted (`treasury.propose`, from Oct 18),
   withdrawing the resident's own treasury proposal on the agent's suggestion
   (`treasury.withdraw`), creating or changing an EdgeOS event or venue
-  (`edgeos.event.write`, `edgeos.venue.write`), installing an app from the
-  village marketplace or having an installed app act, the request naming the
-  app and the verb (`marketplace.app.install`, `marketplace.app.action`), and
-  taking up an allocation of village resources proposed for the resident
-  (`resource.allocate`, the treasury/ODS allocation class); no tool proposes
-  these yet. `odin.*` is reserved for the allocator's own classes (DATA-255),
-  with no row.
+  (`edgeos.event.write`, `edgeos.venue.write`), installing an app through an
+  agent proposal (`marketplace.app.install`; owner install intent is instead
+  managed by the authenticated control plane), and taking up village resource
+  allocations (`resource.allocate`). `odin.*` is reserved for the allocator's
+  own classes (DATA-255), with no row.
   Each arrives as a Telegram message from the "Agent Village
   Approvals" bot with approve and reject buttons, each on its own
   (`delivery: burst`: one left unanswered does not hold back the next), and
   stays open for up to 72 hours; if the resident does nothing it expires and
   nothing is published, shared or cast. An intention the resident stated in their own words is published
-  without a second ask. Three more reserved rows wait for no tap: an installed
-  app reading for the agent (`marketplace.app.read`) runs and is recorded,
-  accepting or declining an Index opportunity, a connection or meeting, on the
-  resident's behalf (`opportunity.accept`) runs, and is recorded while the gate
+  without a second ask. An installed app reading through `village`
+  (`marketplace.app.read`: the app catalogue and the resident's own installs,
+  never a credential or another resident's data) runs and is recorded; a Gold
+  Star send through it separately needs its own manual `marketplace.app.action`
+  grant (propose/wait/start). Accepting or declining an Index
+  opportunity on the resident's behalf (`opportunity.accept`) runs and is recorded
+  while the gate
   is on: only the hook judges it (autonomous is its day-one default, Carter's
   ruling of Oct 7), and `review.delegate.model` is kept for the
   resident to choose later to let a model reviewer act first: nothing acts on

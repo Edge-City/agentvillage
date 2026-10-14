@@ -69,3 +69,32 @@ export function recordSlashAccessStatus(home: string, failed: string | null): bo
   renameSync(tmp, path);
   return true;
 }
+
+/** The one stdout line printed when the model observer's list step failed (SEC-6 half 2, fix round 1, S2). */
+export function modelAllowFailedLine(why: string): string {
+  return `agentvillage-install: model_allow_failed=${JSON.stringify(why)}`;
+}
+
+/**
+ * Set `model_allow_failed` (the reason, or null on a clean run) in this run's status file, as
+ * `recordSlashAccessStatus` sets its field. A missing or unreadable file is left alone.
+ *
+ * @returns Whether the field was written.
+ */
+export function recordModelAllowStatus(home: string, failed: string | null): boolean {
+  const path = installStatusPath(home);
+  let status: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    status = parsed as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  status.model_allow_failed = failed;
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
+  return true;
+}

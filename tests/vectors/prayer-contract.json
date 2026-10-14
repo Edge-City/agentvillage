@@ -1,0 +1,623 @@
+{
+  "about": [
+    "PRAYER P3/P2 contract (lanes-float/PRAYER-design.md §1-§3): the request the overlay's av-events `pray` tool sends",
+    "and the control plane's POST /tenants/:id/prayers answers. Read by the overlay's",
+    "plugins/av-events/tests/test_pray.py; the control plane copies this file verbatim to control-plane/tests/vectors/",
+    "(same precedent as archive_read.v1.json). A change on either side shows up as a failing test on the other.",
+    "Patterns are written for Python's re with fullmatch where marked; the JavaScript side uses the same text with the u flag,",
+    "\\d as \\p{Nd} and \\s as Python's str whitespace. Lengths are Unicode code points ([...s].length in JS), never UTF-16 units."
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/tenants/{tenant_id}/prayers",
+    "headers": {
+      "authorization": "Bearer {AV_EVENTS_TOKEN}",
+      "content-type": "application/json",
+      "accept": "application/json",
+      "x-av-session-kind": [
+        "dm",
+        "cron"
+      ]
+    },
+    "body": "compact JSON, UTF-8 as is (no \\u escapes for non-ASCII), keys ask, reason, idempotency_key and no others",
+    "max_body_bytes": 4096,
+    "cp_hosts": [
+      "control-plane-production-606c.up.railway.app"
+    ],
+    "origin": "https on a cp_hosts host only (exact hostname, port 443 or none, no userinfo, path, query or fragment), as skills/edgeos/scripts/directory.ts; plain http only to loopback (tests)",
+    "deadline_s": 10,
+    "attempts": "at most 2; the retry (after a transport failure, a deadline, a cut answer or a 5xx) sends the same bytes, so the same idempotency_key",
+    "redirects": "refused, never followed"
+  },
+  "rules": {
+    "body_keys": [
+      "ask",
+      "reason",
+      "idempotency_key"
+    ],
+    "ask_keys": [
+      "kind",
+      "tier",
+      "model"
+    ],
+    "ask_kind": [
+      "model_tier",
+      "other"
+    ],
+    "tier_fullmatch": "[a-z][a-z0-9-]{0,23}",
+    "tier": "required with model_tier, absent with other",
+    "model_fullmatch": "[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._:-]*",
+    "model_max": 100,
+    "model": "optional, only with model_tier",
+    "idempotency_key_fullmatch": "[0-9a-f-]{36}",
+    "reason_normalize": "NFC, then ECMAScript String.prototype.trim (WhiteSpace and LineTerminator only)",
+    "reason_min": 1,
+    "reason_max": 600,
+    "reason_max_lines": 8,
+    "reason_controls_refused": "[\\x00-\\x09\\x0b-\\x1f\\x7f-\\x9f]",
+    "reason_contact_search": {
+      "email": "[^\\s@]+@[^\\s@]+\\.[^\\s@]+",
+      "phone": "\\d(?:[ .()-]?\\d){8,}",
+      "handle": "@[A-Za-z0-9_]{2,}",
+      "telegram_link": "(?i)t\\.me/"
+    },
+    "order": "type and keys (invalid_body), then reason length, controls and lines (reason_invalid), then contact (reason_contact)",
+    "reason_invisible_refused": "any character in Unicode categories Cf Co Cs Cn (bidi controls, zero-width, U+00AD, U+180E, tag characters U+E0000-E007F), the variation selectors U+FE00-FE0F and U+E0100-E01EF, U+034F, U+115F, U+1160, U+3164, U+FFA0, U+2028, U+2029 (ov#341 refute N4); the box is stricter than the cp needs to be"
+  },
+  "ids": {
+    "ns_av": "6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11",
+    "prayer_id": "uuid5(NS_AV, 'prayer:' + tenant_id + ':' + idempotency_key)",
+    "event_id": "uuid5(NS_AV, 'prayer.made:' + prayer_id)",
+    "cases": [
+      {
+        "tenant_id": "aa9a5de3-0000-4000-8000-000000000001",
+        "idempotency_key": "3f2b8c1e-7d4a-4e6b-9a1c-5b0d2e8f4a71",
+        "prayer_id": "d38271d2-e737-5436-9a7f-69ca00628111",
+        "event_id": "d08a482f-a48b-566f-ba70-28e266839b11"
+      },
+      {
+        "tenant_id": "0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e",
+        "idempotency_key": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+        "prayer_id": "de3e3a5e-2a4a-5703-b443-c0b5ea316632",
+        "event_id": "7eb51394-d936-580c-bfe2-a746c1e9f923"
+      }
+    ]
+  },
+  "sent": [
+    {
+      "args": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro"
+        },
+        "reason": "My resident writes long research briefs and the current model runs out of context."
+      },
+      "body": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro"
+        },
+        "reason": "My resident writes long research briefs and the current model runs out of context."
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "max-2",
+          "model": "anthropic/claude-opus-4.1"
+        },
+        "reason": "  Needs stronger reasoning\nfor code reviews.  "
+      },
+      "body": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "max-2",
+          "model": "anthropic/claude-opus-4.1"
+        },
+        "reason": "Needs stronger reasoning\nfor code reviews."
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro",
+          "model": null
+        },
+        "reason": "Faster answers in the mornings."
+      },
+      "body": {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro"
+        },
+        "reason": "Faster answers in the mornings."
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "other",
+          "tier": null,
+          "model": ""
+        },
+        "reason": "Café hours: my resident wants more budget for search 🔍"
+      },
+      "body": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Café hours: my resident wants more budget for search 🔍"
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "body": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏"
+      },
+      "body": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏"
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "line\nline\nline\nline\nline\nline\nline\nline"
+      },
+      "body": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "line\nline\nline\nline\nline\nline\nline\nline"
+      }
+    },
+    {
+      "args": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Budget 2026-10-14, 12345678 tokens, model:tier, email me? no."
+      },
+      "body": {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Budget 2026-10-14, 12345678 tokens, model:tier, email me? no."
+      }
+    }
+  ],
+  "refused": {
+    "invalid_body": [
+      null,
+      [],
+      "pray",
+      {
+        "ask": {
+          "kind": "other"
+        }
+      },
+      {
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "r",
+        "extra": 1
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "r",
+        "idempotency_key": "3f2b8c1e-7d4a-4e6b-9a1c-5b0d2e8f4a71"
+      },
+      {
+        "ask": {
+          "kind": "other",
+          "who": "x"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "budget"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "Pro"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "1pro"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "aaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro\n"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro",
+          "model": "claude"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro",
+          "model": "Anthropic/Claude"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "model_tier",
+          "tier": "pro",
+          "model": "a/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "other",
+          "tier": "pro"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "other",
+          "model": "anthropic/claude-opus-4.1"
+        },
+        "reason": "r"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": 5
+      }
+    ],
+    "reason_invalid": [
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": ""
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": " \n\t　 "
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "line\nline\nline\nline\nline\nline\nline\nline\nline"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "tab\there"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "carriage\rreturn"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "delhere"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "c1here"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "nul\u0000here"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "need ‮orp‬ plan"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "ok 󠁡󠁰󠁰󠁲󠁯󠁶󠁥"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "vs ️ here"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "zero​width"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "soft­hyphen"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "line sep"
+      }
+    ],
+    "reason_contact": [
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Write to someone@example.com about it"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Call +91 98765 43210 for details"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "ID 123456789 please"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Phone (022) 555-0199-12"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Ask @someone_else first"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "see https://T.ME/joinchat"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "Digits ٩٨٧٦٥٤٣٢١"
+      }
+    ]
+  },
+  "answers": [
+    {
+      "status": 201,
+      "body": {
+        "prayer_id": "d38271d2-e737-5436-9a7f-69ca00628111",
+        "status": "received"
+      },
+      "tool": {
+        "prayer_id": "d38271d2-e737-5436-9a7f-69ca00628111",
+        "status": "received",
+        "review": "a village admin reviews every request; nothing changes until they approve",
+        "tell_resident": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "prayer_id": "de3e3a5e-2a4a-5703-b443-c0b5ea316632",
+        "status": "received",
+        "duplicate_open": true
+      },
+      "tool": {
+        "prayer_id": "de3e3a5e-2a4a-5703-b443-c0b5ea316632",
+        "status": "received",
+        "duplicate_open": true,
+        "review": "a village admin reviews every request; nothing changes until they approve",
+        "tell_resident": true
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": "tier_unknown"
+      },
+      "tool": {
+        "error": "tier_unknown"
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": "reason_contact"
+      },
+      "tool": {
+        "error": "reason_contact"
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": "something_new"
+      },
+      "tool": {
+        "error": "invalid_body"
+      }
+    },
+    {
+      "status": 401,
+      "body": {
+        "error": "unauthorized"
+      },
+      "tool": {
+        "error": "unauthorized"
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "error": "not_found"
+      },
+      "tool": {
+        "error": "not_enabled"
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": "already_on_tier"
+      },
+      "tool": {
+        "error": "already_on_tier"
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": "idempotency_mismatch"
+      },
+      "tool": {
+        "error": "idempotency_mismatch"
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": "not_live"
+      },
+      "tool": {
+        "error": "not_live"
+      }
+    },
+    {
+      "status": 413,
+      "body": {
+        "error": "too_large"
+      },
+      "tool": {
+        "error": "too_large"
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": "rate_limited",
+        "retry_after": 42
+      },
+      "tool": {
+        "error": "rate_limited",
+        "retry_after_s": 42
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": "busy",
+        "retry_after_s": 600
+      },
+      "tool": {
+        "error": "busy",
+        "retry_after_s": 600
+      }
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": "unavailable",
+        "retry_after_s": 30
+      },
+      "tool": {
+        "error": "unavailable",
+        "retry_after_s": 30
+      },
+      "attempts": 2
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": "model_tier_config_invalid"
+      },
+      "tool": {
+        "error": "model_tier_config_invalid"
+      },
+      "attempts": 2
+    }
+  ],
+  "answer_projection": "2xx: only prayer_id (lower-case uuid), status (a tenant_prayers status, else received), duplicate_open (only if true), plus the tool's fixed review and tell_resident; every other field dropped. Errors: an allowlisted code, retry_after_s and a fixed message; never the upstream body"
+}

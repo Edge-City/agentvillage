@@ -9,6 +9,7 @@ import {
   capModelMaxTokens,
   configureAvApproval,
   configureAvEvents,
+  configureVillageBridge,
   configureHostedGateway,
   configureIndexLinks,
   configureModelFallback,
@@ -45,11 +46,11 @@ function readConfig(path: string): Record<string, unknown> {
   return YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-test("OV-300 M1: unlistPlugins drops a not-staged plugin from plugins.enabled, keeps everything else, and is idempotent", () => {
+test("unlistPlugins drops an explicitly excluded plugin from plugins.enabled, keeps everything else, and is idempotent", () => {
   const path = withConfig({
     plugins: { enabled: ["existing", "village-bridge", "av-approval", "village-bridge"], disabled: ["village-bridge"], hook_callback_timeout: 30 },
   });
-  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual(["village-bridge"]);
+  expect(unlistPlugins(["village-bridge"])).toEqual(["village-bridge"]);
   expect(readConfig(path).plugins).toEqual({ enabled: ["existing", "av-approval"], disabled: ["village-bridge"], hook_callback_timeout: 30 });
   const first = readFileSync(path, "utf8");
   expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
@@ -67,17 +68,23 @@ test("OV-300 M1: unlistPlugins writes nothing when no listed plugin is enabled, 
   expect(readFileSync(path, "utf8")).toBe("model: {}\n");
 });
 
-test("OV-300 M1: install.ts no longer enables village-bridge and runs the strip in the plugin config step", () => {
+test("village bridge is listed without overriding an operator disable", () => {
+  const path = withConfig({ plugins: { enabled: ["existing"], disabled: ["village-bridge"] } });
+  configureVillageBridge();
+  configureVillageBridge();
+  expect(readConfig(path).plugins).toEqual({ enabled: ["existing", "village-bridge"], disabled: ["village-bridge"] });
+  expect(NOT_STAGED_PLUGINS.has("village-bridge")).toBe(false);
   const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
-  const config = readFileSync(join(import.meta.dir, "..", "config.ts"), "utf8");
-  expect(install).not.toContain("configureVillageBridge");
-  expect(config).not.toContain("configureVillageBridge");
-  expect(install).not.toMatch(/["']village-bridge["']/);
+  expect(install).toContain("configureVillageBridge();");
+  // The plugin config step still runs the NOT_STAGED_PLUGINS strip once, after the bridge is listed,
+  // so a name the release list holds back is never left enabled.
   const main = install.slice(install.indexOf("function main(): void {"));
   const approval = main.indexOf("configureAvApproval();");
+  const bridge = main.indexOf("configureVillageBridge();");
   const strip = main.indexOf("unlistPlugins(NOT_STAGED_PLUGINS)");
   expect(approval).toBeGreaterThan(0);
-  expect(strip).toBeGreaterThan(approval);
+  expect(bridge).toBeGreaterThan(approval);
+  expect(strip).toBeGreaterThan(bridge);
   expect(main.indexOf("unlistPlugins(", strip + 1)).toBe(-1);
 });
 

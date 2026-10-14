@@ -1,0 +1,364 @@
+{
+  "id": "dizko",
+  "name": "Dizko",
+  "description": "Discover public music events, artists and venues.",
+  "version": "1.0.0",
+  "homepage": "https://dizko.app",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Public music discovery",
+      "description": "Read public cities, artists, venues and events. No profiles, accounts, purchases or private data."
+    }
+  ],
+  "skills": [
+    "dizko"
+  ],
+  "operations": [
+    "mini-app.read"
+  ],
+  "mcp": {
+    "url": "https://mcp.dizko.app/mcp",
+    "tools": [
+      {
+        "name": "list_cities",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "find_scene_entities",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dj",
+                "artist",
+                "venue",
+                "collective",
+                "promoter"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "genre": {
+              "type": "string"
+            },
+            "date_from": {
+              "type": "string"
+            },
+            "date_to": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "required": [
+                "query"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "get_artist",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "date_from": {
+              "type": "string"
+            },
+            "date_to": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "required": [
+                "query"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "get_venue",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "date_from": {
+              "type": "string"
+            },
+            "date_to": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "required": [
+                "query"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "search_events",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "when": {
+              "type": "string"
+            },
+            "date_from": {
+              "type": "string"
+            },
+            "date_to": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "event_types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "genres": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "vibe": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "neighborhoods": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "free": {
+              "type": "boolean"
+            },
+            "pride": {
+              "type": "boolean"
+            },
+            "price_min": {
+              "type": "number"
+            },
+            "price_max": {
+              "type": "number"
+            },
+            "max_price": {
+              "type": "number"
+            },
+            "featuring": {
+              "type": "string"
+            },
+            "venue": {
+              "type": "string"
+            },
+            "promoter": {
+              "type": "string"
+            },
+            "avoid": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "limit": {
+              "type": "number"
+            },
+            "offset": {
+              "type": "number"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "result_limit": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "recommend_events",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "when": {
+              "type": "string"
+            },
+            "date_from": {
+              "type": "string"
+            },
+            "date_to": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "event_types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "genres": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "vibe": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "neighborhoods": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "free": {
+              "type": "boolean"
+            },
+            "pride": {
+              "type": "boolean"
+            },
+            "price_min": {
+              "type": "number"
+            },
+            "price_max": {
+              "type": "number"
+            },
+            "max_price": {
+              "type": "number"
+            },
+            "featuring": {
+              "type": "string"
+            },
+            "venue": {
+              "type": "string"
+            },
+            "promoter": {
+              "type": "string"
+            },
+            "avoid": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "limit": {
+              "type": "number"
+            },
+            "offset": {
+              "type": "number"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "result_limit": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "get_event",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    ]
+  }
+}

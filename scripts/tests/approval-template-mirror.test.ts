@@ -34,7 +34,14 @@ import { join } from "node:path";
 // agent_may_request), moralmod.share_context (human-only until the resident chooses ask) and
 // coordinator.contact (human-only, locked in October) rows and their two comment lines, five added
 // lines in the classes block, nothing else. Both copies carry the same five lines; the pins are equal.
-const POLICY_BLOCK_SHA256 = "8cb5db39b5a6049c77b4f3c9ab2ca8c3dcf64bd749a44c62d56c23a75cbee5ee";
+// MINI-APPS re-land (rc41: overlay re-cut of ov#312, paired with cp#237 PR C) moved it: the 36th
+// matcher `- { match: village, class: marketplace.app.read }` last in tools: with its two comment
+// lines (a star send also needs its own marketplace.app.action grant; an install or enable is never
+// reached through it), and the marketplace.app.read row's comment (Rolodex search, a reviewed
+// mini-app's public reads, Gold Star previews and status). No class value moves. The block is
+// cp#237's byte for byte (taken at its head e46b62ca, approval's L6633 wording; template file
+// sha256 d8d3e0b4...). The previous pin was 8cb5db39 (ov#320 / rc36).
+const POLICY_BLOCK_SHA256 = "ef0d342eca47536d062f6c9d7c2e08efcc5f5092e7a867cb42c1b8b403b093df";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

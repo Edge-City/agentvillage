@@ -474,13 +474,21 @@ describe("installing the gate", () => {
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
-    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 36 pre_tool_call entries (fail_closed)");
     // R3 fix round 4 (the trust boundary): the routed count and the sorted list's digest, as Hermes's
     // own parse reports them (live_selfcheck.py 5b), on their own line; the control plane pins both.
     const listSha = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
-    expect(listSha).toBe("9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43");
+    expect(listSha).toBe("3cea251ad4eb2862c84b1044da530439f477ba9da69728345a3be99cf763558b");
     expect(APPROVAL_ROUTED_SHA256).toBe(listSha);
-    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: listSha });
+    // MINI-APPS (rc41; approval@edge CLAIMS L6285): the control plane's hookGateFor accepts two receipts
+    // (cp#237). Current: 36 / 3cea251a (above). PREVIOUS: 35 / 9cb621bb, this list without `village`
+    // (rc39/rc40 boxes). Remove this previous pin together with the cp's PREVIOUS_GATED_ENTRIES /
+    // PREVIOUS_GATED_MATCHERS_SHA256, in the first release after the roll that follows rc41.
+    const previous = APPROVAL_GATED_TOOLS.filter((t) => t !== "village");
+    expect([previous.length, createHash("sha256").update([...previous].sort().join("\n"), "utf8").digest("hex")])
+      .toEqual([35, "9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43"]);
+    expect(APPROVAL_GATED_TOOLS.at(-1)).toBe("village");
+    expect(lastInstallRouted()).toEqual({ entries: 36, sha256: listSha });
     // Nothing about it is printed by the step: the receipt is install.ts's last line (gateReceiptLine).
     expect(logs.some((l) => l.includes("av_gate") || l.includes(listSha))).toBe(false);
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
@@ -529,9 +537,9 @@ describe("installing the gate", () => {
     const indexPluginWrites = ["index_create_intent", "index_update_intent", "index_add_intent_to_network", "index_create_network", "index_update_network", "index_join_network", "index_update_opportunity", "index_research_profile"];
     const added = [
       ...indexMcpWrites.map((t) => `mcp__index__${t}`), ...indexPluginWrites,
-      "image_generate", "video_generate", "text_to_speech", "web_search", "x_search",
+      "image_generate", "video_generate", "text_to_speech", "web_search", "x_search", "village",
     ];
-    expect([before.length, added.length]).toEqual([13, 22]);
+    expect([before.length, added.length]).toEqual([13, 23]);
     // The plugin's tools as the overlay's copy of Index's contract lists them: every tool whose request
     // writes (any method but GET, less the one POST that lists: index_read_intents' /intents/list) is
     // routed, every read is not.
@@ -580,13 +588,13 @@ describe("installing the gate", () => {
     const home = tenant();
     const o = opts();
     installApproval(SOURCE_SKILLS, o);
-    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
+    expect(lastInstallRouted()).toEqual({ entries: 36, sha256: APPROVAL_ROUTED_SHA256 });
     const check = () => {
       logs = [];
       const code = checkCli(["--check"], o);
       return { code, out: JSON.parse(logs.at(-1)!) };
     };
-    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35, routed_sha256: APPROVAL_ROUTED_SHA256 } });
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 36, routed_sha256: APPROVAL_ROUTED_SHA256 } });
     const path = join(home, "config.yaml");
     const original = readFileSync(path, "utf8");
     // Added by hand: one more shim entry (memory), as a sandbox writer could.
@@ -595,41 +603,41 @@ describe("installing the gate", () => {
     writeFileSync(path, YAML.stringify(doc));
     const added = check();
     expect(added.code).toBe(1);
-    expect(added.out.routed_entries).toBe(36);
+    expect(added.out.routed_entries).toBe(37);
     expect(added.out.routed_sha256).not.toBe(APPROVAL_ROUTED_SHA256);
-    expect(added.out.problems).toContain("live-routed-mismatch:36");
+    expect(added.out.problems).toContain("live-routed-mismatch:37");
     // Removed by hand: one entry gone (x_search).
     const fewer = YAML.parse(original);
     fewer.hooks.pre_tool_call = fewer.hooks.pre_tool_call.filter((e: Record<string, unknown>) => e.matcher !== "x_search");
     writeFileSync(path, YAML.stringify(fewer));
     // The static check names the missing entry before the live one runs, so no routed count is
-    // reported at all (null): caught, exit 1, and nothing a control plane could record as 35.
+    // reported at all (null): caught, exit 1, and nothing a control plane could record as 36.
     const removed = check();
     expect(removed.code).toBe(1);
     expect(removed.out.problems).toContain("hook-missing:x_search");
     expect([removed.out.routed_entries, removed.out.routed_sha256]).toEqual([null, null]);
-    // The next install merges the list back: 35 again, as Hermes loads it.
+    // The next install merges the list back: 36 again, as Hermes loads it.
     logs = [];
     installApproval(SOURCE_SKILLS, o);
-    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
-    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35 } });
+    expect(lastInstallRouted()).toEqual({ entries: 36, sha256: APPROVAL_ROUTED_SHA256 });
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 36 } });
   });
 
   test("R3 fix round 4 (output injection): the gate receipt is one JSON object bound to the control plane's nonce; no valid nonce or no routed facts prints none; a failed install leaves none", () => {
     const nonce = "0123456789abcdef0123456789abcdef";
-    const routed = { entries: 35, sha256: APPROVAL_ROUTED_SHA256 };
-    expect(JSON.parse(gateReceiptLine(nonce, routed)!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+    const routed = { entries: 36, sha256: APPROVAL_ROUTED_SHA256 };
+    expect(JSON.parse(gateReceiptLine(nonce, routed)!)).toEqual({ av_gate: { nonce, entries: 36, sha256: APPROVAL_ROUTED_SHA256 } });
     expect(gateReceiptLine(nonce, routed)!.includes("\n")).toBe(false);
     for (const bad of [undefined, "", "0123", nonce.toUpperCase(), `${nonce}0`, `${nonce}\n{"av_gate":{}}`]) expect([bad, gateReceiptLine(bad, routed)]).toEqual([bad, null]);
     expect(gateReceiptLine(nonce, null)).toBe(null);
-    expect(gateReceiptLine(nonce, { entries: 35, sha256: "x" })).toBe(null);
+    expect(gateReceiptLine(nonce, { entries: 36, sha256: "x" })).toBe(null);
     // From the environment, after a real install; reset by the next run that does not install.
     const home = tenant();
     const o = opts();
     installApproval(SOURCE_SKILLS, o);
     process.env.AV_GATE_NONCE = nonce;
     try {
-      expect(JSON.parse(gateReceiptLine()!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+      expect(JSON.parse(gateReceiptLine()!)).toEqual({ av_gate: { nonce, entries: 36, sha256: APPROVAL_ROUTED_SHA256 } });
       // A later run whose self-check cannot run fails, and leaves no receipt.
       expect(() => installApproval(SOURCE_SKILLS, { ...o, hermesPython: null })).toThrow();
       expect(lastInstallRouted()).toBe(null);
@@ -854,9 +862,9 @@ describe("M3: the live self-check and --check", () => {
       hermes_exit1: "allowed",
       cron_scripts: [],
       // R3 fix rounds 3/4 (SF1 b): the merge plan's per-tenant check reads these, from Hermes's own parse.
-      routed_entries: 35,
+      routed_entries: 36,
       routed_sha256: APPROVAL_ROUTED_SHA256,
-      routed_entries_expected: 35,
+      routed_entries_expected: 36,
       routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
     expect(bytes(home)).toEqual(before);
@@ -962,9 +970,9 @@ describe("M4: states in which Hermes ignores the gate", () => {
       overrides: expected,
       hermes_exit1: "allowed",
       cron_scripts: [],
-      routed_entries: 35,
+      routed_entries: 36,
       routed_sha256: APPROVAL_ROUTED_SHA256,
-      routed_entries_expected: 35,
+      routed_entries_expected: 36,
       routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
   });
@@ -1078,7 +1086,7 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
     expect(existsSync(approvalShimPath())).toBe(false);
     expect(existsSync(approvalSurfacePath())).toBe(false);
     expect(existsSync(join(home, "skills", "approval"))).toBe(false);
-    expect(logs.join("\n")).toContain("removed 35 pre_tool_call entries");
+    expect(logs.join("\n")).toContain("removed 36 pre_tool_call entries");
     expect(logs.join("\n")).toContain("FAIL-OPEN");
   });
 
@@ -3127,7 +3135,7 @@ describe("DATA-379: the pre-warm", () => {
     // One receipt line on stdout, before the step's own last line; nothing on stderr.
     expect(prewarmLines(logs)).toHaveLength(1);
     expect(prewarmLines(logs)[0]).toStartWith(PREWARM_SENT);
-    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 36 pre_tool_call entries (fail_closed)");
     expect(prewarmLines(errors)).toEqual([]);
     expect([...logs, ...errors, hookLog(home)].join("\n")).not.toContain(TOKEN);
 

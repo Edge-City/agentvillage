@@ -16,6 +16,13 @@ Today, capabilities come from **Index Network** (discovery + intent negotiation)
 - **Curates memory** every few days — distills daily notes into long-term `MEMORY.md`.
 - **Audits token usage quietly** with a deterministic local script. It only wakes the agent when meaningful spend has a clear actionable driver, such as scheduled background work dominating the last day.
 
+Hosted residents can opt into **curated mini-apps**: Gold Stars (exact-preview,
+manual approval before gratitude is sent) and Dizko (public event, artist and
+venue discovery). Installing one grants its permission; Dizko's skill arrives
+only then, while the Gold Stars skill text ships to every box and stays inert
+until installed. The control plane owns reviewed versions and install intent;
+staging files is not proof the runtime loaded them. [Build a reviewed mini-app](mini-apps/README.md).
+
 AgentVillage never names the plumbing in chat. You see AgentVillage and (when relevant) your community.
 
 ## Architecture
@@ -35,6 +42,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edge-esmeralda/` — background on the *previous* popup, Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (a frozen 2026-10-01 snapshot), and the onboarding pointer for obtaining EdgeOS tokens. Background only: it hosts no cron prompts or scripts (they moved to `skills/index-network/` in DATA-361).
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
+- `mini-apps/` — reviewed bundle manifests and builder starter/contract; no arbitrary code upload or install hooks
 - `docs/negotiator.md` — how to write a resident's `$HERMES_HOME/index/negotiator.ts`
 
 ## Repos
@@ -525,7 +533,7 @@ Index background work runs as fixed cron prompts — **memory signal sync `0 1 *
 | Wire optional env vars an existing backend needs | `install/install_<name>.ts` + the Prerequisites section of this README | The installer writes `env.vars.<NAME>`; the gateway exposes those to the agent's shell tools on next start. `install_edgeos.ts` is the worked example. |
 | Change which skills the agent loads | `workspace/AGENTS.md` "Active skills" section | Mark a skill as eager (gates fire at session start) or reactive (only consulted when needed). |
 | Retire a skill this repo no longer ships | `install/paths.ts`: move the name from `EDGE_SKILL_NAMES` to `RETIRED_SKILL_DIRS` | On the next roll the installer removes `$HERMES_HOME/skills/<name>/` from every home, one `→ removed retired skill <name> from <root>` line each; a name on both lists fails at load. Skills on neither list (Hermes's bundled ones, a resident's own) are never touched. `geo-esmeralda` is the first (DATA-360). |
-| Update the India reference snapshot (wiki, guides, website) | Don't edit by hand — the sync workflow does it | `.github/workflows/sync-edge-india-references.yml` runs `scripts/sync-india-references.ts` against `p2p-lanes/edge-agent-skill` every 15 minutes and commits to `main` only when a complete, India-scoped snapshot changed; a failed or partial upstream run keeps the last snapshot. Each agent's `Edge — knowledge sync` job copies it into `knowledge/edge-india/` every 30 minutes, verified against `SNAPSHOT.json`; the skill falls back to the snapshot of the agent's release tag and never fetches in a turn (`skills/edge-india/README.md`). The Esmeralda references are frozen. The recipes in `SKILL.md` are hand-edited — see the "Content" section above. |
+| Update the India reference snapshot (wiki, guides, website) | Don't edit by hand — the sync workflow does it | `.github/workflows/sync-edge-india-references.yml` runs `scripts/sync-india-references.ts` against `p2p-lanes/edge-agent-skill` every 15 minutes and, only when a complete, India-scoped snapshot changed, opens or refreshes one pull request from `bot/india-refs` that a person merges into `main` (it never commits to `main` itself); a failed or partial upstream run keeps the last snapshot. Each agent's `Edge — knowledge sync` job copies it into `knowledge/edge-india/` every 30 minutes, verified against `SNAPSHOT.json`; the skill falls back to the snapshot of the agent's release tag and never fetches in a turn (`skills/edge-india/README.md`). The Esmeralda references are frozen. The recipes in `SKILL.md` are hand-edited — see the "Content" section above. |
 
 ## Auth
 

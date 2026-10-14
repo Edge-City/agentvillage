@@ -166,6 +166,15 @@ export const APPROVAL_PLUGIN = "av-approval";
  * records every call as `tool.call`, and the hook is for actions. Each
  * routed call costs one shim round trip and is blocked while the gate is
  * unverified, as every entry here is.
+ *
+ * MINI-APPS (rc41, ov#312 re-cut; approval@edge CLAIMS L6285): `village`, the
+ * village-bridge plugin's one entry tool, exact name, is the 36th entry. The
+ * resident policy maps it to `marketplace.app.read` (read-only: the app
+ * catalogue and the tenant's own installs). A Gold Star send through it also
+ * needs the plugin's own manual `marketplace.app.action` grant from the daemon
+ * (plugins/village-bridge/_mini_apps.py). The control plane accepts this list
+ * (36, 3cea251a) and the previous one without `village` (35, 9cb621bb) until
+ * the roll after rc41.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -203,6 +212,7 @@ export const APPROVAL_GATED_TOOLS = [
   "text_to_speech",
   "web_search",
   "x_search",
+  "village",
 ] as const;
 
 /**
@@ -214,14 +224,14 @@ export const APPROVAL_GATED_TOOLS = [
  * tools to carry the reason "not staged: OV-300 M1 / BRIDGE-1" in its
  * `NOT_GATED` table, and fails if the entry here is removed without the tool
  * being gated.
+ *
+ * Empty from rc41 (MINI-APPS re-cut of ov#312): `village-bridge` (OV-300 M1,
+ * held back since ov#300) is staged again. Its one tool, `village`, is the 36th
+ * entry of APPROVAL_GATED_TOOLS, and a Gold Star send through it also needs the
+ * plugin's own manual `marketplace.app.action` grant. Without the control
+ * plane's mini-apps.json on the box every operation is refused.
  */
-export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set([
-  // OV-300 M1 (ov#300, a0b087c5): `village` is a write tool (star sends, meeting marks) in neither
-  // APPROVAL_GATED_TOOLS nor av-approval's GATED_MATCHERS. Off every box until BRIDGE-1 brings it back
-  // under the gate. Without its plugin.yaml on the box the control plane's token writer refuses
-  // (`village_plugin_missing`), so no village-bridge.json lands either (OV-300 M2).
-  "village-bridge",
-]);
+export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set();
 
 /** True when `path` exists, a dangling symlink included (`existsSync` follows links). */
 function lstatExists(path: string): boolean {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 
 import pytest
@@ -164,16 +165,18 @@ def test_pre_tool_call_never_returns_a_directive(plugin, ctx, monkeypatch):
 def test_pre_llm_call_injects_no_context_without_the_pairing_file(plugin, ctx, home, monkeypatch):
     """A str or {"context": ...} return would be appended to the user message.
 
-    The plugin's one such return is the DATA-444 reminder, and only while the
-    control plane's `memory/approvals-pairing.json` says unstarted. Without
-    that file there is no context, even in a human's root Telegram DM.
+    The plugin's returns are CLOCK-1's Now line (every turn) and the DATA-444
+    reminder, only while the control plane's `memory/approvals-pairing.json`
+    says unstarted. Without that file there is no reminder, even in a human's
+    root Telegram DM: the Now line is the whole context.
     """
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     plugin.register(ctx)
     assert not (home / "memory" / "approvals-pairing.json").exists()
+    now = re.compile(r"^Now: [A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} IST \(\d{1,2}:\d{2} [AP]M\)$")
     results = ctx.fire("pre_llm_call", session_id="s", user_message="hi", turn_id="t0")
-    assert results == []
+    assert len(results) == 1 and set(results[0]) == {"context"} and now.match(results[0]["context"])
     results = ctx.fire("pre_llm_call", session_id="s2", user_message="hi", turn_id="t0", platform="telegram",
                        conversation_history=[{"role": "user", "content": "hi"}], parent_session_id="")
-    assert results == []
+    assert len(results) == 1 and set(results[0]) == {"context"} and now.match(results[0]["context"])

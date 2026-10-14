@@ -20,6 +20,16 @@ Two more bundles are **opt-in and Hermes-only**, and are not part of the set abo
 - **recall** — tenant-local search over the agent's own daily notes, `MEMORY.md` and private conversations (SQLite FTS5, no LLM, no network), exposed as the `recall` tool by `plugins/recall` in the [agentvillage](../README.md) repo. It refuses in group chats and never writes into `memory/`. Without that plugin the skill does nothing. See `recall/README.md`.
 - **record-intention** — the one front door for intentions, the `record_intention` tool registered by `plugins/av-events` in the [agentvillage](../README.md) repo when `AV_RECORD_INTENTION` is on: publishes explicit intents to Index by default and holds ambient ones until the resident confirms. It is installed on every Hermes tenant with the edge bundles and is inert without the tool: the text applies only if `record_intention` is available (in the tool list, or found with `tool_search`). The index-network prompts, the nightly memory pass and `AGENTS.md` carry the same condition.
 
+**Curated mini-apps are separately installed by the owner:** `gold-stars`
+(recipient search and gratitude, with exact-preview manual approval) and
+`dizko` (public discovery through a reviewed MCP proxy). `install/install_miniapps.ts`
+stages them from the control plane's validated installed projection. `gold-stars`
+is also a baseline skill the installer ships to every box, inert until the app is
+installed; the helper never removes a skill the installer ships. Removing an app
+revokes its permission and removes only a skill file the installer does not ship
+(`dizko`). Copying a skill alone grants no API access.
+See [the builder starter and review contract](../mini-apps/README.md).
+
 The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.
 
 ## Host-specific silence

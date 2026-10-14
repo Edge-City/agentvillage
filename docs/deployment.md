@@ -262,16 +262,19 @@ on it:
 
 The village knowledge skill ships a snapshot of the public India wiki, Substack
 and website in `skills/edge-india/references/`. The sync workflow
-(`.github/workflows/sync-edge-india-references.yml`) keeps that snapshot on
-`main` current with the upstream indexer (`p2p-lanes/edge-agent-skill`), every
-15 minutes, refusing incomplete trees and any tree the agents' knowledge sync
-would refuse. That directory on `main` is the mirror the `Edge — knowledge
-sync` job pulls ("Edge India knowledge" below), so this is the one part of
-agent content that does not wait for a roll: the job copies it into
+(`.github/workflows/sync-edge-india-references.yml`) checks the upstream
+indexer (`p2p-lanes/edge-agent-skill`) every 15 minutes, refusing incomplete
+trees and any tree the agents' knowledge sync would refuse, and forwards a
+change as ONE pull request from `bot/india-refs` (SEC-5 fix a): it never
+commits to `main`, and it fails closed if GitHub refuses the PR. That directory
+on `main` is the mirror the `Edge — knowledge sync` job pulls ("Edge India
+knowledge" below), so this is the one part of agent content that does not wait
+for a roll, but it waits for a person's merge: the job copies it into
 `$HERMES_HOME/knowledge/edge-india/` every 30 minutes, verified against
-`SNAPSHOT.json`. End to end, an edit Fran's publisher has committed reaches the
-agents 30 to 65 minutes later (publisher 15 min, mirror 15 min, box job 30 min,
-plus raw.githubusercontent's 5 min cache); a session already open reads the
+`SNAPSHOT.json`. End to end, a merged update reaches the agents within about 35
+minutes (box job 30 min plus raw.githubusercontent's 5 min cache); before
+SEC-5 the forward was automatic and took 30 to 65 minutes from an upstream
+commit (publisher 15 min, mirror 15 min, box job 30 min); a session already open reads the
 guide at its next start (DATA-393; read back on 2026-10-07: upstream commit
 14:58Z, on a1909a4b's box by 21:55Z after the rc24 roll). The skill's `refs.ts` reads the newer of that copy and the
 snapshot installed at the roll (the offline fallback). **Its own live check,
@@ -554,13 +557,17 @@ default: the built-in default is **Edge City's mirror in this repo**,
 `skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
 kept by `sync-edge-india-references.yml` (#203), which copies complete
 snapshots only and writes `SNAPSHOT.json` with each file's sha256 and the
-upstream commit it copied. The mirror is not reviewed by a person: the
-workflow forwards upstream `main` every 15 minutes. What it adds is its
-checks (complete trees, the caps this job and `refs.ts` apply, manifest
+upstream commit it copied. The mirror moves only on a person's merge: the
+workflow checks upstream `main` every 15 minutes and forwards a change as one
+pull request (`bot/india-refs` to `main`, refreshed in place while it is open;
+SEC-5 fix a), so freshness is the merge cadence. What it adds is that merge,
+its checks (complete trees, the caps this job and `refs.ts` apply, manifest
 links only to the guide's own sites), a commit per change under our org's
 audit log, and a kill switch (disable the workflow, or revert the mirror). A
 push to upstream read directly would reach every agent within one run with
-none of these.
+none of these. The PR is opened with `GITHUB_TOKEN`, which needs the repo
+setting "Allow GitHub Actions to create and approve pull requests" (or a GitHub
+App token); without it the run fails and nothing is forwarded.
 
 **Trust boundary.** The decision: Carter's choice of upstream (GRANT
 2026-10-06 09:06Z named `aromeoes/edge-agent-skill`; moved to
@@ -569,8 +576,8 @@ indexer had failed every run since 2026-10-01 and Fran's live indexer was found
 in `p2p-lanes`, the EdgeOS org, where he said on 2026-10-06 the references live).
 The mirror follows `p2p-lanes/edge-agent-skill@main`: an org branch written by
 Fran's AWS publisher (CodeBuild, committer `edge-india-indexer[bot]`, commits
-unsigned), unpinned, forwarded automatically every 15 minutes by the sync
-workflow, with no person reviewing it. What protects the fleet: the sync's checks (sizes,
+unsigned), unpinned, checked every 15 minutes by the sync workflow and
+forwarded as one pull request a person merges. What protects the fleet: that merge; the sync's checks (sizes,
 names, encoding, HTML, complete India-only trees, manifest links only to the
 guide's hosts) and the upstream commit it records in `SNAPSHOT.json` per
 publish (it refuses to publish when that commit cannot be read); this job's
@@ -579,9 +586,9 @@ record `refs.ts` checks before it reads the local copy (regular files, UTF-8,
 sha256 per file); `refs.ts`'s treat_as frame with a per-run token; and the
 host allowlist on manifest urls. What is **not** protected: the content
 itself. A sentence changed upstream (a price, a date, a contact, a false
-claim) reaches residents as information, typically within the hour (the
-15-minute sync, the CDN's 5-minute cache, the job's 30-minute period), cited
-with its source link. Neither switch removes a
+claim) that the reviewer misses reaches residents as information within about
+35 minutes of the merge (the CDN's 5-minute cache, the job's 30-minute
+period), cited with its source link. Neither switch removes a
 copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus

@@ -2,6 +2,7 @@
 
 The approval gate's fail-closed backstop at every gateway start (DATA-234),
 credential custody, the plugin inventory and unknown-plugin quarantine (SEC-3),
+the model observer (SEC-6 half 2, observe only),
 and the receipts half of approval.md for Agent Village (DATA-43;
 approval-md-hosted `docs/03` section 3.3), still a stub. Enabled by
 `install/install_approval.ts` for a tenant with `AV_APPROVAL_ENABLED=1`, and
@@ -193,7 +194,8 @@ unknown.
   failed: `state=loaded` then shows it is still live, and a line says so);
   `unlist_failed` whenever the key was not unlisted, whatever the unload did (an
   unload that did succeed is logged). No sticky gate block, no gateway exit.
-- `off`: nothing subscribed, nothing sent.
+- `off`: no inventory: nothing classified, nothing sent. The listener and the tick still run while
+  the model observer is on (SEC-6 half 2 fix round 1, S1); with both off nothing is subscribed.
 
 **Events** (bare names through `ctx.emit`; the host namespaces them
 `av-approval:`; av-events turns them into `plugin.inventory@1` and
@@ -232,7 +234,7 @@ a dictionary. If the key cannot be read or created, a per-process key is used an
 
 **What verify reads back after the roll** (design §4.4):
 
-- every box: `plugins/av-approval/plugin.yaml` is `version: 0.4.0`; the gateway log
+- every box: `plugins/av-approval/plugin.yaml` is `version: 0.4.0` or later (0.5.0 from rc41); the gateway log
   has `av-approval: plugins: <n> expected, <m> bundled, 0 unknown (mode report)`
   and no `plugins: inventory NOT running`; `plugins.disabled` is unchanged (empty)
   in report mode;
@@ -245,10 +247,109 @@ a dictionary. If the key cannot be read or created, a per-process key is used an
 - then verify's `box-plugins.sh` sweep, compared with the ingest counts.
 
 **Rollback** (design §4.5): `av_approval.unknown_plugins: off` per box (admin), or
-the previous rc's overlay; with `off` nothing is subscribed. Events: av-events'
+the previous rc's overlay; with `off` no inventory runs (the tick stays for the model observer). Events: av-events'
 `AV_PLUGIN_EVENTS` off. A plugin quarantined in `quarantine` mode stays in
 `plugins.disabled` after a rollback by design: add an allow entry, then
 `hermes plugins enable <key>` (admin).
+
+## Model observer (SEC-6 half 2, 0.5.0, observe only)
+
+`_models.py`, started by `register` after the inventory whatever `AV_APPROVAL_ENABLED` says, in
+the gateway process only (the inventory's argv-or-marker gate). It reports which model id a box
+actually uses. It never blocks or rewrites a request: no `llm_request` middleware, no enforce mode.
+
+**Request half.** One `pre_api_request` callback per process (re-`register` keeps it; `ctx.on_unload`
+drops it). It reads `request["body"]["model"]`, the id on the wire after any `llm_request`
+middleware, else the `model` kwarg (a body too large for Hermes's hook payload arrives truncated,
+without `body`). The cost per request is a dict read, a length check, one `re.fullmatch` and one set
+lookup under one short lock, and the callback returns None. A first sight per distinct id per
+process (a set of 256 ids, oldest dropped first) emits and logs. Every path is wrapped in
+try/except; an error gives one DEBUG line per error type and is never raised.
+
+**Config half.** The SEC-3 pass (boot, loaded, the 15-minute tick) hands its own parse of
+config.yaml to `on_tick(config)`: `model.default` (or a bare `model` string), with no second read
+and no state.db read. It reports at first sight, on any change of the id or of the local list,
+and every 24 h unchanged (`trigger=daily`). `/model --global` and `hermes config set model.default`
+both write that key, so the next tick sees either.
+
+**Restart.** The first-sight set and the 24 h timer live in the process only; nothing is on disk.
+Every gateway boot sends `model.observed` `source=config_default, trigger=first_sight` from the
+boot pass, and `source=request, trigger=first_sight` at the first request. `trigger=daily` rows
+come only from a gateway that has been up for more than 24 h. data's silence rule counts boot rows
+as heartbeats (data#539); this is the contract.
+
+**Events.** `ctx.emit("model.observed", payload)` per observation, and `model.offlist` with the same
+fields next to it when the local list exists and does not hold the id. Bus
+`av-approval:model.*`, actor `system`. The fields are exactly the `model_events` section of
+`plugins/av-events/tests/vectors/plugin_events_contract.json` (ov#333), in its order: `model`,
+`source`, `trigger`, `off_list_local`, `allowlist_version`, `hermes_version`, `ts`. Each emit gets
+a fresh dict. `model` is null when it is longer than 100 characters, misses the cp's `MODEL_ID`
+(never lower-cased), or is a string av-events' credential `sanitize` would rewrite (its
+`_SECRET_PATTERNS`, copied and pinned by a test). That covers the three null vectors ov#336 added to the
+contract (`openai/sk-proj-<16>`, `sk-or-v1-<20>/x`, and `model.offlist` with the sk-proj id),
+which the parity test reads from main's file. av-events sends these events
+only with `AV_MODEL_EVENTS` on.
+
+**Privacy.** Ids only: no prompt text, session/task/turn id, provider, base URL or key.
+
+**Trust boundary** (design §2). The box is agent-writable: config.yaml, this plugin, the
+installer's env. It reports what it OBSERVED. The local verdict (`off_list_local`) only picks the
+log word and whether `model.offlist` is sent. The alert is decided by data (DATA-477) against the
+cp's list. `allowlist_version` exposes a tampered local list. A box that strips the plugin goes
+silent, and data's silence rule catches that.
+
+**Config** (`config.yaml`):
+
+```yaml
+av_approval:
+  model_observer: on          # off (or a bare YAML off): nothing subscribed, nothing sent, nothing logged
+  model_allow:                # written by the installer (configureModelAllow); absent = no local list
+    - openai/gpt-4o-mini
+    - openai/gpt-6-luna
+```
+
+`model_allow` holds the cp's `AV_MODEL_ALLOWLIST` (exec env only, never `.env`) plus the overlay's
+`FALLBACK_MODEL`, each id checked and deduped, then sorted. At most 64 of the cp's ids other than
+the fallback are kept, first come; the rest are dropped and counted in one line. The fallback is
+added after the cap, so the list holds up to 65 ids, which data accepts (data#539 N7). The
+observer reads the list with the same rule: it keeps at most 64 ids besides the fallback, in list
+order, then adds `FALLBACK_MODEL`, so its ids are always that union. A list the installer wrote is
+never cut. `allowlist_version` = sha256 hex[:12] of
+`",".join(sorted(set(ids)))`, UTF-8, which is data's recipe byte for byte, pinned by
+`tests/vectors/model-allowlist-version.v1.json`, including its 65-id edge row. That file is copied
+from agentvillage-data data#539 at fa754673, `tests/fixtures/model-allowlist-version.v1.json`, blob
+ad2df959, sha256 0d9e498b…a60c60d41, so CI needs no cross-repo access. With `AV_MODEL_ALLOWLIST` absent (a manual
+install, a local runtime) the key is removed, so `off_list_local` and `allowlist_version` are null.
+The installer step fails loudly (non-zero exit at the end of the run) on an unparseable config, a
+YAML merge key, or an `av_approval` that is not a mapping. `model_observer: off` read at register
+subscribes nothing. Read at a tick, it silences both halves until it is `on` again; the request
+half then resumes only if it was subscribed at register. The config half no longer depends on
+the inventory (fix round 1, S1). The 15-minute tick starts when EITHER `unknown_plugins` or
+`model_observer` is not off, and each runs only under its own mode, so `unknown_plugins: off` does
+not silence the observer. With both off, no tick starts.
+
+**Log** (one new class: every line under the `av-approval: model:` prefix, three lines in all, fix round 1 N1):
+`av-approval: model: <id> (<source>, <on-list|off-list|no-list>)` at
+INFO (WARNING when off-list), at first sight and with the daily heartbeat only. `<id>` is printed
+only when it passed the checks above; otherwise it is printed as `invalid`. Once per process:
+`av-approval: model: av_approval.model_allow: <n> entries dropped (invalid or past the 64-id cap)`. DEBUG:
+`av-approval: model: observer error (<type>)`.
+
+**Layers** (design §7):
+
+| Layer | What it stops | What it cannot stop |
+|---|---|---|
+| OpenRouter per-tenant key guardrail (release c34742a0 / cp#229) + key credit limit | any request for a model outside the guardrail's ids; spend past the per-key cap (the hard cost bound) | switches among those ids; a box holding another provider's key; nothing until `OPENROUTER_GUARDRAIL_ID` is set |
+| SEC-6 half 1, slash allow-list (ov#330) | residents' `/model`, `/reasoning`, `/fast` and config commands in Telegram | the agent's own `hermes config set model.default`, direct config.yaml edits, the admin PTY |
+| SEC-6 half 2, this observer | nothing: it DETECTS an off-list id within one turn (request) or 15 min (config), and a tampered local list | a box that strips the plugin or the event (caught as silence, not prevented); auxiliary-model traffic |
+
+**Rollback.** Per box: `av_approval.model_observer: off` (admin). Fleet-wide: `AV_MODEL_EVENTS`
+off at av-events (events dark; the log line stays). Or the previous rc's overlay.
+`unknown_plugins: off`, SEC-3's rollback, no longer silences the observer. An installer failure
+of the list step is recorded as `model_allow_failed` in `av-events/install-status.json`, printed as
+`agentvillage-install: model_allow_failed=<reason>`, and exits 1 at the end of the run. It is inert until rc41
+rolls `plugins/`. Events stay dark until `AV_MODEL_EVENTS=1`, after data's DATA-477 release is
+live.
 
 ## Kill switch
 
@@ -272,7 +373,7 @@ ungated one, the healthy state never blocks, the start failure is sticky, the
 re-check runs at most once a minute, the token is never read, and `register`
 never raises. `test_backstop_in_a_real_hermes` runs the plugin inside a real
 Hermes (opt-in: `AV_HERMES_SRC=<Hermes source tree>
-AV_HERMES_PYTHON=<its interpreter>`): healthy, 35 shell hooks register (13 before R3b) and
+AV_HERMES_PYTHON=<its interpreter>`): healthy, 36 shell hooks register (including `village`) and
 nothing blocks; with a mode-000 allowlist lock, `register_from_config` raises
 `PermissionError` and the backstop blocks `terminal`.
 
@@ -298,3 +399,14 @@ The Hermes-backed runs (an install from a local `git init` fixture registering
 an allow-listed revision, a bundled `web/ddgs`, a same-named override) run in a
 subprocess when `hermes_cli` and `ruamel.yaml` import
 (`PYTHONPATH=<Hermes source tree>[:<ruamel>]`) and skip otherwise.
+
+`tests/test_model_observer.py` (SEC-6 half 2): hook payload shapes, nulling (the contract's null
+vectors and av-events' credential shapes, the patterns pinned to av-events' `_core.py`), first-sight
+dedupe with its 256 bound, the heartbeat and restart on a fake clock, list parsing, data's
+`allowlist_version` fixture row by row, mode off, subscribe-once, never-raise on hostile input,
+PARITY with the contract's `model_events` section (bus, types, field order, shapes, switch,
+drop reasons, every accept and null vector), and three mutation checks (dedupe off, nulling off,
+list parsing off). The Hermes-backed run, which needs `PYTHONPATH` as above, drives the ref's
+`_fire_pre_api_request_hook` on the real `ApiRequestHooksMixin`, adds an `llm_request` middleware
+that rewrites the id, and calls `persist_model_selection` before the next tick. The installer step
+is tested by `bun test install/tests/model_allow.test.ts`.

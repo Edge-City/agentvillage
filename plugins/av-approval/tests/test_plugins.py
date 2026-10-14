@@ -170,7 +170,9 @@ def test_a_healthy_box_counts_everything_expected_and_nothing_missing(tmp_path):
     mod = _mod()
     bundled, user, keys = _world(tmp_path)
     expected = mod.load_expected()
-    records = [_rec(n, user / n, dashboard_only=(n == "edgecity-village"), loaded=(n not in ("edgecity-village", "recall")))
+    # Conditional plugins (recall, and village-bridge from rc41) are present but not loaded here.
+    records = [_rec(n, user / n, dashboard_only=(n == "edgecity-village"),
+                    loaded=(n != "edgecity-village" and n not in expected["conditional"]))
                for n in expected["overlay"]]
     records.append(_rec("web/ddgs", bundled / "web" / "ddgs", source="bundled"))
     inv = mod.classify(records, expected=expected, metadata={}, bundled_root=bundled, bundled_keys=keys)
@@ -401,10 +403,20 @@ def test_register_subscribes_and_never_unloads_the_listener_does(box, monkeypatc
 
 def test_off_subscribes_nothing_and_sends_nothing(box):
     mod, home, manager, _ = box
-    _set_mode(home, "off")
+    _set_mode(home, "off", model_observer="off")  # SEC-6 fix round 1 S1: the observer on keeps the tick
     ctx = FakeBusCtx()
     assert mod.start(ctx, manager_factory=lambda: manager) is False
     assert manager.listeners == [] and "thread" not in mod._state() and ctx.unloads == []
+
+
+def test_observer_off_leaves_the_inventory_as_it_was(box):
+    mod, home, manager, _ = box
+    _set_mode(home, "report", model_observer="off")
+    models = __import__(mod.__name__.rsplit(".", 1)[0] + "._models", fromlist=["_models"])
+    ctx = FakeBusCtx()
+    assert models.start(ctx) is False and mod.start(ctx, manager_factory=lambda: manager)
+    manager.fire()
+    assert [e for e, _ in ctx.emitted] == ["plugin.inventory", "plugin.unknown"]
 
 
 def test_outside_the_gateway_process_nothing_runs_and_nothing_is_logged(box, caplog, monkeypatch):
@@ -511,7 +523,8 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
         manager.fire()
     assert manager.unloaded == [] and unlisted == [] and (home / "config.yaml").read_bytes() == before
     (inventory,) = _events(ctx, "plugin.inventory")
-    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 7, "expected_missing": 0,
+    # Eight from rc41: the overlay staged in full, village-bridge included (MINI-APPS re-cut).
+    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 8, "expected_missing": 0,
                          "bundled_loaded": 0, "unknown_count": 1, "allowed_count": 0,
                          "expected_set_version": mod.load_expected()["expected_set_version"],
                          "hermes_version": inventory["hermes_version"]}
@@ -519,7 +532,7 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
     assert (unknown["name"], unknown["state"], unknown["action"], unknown["install_host"], unknown["tools"]) == (
         "fixture-echo", "loaded", "none", "git.example.com", 1)
     assert [r.getMessage() for r in caplog.records] == [
-        "av-approval: plugins: 7 expected, 0 bundled, 1 unknown (mode report)"]
+        "av-approval: plugins: 8 expected, 0 bundled, 1 unknown (mode report)"]
 
 
 def test_quarantine_unloads_and_unlists_and_reports_each_outcome_once(box):
@@ -789,7 +802,7 @@ manager = get_plugin_manager()
 seen = []
 real = manager._dispatch_event
 def spy(event, payload):
-    if event.startswith("av-approval:"):
+    if event.startswith("av-approval:plugin."):  # SEC-6's model.* events are pinned in test_model_observer.py
         seen.append([event, dict(payload)])
     return real(event, payload)
 manager._dispatch_event = spy

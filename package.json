@@ -11,6 +11,8 @@
     "install/*.ts",
     "workspace/**/*.md",
     "skills/",
+    "plugins/",
+    "mini-apps/",
     "LICENSE"
   ],
   "dependencies": {
