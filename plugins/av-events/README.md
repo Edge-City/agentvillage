@@ -32,6 +32,7 @@ plugins/av-events/
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
+  _ask_village.py  the ask_village tool, dark behind AV_ASK_VILLAGE: one question about the main group, answered by the god agents through the control plane
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -63,7 +64,8 @@ plugins/av-events/
 | `AV_BACKUP_MIN_INTERVAL_S` | `300` | Least time between two turn-triggered snapshot passes. A session finalize is not held to it. |
 | `AV_BACKUP_GRACE_S` | `90` | Least time between a snapshot request and the pass that covers it, so the background memory review's writes after a turn are included. |
 | `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
-| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read only by `pray`. |
+| `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
+| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray` and `ask_village` (which sends its key only to a `CP_HOSTS` host). |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -1864,6 +1866,29 @@ reviews every request before anything changes; the tool itself grants and emits 
 - **Nothing private leaves:** `tool.call` carries only a keyed hash of the arguments, and `pray` is not in
   `tool_categories.json`, so it leaves as `other` with no name. Log lines carry codes only, never the
   reason, the token or the tenant.
+
+---
+
+## Asking about the village group (ASK-VILLAGE)
+
+With `AV_ASK_VILLAGE` on, the plugin registers `ask_village` (toolset `av-events`, `_ask_village.py`):
+`ask_village({question, window?})`, a question of at most 500 characters about the village's main
+Telegram group (it may name a person: "what has X been saying?"), over `24h` (default), `7d` or `all`.
+The tool POSTs `{question, window?}` to the control plane's `/tenants/{TENANT_ID}/village/ask` with
+`Authorization: Bearer $EDGEOS_API_KEY` (the box credential cp#227's directory forward takes, as
+`skills/edgeos/scripts/directory.ts` sends it) and `X-AV-Session-Kind: dm|cron`. The control plane
+forwards it to the app's god-agent runner, and the app's JSON (`{answer, window, sources, cached,
+cut?}`) comes back to the agent as is, or `{error, retry_after_s?, message}` (a 404 is `not_available`:
+the route is dark).
+
+- **Who may ask:** the same rule as `pray` (the resident's direct chat and the agent's own cron runs);
+  a group is refused with `group_session` and nothing is sent.
+- **The wire:** the key goes only over https to a host on `CP_HOSTS` (directory.ts's list; plain http
+  only to loopback for tests). Body at most 4 KiB, a 65 s deadline (the control plane waits about 60 s on
+  the app), redirects and proxy variables refused. Only a failure before anything was sent is retried,
+  once. The contract is `tests/vectors/ask-village-contract.json`.
+- **Not routed through the approval gate** (`NOT_GATED` in `install/tests/plugin_tools_gated.test.ts`).
+- **Never logged:** the question, the answer, the key or the tenant; one line of codes per call.
 
 ---
 

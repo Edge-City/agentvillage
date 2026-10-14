@@ -633,15 +633,23 @@ def register_pray_tool(ctx: Any) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("av-events: pray register_failed=%s", type(exc).__name__)
         return False
-    register_hook = getattr(ctx, "register_hook", None)
-    if callable(register_hook):
-        for name in LINEAGE_HOOK_NAMES:
-            try:
-                register_hook(name, _ri.LINEAGE_HOOKS[name])
-            except Exception:  # noqa: BLE001 - a missing listener only refuses more cron runs as groups
-                continue
+    register_lineage(ctx)
     logger.info("av-events: pray registered")
     return True
+
+
+def register_lineage(ctx: Any) -> None:
+    """The lineage listeners `session_kind`'s cron rule reads. `pray`, `ask_village` and
+    record_intention may each register them: a second copy only records the same platform
+    and parent again."""
+    register_hook = getattr(ctx, "register_hook", None)
+    if not callable(register_hook):
+        return
+    for name in LINEAGE_HOOK_NAMES:
+        try:
+            register_hook(name, _ri.LINEAGE_HOOKS[name])
+        except Exception:  # noqa: BLE001 - a missing listener only refuses more cron runs as groups
+            continue
 
 
 __all__ = [
@@ -665,6 +673,7 @@ __all__ = [
     "normalize_reason",
     "post_prayer",
     "pray_answer",
+    "register_lineage",
     "register_pray_tool",
     "request_body",
     "session_kind",

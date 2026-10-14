@@ -69,6 +69,9 @@ AV_ENV_VARS = (
     # PRAYER P3: the `pray` tool.
     "AV_PRAY",
     "CONTROL_PLANE_URL",
+    # ASK-VILLAGE: the `ask_village` tool.
+    "AV_ASK_VILLAGE",
+    "EDGEOS_API_KEY",
 )
 
 

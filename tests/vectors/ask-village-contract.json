@@ -1,0 +1,338 @@
+{
+  "about": [
+    "ASK-VILLAGE (D) box contract: the request the overlay's av-events `ask_village` tool sends to the control plane's",
+    "POST /tenants/{tenant_id}/village/ask (release's cp half, CLAIMS L6493), which forwards {tenant_id, question, window?}",
+    "to the app's POST /api/v1/internal/village/ask (app#247) and passes the app's JSON back as is.",
+    "Read by plugins/av-events/tests/test_ask_village.py; the cp copies it to control-plane/tests/vectors/.",
+    "Credential: Bearer EDGEOS_API_KEY, exactly as cp#227's directory forward (skills/edgeos/scripts/directory.ts), and only",
+    "over https to a CP_HOSTS host. Lengths are Unicode code points."
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/tenants/{tenant_id}/village/ask",
+    "headers": {
+      "authorization": "Bearer {EDGEOS_API_KEY}",
+      "content-type": "application/json",
+      "accept": "application/json",
+      "x-av-session-kind": [
+        "dm",
+        "cron"
+      ]
+    },
+    "body": "compact JSON, UTF-8 as is, keys question and (optional) window only; the cp adds tenant_id",
+    "max_body_bytes": 4096,
+    "deadline_s": 65,
+    "cp_hosts": [
+      "control-plane-production-606c.up.railway.app"
+    ],
+    "attempts": "at most 2; the second only when nothing was sent (a connect or DNS failure)",
+    "redirects": "refused, never followed"
+  },
+  "rules": {
+    "question_max": 500,
+    "question_normalize": "NFC, runs of ECMAScript white space (JS \\s) folded to one space, trimmed",
+    "question_refused": "[\\x00-\\x1f\\x7f-\\x9f\\u202a-\\u202e\\u2066-\\u2069] or a lone surrogate",
+    "windows": [
+      "24h",
+      "7d",
+      "all"
+    ]
+  },
+  "sent": [
+    {
+      "args": {
+        "question": "What has the village been saying about the Friday dinner?"
+      },
+      "body": {
+        "question": "What has the village been saying about the Friday dinner?"
+      }
+    },
+    {
+      "args": {
+        "question": "What has Asha been saying in the group?",
+        "window": "7d"
+      },
+      "body": {
+        "question": "What has Asha been saying in the group?",
+        "window": "7d"
+      }
+    },
+    {
+      "args": {
+        "question": "  Any   news\n\tabout surfing?  ",
+        "window": "all"
+      },
+      "body": {
+        "question": "Any news about surfing?",
+        "window": "all"
+      }
+    },
+    {
+      "args": {
+        "question": "Café plans?",
+        "window": null
+      },
+      "body": {
+        "question": "Café plans?"
+      }
+    },
+    {
+      "args": {
+        "question": "🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄",
+        "window": "24h"
+      },
+      "body": {
+        "question": "🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄🏄",
+        "window": "24h"
+      }
+    }
+  ],
+  "refused": {
+    "invalid_body": [
+      null,
+      [],
+      "q",
+      {
+        "window": "7d"
+      },
+      {
+        "question": "q",
+        "person_id": "x"
+      },
+      {
+        "question": 5
+      }
+    ],
+    "question_invalid": [
+      {
+        "question": ""
+      },
+      {
+        "question": " \n "
+      },
+      {
+        "question": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "question": "bidi ‮ override"
+      },
+      {
+        "question": "del"
+      },
+      {
+        "question": "c1x"
+      },
+      {
+        "question": "isolate ⁦x⁩"
+      }
+    ],
+    "window_invalid": [
+      {
+        "question": "q",
+        "window": "30d"
+      },
+      {
+        "question": "q",
+        "window": "ALL"
+      },
+      {
+        "question": "q",
+        "window": 7
+      }
+    ]
+  },
+  "answers": [
+    {
+      "status": 200,
+      "body": {
+        "answer": "The village group discussed moving the Friday dinner to the beach; Asha said she would bring the speakers.",
+        "window": {
+          "since": "2026-10-13T12:00:00.000Z",
+          "until": "2026-10-14T12:00:00.000Z"
+        },
+        "sources": [
+          {
+            "topic": "Dinners",
+            "when": "2026-10-14T09:00Z"
+          }
+        ],
+        "cached": false
+      },
+      "tool": {
+        "answer": "The village group discussed moving the Friday dinner to the beach; Asha said she would bring the speakers.",
+        "window": {
+          "since": "2026-10-13T12:00:00.000Z",
+          "until": "2026-10-14T12:00:00.000Z"
+        },
+        "sources": [
+          {
+            "topic": "Dinners",
+            "when": "2026-10-14T09:00Z"
+          }
+        ],
+        "cached": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "answer": "The village group discussed moving the Friday dinner to the beach; Asha said she would bring the speakers.",
+        "window": {
+          "since": "2026-10-13T12:00:00.000Z",
+          "until": "2026-10-14T12:00:00.000Z"
+        },
+        "sources": [
+          {
+            "topic": "Dinners",
+            "when": "2026-10-14T09:00Z"
+          }
+        ],
+        "cached": true,
+        "cut": true
+      },
+      "tool": {
+        "answer": "The village group discussed moving the Friday dinner to the beach; Asha said she would bring the speakers.",
+        "window": {
+          "since": "2026-10-13T12:00:00.000Z",
+          "until": "2026-10-14T12:00:00.000Z"
+        },
+        "sources": [
+          {
+            "topic": "Dinners",
+            "when": "2026-10-14T09:00Z"
+          }
+        ],
+        "cached": true,
+        "cut": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "store_empty"
+      },
+      "tool": {
+        "error": "store_empty"
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": "question_invalid"
+      },
+      "tool": {
+        "error": "question_invalid"
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": "window_invalid"
+      },
+      "tool": {
+        "error": "window_invalid"
+      }
+    },
+    {
+      "status": 401,
+      "body": {
+        "error": "unauthorized"
+      },
+      "tool": {
+        "error": "unauthorized"
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "error": "not_found"
+      },
+      "tool": {
+        "error": "not_available"
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "error": "disabled"
+      },
+      "tool": {
+        "error": "not_available"
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": "no_village_grant"
+      },
+      "tool": {
+        "error": "no_village_grant"
+      }
+    },
+    {
+      "status": 413,
+      "body": {
+        "error": "too_large"
+      },
+      "tool": {
+        "error": "too_large"
+      }
+    },
+    {
+      "status": 422,
+      "body": {
+        "error": "store_empty"
+      },
+      "tool": {
+        "error": "store_empty"
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": "rate_limited",
+        "retry_after_s": 60
+      },
+      "tool": {
+        "error": "rate_limited",
+        "retry_after_s": 60
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": "busy"
+      },
+      "tool": {
+        "error": "busy"
+      }
+    },
+    {
+      "status": 502,
+      "body": {
+        "error": "model_failed"
+      },
+      "tool": {
+        "error": "model_failed"
+      }
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": "disabled"
+      },
+      "tool": {
+        "error": "disabled"
+      }
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": "something_else"
+      },
+      "tool": {
+        "error": "unavailable"
+      }
+    }
+  ]
+}
