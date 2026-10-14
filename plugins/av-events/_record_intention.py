@@ -289,8 +289,9 @@ PUBLISH_RULE = (
 )
 
 #: DATA-384: which source to pass, by whose words the text is. Stated word for
-#: word in workspace/AGENTS.md, skills/record-intention/SKILL.md and
-#: skills/index-network/tools.md (tests/test_intention_source.py). DATA-410
+#: word in skills/record-intention/SKILL.md and skills/index-network/tools.md;
+#: workspace/AGENTS.md states the same rules in fewer words (AGENTS-MD-CAP) and
+#: points to the skill (tests/test_intention_source.py). DATA-410
 #: (Carter's ruling, 2026-10-07, corrected by the lead the same evening): the
 #: agent's words, shown and adopted in chat, are the resident's (source=message
 #: with confirmed_in_chat); ambient is for words the resident never saw.

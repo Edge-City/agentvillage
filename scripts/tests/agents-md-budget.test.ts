@@ -10,7 +10,8 @@
  * (install/config.ts `setContextFileMaxChars`); this file is the real fix: AGENTS.md
  * under the 20,000 floor (target 18,000), so no model pin can truncate it, with the
  * red lines at the top, inside any head budget, byte for byte as on main (one
- * pointer changed: scripts/tests/fixtures/agents-md-red-lines.txt). The reference
+ * pointer changed, and rc38's trim of the Intentions bullet to the same rules in
+ * fewer words: scripts/tests/fixtures/agents-md-red-lines.txt). The reference
  * sections it shed live at the end of skills/index-network/tools.md, read on demand.
  */
 import { describe, expect, test } from "bun:test";
@@ -61,7 +62,8 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(at).toBeLessThan(agents.indexOf("\n## Community context\n"));
     // Right after the identity block: the first section heading in the file.
     expect(headings(agents).slice(0, 2)).toEqual(["# AGENTS.md — Your Workspace", "## Red lines"]);
-    // The section byte for byte: main's red lines with only the URL-preservation pointer changed (R1).
+    // The section byte for byte: main's red lines with only the URL-preservation pointer changed (R1)
+    // and the Intentions bullet trimmed to the same rules in fewer words (rc38, test_intention_source.py pins it).
     const section = agents.slice(at + 1, agents.indexOf("\n## ", at + 1) + 1);
     const fixture = readFileSync(join(import.meta.dir, "fixtures", "agents-md-red-lines.txt"), "utf8");
     expect(section).toBe(fixture);

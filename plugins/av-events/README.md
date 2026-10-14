@@ -540,7 +540,7 @@ background or cron run found.
 `DRAFT_RULE` in `_record_intention.py` are the text (with `SOURCE_SHORT`, one sentence inside the
 first 500 characters of the description, which is all `tool_search` shows); the tool description is
 built from them, and `tests/test_intention_source.py` pins whole each passage that states them: the
-`workspace/AGENTS.md` bullet, the skill's two sections, the `skills/index-network/tools.md`
+`workspace/AGENTS.md` bullet (the same rules in fewer words, AGENTS-MD-CAP), the skill's two sections, the `skills/index-network/tools.md`
 paragraph, the description and the schema's `source` and `confirmed_in_chat` descriptions. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
 Search, which such a gate would not see); its text, the `workspace/AGENTS.md` routing line and the
