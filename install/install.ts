@@ -73,6 +73,7 @@ import {
   configureIndexLinks,
   configureDashboardAuth,
   configureHostedGateway,
+  configParseFailure,
   configureModelFallback,
   configureSlashAccess,
   configureStt,
@@ -290,6 +291,23 @@ function restartGateway(): void {
 
 function main(): void {
   ensureHermesAvailable();
+
+  // SEC-6 fix round 2: a config.yaml the installer cannot parse (a duplicate key: PyYAML keeps the
+  // last value, which could ungate) would crash the first config step before the slash gate is
+  // written. Record it and stop here, fail closed.
+  const parseFailed = configParseFailure();
+  if (parseFailed) {
+    try {
+      writeInstallStatus(hermesHome(), []);
+      recordSlashAccessStatus(hermesHome(), parseFailed);
+    } catch {
+      console.warn("  warning: could not write av-events/install-status.json");
+    }
+    console.log(slashAccessFailedLine(parseFailed));
+    console.error("error: config.yaml could not be parsed; nothing installed, slash access not configured");
+    process.exitCode = 1;
+    return;
+  }
 
   const wipeUser = process.argv.includes("--wipe-user");
   const welcomeState = wipeUser ? null : captureWelcomeState(TARGET_HOME);

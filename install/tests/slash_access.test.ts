@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { configureSlashAccess, RESIDENT_SLASH_COMMANDS, SLASH_ACCESS_KEYS, SLASH_NO_ADMIN, slashAccessKeys } from "../config";
+import { configureSlashAccess, findMergeKey, RESIDENT_SLASH_COMMANDS, SLASH_ACCESS_KEYS, SLASH_NO_ADMIN, slashAccessKeys } from "../config";
 import { installStatusPath, recordSlashAccessStatus, writeInstallStatus } from "../install_status";
 
 const HERMES_REF = "/Users/carter/dev/hermes-agent-ref-v2026.9.24";
@@ -182,6 +182,64 @@ test("S3: install.ts runs every other step, records slash_access_failed and exit
   expect(stdout).toContain("✓ installed"); // the remaining steps ran first
   expect(existsSync(join(home, "AGENTS.md"))).toBe(true);
   expect(JSON.parse(readFileSync(installStatusPath(home), "utf8")).slash_access_failed).toBe(why);
+});
+
+/** Run install.ts end to end over `configText`, as the control plane does (--no-restart). */
+function runInstall(configText: string): { code: number | null; stdout: string; status: Record<string, unknown> } {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-slash-install-"));
+  const fakeHermes = join(home, "fake-hermes");
+  writeFileSync(fakeHermes, "#!/bin/sh\nexit 127\n");
+  chmodSync(fakeHermes, 0o755);
+  writeFileSync(join(home, "config.yaml"), configText);
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: fakeHermes };
+  for (const key of ["AV_APPROVAL_ENABLED", "AV_RECALL_ENABLED", "AV_SLASH_ADMIN_IDS"]) delete env[key];
+  const run = Bun.spawnSync({
+    cmd: ["bun", join(REPO_ROOT, "install", "install.ts"), "--no-restart", "--skip-crons", "--skip-index"],
+    cwd: REPO_ROOT, env, stdout: "pipe", stderr: "pipe",
+  });
+  const statusPath = installStatusPath(home);
+  const status = existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, "utf8")) : {};
+  return { code: run.exitCode, stdout: run.stdout.toString(), status };
+}
+
+/** Fix round 2 (M1-M3): PyYAML merges these into a Telegram block that ungates; the `yaml` package does not. */
+const MERGE_SHAPES = [
+  ["M1 top level", "tdef: &t {telegram: {allow_admin_from: []}}\n<<: *t\n", "the top level"],
+  ["M2 gateway", "gdef: &g {telegram: {extra: {allow_admin_from: []}}}\ngateway:\n  <<: *g\n", "gateway"],
+  ["M3 gateway.platforms", "pdef: &p {telegram: {user_allowed_commands: [model]}}\ngateway:\n  platforms:\n    <<: *p\n", "gateway.platforms"],
+] as const;
+
+for (const [name, text, where] of MERGE_SHAPES) {
+  test(`fix round 2 ${name}: a merge key fails closed, file byte-identical, install exits 1 with slash_access_failed`, () => {
+    const why = `YAML merge key "<<" under ${where}`;
+    const path = withText(text);
+    expect(configureSlashAccess()).toBe(why);
+    expect(readFileSync(path, "utf8")).toBe(text);
+    const run = runInstall(text);
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain(`agentvillage-install: slash_access_failed=${JSON.stringify(why)}`);
+    expect(run.status.slash_access_failed).toBe(why);
+  });
+}
+
+test("fix round 2: findMergeKey walks every depth, sequences included, and survives shared nodes", () => {
+  expect(findMergeKey({ a: { b: [{ c: 1 }, { d: { "<<": {} } }] } })).toBe("a.b[1].d");
+  const shared: Record<string, unknown> = { x: 1 };
+  const cyclic: Record<string, unknown> = { a: shared, b: shared };
+  cyclic.self = cyclic;
+  expect(findMergeKey(cyclic)).toBeNull();
+  expect(findMergeKey(YAML.parse("a: &x {k: 1}\nb: *x\n"))).toBeNull(); // anchors and aliases alone are fine
+});
+
+test("fix round 2: a config.yaml that cannot be parsed (duplicate key) records parse_error and exits 1", () => {
+  const text = "platforms:\n  telegram: {}\nplatforms:\n  telegram: {allow_admin_from: []}\n";
+  const path = withText(text);
+  expect(configureSlashAccess()).toBe("parse_error");
+  expect(readFileSync(path, "utf8")).toBe(text);
+  const run = runInstall(text);
+  expect(run.code).toBe(1);
+  expect(run.stdout).toContain('agentvillage-install: slash_access_failed="parse_error"');
+  expect(run.status.slash_access_failed).toBe("parse_error");
 });
 
 /** The mutation check: adding any admin-only name (e.g. `model`) to the resident list fails here. */

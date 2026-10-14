@@ -436,6 +436,44 @@ export function slashAccessKeys(): Record<(typeof SLASH_ACCESS_KEYS)[number], st
   };
 }
 
+/** Reason recorded when config.yaml cannot be parsed (fix round 2: a duplicate key throws in the
+ * `yaml` package, while PyYAML keeps the last value, which could ungate). */
+export const CONFIG_PARSE_ERROR = "parse_error";
+
+/** `CONFIG_PARSE_ERROR` when `$HERMES_HOME/config.yaml` cannot be parsed, else null. */
+export function configParseFailure(): string | null {
+  try {
+    readConfig();
+    return null;
+  } catch {
+    return CONFIG_PARSE_ERROR;
+  }
+}
+
+/**
+ * Path of the first mapping, at any depth (inside sequences too), that holds a YAML merge key
+ * `<<`, or null. "the top level" for the document itself. Cycle-guarded: aliases can share nodes.
+ */
+export function findMergeKey(node: unknown, path = "the top level", seen: Set<object> = new Set()): string | null {
+  if (typeof node !== "object" || node === null || seen.has(node)) return null;
+  seen.add(node);
+  const child = (key: string | number) =>
+    typeof key === "number" ? `${path}[${key}]` : path === "the top level" ? key : `${path}.${key}`;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findMergeKey(node[i], child(i), seen);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  if ("<<" in node) return path;
+  for (const [key, value] of Object.entries(node)) {
+    const hit = findMergeKey(value, child(key), seen);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
 /**
  * SEC-6: residents may run only `RESIDENT_SLASH_COMMANDS` (plus Hermes's `/help`, `/whoami` floor);
  * `/model` and every model, cost or config command is admin-only, and no Telegram user is admin.
@@ -450,20 +488,31 @@ export function slashAccessKeys(): Record<(typeof SLASH_ACCESS_KEYS)[number], st
  * deletes the four keys from each of them, top level and `extra`, with one line per removal, and
  * mirrors the values onto a top-level `platforms.telegram.<key>` copy.
  *
- * Fails loudly (fix round 1, S3): when a level it must edit is not a mapping or holds a YAML merge
- * key (`<<`, which PyYAML merges and the `yaml` package cannot see through), it writes nothing and
- * returns the reason; install.ts records it as `slash_access_failed` in `install-status.json` and
+ * Fails loudly (fix round 1, S3): when config.yaml cannot be parsed (`parse_error`), when any
+ * mapping anywhere in it holds a YAML merge key (`<<`, which PyYAML merges and the `yaml` package
+ * cannot see through; fix round 2), or when a level it must edit is not a mapping, it writes
+ * nothing and returns the reason; install.ts records it as `slash_access_failed` in `install-status.json` and
  * exits non-zero at the end of the run. Idempotent: an unchanged file is not rewritten.
  *
  * @returns null when the gate is configured, else why it is not.
  */
 export function configureSlashAccess(): string | null {
-  const doc: unknown = readConfig();
   const fail = (why: string): string => {
     console.log(`→ error: ${why}; slash access NOT configured (residents can run /model)`);
     return why;
   };
+  let doc: unknown;
+  try {
+    doc = readConfig();
+  } catch {
+    return fail(CONFIG_PARSE_ERROR);
+  }
   if (!isMapping(doc)) return fail("the top level of config.yaml is not a mapping");
+  // Fix round 2 (M1-M3): the `yaml` package keeps a merge key as a literal "<<" key while Hermes's
+  // PyYAML merges it, so a "<<" anywhere (top level, `gateway`, `gateway.platforms`, …) can hand
+  // Hermes a Telegram block this step never sees. Refuse any, before any edit.
+  const merge = findMergeKey(doc);
+  if (merge !== null) return fail(`YAML merge key "<<" under ${merge}`);
 
   const section = (parent: Record<string, unknown>, name: string, path: string): Record<string, unknown> | string => {
     const value = parent[name] ?? {};

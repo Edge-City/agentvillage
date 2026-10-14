@@ -96,3 +96,25 @@ def test_competing_blocks_cannot_ungate(tmp_path, monkeypatch):
     for chat_type in ("", None, "supergroup"):
         source = SimpleNamespace(platform=gateway_config.Platform.TELEGRAM, chat_type=chat_type, user_id=RESIDENT)
         assert slash_access.policy_for_source(loaded, source).can_run(RESIDENT, "model") is False
+
+
+def test_merge_key_shape_fails_closed_where_hermes_would_be_ungated(tmp_path, monkeypatch):
+    """Fix round 2 (M1): a top-level `<<` hands Hermes (PyYAML merges it) a root telegram block that
+    ungates DMs, while the `yaml` package sees only a key named "<<". The step must refuse it."""
+    bun = shutil.which("bun")
+    if bun is None:
+        pytest.skip("bun not installed")
+    text = "tdef: &t {telegram: {allow_admin_from: []}}\n<<: *t\n"
+    (tmp_path / "config.yaml").write_text(text)
+    env = {k: v for k, v in os.environ.items() if k != "AV_SLASH_ADMIN_IDS"}
+    env["HERMES_HOME"] = str(tmp_path)
+    script = 'import { configureSlashAccess } from "./install/config.ts"; console.log("RET=" + JSON.stringify(configureSlashAccess()));'
+    run = subprocess.run([bun, "-e", script], cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr
+    assert 'RET="YAML merge key \\"<<\\" under the top level"' in run.stdout
+    assert (tmp_path / "config.yaml").read_text() == text
+    # Why refusing matters: this is the file Hermes reads, and its DM scope is ungated.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    loaded = gateway_config.load_gateway_config()
+    source = SimpleNamespace(platform=gateway_config.Platform.TELEGRAM, chat_type="dm", user_id=RESIDENT)
+    assert slash_access.policy_for_source(loaded, source).can_run(RESIDENT, "model") is True
