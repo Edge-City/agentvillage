@@ -9,7 +9,20 @@ import stat
 from pathlib import Path
 
 MINI_APPS_GATE_VERSION = 1
-GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
+# BRIDGE-RESTORE (rc41, Carter's ruling, CLAIMS L7212/L7216): ov#300's native `rolodex.meeting`
+# (owner-requested mark/undo) and `skylight.status` (the owner's own read) ride the Gold Stars install,
+# appended in this exact order. The control-plane catalog's gold-stars entry must carry the same list.
+GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]}
+# The entry before the restore (ov#343). Still accepted so this overlay can roll out before the CP
+# catalog moves (one way only: overlay first, then the catalog); it carries no meeting or Skylight operation, so those stay refused under it.
+GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
+
+# Every `village` operation, classified. A write changes the owner's account state; a read does not.
+# `rolodex.meeting` (mark/undo) is a WRITE: it rides the `village` tool's existing gate entry (no preview
+# step, CLAIMS L7216) and runs only while that gate is on and verified (gate_verified). `skylight.status`
+# is a READ of the owner's own status. Star sends also need their own daemon grant (authorize_send).
+READ_OPERATIONS = frozenset({"rolodex.search", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read"})
+WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel"})
 
 
 def installed(home: Path, app_id: str, operation: str) -> bool:
@@ -33,7 +46,7 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
             if name in seen or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name):
                 return False
             if name == "gold-stars":
-                if app != {"id": name, **GOLD_STARS}:
+                if app != {"id": name, **GOLD_STARS} and app != {"id": name, **GOLD_STARS_PREVIOUS}:
                     return False
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
                   or app["skills"] != [name] or app["operations"] != ["mini-app.read"]):
@@ -44,6 +57,13 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
         return any(app["id"] == app_id and operation in app["operations"] for app in doc["apps"])
     except Exception:
         return False
+
+
+def gate_verified() -> None:
+    """A gated write never runs while the approval gate is off or unverified (no bypass of its entry)."""
+    backstop = importlib.import_module("hermes_plugins.av_approval")
+    if backstop.switch() != "on" or backstop.current_codes():
+        raise ValueError("approval_unavailable")
 
 
 def approval_modules():

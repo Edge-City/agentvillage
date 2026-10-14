@@ -5,10 +5,25 @@ import { lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSy
 import { dirname, join, resolve, parse } from "node:path";
 import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
 
+/**
+ * BRIDGE-RESTORE (rc41, CLAIMS L7212/L7216): the gold-stars entry also carries ov#300's native
+ * `rolodex.meeting` (owner-requested mark/undo) and `skylight.status` (the owner's own read), appended
+ * in this exact order; plugins/village-bridge/_mini_apps.py GOLD_STARS and the control-plane catalog's
+ * gold-stars entry carry the same list, so the CP's projection hash matches the receipt.
+ */
 export const REVIEWED_MINI_APPS = [
-  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
+  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
+/**
+ * The gold-stars entry before the restore (ov#343), still staged byte for byte so this overlay can roll
+ * out BEFORE the CP catalog moves (overlay first, then the catalog with a re-stage; never the reverse). It carries no meeting or Skylight operation (the plugin refuses
+ * them under it). Remove after the CP catalog serves the restored list everywhere.
+ */
+export const PREVIOUS_REVIEWED_MINI_APPS = [
+  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
+] as const;
+type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
  * Skills the installer ships to every box (install/paths.ts). The helper may write a desired app's
  * SKILL.md over one (the same source bytes), but never removes one: an app missing from `desired`
@@ -17,7 +32,7 @@ export const REVIEWED_MINI_APPS = [
  */
 export const SHIPPED_SKILLS: ReadonlySet<string> = new Set<string>(EDGE_SKILL_NAMES);
 const owned = (id: string) => !SHIPPED_SKILLS.has(id);
-type Projection = { version: 1; apps: (typeof REVIEWED_MINI_APPS[number])[] };
+type Projection = { version: 1; apps: ReviewedApp[] };
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 function exists(path: string): boolean {
   try { lstatSync(path); return true; } catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return false; throw error; }
@@ -41,7 +56,7 @@ export function validateProjection(value: unknown): Projection {
   const seen = new Set<string>();
   const apps = value.apps.map((app: unknown) => {
     if (!app || typeof app !== "object" || !("id" in app) || typeof app.id !== "string" || !("version" in app) || !("operations" in app) || !("skills" in app)) throw new Error("mini_apps_invalid_entry");
-    const reviewed = REVIEWED_MINI_APPS.find(x => x.id === app.id);
+    const reviewed = ([...REVIEWED_MINI_APPS, ...PREVIOUS_REVIEWED_MINI_APPS] as readonly ReviewedApp[]).find(x => x.id === app.id && JSON.stringify(app.operations) === JSON.stringify(x.operations));
     if (!reviewed || seen.has(app.id) || Object.keys(app).sort().join(",") !== "id,operations,skills,version" || app.version !== reviewed.version || JSON.stringify(app.operations) !== JSON.stringify(reviewed.operations) || JSON.stringify(app.skills) !== JSON.stringify(reviewed.skills)) throw new Error("mini_apps_unreviewed_bundle");
     seen.add(app.id);
     return reviewed;

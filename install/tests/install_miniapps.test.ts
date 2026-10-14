@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection } from "../install_miniapps";
+import { PREVIOUS_REVIEWED_MINI_APPS, reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection } from "../install_miniapps";
 import { EDGE_SKILL_NAMES } from "../paths";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -123,11 +123,34 @@ test("non-cohort box: an empty projection on a box with no mini-app state writes
 
 test("unknown bundles, versions, extra fields, permissions and duplicate ids are refused", () => {
   const gold = REVIEWED_MINI_APPS[0];
-  for (const app of [{ ...gold, id: "../../escape" }, { ...gold, version: "9" }, { ...gold, hooks: ["sh"] }, { ...gold, skills: ["../../other"] }, { ...gold, operations: [...gold.operations, "rolodex.meeting"] }]) {
+  for (const app of [{ ...gold, id: "../../escape" }, { ...gold, version: "9" }, { ...gold, hooks: ["sh"] }, { ...gold, skills: ["../../other"] }, { ...gold, operations: [...gold.operations, "rolodex.delete"] }, { ...gold, operations: gold.operations.filter((op) => op !== "skylight.status") }, { ...gold, operations: [...gold.operations].reverse() }]) {
     expect(() => validateProjection({ version: 1, apps: [app] })).toThrow();
   }
   expect(() => validateProjection({ version: 1, apps: [gold, gold] })).toThrow();
   expect(() => validateProjection({ version: 1, apps: [], mcp: { url: "https://unreviewed.invalid" } })).toThrow();
+});
+
+test("BRIDGE-RESTORE: gold-stars carries rolodex.meeting + skylight.status; the pre-restore entry stays stageable byte for byte", () => {
+  const gold = REVIEWED_MINI_APPS[0];
+  expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]);
+  expect(PREVIOUS_REVIEWED_MINI_APPS[0].operations).toEqual(gold.operations.slice(0, 6));
+  // The plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  const list = (name: string) => JSON.parse(new RegExp(`^${name} = \\{"version": "1\\.1\\.0", "skills": \\["gold-stars"\\], "operations": (\\[[^\\]]*\\])\\}$`, "m").exec(plugin)![1]);
+  expect(list("GOLD_STARS")).toEqual([...gold.operations]);
+  expect(list("GOLD_STARS_PREVIOUS")).toEqual([...PREVIOUS_REVIEWED_MINI_APPS[0].operations]);
+  expect(JSON.parse(readFileSync(join(REPO, "mini-apps", "gold-stars", "manifest.json"), "utf8")).operations).toEqual([...gold.operations]);
+  // Either catalog entry (CP before or after this overlay) stages, and the receipt hashes the CP's exact bytes.
+  for (const entry of [gold, PREVIOUS_REVIEWED_MINI_APPS[0]]) {
+    const projection = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    const root = installedBox();
+    const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
+    expect(readFileSync(join(root, "mini-apps.json"), "utf8")).toBe(JSON.stringify(projection));
+    expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  }
+  // Never both entries at once.
+  expect(() => validateProjection({ version: 1, apps: [gold, PREVIOUS_REVIEWED_MINI_APPS[0]] })).toThrow("mini_apps_unreviewed_bundle");
 });
 
 test("symlink targets and ancestors cannot escape managed paths", () => {

@@ -13,7 +13,7 @@ Two complete starters are maintained with their real native skills:
 | Starter | Manifest | Skill | Backend contract |
 | --- | --- | --- | --- |
 | Public read-only MCP | [Dizko](dizko/manifest.json) | [SKILL.md](../skills/dizko/SKILL.md) | Seven reviewed public tools, exact input schemas and fixed HTTPS endpoint |
-| Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, manual approval, send/status/cancel |
+| Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, manual approval, send/status/cancel; also carries the owner's Rolodex meeting mark/undo and Skylight status read |
 
 ### Give your builder agent this prompt
 
@@ -121,9 +121,34 @@ requests keep their 25-second timeout. A timeout is an unknown outcome, not
 permission to construct a new draft.
 
 `village` is routed through the approval shim and startup-integrity backstop.
-The policy records read/staging under `marketplace.app.read`; actual effects
-use the separate internal manual action proposal. Matchers alone are not the
-write gate. Gold Stars grants neither meeting changes nor Skylight access.
+The policy records read/staging under `marketplace.app.read`; a star send
+uses the separate internal manual action proposal. Matchers alone are not the
+write gate for a star.
+
+### Carried native operations: meeting marks and Skylight status
+
+The Gold Stars install also carries ov#300's two native operations (restored
+after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
+
+- `rolodex.meeting` with exactly `attendeeId` (a Rolodex search id) and
+  `met` (`true` marks met, `false` undoes). An owner-requested, owner-scoped,
+  reversible **write** in one call, through the `village` tool's existing gate
+  entry; no preview step and no daemon grant. The plugin classifies it in
+  `WRITE_OPERATIONS` and refuses it (`approval_unavailable`) while the
+  approval gate is off or unverified, so it never runs outside that entry.
+  The agent calls it only when the owner asks. The
+  native tool adds `requestId`, stable for that turn, attendee and state; the
+  app replays a `historicalReceipt` for a repeated request, so an old request
+  cannot re-mark someone after a later undo.
+- `skylight.status` with no other argument: the owner's own Skylight status,
+  a **read** (`READ_OPERATIONS`). No tenant, person or agent argument exists; the app derives the
+  account from the bearer.
+
+The CP catalog's gold-stars entry carries the same eight operations in the same
+order. The helper and the plugin still accept the six-operation entry from
+before the restore (meeting and Skylight refused under it), so the overlay can
+roll out first. The order is one way only: overlay first, then the catalog
+(with a re-stage of installed rows); an older overlay refuses the eight-op entry.
 
 ## Disk staging and lifecycle
 
@@ -136,7 +161,7 @@ Only the pinned local checkout's exact reviewed `SKILL.md` files are copied.
 `bun install/install_miniapps.ts` reads this projection from stdin:
 
 ```json
-{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel"],"skills":["gold-stars"]}]}
+{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status"],"skills":["gold-stars"]}]}
 ```
 
 `HERMES_HOME` selects the disk target. Add `--verify` to check without writing.

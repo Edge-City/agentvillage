@@ -1,6 +1,6 @@
 ---
 name: gold-stars
-description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Optional curated mini-app; recipient search only, no meeting marks. Personal received-star history stays on the website.
+description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Optional curated mini-app; its install also carries the owner's meeting marks (see `rolodex`) and Skylight status (see `skylight`). Personal received-star history stays on the website.
 version: 1.1.0
 author: Edge City
 ---
