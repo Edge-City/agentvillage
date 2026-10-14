@@ -1849,11 +1849,12 @@ $AV_EVENTS_TOKEN` and `X-AV-Session-Kind: dm|cron`, and answers `{prayer_id, sta
 duplicate_open?, review, tell_resident: true}` or `{error, retry_after_s?, message}`. A human admin
 reviews every request before anything changes; the tool itself grants and emits nothing.
 
-- **Who may pray:** the resident's direct chat (recall's rule) and the agent's own cron runs
-  (`record_intention`'s lineage rule; the tool registers those listeners itself) whose output goes
-  nowhere or to a Telegram DM (`HERMES_CRON_AUTO_DELIVER_PLATFORM`/`_CHAT_ID`; approval@edge's ruling).
-  A group, a channel, a cron job that reports to one, or a session whose kind cannot be read is refused
-  with `group_session`, and nothing is sent.
+- **Who may pray (fail closed):** only a task whose bound chat type is positively a direct chat, or
+  the agent's own cron run (`record_intention`'s lineage rule; the tool registers those listeners
+  itself) whose auto-delivery target is positively the resident's Telegram DM
+  (`HERMES_CRON_AUTO_DELIVER_PLATFORM=telegram` and `_CHAT_ID` equal to `TELEGRAM_HOME_CHANNEL`;
+  approval@edge's ruling). Anything else (a group, a channel, a cron job that reports elsewhere or
+  locally, an empty, unknown or unreadable value, an exception) is `group_session`, and nothing is sent.
 - **Checked before sending:** the closed object, the kind, the tier and model shapes, and the reason
   (NFC and trimmed, 1-600 code points, at most 8 lines, no control characters but newlines, no
   email, phone-like number, `@handle` or `t.me/` link). The rules and their cases are the shared
@@ -1892,9 +1893,9 @@ is rewritten. Else `{error, retry_after_s?, message}` with a fixed message
 (a 404 is `not_available`: the route is dark). The tenant and host come from the box only; the
 arguments are a closed object.
 
-- **Who may ask:** the same rule as `pray` (the resident's direct chat, and the agent's own cron runs
-  whose output goes nowhere or to a Telegram DM); a group, or a cron job that reports to a group or
-  channel (or whose target cannot be read), is refused with `group_session` and nothing is sent.
+- **Who may ask:** the same fail-closed helper as `pray` (`_pray.session_kind`): the resident's
+  direct chat, or the agent's own cron run that reports to the resident's Telegram DM; everything else
+  is `group_session` and nothing is sent.
 - **The wire:** the key goes only over https to a host on `CP_HOSTS` (directory.ts's list; plain http
   only to loopback for tests). Body at most 4 KiB, a 65 s deadline (the control plane waits about 60 s on
   the app), redirects and proxy variables refused. Only a failure before anything was sent is retried,

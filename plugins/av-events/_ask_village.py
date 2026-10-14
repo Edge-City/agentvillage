@@ -18,13 +18,13 @@ the group?"): Carter's per-person ruling (CLAIMS L6484); there is no person-id
 field. `window`: `24h` (the app's default), `7d` or `all`; else
 `window_invalid`. Anything else is `invalid_body`.
 
-**Who may ask.** The same rule as `pray` (`_pray.session_kind`): the
-resident's direct chat, and the agent's own scheduled runs whose output goes
-nowhere or to a Telegram DM (`_pray.cron_delivers_privately`, approval@edge's
-ruling, CLAIMS L6599). Elsewhere (a cron run that reports to a group, a group,
-a channel, an unknowable session) `group_session`, nothing sent: an answer
-about who said what must not be posted into a chat whose members may not be
-the main group's.
+**Who may ask.** The same fail-closed helper as `pray`
+(`_pray.session_kind`): a task positively bound to a direct chat, or the
+agent's own cron run whose auto-delivery target is positively the resident's
+Telegram DM (`_pray.cron_delivers_privately`, approval@edge's ruling, CLAIMS
+L6599). Everything else, including an empty, unknown or unreadable value or an
+exception, is `group_session` and nothing is sent: an answer about who said
+what must not be posted into a chat whose members may not be the main group's.
 
 **The wire.** `POST {CONTROL_PLANE_URL}/tenants/{TENANT_ID}/village/ask`
 with `Authorization: Bearer $EDGEOS_API_KEY`: the box's own credential exactly

@@ -33,19 +33,22 @@ agent hears a refusal at once:
 The exact rules and their cases are the contract vector
 `tests/vectors/prayer-contract.json`, which the control plane's P2 copies.
 
-**Who may pray.** The resident's direct chat (recall's rule,
-`plugins/recall/__init__.py` `DIRECT_CHAT_TYPES` and `SessionView.is_main`: a
-one-to-one chat type, or an empty one on the owner's local surface) and the
-agent's own scheduled runs (`record_intention`'s lineage rule: a `cron_`
-session id or `platform=cron` anywhere up the delegation chain, plus Hermes's
-`HERMES_CRON_SESSION=1`), but a cron run only when its output goes nowhere or
-to a Telegram DM (`cron_delivers_privately`: approval@edge's ruling, CLAIMS
-L6599; a job that reports to a group or channel is refused like a group). Everything else, a group, a channel, a webhook or a
-session whose kind cannot be read, is refused with `group_session` and nothing
-is sent. The tool registers the lineage listeners itself, so the cron rule
-works with `AV_RECORD_INTENTION` off. The kind travels as
-`X-AV-Session-Kind: dm|cron`; it labels the prayer for the reviewer and is
-not a credential.
+**Who may pray (fail closed, `session_kind`).** Only two cases are allowed,
+each positively identified; everything else (a group, a channel, a webhook,
+an empty, unknown or unreadable chat type, an exception) is refused with
+`group_session` and nothing is sent:
+- `dm`: the task's bound chat type is a direct chat (recall's
+  `DIRECT_CHAT_TYPES`, `plugins/recall/__init__.py`; unlike recall, an empty
+  chat type on a local surface is refused);
+- `cron`: the agent's own scheduled run (`record_intention`'s lineage rule:
+  a `cron_` session id or `platform=cron` up the delegation chain, plus
+  Hermes's `HERMES_CRON_SESSION=1`) whose auto-delivery target is positively
+  the resident's Telegram DM (`cron_delivers_privately`: platform `telegram`
+  and chat id equal to `TELEGRAM_HOME_CHANNEL`, a positive id; approval@edge's
+  ruling, CLAIMS L6599). `ask_village` uses the same helper.
+The tool registers the lineage listeners itself, so the cron rule works with
+`AV_RECORD_INTENTION` off. The kind travels as `X-AV-Session-Kind: dm|cron`;
+it labels the prayer for the reviewer and is not a credential.
 
 **The wire.** `POST {CONTROL_PLANE_URL}/tenants/{tenant}/prayers` with
 `Authorization: Bearer $AV_EVENTS_TOKEN`, the tenant being `AV_TENANT_ID`, else
@@ -341,9 +344,9 @@ def request_body(prayer: dict, idempotency_key: str) -> bytes:
 
 # ---- Who is speaking (§2 session rule) --------------------------------------
 
-#: recall's `DIRECT_CHAT_TYPES` and `LOCAL_SURFACES` (plugins/recall/__init__.py).
+#: recall's `DIRECT_CHAT_TYPES` (plugins/recall/__init__.py). Unlike recall, an empty chat type on a
+#: local surface is not accepted: only a positively bound direct chat is (fail closed).
 DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
-LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 
 
 def _session_module():
@@ -377,66 +380,66 @@ def _session_value(name: str) -> Optional[str]:
             return None
 
 
-def _engaged() -> bool:
-    sc = _session_module()
-    if sc is None:
-        return False
-    try:
-        return bool(sc.session_context_engaged())
-    except Exception:  # noqa: BLE001 - unknowable: assume a gateway
-        return True
-
-
-def _norm(value: Optional[str]) -> Optional[str]:
-    return None if value is None else value.strip().lower()
-
-
 #: A Telegram private chat's id is the user's id, positive; a group's or a channel's is negative.
 _TELEGRAM_DM_CHAT = re.compile(r"[1-9][0-9]{0,19}")
 
 
+#: The resident's Telegram DM: the control plane writes the resident's own Telegram user id here
+#: (`telegram-home.js`, after the pairing is approved), which is also their private chat's id.
+HOME_CHANNEL_ENV = "TELEGRAM_HOME_CHANNEL"
+
+
+def _text_or_none(value: Any) -> Optional[str]:
+    """A session value as stripped lower-case text, or None for anything that is not a string."""
+    return value.strip().lower() if isinstance(value, str) else None
+
+
 def cron_delivers_privately() -> bool:
-    """approval@edge's ruling (CLAIMS L6599, ov#341 refute S3): a cron run may use these tools only
-    when its output goes nowhere (no auto-delivery target: platform and chat both blank, or `local`)
-    or to a Telegram DM (a positive chat id). Hermes binds the job's target per task
-    (`cron/scheduler.py` `_reload_dotenv_and_publish_delivery_target`, the
-    `HERMES_CRON_AUTO_DELIVER_PLATFORM` / `_CHAT_ID` session variables). A group or channel (a
-    negative id), another platform, or a target that cannot be read is refused."""
-    platform = _norm(_session_value("HERMES_CRON_AUTO_DELIVER_PLATFORM"))
-    chat = _session_value("HERMES_CRON_AUTO_DELIVER_CHAT_ID")
-    if platform is None or chat is None:
+    """approval@edge's ruling (CLAIMS L6599, ov#341 refute S3), FAIL CLOSED: a cron run may use these
+    tools only when its auto-delivery target is positively the resident's own Telegram DM. Hermes
+    binds the job's target per task (`cron/scheduler.py` `_reload_dotenv_and_publish_delivery_target`:
+    `HERMES_CRON_AUTO_DELIVER_PLATFORM` / `_CHAT_ID`); the resident's DM is `TELEGRAM_HOME_CHANNEL`.
+    Every other case is False: no target (local delivery), an empty or unreadable value, an exception,
+    another platform, a group or channel (a negative id), or any chat that is not the home DM."""
+    try:
+        platform = _text_or_none(_session_value("HERMES_CRON_AUTO_DELIVER_PLATFORM"))
+        chat = _text_or_none(_session_value("HERMES_CRON_AUTO_DELIVER_CHAT_ID"))
+        home = _text_or_none(env(HOME_CHANNEL_ENV))
+        # THE allow condition, and the only one:
+        return platform == "telegram" and chat is not None and chat == home and _TELEGRAM_DM_CHAT.fullmatch(chat) is not None
+    except Exception:  # noqa: BLE001 - unreadable is refused
         return False
-    chat = chat.strip()
-    if platform in ("", "local") and chat == "":
-        return True
-    return platform == "telegram" and _TELEGRAM_DM_CHAT.fullmatch(chat) is not None
 
 
 def session_kind(session_id: Any) -> Optional[str]:
-    """`cron`, `dm`, or None (refused: a group, a channel, anything else, or unknowable)."""
+    """`dm`, `cron`, or None (refused), FAIL CLOSED for `pray` and `ask_village` alike: any exception,
+    unknown, missing, empty or unexpected value is None. Allowed only:
+    - `cron`: a session positively seen as the agent's own scheduled run (a `cron_` id, or
+      `platform=cron`, up its delegation chain, or Hermes's `HERMES_CRON_SESSION=1`) AND
+      `cron_delivers_privately()`;
+    - `dm`: a session whose bound chat type is positively a direct chat (`DIRECT_CHAT_TYPES`).
+    An empty chat type (a local CLI, an unbound task) is refused."""
+    try:
+        return _session_kind(session_id)
+    except Exception:  # noqa: BLE001 - unreadable is refused
+        return None
+
+
+def _session_kind(session_id: Any) -> Optional[str]:
     sid = session_id.strip() if isinstance(session_id, str) else ""
-    chat_type = _norm(_session_value("HERMES_SESSION_CHAT_TYPE"))
-    cron_flag = _norm(_session_value("HERMES_CRON_SESSION"))
-    raw_idents = [os.environ.get("HERMES_PLATFORM", ""), _session_value("HERMES_SESSION_PLATFORM"),
-                  _session_value("HERMES_SESSION_SOURCE")]
-    idents = [v for v in (_norm(i) for i in raw_idents) if v]
-    bound_id = _session_value("HERMES_SESSION_ID") or ""
+    bound_id = _session_value("HERMES_SESSION_ID")
+    idents = [_text_or_none(os.environ.get("HERMES_PLATFORM")), _text_or_none(_session_value("HERMES_SESSION_PLATFORM")),
+              _text_or_none(_session_value("HERMES_SESSION_SOURCE"))]
     try:
         lineage = _ri.held_reason(sid) if sid else None
-    except Exception:  # noqa: BLE001 - unsure is not cron
+    except Exception:  # noqa: BLE001 - lineage unread: cron is still detected by the other signals
         lineage = None
-    if (lineage == "cron" or cron_flag == "1" or "cron" in idents
-            or any(s.startswith("cron_") for s in (sid, bound_id))):
-        return "cron" if cron_delivers_privately() else None
-    if chat_type is None or any(v is None for v in raw_idents):
-        return None
-    if chat_type in DIRECT_CHAT_TYPES:
+    if (lineage == "cron" or _text_or_none(_session_value("HERMES_CRON_SESSION")) == "1" or "cron" in idents
+            or sid.startswith("cron_") or (isinstance(bound_id, str) and bound_id.startswith("cron_"))):
+        return "cron" if cron_delivers_privately() is True else None
+    if _text_or_none(_session_value("HERMES_SESSION_CHAT_TYPE")) in DIRECT_CHAT_TYPES:
         return "dm"
-    if chat_type != "":
-        return None
-    if not idents:
-        return None if _engaged() else "dm"
-    return "dm" if all(ident in LOCAL_SURFACES for ident in idents) else None
+    return None
 
 
 # ---- The wire (§2) ----------------------------------------------------------

@@ -52,6 +52,8 @@ optional_env:
   # CONTROL_PLANE_URL (a CP_HOSTS host only) with EDGEOS_API_KEY, as cp#227's directory forward.
   - AV_ASK_VILLAGE
   - EDGEOS_API_KEY
+  # pray / ask_village: a cron run may use them only when it reports to this DM (fail closed).
+  - TELEGRAM_HOME_CHANNEL
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:

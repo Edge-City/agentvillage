@@ -36,9 +36,10 @@ SESSION = "sess-pray"
 REASON = "My resident writes long research briefs and the current model runs out of context."
 PRAYER_ID = VECTOR["ids"]["cases"][0]["prayer_id"]
 ARGS = {"ask": {"kind": "model_tier", "tier": "pro"}, "reason": REASON}
+HOME_DM = "123456789"
 SESSION_ENV = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFORM", "HERMES_SESSION_PLATFORM",
                "HERMES_SESSION_SOURCE", "HERMES_SESSION_ID", "HERMES_CRON_AUTO_DELIVER_PLATFORM",
-               "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+               "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "TELEGRAM_HOME_CHANNEL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
                "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
 
 
@@ -167,6 +168,10 @@ def on(monkeypatch, home):
     monkeypatch.setenv("TENANT_ID", TENANT)
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     monkeypatch.setenv("HERMES_SESSION_PLATFORM", "telegram")
+    # Only read in cron sessions: the job reports to the resident's own DM (fail-closed cron rule).
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", HOME_DM)
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", "telegram")
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", HOME_DM)
 
 
 @pytest.fixture()
@@ -443,11 +448,13 @@ def test_a_non_local_surface_with_no_chat_type_is_refused(tctx, cp, monkeypatch)
     assert cp.requests == []
 
 
-def test_the_local_cli_is_the_owners_main_session(tctx, cp, monkeypatch):
+@pytest.mark.parametrize("surface", ["cli", "tui", "desktop", "local", ""])
+def test_an_empty_chat_type_is_refused_even_on_a_local_surface(tctx, cp, monkeypatch, surface):
+    """Fail closed: only a positively bound direct chat is a DM (recall would accept the local CLI)."""
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
-    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "cli")
-    assert call(tctx, ARGS)["status"] == "received"
-    assert cp.requests[0]["headers"]["x-av-session-kind"] == "dm"
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", surface)
+    assert call(tctx, ARGS)["error"] == "group_session"
+    assert cp.requests == []
 
 
 def test_cron_by_session_id(tctx, cp, monkeypatch):
@@ -894,11 +901,16 @@ def test_an_upstream_error_body_is_never_echoed(tctx, cp, caplog):
 
 
 @pytest.mark.parametrize("platform,chat,allowed", [
-    ("telegram", "123456789", True),
-    ("", "", True),
-    ("telegram", "-1001234567890", False),
+    ("telegram", "123456789", True),          # the resident's own DM (TELEGRAM_HOME_CHANNEL)
+    ("Telegram", " 123456789 ", True),
+    ("", "", False),                          # local delivery: not positively the DM
+    ("local", "", False),
+    ("telegram", "987654321", False),         # another person's DM
+    ("telegram", "-1001234567890", False),    # a supergroup / channel
     ("telegram", "-4567", False),
+    ("telegram", "", False),
     ("slack", "C123", False),
+    ("weird", "123456789", False),
 ])
 def test_s3_a_cron_prayer_only_when_the_run_reports_to_the_dm(tctx, cp, monkeypatch, platform, chat, allowed):
     """The session rule is shared with ask_village (`session_kind` / `cron_delivers_privately`)."""
@@ -917,3 +929,126 @@ def test_n7_the_token_is_registered_as_a_secret(tctx, cp, plugin):
     core._LITERAL_SECRETS.discard(TOKEN)  # the collector registers it too; pray must not rely on that
     call(tctx, ARGS)
     assert TOKEN in core._LITERAL_SECRETS
+
+
+# ---- Fail closed: every unreadable, missing or unexpected session fact refuses ----------
+
+
+class _Var:
+    def __init__(self, value: Any = None, raises: bool = False) -> None:
+        self.value, self.raises = value, raises
+
+    def get(self) -> Any:
+        if self.raises:
+            raise RuntimeError("context var broke")
+        return self.value
+
+
+def _gateway(monkeypatch, values: dict, *, engaged: bool = True, var_map: bool = True,
+             public_reader: Optional[Callable] = None) -> types.ModuleType:
+    unset = object()
+    sc = types.ModuleType("gateway.session_context")
+    names = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_SESSION_PLATFORM", "HERMES_SESSION_SOURCE",
+             "HERMES_SESSION_ID", "HERMES_CRON_AUTO_DELIVER_PLATFORM", "HERMES_CRON_AUTO_DELIVER_CHAT_ID")
+    if var_map:
+        sc._VAR_MAP = {n: (values[n] if isinstance(values.get(n), _Var) else _Var(values.get(n, unset)))
+                       for n in names}
+    sc._UNSET = unset
+    sc.session_context_engaged = lambda: engaged
+    sc.get_session_env = public_reader or (lambda name, default="": default)
+    gateway = types.ModuleType("gateway")
+    gateway.session_context = sc
+    monkeypatch.setitem(sys.modules, "gateway", gateway)
+    monkeypatch.setitem(sys.modules, "gateway.session_context", sc)
+    return sc
+
+
+CRON = {"HERMES_SESSION_CHAT_TYPE": "", "HERMES_CRON_SESSION": "1", "HERMES_SESSION_PLATFORM": "cron",
+        "HERMES_SESSION_SOURCE": "cron", "HERMES_SESSION_ID": "cron_job_z_1",
+        "HERMES_CRON_AUTO_DELIVER_PLATFORM": "telegram", "HERMES_CRON_AUTO_DELIVER_CHAT_ID": HOME_DM}
+DM = {"HERMES_SESSION_CHAT_TYPE": "dm", "HERMES_SESSION_PLATFORM": "telegram", "HERMES_SESSION_SOURCE": "telegram",
+      "HERMES_SESSION_ID": SESSION}
+
+
+def _refused(ctx, cp, session=SESSION) -> None:
+    out = call(ctx, ARGS, session=session)
+    assert out["error"] == "group_session", out
+    assert cp.requests == []
+
+
+def test_fc_the_two_allowed_cases_through_a_gateway(tctx, cp, monkeypatch):
+    _gateway(monkeypatch, DM)
+    assert call(tctx, ARGS)["status"] == "received"
+    _gateway(monkeypatch, CRON)
+    assert call(tctx, ARGS, session="cron_job_z_1")["status"] == "received"
+    assert [r["headers"]["x-av-session-kind"] for r in cp.requests] == ["dm", "cron"]
+
+
+@pytest.mark.parametrize("name", ["HERMES_CRON_AUTO_DELIVER_PLATFORM", "HERMES_CRON_AUTO_DELIVER_CHAT_ID"])
+def test_fc_cron_target_missing_is_refused(tctx, cp, monkeypatch, name):
+    _gateway(monkeypatch, {k: v for k, v in CRON.items() if k != name})  # unbound in this task
+    _refused(tctx, cp, "cron_job_z_1")
+
+
+@pytest.mark.parametrize("name", ["HERMES_CRON_AUTO_DELIVER_PLATFORM", "HERMES_CRON_AUTO_DELIVER_CHAT_ID"])
+@pytest.mark.parametrize("value", [None, "", "   ", "unknown", "-1001234567890", "0", "+123456789", ["telegram"]])
+def test_fc_cron_target_none_empty_unknown_or_wrong_type_is_refused(tctx, cp, monkeypatch, name, value):
+    _gateway(monkeypatch, {**CRON, name: value})
+    _refused(tctx, cp, "cron_job_z_1")
+
+
+@pytest.mark.parametrize("name", ["HERMES_CRON_AUTO_DELIVER_PLATFORM", "HERMES_CRON_AUTO_DELIVER_CHAT_ID",
+                                  "HERMES_SESSION_CHAT_TYPE"])
+def test_fc_an_exception_reading_a_session_fact_is_refused(tctx, cp, monkeypatch, name):
+    base = DM if name == "HERMES_SESSION_CHAT_TYPE" else CRON
+    session = SESSION if base is DM else "cron_job_z_1"
+    _gateway(monkeypatch, {**base, name: _Var(raises=True)},
+             public_reader=lambda n, default="": (_ for _ in ()).throw(RuntimeError("public reader broke")))
+    _refused(tctx, cp, session)
+
+
+def test_fc_a_gateway_without_its_var_map_is_refused(tctx, cp, monkeypatch):
+    _gateway(monkeypatch, {}, var_map=False)  # the public reader answers its default: ""
+    _refused(tctx, cp)
+    _refused(tctx, cp, "cron_job_z_1")
+
+
+@pytest.mark.parametrize("home", [None, "", "-1001234567890", "abc"])
+def test_fc_cron_without_a_positive_home_dm_is_refused(tctx, cp, monkeypatch, home):
+    if home is None:
+        monkeypatch.delenv("TELEGRAM_HOME_CHANNEL")
+    else:
+        monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", home)
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", home or "")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    _refused(tctx, cp, "cron_job_h_1")
+
+
+@pytest.mark.parametrize("chat_type", [None, "", "  ", "unknown", "group", "channel", "dm-ish", 7])
+def test_fc_unknown_missing_or_unexpected_chat_type_is_refused(tctx, cp, monkeypatch, chat_type):
+    _gateway(monkeypatch, {**DM, "HERMES_SESSION_CHAT_TYPE": chat_type})
+    _refused(tctx, cp)
+
+
+def test_fc_a_group_target_on_a_cron_is_refused(tctx, cp, monkeypatch):
+    _gateway(monkeypatch, {**CRON, "HERMES_CRON_AUTO_DELIVER_CHAT_ID": "-1001234567890"})
+    _refused(tctx, cp, "cron_job_z_1")
+
+
+def test_fc_any_exception_inside_the_helper_refuses_not_internal(tctx, pr, cp, monkeypatch):
+    def boom(_name):  # noqa: ANN001
+        raise RuntimeError("session store broke")
+
+    monkeypatch.setattr(pr, "_session_value", boom)
+    _refused(tctx, cp)
+    _refused(tctx, cp, "cron_job_z_1")
+    monkeypatch.setattr(pr, "env", lambda _n: (_ for _ in ()).throw(RuntimeError("env broke")))
+    assert pr.cron_delivers_privately() is False
+
+
+def test_fc_the_allow_condition_is_the_one_line(pr):
+    import inspect  # noqa: PLC0415
+
+    source = inspect.getsource(pr.cron_delivers_privately)
+    assert source.count("return platform == \"telegram\"") == 1 and "return True" not in source
+    assert "return True" not in inspect.getsource(pr._session_kind)

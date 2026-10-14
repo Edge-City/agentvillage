@@ -32,9 +32,10 @@ ANSWER = VECTOR["answers"][0]["body"]
 #: What the agent gets for ANSWER: allowlisted fields, the answer framed.
 EXPECTED = VECTOR["answers"][0]["tool"]
 ARGS = {"question": QUESTION}
+HOME_DM = "123456789"
 SESSION_ENV = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFORM", "HERMES_SESSION_PLATFORM",
                "HERMES_SESSION_SOURCE", "HERMES_SESSION_ID", "HERMES_CRON_AUTO_DELIVER_PLATFORM",
-               "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+               "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "TELEGRAM_HOME_CHANNEL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
                "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
 
 
@@ -140,6 +141,10 @@ def on(monkeypatch, home):
     monkeypatch.setenv("TENANT_ID", TENANT)
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     monkeypatch.setenv("HERMES_SESSION_PLATFORM", "telegram")
+    # Only read in cron sessions: the job reports to the resident's own DM (fail-closed cron rule).
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", HOME_DM)
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", "telegram")
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", HOME_DM)
 
 
 @pytest.fixture()
@@ -661,9 +666,10 @@ def test_n1_fullwidth_and_entity_lookalike_closers_are_rewritten(tctx, cp):
 
 
 @pytest.mark.parametrize("platform,chat,allowed", [
-    ("telegram", "123456789", True),          # the resident's DM
-    ("", "", True),                           # no auto-delivery (local)
-    ("local", "", True),
+    ("telegram", "123456789", True),          # the resident's own DM (TELEGRAM_HOME_CHANNEL)
+    ("", "", False),                          # local delivery: not positively the DM
+    ("local", "", False),
+    ("telegram", "987654321", False),         # another person's DM
     ("telegram", "-1001234567890", False),    # a supergroup / channel
     ("telegram", "-4567", False),             # a basic group
     ("telegram", "", False),
@@ -710,7 +716,7 @@ def test_s3_an_unreadable_cron_target_is_refused(tctx, cp, monkeypatch):
     assert call(tctx, ARGS, session="cron_job_y_1")["error"] == "group_session"
     assert cp.requests == []
     sc._VAR_MAP["HERMES_CRON_AUTO_DELIVER_PLATFORM"] = Var("telegram")
-    sc._VAR_MAP["HERMES_CRON_AUTO_DELIVER_CHAT_ID"] = Var("98765")
+    sc._VAR_MAP["HERMES_CRON_AUTO_DELIVER_CHAT_ID"] = Var(HOME_DM)
     assert "answer" in call(tctx, ARGS, session="cron_job_y_1")
 
 
@@ -719,3 +725,15 @@ def test_n7_the_key_is_registered_as_a_secret(tctx, cp, plugin):
     assert KEY not in core._LITERAL_SECRETS
     call(tctx, ARGS)
     assert KEY in core._LITERAL_SECRETS
+
+
+def test_fc_ask_village_uses_the_shared_fail_closed_helper(tctx, av_mod, cp, monkeypatch, plugin):
+    pray = sys.modules[f"{plugin.__name__}._pray"]
+    assert av_mod._pray is pray
+    real = pray.session_kind
+    calls: list = []
+    monkeypatch.setattr(pray, "session_kind", lambda sid: calls.append(sid) or None)
+    assert call(tctx, ARGS)["error"] == "group_session" and calls == [SESSION] and cp.requests == []
+    monkeypatch.setattr(pray, "session_kind", real)  # the real helper, with a broken reader
+    monkeypatch.setattr(pray, "_session_value", lambda _n: (_ for _ in ()).throw(RuntimeError("x")))
+    assert call(tctx, ARGS)["error"] == "group_session" and cp.requests == []
