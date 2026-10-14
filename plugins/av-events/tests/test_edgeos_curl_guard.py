@@ -61,6 +61,11 @@ REFUSED = {
     "continuation_inside_url": ("terminal", 'curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" '
                                 '"https://api.edgeos.world/api/v1/applications/my/\\\n'
                                 f'directory/{POPUP}?q=ana"'),
+    # Refute S1 (ov#346): a backtick, `<`, `>` or `.` right after the path is a boundary too.
+    "js_template_literal": ("terminal", "node -e \"fetch(`${process.env.EDGEOS_API_BASE}/humans/me`).then(r => r.text())\""),
+    "backtick_substitution": ("terminal", "R=`curl -s ${EDGEOS_API_BASE}/humans/me`; echo $R"),
+    "redirect_after_path": ("terminal", 'curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" $EDGEOS_API_BASE/humans/me>/tmp/o'),
+    "python_str_format": ("terminal", "python3 -c \"import os,requests; print(requests.get('{}/humans/me'.format(os.environ['EDGEOS_API_BASE'])).text)\""),
     "crlf_continuation": ("terminal", 'curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \\\r\n'
                           f'  "{BASE}/humans/me"'),
 }
@@ -87,6 +92,8 @@ ALLOWED = {
     "participants": ("terminal", 'curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" '
                      f'"{BASE}/event-participants/portal/participants?event_id={POPUP}&skip=0&limit=100"'),
     "venues": ("terminal", f'curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" "{BASE}/event-venues/portal/venues?popup_id={POPUP}"'),
+    "humans_meetings": ("terminal", 'curl -s "${EDGEOS_API_BASE}/humans/meetings"'),
+    "directory_script_redirect": ("terminal", "EDGEOS_API_BASE=https://api.edgeos.world/api/v1 bun skills/edgeos/scripts/directory.ts > /tmp/out"),
     "humans_other_path": ("terminal", f'curl -s "{BASE}/humans/mentors"'),
     "applications_other": ("terminal", f'curl -s "{BASE}/applications/my/directory-settings"'),
     # Other hosts, even with the same path.

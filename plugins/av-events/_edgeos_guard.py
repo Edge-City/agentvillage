@@ -62,7 +62,7 @@ REFUSAL = (
 )
 
 _ENDPOINT = re.compile(
-    r"(?:/api/v1)?/(?:humans/me|applications/my/directory)(?=$|[/?#\s;&|)\\,}+])", re.IGNORECASE)
+    r"(?:/api/v1)?/(?:humans/me|applications/my/directory)(?=$|[/?#\s;&|)\\,}+`<>.])", re.IGNORECASE)
 _EDGEOS_REF = re.compile(r"edgeos\.world|EDGEOS_API_BASE|EDGEOS_BEARER_TOKEN|EDGEOS_API_KEY",
                          re.IGNORECASE)
 _CLIENT = re.compile(
@@ -76,7 +76,7 @@ _PREFIX = re.compile(
     r"|f?\{[^{}]*\}",
     re.IGNORECASE)
 #: Characters that end a URL word (looking back from the endpoint path).
-_WORD_BREAK = frozenset(" \t\n;&|()<>,=+[]")
+_WORD_BREAK = frozenset(" \t\n;&|()<>,=+[]`")
 
 
 def switch_on(environ: Optional[Mapping[str, str]] = None) -> bool:
