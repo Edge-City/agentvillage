@@ -88,7 +88,8 @@ def label(edgeos, command):
     # The profile update's body carries `"picture_url":"https://..."`: a URL
     # inside a request body is content, not a target, so it is recognised.
     (8, ["edgeos.profile_read", "edgeos.profile_update"]),
-    (9, ["edgeos.directory_search"]),
+    # DATA-454: §9 has no curl; the directory goes through the script (pinned below).
+    (9, []),
 ])
 def test_the_other_recipes_carry_their_labels(edgeos, section, operations):
     assert [label(edgeos, command) for command in recipes(section)] == operations
@@ -169,7 +170,6 @@ RECIPE_OPERATIONS = {
     "List active venues for a popup": "edgeos.venues_list",
     "Read the calling user's profile": "edgeos.profile_read",
     "Update basic profile fields": "edgeos.profile_update",
-    "Search attendees in a popup": "edgeos.directory_search",
 }
 
 
@@ -239,11 +239,10 @@ def test_the_skill_says_the_api_key_cannot_reach_the_directory_or_profile():
     section0 = re.search(r"^## 0\..*?(?=^## )", text, re.S | re.M).group(0)
     assert "cannot** reach the attendee directory" in section0
     assert "never retry those calls with the API key" in section0
-    for number in (8, 9):
-        body = re.search(rf"^## {number}\..*?(?=^## )", text, re.S | re.M).group(0)
-        assert "human session token only" in body.splitlines()[0], number
-    # The directory and profile recipes carry the human bearer, never the key.
-    for heading in ("Search attendees in a popup", "Read the calling user's profile", "Update basic profile fields"):
+    body = re.search(r"^## 8\..*?(?=^## )", text, re.S | re.M).group(0)
+    assert "human session token only" in body.splitlines()[0]
+    # The profile recipes carry the human bearer, never the key; the directory has no curl (DATA-454).
+    for heading in ("Read the calling user's profile", "Update basic profile fields"):
         assert "$EDGEOS_BEARER_TOKEN" in recipe(heading) and "EDGEOS_API_KEY" not in recipe(heading), heading
 
 
@@ -322,7 +321,8 @@ def test_the_directory_search_parameter_is_q():
     """`list_attendees_directory(..., q, hide_empty_rows)`: there is no
     `search` parameter and no per-popup filter; `q` matches name, email and
     Telegram only."""
-    assert "q=QUERY" in recipe("Search attendees in a popup")
+    assert '--search "Priya"' in section(9)
+    assert 'params.set("q", args.q)' in DIRECTORY_SCRIPT.read_text(encoding="utf-8")
     for doc in (SKILL, ESMERALDA):
         text = doc.read_text(encoding="utf-8")
         assert "?search=" not in text, doc.name
@@ -388,3 +388,57 @@ def test_the_cancel_seed_path_is_the_portal_route():
     assert (ops["edgeos.event_cancel"]["method"], ops["edgeos.event_cancel"]["path"]) == (
         "POST", "/api/v1/events/portal/events/{event_id}/cancel")
     assert ops["edgeos.participants_list"]["path"] == "/api/v1/event-participants/portal/participants"
+
+
+# --------------------------------------------------------------------------
+# DATA-454: the directory goes through the Agent Village control plane, by
+# the script, on the resident's own Edge City grant held by the app. The box's
+# EDGEOS_BEARER_TOKEN lives 15 minutes since EdgeOS v1.47, so §9's old curl
+# answered 401 within minutes of provisioning.
+# --------------------------------------------------------------------------
+
+DIRECTORY_SCRIPT = SKILL.parent / "scripts" / "directory.ts"
+
+
+def section(number: int) -> str:
+    text = SKILL.read_text(encoding="utf-8")
+    return re.search(rf"^## {number}\..*?(?=^## )", text, re.S | re.M).group(0)
+
+
+def test_section_9_runs_the_directory_script_and_no_curl():
+    body = section(9)
+    assert "Agent Village control plane" in body.splitlines()[0]
+    runs = re.findall(r"```sh\n(.*?)```", body, re.S)
+    assert len(runs) == 1
+    commands = runs[0].strip().splitlines()
+    assert commands and all(c.startswith("bun skills/edgeos/scripts/directory.ts") for c in commands)
+    assert DIRECTORY_SCRIPT.is_file()
+    assert "curl -" not in body and "```bash" not in body
+    assert "EDGEOS_BEARER_TOKEN" not in body
+    assert "/applications/my/directory" not in body
+    # The terminal rule reads as §2's and §3's do.
+    assert "Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else." in body
+
+
+def test_section_9_maps_the_script_exit_codes_to_the_fail_soft_answers():
+    flat = re.sub(r"\s+", " ", section(9))
+    assert "**Exit 2** means the directory isn't connected to this agent" in flat
+    assert "follow §0" in flat and "don't retry in this conversation" in flat
+    assert "**Exit 1** means it can't be reached right now" in flat
+    assert "Never show the error text, a status code or a key." in flat
+    flat0 = re.sub(r"\s+", " ", section(0))
+    assert "the directory script exits 2" in flat0
+    assert "never retry those calls with the API key" in flat0
+
+
+def test_the_bearer_is_for_the_profile_only():
+    """§8's /humans/me still uses the bearer and keeps the 401-as-unset rule
+    (DATA-454 AC #5); nothing names the bearer for the directory."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "required_for: own profile (" in text
+    flat0 = re.sub(r"\s+", " ", section(0))
+    assert "A `401` from the profile call" in flat0 and "treat it like an unset one" in flat0
+    assert "follow §0 (not connected or expired; no retry)" in section(8)
+    assert "Required for `/humans/me` only." in section(1)
+    for doc in (SKILL, ESMERALDA):
+        assert "/applications/my/directory" not in doc.read_text(encoding="utf-8"), doc.name

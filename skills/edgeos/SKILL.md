@@ -1,14 +1,18 @@
 ---
 name: edgeos
-description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, and, only when a human session token is set, look up the calling user's own profile and browse the attendee directory (the API key cannot reach those). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.4.0
+description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, search the attendee directory through the Agent Village control plane (a script; the app reads it with the person's own Edge City sign-in), and, only when a human session token is set, look up the calling user's own profile (the API key cannot reach it). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
+version: 1.5.0
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
   - name: EDGEOS_BEARER_TOKEN
-    required_for: directory, own profile (a human session JWT; the API key cannot reach these)
+    required_for: own profile (a human session JWT; the API key cannot reach it)
   - name: EDGEOS_API_KEY
-    required_for: events, RSVPs, venues
+    required_for: events, RSVPs, venues, directory (the directory script sends it to the Agent Village control plane only)
+  - name: CONTROL_PLANE_URL
+    required_for: directory (the Agent Village control plane)
+  - name: TENANT_ID
+    required_for: directory (this agent's tenant on the control plane)
   - name: AV_POPUP_ID
     required_for: events, venues, directory (the current village's popup id)
 metadata:
@@ -31,7 +35,7 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 
 - You **can** read the schedule, read venues, see who is going to an event, RSVP the person to an event, and cancel their RSVP.
 - You **cannot** create, edit, cancel, or invite people to village events, and cannot create or change venues. Those calls fail with `403`. When the person wants to host or change an event, tell them plainly that agents can't create village events and send them to the Edge City portal (the events page, `$AV_PORTAL_URL` when set) to do it themselves. Don't attempt those calls.
-- Your API key **cannot** reach the attendee directory (§9) or `/humans/me` (§8). EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). The directory and the profile need a human session token, `$EDGEOS_BEARER_TOKEN`, that carries the right scope (§1). When `EDGEOS_BEARER_TOKEN` is unset or empty, tell the person the directory and profile aren't connected to their agent and point them to the Edge City portal; never retry those calls with the API key. A `401` from a directory or profile call (§8, §9; the body usually says the token is expired or invalid) means `$EDGEOS_BEARER_TOKEN` has expired: treat it like an unset one. Tell the person you can't reach the directory or their profile from here right now, and that they can look people up and edit their profile themselves on the Edge City portal; don't suggest that signing in again will reconnect you, and never ask them for a token. Don't retry the call (not with the API key either), never show the error, status code or token, and for the rest of the conversation give the same answer to any directory or profile request without calling.
+- Your API key **cannot** reach the attendee directory or `/humans/me` (§8) on EdgeOS itself. EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). The profile needs a human session token, `$EDGEOS_BEARER_TOKEN`, that carries the right scope (§1); the directory comes only through the directory script (§9), never a curl. When `EDGEOS_BEARER_TOKEN` is unset or empty, or the directory script exits 2, tell the person the directory or profile isn't connected to their agent and point them to the Edge City portal; never retry those calls with the API key. A `401` from the profile call (§8; the body usually says the token is expired or invalid) means `$EDGEOS_BEARER_TOKEN` has expired: treat it like an unset one. Tell the person you can't reach the directory or their profile from here right now, and that they can look people up and edit their profile themselves on the Edge City portal; don't suggest that signing in again will reconnect you, and never ask them for a token. Don't retry the call (not with the API key either), never show the error, status code or token, and for the rest of the conversation give the same answer to any directory or profile request without calling.
 
 **Ask before every RSVP or cancel.** Before each `POST` to `register` or `cancel-registration` (one call per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI"). The same rule applies to `PATCH /humans/me`: show the exact fields you'll change and wait for a yes.
 
@@ -39,8 +43,8 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 
 You need two tokens, both passed as `Authorization: Bearer <token>`:
 
-- **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for: `/humans/me`, `/applications/my/directory/{popup_id}`. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it, `portal:directory:read` for the directory. A token without the scope gets `403`; an expired one gets `401`. It may be unset or expired: then those calls are unavailable (§0).
-- **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` (§0).
+- **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for `/humans/me` only. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it. A token without the scope gets `403`; an expired one gets `401`. It may be unset or expired: then those calls are unavailable (§0).
+- **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` on EdgeOS (§0); the directory script (§9) sends it to the Agent Village control plane, which reads the directory with the person's own Edge City sign-in (`portal:directory:read`).
 
 Every curl recipe below names its token as `"$EDGEOS_API_KEY"` or `"$EDGEOS_BEARER_TOKEN"` inside double quotes, and the shell fills it in. Run the recipe as written. Never print, echo or paste a token's value, never type one into a command, and never put one in a message: a pasted value ends up in the conversation log and the approval log.
 
@@ -196,21 +200,23 @@ curl -s -X PATCH -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
 
 Patchable fields: `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. All are optional — include only what you want to change. Store Telegram usernames as bare handles (`handle`, not `@handle`) and only after the resident confirms the value when systems disagree. Application-specific fields (dietary preferences, "what I'm building", application answers) are **not** patchable through this endpoint — those live on the popup application form and must be edited in the EdgeOS portal UI.
 
-## 9. Attendee directory (`portal:directory:read`; human session token only)
+## 9. Attendee directory (`portal:directory:read`; through the Agent Village control plane)
 
-The directory does **not** work with your API key: EdgeOS answers an `eos_live_` key here with `403` (§0). It needs `$EDGEOS_BEARER_TOKEN` carrying the scope `portal:directory:read`. When that token is unset or empty, don't call the directory at all: tell the person the attendee directory isn't connected to their agent and point them to the Edge City portal. A `401` from the directory means the token has expired: follow §0 and don't retry.
+The directory comes through the Agent Village control plane, which has the Agent Village app read it from EdgeOS with the person's own Edge City sign-in (`portal:directory:read`; nothing is stored on the way). Only when the control plane isn't connected does the script also try EdgeOS's own directory with your API key, which EdgeOS refuses today; either way it prints the same rows. Use the script, never a curl:
 
-**Search attendees in a popup** (uses the human bearer):
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/applications/my/directory/{popup_id}?skip=0&limit=20&q=QUERY"
+```sh
+bun skills/edgeos/scripts/directory.ts --search "Priya"
+bun skills/edgeos/scripts/directory.ts --search "priya@example.com" --json
+bun skills/edgeos/scripts/directory.ts --limit 100 --skip 100
 ```
 
-`{popup_id}` is the value of `$AV_POPUP_ID` (use the previous popup Edge Esmeralda's id from the `edge-esmeralda` skill only when the person asks about that popup). Replace `QUERY` with part of a name, an email address or a Telegram handle: `q` matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, page through the directory and filter the rows yourself. Leave `q` out to list everyone.
+Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
-**Pagination:** `skip` + `limit` (default 100, at most 1000). Response shape: `{ results: Attendee[], paging: { offset, limit, total } }`. Fetch again with a larger `skip` only while `skip + results.length < paging.total`.
+`--search` (1-120 characters) matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, list the directory and filter the rows yourself. Leave `--search` out to list everyone. `--hide-empty` sends `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. The script uses the current village (`$AV_POPUP_ID`); pass `--popup <id>` only when the person asks about the previous popup (the `edge-esmeralda` skill's id). Each line is one attendee, `hidden` where the attendee hid a field; `--json` prints the rows instead, as `{ results: Attendee[], paging: { offset, limit, total } }`.
 
-**Other parameters:** the only other filter is `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. There is no week, family or other per-popup filter. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed), newest first. A popup without an attendee directory answers `404`.
+**Pagination:** `--skip` (up to 5000) + `--limit` (default 20, at most 100). Fetch again with a larger `--skip` only while `skip + results < total` (the last line says `more: --skip N`). There is no week, family or other per-popup filter. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed), newest first.
+
+**Exit 2** means the directory isn't connected to this agent (or that popup has no directory): follow §0 (tell the person, point them to the Edge City portal, don't retry in this conversation). **Exit 1** means it can't be reached right now: say you can't reach the directory right now; you may try again later if asked again. Exit 3 is a usage error: fix the arguments. Never show the error text, a status code or a key.
 
 **Fields:** every row has `id` (the attendee id), `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age`, `gender`, `picture_url`, `category` (`main` or `spouse`), `participation` (the attendee's tickets, each `{ id, name, slug, category, duration_type }`) and `associated_attendees` (always an empty list: a spouse is a row of their own). The shape is the same for every popup. Any field can be null when the attendee never filled it in.
 

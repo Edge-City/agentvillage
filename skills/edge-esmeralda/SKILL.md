@@ -30,7 +30,7 @@ This skill is a **knowledge layer** about the popup itself. For live calendar, R
 ## 1. Popup constants (use these with the `edgeos` skill)
 
 - **`popup_id`**: `43746fd0-bce2-472b-93e4-a438177b2dff`
-  Pass this as the `popup_id` parameter to the `edgeos` skill's read calls that need it: `GET /events/portal/events?popup_id=...` (always pass it; see the `edgeos` skill §3), `GET /applications/my/directory/{popup_id}` and `GET /event-venues/portal/venues?popup_id=...`. Agents cannot create or change events or venues for any popup. The `edgeos` API key is bound to the current village's popup, so the events and venues calls with this id answer `403` ("This API key does not have access to this popup"); when they do, tell the person the previous popup's live schedule isn't reachable from their agent.
+  Pass this as the `popup_id` parameter to the `edgeos` skill's read calls that need it: `GET /events/portal/events?popup_id=...` (always pass it; see the `edgeos` skill §3), the `edgeos` skill's directory script (`--popup` with this id; §9) and `GET /event-venues/portal/venues?popup_id=...`. Agents cannot create or change events or venues for any popup. The `edgeos` API key is bound to the current village's popup, so the events and venues calls with this id answer `403` ("This API key does not have access to this popup"); when they do, tell the person the previous popup's live schedule isn't reachable from their agent.
 - **`popup_slug`**: `edge-esmeralda-2026` (informational; not used by EdgeOS API calls).
 - **`event_base_url`**: `https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/`
   Use this as the prefix for event links by appending the `event_id` returned by the EdgeOS API.
@@ -54,7 +54,7 @@ When the user says "week 2", convert to `start_after=2026-06-08T07:00:00Z&start_
 
 ## 2. Attendee directory field guide
 
-The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the `popup_id` from §1. It works only with a human session token carrying `portal:directory:read` (`$EDGEOS_BEARER_TOKEN`), never with the `eos_live_` API key; see the `edgeos` skill §9. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed). Each attendee record in `results[]` contains:
+The `edgeos` skill reads the attendee directory through its directory script (§9), never a curl: pass the `popup_id` from §1 as `--popup`. The Agent Village control plane reads it from EdgeOS with the person's own Edge City sign-in (`portal:directory:read`). When the script exits 2, the directory isn't connected to this agent (the `edgeos` skill §0). The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed). Each attendee record in `results[]` contains:
 
 - `id` — the attendee id
 - `first_name`, `last_name`, `email`, `telegram`
@@ -71,11 +71,11 @@ Response wrapper: `{ results: Attendee[], paging: { offset, limit, total } }`.
 
 An attendee can hide any of `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age` and `gender`; a hidden value appears as the literal string `"*"`. `picture_url`, `category` and `participation` are never masked, and only a main applicant's record carries masks. **Respect this** — do not try to infer or work around hidden data. If a field is `"*"`, tell the user that information is private.
 
-### Useful query patterns (via the `edgeos` skill's directory recipe)
+### Useful query patterns (via the `edgeos` skill's directory script, with `--popup` and the id from §1)
 
-- Search by name, email or Telegram handle: `?q=QUERY` (it matches only shared values and does not search role or organization)
-- Pagination: `?skip=0&limit=20` (default 100, at most 1000; page again only while `skip + results.length < paging.total`)
-- `?hide_empty_rows=true` drops records with no shared name, email, Telegram, role or organization. There is no filter by week, family or anything else.
+- Search by name, email or Telegram handle: `--search QUERY` (it matches only shared values and does not search role or organization)
+- Pagination: `--skip 0 --limit 20` (default 20, at most 100; page again only while `skip + results.length < paging.total`)
+- `--hide-empty` (`hide_empty_rows=true`) drops records with no shared name, email, Telegram, role or organization. There is no filter by week, family or anything else.
 
 ---
 
