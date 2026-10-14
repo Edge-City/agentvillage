@@ -127,8 +127,9 @@ write gate. Gold Stars grants neither meeting changes nor Skylight access.
 
 ## Disk staging and lifecycle
 
-The baseline installer stages the guarded native plugin but **does not install
-Gold Stars or Dizko skills**. The CP writes desired install state durably and
+The baseline installer stages the guarded native plugin and **grants no app**.
+It ships the Gold Stars skill text to every box (a baseline skill, inert until
+installed) and **does not install Dizko**. The CP writes desired install state durably and
 reconciles after baseline install, under its runtime lease and sandbox binding.
 Only the pinned local checkout's exact reviewed `SKILL.md` files are copied.
 
@@ -142,7 +143,10 @@ Only the pinned local checkout's exact reviewed `SKILL.md` files are copied.
 Both modes are local filesystem operations: no Hermes CLI, model calls,
 network, package hooks, chat, cron or live services. The empty apps list is a
 real opt-out; it removes each exact owned skill file and the managed
-`village-bridge.json` bearer, not arbitrary directories or resident notes.
+`village-bridge.json` bearer, not arbitrary directories or resident notes, and
+never a skill the installer ships (`gold-stars` keeps its file and loses only its
+permission). On a box with no mini-app state (no projection, no bearer, no owned
+skill file) the empty list writes nothing at all.
 Symlinks at source/target/ancestor paths, path escapes,
 unknown versions, extra permissions and duplicate app ids are refused.
 

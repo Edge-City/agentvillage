@@ -77,6 +77,25 @@ class BridgeTest(unittest.TestCase):
   Path(self.tmp.name,'mini-apps.json').unlink()
   self.assertEqual(self.call()['error'],'mini_app_not_installed')
   self.transport.assert_not_called()
+ def test_no_mini_app_state_is_inert_for_every_operation(self):
+  # A non-cohort box (rc41): the plugin is staged and listed, the cp never ran the helper, so there is
+  # no mini-apps.json. Every operation, well-formed or not, is refused before any credential read,
+  # network call or write; with or without a leftover village-bridge.json (jmill's canary).
+  draft='550e8400-e29b-41d4-a716-446655440000'
+  calls=[{'operation':'gold-stars.quota'},{'operation':'rolodex.search','query':'Naman'},
+         {'operation':'gold-stars.prepare','attendeeId':draft,'note':'Thanks','visibility':'named'},
+         {'operation':'gold-stars.send','draftId':draft},{'operation':'gold-stars.status','draftId':draft},
+         {'operation':'gold-stars.cancel','draftId':draft},{'operation':'mini-app.read','appId':'dizko','tool':'search','arguments':{}},
+         {'operation':'rolodex.meeting','attendeeId':draft,'met':True},{'operation':'skylight.status'}]
+  Path(self.tmp.name,'mini-apps.json').unlink()
+  for leftover in (True,False):
+   if not leftover:Path(self.tmp.name,'village-bridge.json').unlink()
+   before=sorted((p.name,p.read_bytes()) for p in Path(self.tmp.name).iterdir())
+   with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon call')),patch('builtins.open',side_effect=AssertionError('no file read')):
+    for args in calls:
+     with self.subTest(leftover=leftover,op=args['operation']):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+   self.assertEqual(sorted((p.name,p.read_bytes()) for p in Path(self.tmp.name).iterdir()),before)
+  self.transport.assert_not_called()
  def test_unknown_actions_and_actor_injection_refused(self):
   for args in [{'operation':'gold-stars.send'},{'operation':'gold-stars.quota','humanId':'other'}, {'operation':'gold-stars.prepare','attendeeId':'bad','note':'x','visibility':'named'}]:self.assertEqual(self.call(args)['error'],'village_unavailable')
   self.transport.assert_not_called()

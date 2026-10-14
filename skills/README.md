@@ -22,10 +22,12 @@ Two more bundles are **opt-in and Hermes-only**, and are not part of the set abo
 
 **Curated mini-apps are separately installed by the owner:** `gold-stars`
 (recipient search and gratitude, with exact-preview manual approval) and
-`dizko` (public discovery through a reviewed MCP proxy). Their `SKILL.md` files
-are staged only by `install/install_miniapps.ts` from the control plane's
-validated installed projection. Removing an app revokes its permission and
-removes its owned skill file. Copying a skill alone grants no API access.
+`dizko` (public discovery through a reviewed MCP proxy). `install/install_miniapps.ts`
+stages them from the control plane's validated installed projection. `gold-stars`
+is also a baseline skill the installer ships to every box, inert until the app is
+installed; the helper never removes a skill the installer ships. Removing an app
+revokes its permission and removes only a skill file the installer does not ship
+(`dizko`). Copying a skill alone grants no API access.
 See [the builder starter and review contract](../mini-apps/README.md).
 
 The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.

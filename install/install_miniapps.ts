@@ -3,12 +3,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, parse } from "node:path";
-import { hermesHome } from "./paths";
+import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
 
 export const REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
+/**
+ * Skills the installer ships to every box (install/paths.ts). The helper may write a desired app's
+ * SKILL.md over one (the same source bytes), but never removes one: an app missing from `desired`
+ * only loses its native permission (mini-apps.json), never a baseline skill (rc37's helper unlinked
+ * the baseline gold-stars SKILL.md; the re-cut for rc41 does not).
+ */
+export const SHIPPED_SKILLS: ReadonlySet<string> = new Set<string>(EDGE_SKILL_NAMES);
+const owned = (id: string) => !SHIPPED_SKILLS.has(id);
 type Projection = { version: 1; apps: (typeof REVIEWED_MINI_APPS[number])[] };
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 function exists(path: string): boolean {
@@ -60,6 +68,9 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   const files: { path: string; sha256: string }[] = [];
   // Preflight every exact owned path, never recursively remove a resident's files.
   for (const app of REVIEWED_MINI_APPS) regular(join(home, "skills", app.id, "SKILL.md"));
+  // No desired apps and no mini-app state on the box (every non-cohort box): write nothing at all.
+  const stateless = () => !exists(target) && !exists(credential) &&
+    REVIEWED_MINI_APPS.every(app => !owned(app.id) || !exists(join(home, "skills", app.id, "SKILL.md")));
   const desired = projection.apps.map(app => {
     const path = join(source, app.id, "SKILL.md");
     regular(path);
@@ -68,17 +79,17 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
     return { app, content };
   });
   if (verify) {
-    if (readFileSync(target, "utf8") !== bytes) throw new Error("mini_apps_projection_mismatch");
+    if (!(projection.apps.length === 0 && stateless()) && (!exists(target) || readFileSync(target, "utf8") !== bytes)) throw new Error("mini_apps_projection_mismatch");
     if (projection.apps.length === 0 && exists(credential)) throw new Error("mini_apps_credential_removal_pending");
     for (const { app, content } of desired) if (!readFileSync(join(home, "skills", app.id, "SKILL.md")).equals(content)) throw new Error("mini_apps_skill_mismatch");
-    for (const app of REVIEWED_MINI_APPS) if (!projection.apps.some(x => x.id === app.id) && exists(join(home, "skills", app.id, "SKILL.md"))) throw new Error("mini_apps_removal_pending");
-  } else {
+    for (const app of REVIEWED_MINI_APPS) if (owned(app.id) && !projection.apps.some(x => x.id === app.id) && exists(join(home, "skills", app.id, "SKILL.md"))) throw new Error("mini_apps_removal_pending");
+  } else if (!(projection.apps.length === 0 && stateless())) {
     // Fail closed even if copying/removal is interrupted. Publish desired authority last.
     atomic(target, JSON.stringify({ version: 1, apps: [] }));
     if (projection.apps.length === 0 && exists(credential)) unlinkSync(credential);
     for (const app of REVIEWED_MINI_APPS) {
       const path = join(home, "skills", app.id, "SKILL.md");
-      if (!projection.apps.some(x => x.id === app.id) && exists(path)) unlinkSync(path);
+      if (owned(app.id) && !projection.apps.some(x => x.id === app.id) && exists(path)) unlinkSync(path);
     }
     for (const { app, content } of desired) atomic(join(home, "skills", app.id, "SKILL.md"), content);
     atomic(target, bytes);

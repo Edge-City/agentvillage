@@ -1,10 +1,37 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { reconcileMiniApps, REVIEWED_MINI_APPS, validateProjection } from "../install_miniapps";
+import { join, relative } from "node:path";
+import { reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection } from "../install_miniapps";
 import { EDGE_SKILL_NAMES } from "../paths";
+
+const REPO = join(import.meta.dir, "..", "..");
+/** Every file under `root` with its bytes and mode, for "nothing changed" proofs. */
+function snapshot(root: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      const st = statSync(path);
+      if (st.isDirectory()) { out[relative(root, path) + "/"] = String(st.mode); walk(path); }
+      else out[relative(root, path)] = `${st.mode}:${readFileSync(path, "base64")}`;
+    }
+  };
+  walk(root);
+  return out;
+}
+/** A box as the installer leaves it: every installer-shipped skill copied from this checkout. */
+function installedBox(): string {
+  const root = home();
+  for (const name of EDGE_SKILL_NAMES) {
+    mkdirSync(join(root, "skills", name), { recursive: true });
+    writeFileSync(join(root, "skills", name, "SKILL.md"), readFileSync(join(REPO, "skills", name, "SKILL.md")));
+  }
+  writeFileSync(join(root, "config.yaml"), "plugins:\n  enabled: [village-bridge]\n");
+  return root;
+}
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -17,7 +44,8 @@ const all = { version: 1, apps: [...REVIEWED_MINI_APPS] };
 
 test("reviewed skills are optional, disk-only staging has deterministic receipts and verify", () => {
   const root = home();
-  expect(EDGE_SKILL_NAMES).not.toContain("gold-stars");
+  // gold-stars is a baseline skill the installer ships to every box; dizko only ever arrives this way.
+  expect(EDGE_SKILL_NAMES).toContain("gold-stars");
   expect(EDGE_SKILL_NAMES).not.toContain("dizko");
   const receipt = reconcileMiniApps(all, root);
   expect(receipt).toEqual(reconcileMiniApps(all, root));
@@ -29,7 +57,7 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
 });
 
-test("uninstall revokes the projection and removes only exact managed files", () => {
+test("uninstall revokes the projection and removes only exact managed files, never a shipped skill", () => {
   const root = home();
   reconcileMiniApps(all, root);
   writeFileSync(join(root, "village-bridge.json"), "managed bearer fixture");
@@ -37,13 +65,60 @@ test("uninstall revokes the projection and removes only exact managed files", ()
   const one = { version: 1, apps: [REVIEWED_MINI_APPS[1]] };
   reconcileMiniApps(one, root);
   expect(existsSync(join(root, "village-bridge.json"))).toBe(true);
-  expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(false);
+  // gold-stars left `desired`: its permission is gone from mini-apps.json, its baseline SKILL.md stays.
+  expect(JSON.parse(readFileSync(join(root, "mini-apps.json"), "utf8")).apps.map((a: { id: string }) => a.id)).toEqual(["dizko"]);
+  expect(readFileSync(join(root, "skills", "gold-stars", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "gold-stars", "SKILL.md")));
   expect(readFileSync(join(root, "skills", "gold-stars", "resident-note.txt"), "utf8")).toBe("keep");
   expect(reconcileMiniApps(one, root, undefined, true).apps).toEqual([{ id: "dizko", version: "1.0.0" }]);
   reconcileMiniApps({ version: 1, apps: [] }, root);
   expect(existsSync(join(root, "village-bridge.json"))).toBe(false);
   expect(JSON.parse(readFileSync(join(root, "mini-apps.json"), "utf8"))).toEqual({ version: 1, apps: [] });
   expect(existsSync(join(root, "skills", "dizko", "SKILL.md"))).toBe(false);
+  expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(true);
+  expect(reconcileMiniApps({ version: 1, apps: [] }, root, undefined, true).apps).toEqual([]);
+});
+
+test("the helper never removes an installer-shipped skill, for any desired set", () => {
+  // The reviewed ids the installer also ships (today: gold-stars) are exactly the protected ones.
+  expect(REVIEWED_MINI_APPS.filter((a) => SHIPPED_SKILLS.has(a.id)).map((a) => a.id)).toEqual(["gold-stars"]);
+  expect([...SHIPPED_SKILLS].sort()).toEqual([...EDGE_SKILL_NAMES].sort());
+  const sets = [[], [REVIEWED_MINI_APPS[0]], [REVIEWED_MINI_APPS[1]], [...REVIEWED_MINI_APPS]];
+  for (const first of sets) for (const second of sets) {
+    const root = installedBox();
+    const shipped = () => Object.fromEntries(EDGE_SKILL_NAMES.map((n) => [n, readFileSync(join(root, "skills", n, "SKILL.md"), "base64")]));
+    const before = shipped();
+    for (const apps of [first, second]) {
+      const receipt = reconcileMiniApps({ version: 1, apps }, root);
+      expect(shipped()).toEqual(before);
+      expect(reconcileMiniApps({ version: 1, apps }, root, undefined, true)).toEqual(receipt);
+    }
+    expect(existsSync(join(root, "skills", "dizko", "SKILL.md"))).toBe(second.some((a) => a.id === "dizko"));
+  }
+});
+
+test("non-cohort box: an empty projection on a box with no mini-app state writes nothing (library and CLI)", () => {
+  const empty = { version: 1, apps: [] };
+  const root = installedBox();
+  const before = snapshot(root);
+  const receipt = reconcileMiniApps(empty, root);
+  expect(receipt).toEqual({ version: 1, projectionSha256: createHash("sha256").update(JSON.stringify(empty)).digest("hex"), files: [], apps: [], staged: true });
+  expect(reconcileMiniApps(empty, root, undefined, true)).toEqual(receipt);
+  expect(snapshot(root)).toEqual(before);
+  // The exact command the control plane runs (stdin JSON, `bun install/install_miniapps.ts`), with and without --verify.
+  for (const args of [[], ["--verify"]]) {
+    const run = spawnSync("bun", ["--no-env-file", "--no-install", "install/install_miniapps.ts", ...args], {
+      cwd: REPO, input: JSON.stringify(empty), env: { ...process.env, HERMES_HOME: root }, encoding: "utf8",
+    });
+    expect([run.status, run.stderr]).toEqual([0, ""]);
+    expect(JSON.parse(run.stdout)).toEqual(receipt);
+  }
+  expect(snapshot(root)).toEqual(before);
+  // Once a box has mini-app state, an empty projection is a real revocation (fails closed).
+  writeFileSync(join(root, "village-bridge.json"), "managed bearer fixture");
+  expect(() => reconcileMiniApps(empty, root, undefined, true)).toThrow("mini_apps_projection_mismatch");
+  reconcileMiniApps(empty, root);
+  expect(existsSync(join(root, "village-bridge.json"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, "mini-apps.json"), "utf8"))).toEqual(empty);
 });
 
 test("unknown bundles, versions, extra fields, permissions and duplicate ids are refused", () => {
