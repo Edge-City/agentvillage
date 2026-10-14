@@ -25,6 +25,7 @@ from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_a
 from ._ask_village import register_ask_village_tool
 from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
+from ._clock import with_clock_line
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
@@ -1187,8 +1188,8 @@ def build_hooks(collector_ref=_collector) -> dict:
 
     `pre_tool_call` is then wrapped once more by `with_terminal_args_fix`
     (DATA-312), which is the only thing in this plugin that returns a directive,
-    and `pre_llm_call` by `with_approvals_reminder` (DATA-444), the only thing
-    that returns context.
+    and `pre_llm_call` by `with_clock_line` (CLOCK-1, the Now line on every turn)
+    inside `with_approvals_reminder` (DATA-444), the two things that return context.
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
@@ -1203,7 +1204,9 @@ def build_hooks(collector_ref=_collector) -> dict:
         if name == "pre_tool_call":
             wrapped = with_terminal_args_fix(wrapped)
         elif name == "pre_llm_call":
-            wrapped = with_approvals_reminder(wrapped, collector_ref)
+            # CLOCK-1 (`_clock.py`): the Now line on every turn, cron and subagents included,
+            # between the telemetry return and the DATA-444 reminder; outside `guarded`.
+            wrapped = with_approvals_reminder(with_clock_line(wrapped, collector_ref), collector_ref)
         hooks[name] = wrapped
     return hooks
 

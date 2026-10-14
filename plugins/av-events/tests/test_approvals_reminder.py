@@ -44,12 +44,26 @@ def unstarted(minutes_ago: float = 1.0) -> dict:
     return {"started": False, "button": "sent", "at": iso(minutes_ago)}
 
 
+def without_clock(results: list) -> list:
+    """The hook's returns without CLOCK-1's Now line (`test_clock_line.py` covers it, and its order
+    before the reminder): this file is about the reminder alone."""
+    out = []
+    for result in results:
+        if isinstance(result, dict) and isinstance(result.get("context"), str):
+            kept = "\n\n".join(p for p in result["context"].split("\n\n") if not p.startswith("Now: "))
+            if not kept and set(result) == {"context"}:
+                continue
+            result = dict(result, context=kept)
+        out.append(result)
+    return out
+
+
 def say(ctx, session=SESSION, platform="telegram", text="hi there", history=None, **extra) -> list:
-    return ctx.fire(
+    return without_clock(ctx.fire(
         "pre_llm_call", session_id=session, task_id=session, turn_id="t", user_message=text,
         conversation_history=history if history is not None else [{"role": "user", "content": text}],
         is_first_turn=False, model="m", platform=platform, parent_session_id="", sender_id="", **extra,
-    )
+    ))
 
 
 @pytest.fixture()
@@ -370,8 +384,8 @@ def test_a_cron_session_never_reminds(dm, ctx, home):
 def test_a_subagent_never_reminds(live_dm, ctx, home):
     write_pairing(home, unstarted())
     # Hermes's own `parent_session_id` in the payload.
-    assert ctx.fire("pre_llm_call", session_id="child-1", user_message="goal", platform="telegram",
-                    parent_session_id=SESSION, conversation_history=[]) == []
+    assert without_clock(ctx.fire("pre_llm_call", session_id="child-1", user_message="goal", platform="telegram",
+                                  parent_session_id=SESSION, conversation_history=[])) == []
     # The delegated child's own platform.
     assert say(ctx, session="child-2", platform="subagent") == []
     # Lineage the collector heard from `subagent_start`.
