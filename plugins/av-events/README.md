@@ -56,6 +56,7 @@ plugins/av-events/
 | `AV_PLUGIN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `plugin.inventory@1` and `plugin.unknown@1` from av-approval's plugin inventory (SEC-3; see "Events from other plugins"). **Off until the data release that registers both types is live**; while off each delivery is counted `plugin_dropped_switch_off` (a counter only: unlike the other drop reasons it never logs a line) and nothing is emitted. Read like the other switches (process environment, then `.env`), on every delivery. |
 | `AV_MODEL_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `model.observed@1` and `model.offlist@1` from av-approval's model observer (SEC-6 half 2; see "Events from other plugins"). A switch of its own, separate from `AV_PLUGIN_EVENTS`. **Off until agentvillage-data's DATA-477 release that registers both types is live**; while off each delivery is counted `model_dropped_switch_off` (a counter only, never a log line) and nothing is emitted. Rollback is this switch off. Read like the other switches (process environment, then `.env`), on every delivery. |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
+| `AV_EDGEOS_CURL_GUARD` | `1` | Any of `0`, `false`, `no`, `off` turns off the refusal of hand-written calls to EdgeOS's directory and `/humans/me` (see "Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)"). **Process environment only**, read on every `pre_tool_call`. Independent of every telemetry switch. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
@@ -2269,6 +2270,21 @@ Cron ids at this tag: a session is `cron_<job_id>_<YYYYmmdd>_<HHMMSS>` and its t
 `cron:<job_id>:<execution_id>` (`cron/scheduler.py`); execution ids are `uuid4().hex`.
 
 Every payload also gets `telemetry_schema_version="hermes.observer.v1"` injected (`plugins.py:5627`).
+
+### Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)
+
+BUG 1 (14 Oct): a DM session that began before rc39 still holds the old §8/§9 curl
+(`Authorization: Bearer $EDGEOS_BEARER_TOKEN` to `/applications/my/directory/{popup}` or `/humans/me`)
+and re-runs it from its own history; the bearer is dead, EdgeOS answers 401, and the model says the
+directory "expired". `pre_tool_call` (`_edgeos_guard.py`) now returns a `block` directive for such a
+call whose message names `bun skills/edgeos/scripts/directory.ts` and `profile.ts`. It refuses a
+`terminal` command that runs an HTTP client (`curl`, `wget`, HTTPie, `xh`, or an interpreter) or any
+`execute_code` code, when the text names EdgeOS (`edgeos.world`, `EDGEOS_API_BASE`,
+`EDGEOS_BEARER_TOKEN`, `EDGEOS_API_KEY`) and holds `[/api/v1]/humans/me` or
+`[/api/v1]/applications/my/directory` in a URL word on an EdgeOS origin, a variable expansion, or as
+a bare path. Every other EdgeOS endpoint, every other host and the scripts themselves pass. If the
+matcher raises, the call is refused only when its raw text holds one of the two paths; otherwise it
+passes with one warning. Kill switch `AV_EDGEOS_CURL_GUARD=0`; default on.
 
 ### Return values
 
