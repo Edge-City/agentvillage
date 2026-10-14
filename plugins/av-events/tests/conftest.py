@@ -60,6 +60,8 @@ AV_ENV_VARS = (
     "AV_APPROVAL_CARD_EVENTS",
     # DATA-312: the terminal argument fix's kill switch.
     "AV_TERMINAL_ARGS_FIX",
+    # EDGEOS-CURL-GUARD: the directory/profile curl refusal's kill switch.
+    "AV_EDGEOS_CURL_GUARD",
     # DATA-470: intention.inference_run, off until the data release registers it.
     "AV_INFERENCE_RUN_EVENTS",
     # SEC-3: plugin.inventory / plugin.unknown, off until the data release registers them.
