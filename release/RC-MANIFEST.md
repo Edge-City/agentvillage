@@ -37,4 +37,5 @@ The hand fallback in `docs/deployment.md` ("Roll"), `git tag -a` and
 v2.0.0-rc36 = 93b77aaf24a5edcec8ba82e85135d750ba9b7adb # rc35 + ov#310 + ov#299 + ov#311; checks 1-5 by release 13 Oct
 v2.0.0-rc37 = c941c9b07b50da7b8b14761523f09a64370803ee # owner-only mini-app canary; ov#312
 v2.0.0-rc38 = c48353be287948cf64b4415f2e2e92ffb5f516da # rc36 + ov#321 + ov#320 + ov#322 + ov#317 + ov#314 (+ ov#316/#318 tooling, refs sync); checks by release 14 Oct
+v2.0.0-rc39 = 5bd9c0537a997b10bfdd9832d04faa737d4d06eb # rc38 + ov#325 (DATA-454 directory, fail-soft until the server side is live); checks by release 14 Oct
 ```
