@@ -170,7 +170,9 @@ def test_a_healthy_box_counts_everything_expected_and_nothing_missing(tmp_path):
     mod = _mod()
     bundled, user, keys = _world(tmp_path)
     expected = mod.load_expected()
-    records = [_rec(n, user / n, dashboard_only=(n == "edgecity-village"), loaded=(n not in ("edgecity-village", "recall")))
+    # Conditional plugins (recall, and village-bridge from rc41) are present but not loaded here.
+    records = [_rec(n, user / n, dashboard_only=(n == "edgecity-village"),
+                    loaded=(n != "edgecity-village" and n not in expected["conditional"]))
                for n in expected["overlay"]]
     records.append(_rec("web/ddgs", bundled / "web" / "ddgs", source="bundled"))
     inv = mod.classify(records, expected=expected, metadata={}, bundled_root=bundled, bundled_keys=keys)
@@ -521,7 +523,8 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
         manager.fire()
     assert manager.unloaded == [] and unlisted == [] and (home / "config.yaml").read_bytes() == before
     (inventory,) = _events(ctx, "plugin.inventory")
-    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 7, "expected_missing": 0,
+    # Eight from rc41: the overlay staged in full, village-bridge included (MINI-APPS re-cut).
+    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 8, "expected_missing": 0,
                          "bundled_loaded": 0, "unknown_count": 1, "allowed_count": 0,
                          "expected_set_version": mod.load_expected()["expected_set_version"],
                          "hermes_version": inventory["hermes_version"]}
@@ -529,7 +532,7 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
     assert (unknown["name"], unknown["state"], unknown["action"], unknown["install_host"], unknown["tools"]) == (
         "fixture-echo", "loaded", "none", "git.example.com", 1)
     assert [r.getMessage() for r in caplog.records] == [
-        "av-approval: plugins: 7 expected, 0 bundled, 1 unknown (mode report)"]
+        "av-approval: plugins: 8 expected, 0 bundled, 1 unknown (mode report)"]
 
 
 def test_quarantine_unloads_and_unlists_and_reports_each_outcome_once(box):
