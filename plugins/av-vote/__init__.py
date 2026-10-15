@@ -26,10 +26,16 @@ core registers an unscoped ``CallbackQueryHandler`` (:2938), so this handler is 
 
 On a tap:
 
-1. Owner only. ``query.from_user.id`` must equal the box's paired resident: the Telegram home
-   channel the control plane writes after the pairing is approved (``platforms.telegram.home_channel``
-   in the adapter config, else ``TELEGRAM_HOME_CHANNEL``; a private chat's id is the user's id). When
-   the card's chat is known it must be that DM too. Anyone else: "This vote card is not yours".
+1. Owner only. The tap must come from the box's own resident, in that resident's private chat with
+   the bot (``message.chat.id == from_user.id``, ``chat.type == "private"`` when known). The resident
+   is any of: the home channel the control plane writes after the pairing is approved
+   (``platforms.telegram.home_channel``: its ``user_id`` and its positive ``chat_id``, from the adapter
+   config), ``TELEGRAM_HOME_CHANNEL``, or a Telegram user in Hermes's approved pairings
+   (``gateway.pairing.PairingStore().is_approved("telegram", id)``, the file
+   ``$HERMES_HOME/platforms/pairing/telegram-approved.json``): the very list the control plane checks
+   (``pairings.js`` ``isApproved``) before it sends the card to ``tenants.telegram_user_id``. The
+   pairing read covers boxes whose home channel drifted from that id (an inherited env home, a
+   ``/sethome`` elsewhere, a re-pair with another account). Anyone else: "This vote card is not yours".
 2. ``POST <origin>/api/referenda/vote-token`` with ``{"token", "tenantId"}`` (``tenantId`` a hint only),
    10 s timeout, no redirects followed. ``<origin>`` is ``AV_APP_ORIGIN`` when it is an https
    ``edgecity.live`` origin, else ``https://agents.edgecity.live`` (the origin the other overlay
@@ -39,6 +45,10 @@ On a tap:
    change the vote before the close), every other button (the web row) is kept as it is.
 4. Failure: a short answer ("Voting has closed." / "This vote button is no longer valid..." /
    "Could not record your vote...") and the card is left unchanged; the web row still works.
+
+Non-blocking: the handler is registered with ``block=False``. Hermes builds its PTB Application with
+the default update processor (one update at a time), so a blocking handler would hold every later
+update (the resident's messages, exec-approval taps) for the length of the app call (up to 12 s).
 
 Double taps: a second tap on the same card while the first is still being recorded is answered
 "Still recording your vote..." and sends nothing; a tap after that goes to the app again, whose
@@ -125,18 +135,49 @@ def _positive_id(value: Any) -> Optional[str]:
     return text if _TELEGRAM_USER.fullmatch(text) else None
 
 
-def owner_id(adapter: Any = None) -> Optional[str]:
-    """The box's paired resident's Telegram user id: the adapter config's home channel (a DM), else
-    ``TELEGRAM_HOME_CHANNEL``. None when neither is a positive id (fail closed)."""
+def owner_ids(adapter: Any = None) -> set[str]:
+    """The resident's Telegram user ids the box names directly: the adapter config's home channel
+    (``user_id``, and ``chat_id`` when it is a positive DM id) and ``TELEGRAM_HOME_CHANNEL``. Empty
+    when none is a positive id."""
+    found: set[str] = set()
     try:
         home = getattr(getattr(adapter, "config", None), "home_channel", None)
-        chat = home.get("chat_id") if isinstance(home, dict) else getattr(home, "chat_id", None)
-        found = _positive_id(chat) if chat is not None else None
-        if found:
-            return found
+        for field in ("user_id", "chat_id"):
+            value = home.get(field) if isinstance(home, dict) else getattr(home, field, None)
+            ident = _positive_id(value) if value is not None else None
+            if ident:
+                found.add(ident)
     except Exception:  # noqa: BLE001 - an unreadable config falls back to the env
         pass
-    return _positive_id(os.environ.get(HOME_CHANNEL_ENV, ""))
+    env_id = _positive_id(os.environ.get(HOME_CHANNEL_ENV, ""))
+    if env_id:
+        found.add(env_id)
+    return found
+
+
+def paired_on_box(user: str) -> bool:
+    """Hermes's approved Telegram pairings hold ``user`` (the list the control plane checks before it
+    sends a card). False when Hermes's pairing store cannot be read (fail closed)."""
+    try:
+        from gateway.pairing import PairingStore  # noqa: PLC0415 - Hermes, in-process on a box
+
+        return bool(PairingStore().is_approved("telegram", user))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_owner_tap(adapter: Any, user: Optional[str], chat: Optional[str], chat_type: Optional[str]) -> bool:
+    """The tap is the resident's, in the resident's own DM with the bot."""
+    if user is None:
+        return False
+    if chat is not None and chat != user:
+        return False
+    if isinstance(chat_type, str) and chat_type and chat_type != "private":
+        return False
+    if user in owner_ids(adapter):
+        return True
+    # The pairing list only for a tap whose DM is known (chat id == the tapper's id).
+    return chat is not None and paired_on_box(user)
 
 
 def tenant_id() -> Optional[str]:
@@ -298,12 +339,15 @@ def make_handler(adapter: Any = None, *, make_button: Optional[Callable[[str, st
         key: Optional[tuple[str, str]] = None
         try:
             data = getattr(query, "data", None)
-            owner = owner_id(adapter)
             user = _positive_id(getattr(getattr(query, "from_user", None), "id", None))
             message = getattr(query, "message", None)
-            chat = getattr(getattr(message, "chat", None), "id", None) if message is not None else None
-            if owner is None or user != owner or (chat is not None and str(chat) != owner):
-                _log("not_owner" if owner else "no_owner")
+            chat_obj = getattr(message, "chat", None) if message is not None else None
+            raw_chat = getattr(chat_obj, "id", None)
+            chat = None if raw_chat is None else str(raw_chat).strip()
+            chat_type = getattr(chat_obj, "type", None)
+            chat_type = getattr(chat_type, "value", chat_type)  # PTB ChatType enum or plain str
+            if not is_owner_tap(adapter, user, chat, chat_type):
+                _log("not_owner")
                 await _answer(query, NOT_YOURS)
                 return
             parsed = parse_callback(data)
@@ -311,12 +355,6 @@ def make_handler(adapter: Any = None, *, make_button: Optional[Callable[[str, st
                 _log("bad_data")
                 await _answer(query, BAD_BUTTON)
                 return
-            accept = getattr(adapter, "_accept_update", None)
-            if callable(accept):
-                try:
-                    accept()
-                except Exception:  # noqa: BLE001
-                    pass
             index, token = parsed
             key = (str(chat), str(getattr(message, "message_id", ""))) if message is not None else ("-", str(data))
             if key in _in_flight:
@@ -364,7 +402,9 @@ def _wire_telegram(application: Any, adapter: Any) -> None:
         make_button=lambda text, data: InlineKeyboardButton(text=text, callback_data=data),
         make_markup=lambda rows: InlineKeyboardMarkup(rows),
     )
-    application.add_handler(CallbackQueryHandler(handler, pattern=HANDLER_PATTERN))
+    # block=False: Hermes's Application processes one update at a time, so a blocking handler would
+    # hold the resident's messages and every other button for the whole app call (OV-358 S1).
+    application.add_handler(CallbackQueryHandler(handler, pattern=HANDLER_PATTERN, block=False))
     logger.info("av-vote: vote card buttons wired (pattern %s)", HANDLER_PATTERN)
 
 

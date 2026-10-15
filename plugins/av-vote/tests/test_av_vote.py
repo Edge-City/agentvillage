@@ -11,6 +11,7 @@ import sys
 import threading
 import types
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -153,8 +154,8 @@ def test_factory_adds_a_pattern_scoped_callback_handler(plugin, monkeypatch):
     added = []
 
     class CallbackQueryHandler:
-        def __init__(self, callback, pattern=None):
-            self.callback, self.pattern = callback, pattern
+        def __init__(self, callback, pattern=None, block=True):
+            self.callback, self.pattern, self.block = callback, pattern, block
 
     telegram = types.ModuleType("telegram")
     telegram.InlineKeyboardButton, telegram.InlineKeyboardMarkup = Button, Markup
@@ -164,12 +165,21 @@ def test_factory_adds_a_pattern_scoped_callback_handler(plugin, monkeypatch):
     monkeypatch.setitem(sys.modules, "telegram.ext", ext)
     plugin._wire_telegram(types.SimpleNamespace(add_handler=added.append), object())
     assert len(added) == 1 and added[0].pattern == r"^avv:"
+    assert added[0].block is False  # never holds the bot's one-at-a-time update loop (OV-358 S1)
 
 
 # --------------------------------------------------------------------------- owner only
 
+@pytest.fixture
+def pairings(plugin, monkeypatch):
+    """Hermes's approved Telegram pairings, as a set the test fills (empty: nobody paired)."""
+    approved: set[str] = set()
+    monkeypatch.setattr(plugin, "paired_on_box", lambda user: user in approved)
+    return approved
+
+
 @pytest.mark.parametrize("user,chat", [(OTHER, OWNER), (OTHER, OTHER), (OWNER, OTHER)])
-def test_only_the_boxs_resident_can_vote(plugin, owner_env, user, chat):
+def test_only_the_boxs_resident_can_vote(plugin, owner_env, pairings, user, chat):
     rec = Recorder()
     q = Query(f"avv:0:{TOKEN}", user=user, chat=chat, rows=card())
     run(handler(plugin, rec)(update(q)))
@@ -177,7 +187,7 @@ def test_only_the_boxs_resident_can_vote(plugin, owner_env, user, chat):
     assert rec.tokens == [] and q.edits == []
 
 
-def test_no_paired_owner_fails_closed(plugin, monkeypatch):
+def test_no_paired_owner_fails_closed(plugin, monkeypatch, pairings):
     monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
     rec = Recorder()
     q = Query(f"avv:0:{TOKEN}", rows=card())
@@ -185,13 +195,55 @@ def test_no_paired_owner_fails_closed(plugin, monkeypatch):
     assert q.answers == ["This vote card is not yours"] and rec.tokens == []
 
 
-def test_owner_from_the_adapters_home_channel(plugin, monkeypatch):
+def test_pairing_store_unreadable_is_not_paired(plugin):
+    # No Hermes here: gateway.pairing cannot be imported, so nobody is paired (fail closed).
+    assert plugin.paired_on_box(OWNER) is False
+
+
+def test_owner_ids_from_the_home_channel_and_env(plugin, monkeypatch):
     monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", OTHER)
-    adapter = types.SimpleNamespace(config=types.SimpleNamespace(home_channel=types.SimpleNamespace(chat_id=OWNER)))
-    assert plugin.owner_id(adapter) == OWNER
-    assert plugin.owner_id(types.SimpleNamespace(config=types.SimpleNamespace(home_channel=None))) == OTHER
-    assert plugin.owner_id(types.SimpleNamespace(
-        config=types.SimpleNamespace(home_channel=types.SimpleNamespace(chat_id="-100123")))) == OTHER
+    home = types.SimpleNamespace(chat_id=OWNER, user_id="555")
+    adapter = types.SimpleNamespace(config=types.SimpleNamespace(home_channel=home))
+    assert plugin.owner_ids(adapter) == {OWNER, "555", OTHER}
+    assert plugin.owner_ids(types.SimpleNamespace(config=types.SimpleNamespace(home_channel=None))) == {OTHER}
+    group = types.SimpleNamespace(chat_id="-100123", user_id=None)
+    assert plugin.owner_ids(types.SimpleNamespace(config=types.SimpleNamespace(home_channel=group))) == {OTHER}
+    monkeypatch.delenv("TELEGRAM_HOME_CHANNEL")
+    assert plugin.owner_ids(None) == set()
+
+
+def test_home_channel_user_id_is_the_owner(plugin, monkeypatch, pairings):
+    # A /sethome in a group: chat_id is negative, user_id is still the resident (OV-358 S2 b).
+    monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
+    adapter = types.SimpleNamespace(config=types.SimpleNamespace(
+        home_channel={"chat_id": "-100123", "user_id": OWNER}))
+    q = Query(f"avv:0:{TOKEN}", rows=card())
+    run(handler(plugin, Recorder(), adapter=adapter)(update(q)))
+    assert q.answers == ["Recorded: Yes"]
+
+
+def test_a_paired_resident_whose_home_drifted_can_vote_in_their_dm(plugin, owner_env, pairings):
+    # TELEGRAM_HOME_CHANNEL is an old id (inherited env, re-pair); the card went to the paired id.
+    pairings.add(OTHER)
+    q = Query(f"avv:0:{TOKEN}", user=OTHER, chat=OTHER, rows=card())
+    run(handler(plugin, Recorder())(update(q)))
+    assert q.answers == ["Recorded: Yes"]
+
+
+def test_pairing_never_lets_a_tap_through_outside_the_tappers_dm(plugin, owner_env, pairings):
+    pairings.add(OTHER)
+    for chat in (OWNER, "-100123"):
+        q = Query(f"avv:0:{TOKEN}", user=OTHER, chat=chat, rows=card())
+        run(handler(plugin, Recorder())(update(q)))
+        assert q.answers == ["This vote card is not yours"]
+    q = Query(f"avv:0:{TOKEN}", user=OTHER, chat=OTHER, rows=card())
+    q.message.chat.type = "group"
+    run(handler(plugin, Recorder())(update(q)))
+    assert q.answers == ["This vote card is not yours"]
+    q = Query(f"avv:0:{TOKEN}", user=OTHER, chat=OTHER, rows=card())
+    q.message = None  # no chat to check: the pairing list alone is not enough
+    run(handler(plugin, Recorder())(update(q)))
+    assert q.answers == ["This vote card is not yours"]
 
 
 # --------------------------------------------------------------------------- success / failure / timeout
@@ -392,6 +444,9 @@ def test_record_vote_network_failures(plugin, error, outcome):
 
 def test_redirects_are_not_followed(plugin):
     assert plugin._NoRedirect().redirect_request(None, None, 302, "x", {}, "https://evil.example/") is None
+    # The opener the plugin really uses carries that handler (OV-358 N2).
+    assert any(isinstance(h, plugin._NoRedirect) for h in plugin._OPENER.handlers)
+    assert not any(type(h) is urllib.request.HTTPRedirectHandler for h in plugin._OPENER.handlers)
 
 
 @pytest.mark.parametrize("value,origin", [
@@ -440,3 +495,96 @@ def test_ptb_dispatch_order_and_keyboard(plugin, owner_env):
     assert [r[0].text for r in markup.inline_keyboard] == ["✅ Yes", "No", "Vote on the web"]
     assert markup.inline_keyboard[2][0].url == "https://agents.edgecity.live/referenda/r1"
     assert made == ["✅ Yes"]
+
+
+def test_ptb_a_waiting_tap_never_blocks_the_bot(plugin, owner_env, monkeypatch):
+    """OV-358 S1, through real python-telegram-bot 22.8 dispatch: Hermes builds its Application with
+    the default update processor (one update at a time) and wires plugin handlers before core. While a
+    vote tap waits for the app, the resident's next message and an exec-approval tap are processed, and
+    a second tap on the same card is answered "Still recording" without a second request."""
+    telegram = pytest.importorskip("telegram")
+    from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters
+
+    gate = threading.Event()
+    started = threading.Event()
+    posted = []
+
+    def slow_record(token, timeout=None):
+        posted.append(token)
+        started.set()
+        gate.wait(5)
+        return ("recorded", "Yes")
+
+    monkeypatch.setattr(plugin, "record_vote", slow_record)
+    events = []
+
+    async def fake_answer(self, text=None, **_):
+        events.append(("answer", self.id, text))
+
+    async def fake_edit(self, reply_markup=None, **_):
+        events.append(("edit", self.id))
+
+    monkeypatch.setattr(telegram.CallbackQuery, "answer", fake_answer)
+    monkeypatch.setattr(telegram.CallbackQuery, "edit_message_reply_markup", fake_edit)
+
+    async def main():
+        app = ApplicationBuilder().token("123:abc").build()
+        assert app.update_processor.max_concurrent_updates == 1  # Hermes never sets concurrent_updates
+        plugin._wire_telegram(app, None)  # plugin factories run before core registers (adapter.py:3238-3239)
+
+        async def core_callback(update, context):
+            events.append(("core", update.callback_query.data))
+
+        async def text(update, context):
+            events.append(("text", update.message.text))
+
+        app.add_handler(MessageHandler(filters.TEXT, text))
+        app.add_handler(CallbackQueryHandler(core_callback))  # Hermes's unscoped catch-all
+        app._initialized = True
+        app.bot._bot_user = telegram.User(42, "bot", True)
+        app.bot._initialized = True
+        await app.update_processor.initialize()
+
+        user = telegram.User(int(OWNER), "R", False)
+        chat = telegram.Chat(int(OWNER), "private")
+        keyboard = telegram.InlineKeyboardMarkup(
+            [[telegram.InlineKeyboardButton("Yes", callback_data=f"avv:0:{TOKEN}")],
+             [telegram.InlineKeyboardButton("No", callback_data=f"avv:1:{TOKEN_B}")]])
+
+        def tap(qid, data, message_id=5):
+            message = telegram.Message(message_id, None, chat, reply_markup=keyboard)
+            query = telegram.CallbackQuery(qid, user, "ci", data=data, message=message)
+            query.set_bot(app.bot)
+            return telegram.Update(int(qid), callback_query=query)
+
+        async def dispatch(update):
+            # Bounded: a blocking handler would hold this until the gate opens (the S1 defect).
+            await asyncio.wait_for(app.update_processor.process_update(update, app.process_update(update)), 2)
+
+        await dispatch(tap("1", f"avv:0:{TOKEN}"))
+        assert await asyncio.to_thread(started.wait, 2)
+        message = telegram.Message(6, None, chat, from_user=user, text="hello")
+        message.set_bot(app.bot)
+        await dispatch(telegram.Update(2, message=message))
+        await dispatch(tap("3", "ea:once:1", message_id=7))
+        await dispatch(tap("4", f"avv:0:{TOKEN}"))
+        await asyncio.sleep(0.05)
+        while_waiting = list(events)
+        gate.set()
+        for _ in range(200):
+            if ("answer", "1", "Recorded: Yes") in events:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        return while_waiting
+
+    try:
+        while_waiting = run(main())
+    finally:
+        gate.set()
+    assert ("text", "hello") in while_waiting
+    assert ("core", "ea:once:1") in while_waiting
+    assert ("answer", "4", "Still recording your vote...") in while_waiting
+    assert not any(e[:2] == ("answer", "1") for e in while_waiting)
+    assert ("answer", "1", "Recorded: Yes") in events and ("edit", "1") in events
+    assert posted == [TOKEN]
