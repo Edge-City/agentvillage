@@ -161,7 +161,10 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   deny-listed host, an email or a phone number is refused; every Unicode
   format character, variation selector and invisible filler is removed from
   every key and string; an app body carrying an `error` key is rebuilt from
-  the plugin's own codes. It does not rewrite prose.
+  the plugin's own codes. A card line, or the whole whatYouDo, that holds an
+  email, a 7+ digit phone run, an @handle, a deny-listed host or a messaging
+  label with a handle is dropped whole (after hidden-character removal and
+  NFKC; never redacted inside a line, false positives accepted).
 
 The reviewed gold-stars entry carries these nine operations in this order. The
 helper and the plugin still accept the eight-operation entry (ov#350, the CP's

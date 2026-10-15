@@ -107,6 +107,42 @@ PERSON_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0-9a-f-]{36}")
 
 
+# Fix 4 (prose), coordinator's ruling: a card line, or the whole whatYouDo, that looks like it carries a contact
+# detail is DROPPED whole (never redacted inside the line). Checked after hidden characters are removed and
+# after NFKC (full-width @ and digits fold to ASCII). False positives are accepted: a dropped line is cheap.
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+PHONE = re.compile(r"\+?\d(?:[\s.\-()]{0,3}\d){6,}")  # 7 or more digits; spaces, dots, dashes, brackets between
+HANDLE = re.compile(r"(?<![\w.])@[A-Za-z0-9_.]{2,}")
+_TOKEN = r"@?[A-Za-z0-9_.]{2,}"
+_CONNECT = r"(?:\s*[:=\-\u2013\u2014\u2192>,]+\s*|\s+)(?:(?:is|as|at|on|via|id|handle|username|user|me|i'm|im|my)\b[\s:,\-]*)*"
+MESSAGING = (
+    # Strong labels: the label then any handle-like token ("Telegram: naman", "find me on tg as naman").
+    re.compile(r"\b(?:telegram|tg|whats\s?app|threema|wechat|discord|snapchat|kakao(?:talk)?|viber|skype)\b" + _CONNECT + _TOKEN, re.I),
+    # Ambiguous words (a signal, a line, a snap): only with an explicit separator or a token holding a digit, _ or @.
+    re.compile(r"\b(?:signal|line|snap)\b(?:\s*(?:id|handle|username|user))?\s*[:=\-\u2013\u2014\u2192>]+\s*" + _TOKEN, re.I),
+    re.compile(r"\b(?:signal|line|snap)\b" + _CONNECT + r"@?[A-Za-z0-9_.]*[0-9_@][A-Za-z0-9_.]*", re.I),
+    # "dm me", "text me", "call me" followed by anything.
+    re.compile(r"\b(?:dm|text|call)\s+me\b\s*\S", re.I),
+)
+
+
+def contact_shaped(text):
+    folded = unicodedata.normalize("NFKC", text)
+    lowered = re.sub(r"\s*\.\s*", ".", folded.lower())
+    return bool(EMAIL.search(folded) or PHONE.search(folded) or HANDLE.search(folded)
+                or any(m.search(folded) for m in MESSAGING)
+                or any(re.search(r"(?<![a-z0-9-])" + re.escape(d) + r"(?![a-z0-9-])", lowered) for d in CONTACT_HOSTS))
+
+
+def prose(value, cap):
+    """A card line or whatYouDo as it may reach the agent, or None: hidden characters removed, then dropped
+    whole if contact-shaped, then capped (the check runs before the cap so a cut cannot hide a number)."""
+    text = visible(value)
+    if not text or contact_shaped(text):
+        return None
+    return text[:cap]
+
+
 def visible(value, cap=None):
     """Every forwarded string: every format character (unicodedata category Cf: bidi, zero-width, BOM, soft
     hyphen, tag characters U+E0000-E007F, ...), surrogate, private-use and unassigned (Cn: a newer Unicode's
@@ -189,7 +225,7 @@ def person_answer(result):
             out.update(status=result["status"], settingsUrl=SETTINGS)
         out["instruction"] = "Do not describe this person from memory or guesses. Offer the Rolodex link: https://agents.edgecity.live/rolodex"
         return out
-    dropped = 0
+    dropped = lines = 0
     found = result.get("found")
     if found is False:
         out = {"found": False, "reason": result.get("reason") if result.get("reason") in ("none", "ambiguous", "self") else "none"}
@@ -216,10 +252,17 @@ def person_answer(result):
         out["cards"] = {}
         for name in PERSON_CARDS:
             if isinstance(cards.get(name), list):
-                out["cards"][name] = [line for line in (visible(x, CAPS["line"]) for x in cards[name]) if line][:4]
+                kept = [prose(x, CAPS["line"]) for x in cards[name] if isinstance(x, str) and visible(x)]
+                lines += kept.count(None)
+                if any(kept):
+                    out["cards"][name] = [line for line in kept if line][:4]
         dropped += len(set(cards) - set(PERSON_CARDS))
-        if isinstance(result.get("whatYouDo"), str):
-            out["whatYouDo"] = visible(result["whatYouDo"], CAPS["whatYouDo"])
+        if isinstance(result.get("whatYouDo"), str) and visible(result["whatYouDo"]):
+            what = prose(result["whatYouDo"], CAPS["whatYouDo"])
+            if what:
+                out["whatYouDo"] = what
+            else:
+                lines += 1
         raw_links = result.get("links") if isinstance(result.get("links"), list) else []
         links = [link for link in (person_link(item) for item in raw_links) if link][:8]
         out["links"] = links
@@ -233,6 +276,8 @@ def person_answer(result):
         return {"error": "village_unavailable"}
     if dropped:
         LOG.warning("village_bridge rolodex_person_filtered dropped=%d", dropped)  # code and count only
+    if lines:
+        LOG.warning("village_bridge rolodex_person_lines_dropped=%d", lines)  # the number of dropped lines only
     return scrubbed_tree(out)
 
 
