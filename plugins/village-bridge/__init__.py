@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,35 +83,55 @@ CONTACT_HOSTS = (
     "calendly.com", "cal.com", "tidycal.com", "calendar.app.google", "calendar.google.com",
     "mail.google.com", "gmail.com", "outlook.com", "proton.me", "protonmail.com",
 )
-# Messaging, DM, add-contact and contact-info pages on any host (snapchat.com/add, instagram.com/direct,
+# Messaging, DM, add-contact, booking and contact-info pages on any host (snapchat.com/add, instagram.com/direct,
 # linkedin.com/messaging, x.com/messages, Google appointment pages, linkedin .../overlay/contact-info).
-CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "add", "appointments"})
-HIDDEN = re.compile("[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "message", "add", "appointments", "contact-info", "contactinfo"})
+# The app's caps (app#290 person.ts): card lines 160, whatYouDo 300, names 240, role/organization 120 code points;
+# at most 4 lines a card, 5 candidate names and 8 links.
+CAPS = {"line": 160, "whatYouDo": 300, "name": 240, "role": 120, "organization": 120, "asOf": 40}
+# Invisible letters that are not format characters (Hangul fillers, Khmer inherent vowels, combining grapheme joiner).
+INVISIBLE = frozenset("͏ᅟᅠ឴឵ㅤﾠ")
+PERSON_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0-9a-f-]{36}")
 
 
-def visible(value):
-    return HIDDEN.sub("", value) if isinstance(value, str) else None
+def visible(value, cap=None):
+    """Every forwarded string: format (Cf: bidi, zero-width, BOM, soft hyphen, tag characters U+E0000-E007F),
+    surrogate, private-use and invisible-filler characters removed; controls and line/paragraph separators
+    become spaces; then capped in code points."""
+    if not isinstance(value, str):
+        return None
+    out = []
+    for ch in value:
+        category = unicodedata.category(ch)
+        if category in ("Cf", "Cs", "Co") or ch in INVISIBLE:
+            continue
+        out.append(" " if category in ("Cc", "Zl", "Zp") else ch)
+    text = "".join(out).strip()
+    return text[:cap] if cap else text
 
 
 def person_link(item):
     if not isinstance(item, dict) or not isinstance(item.get("url"), str):
         return None
-    url = visible(item["url"]).strip()
+    url = item["url"]
     platform = item.get("platform") if item.get("platform") in PERSON_PLATFORMS else "other"
-    if len(url) > 500 or not url.startswith("https://"):
-        return None  # http, mailto:, tel:, sms:, tg:, javascript:, a bare host
+    # ASCII only, no whitespace, controls or backslashes (a browser reads "\\" as "/"), https only: refuses
+    # http, mailto:, tel:, sms:, tg:, javascript:, protocol-relative and bare hosts, IDN and hidden characters.
+    if len(url) > 500 or not re.fullmatch(r"https://[\x21-\x7e]+", url) or "\\" in url:
+        return None
     try:
         parts = urlsplit(url)
         port = parts.port
     except ValueError:
         return None
-    host = (parts.hostname or "").rstrip(".")
     if parts.username is not None or parts.password is not None or port not in (None, 443):
-        return None
+        return None  # https://x.com@t.me/ and odd ports
+    host = (parts.hostname or "").rstrip(".")
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+", host):
-        return None  # IDN, percent-escaped or odd hosts
+        return None  # percent-escaped, IP-v6, empty or odd hosts
     if any(label.startswith("xn--") for label in host.split(".")):
-        return None
+        return None  # punycode look-alikes
     try:
         ipaddress.ip_address(host)
         return None
@@ -118,11 +139,18 @@ def person_link(item):
         pass
     if any(host == d or host.endswith("." + d) for d in CONTACT_HOSTS):
         return None
-    for path in (parts.path, unquote(parts.path)):
-        lowered = path.lower()
-        if "/overlay/contact-info" in lowered or CONTACT_SEGMENTS & set(lowered.split("/")):
+    # The path as written and fully percent-decoded (double encoding too); segments split on / ; and
+    # empty ones (double slashes) ignored, each reduced to its letters, digits and hyphens.
+    path, readings = parts.path, [parts.path]
+    for _ in range(4):
+        path = unquote(path)
+        readings.append(path)
+    for reading in readings:
+        segments = {re.sub(r"[^a-z0-9-]", "", seg) for seg in re.split(r"[/;\\]", reading.lower())}
+        if CONTACT_SEGMENTS & segments:
             return None
-    return {"platform": platform, "url": url}
+    # The link without its query or fragment (contact details can ride there): scheme, host and path only.
+    return {"platform": platform, "url": "https://" + host + (parts.path or "/")}
 
 
 def person_answer(result):
@@ -136,35 +164,38 @@ def person_answer(result):
     if found is False:
         out = {"found": False, "reason": result.get("reason") if result.get("reason") in ("none", "ambiguous", "self") else "none"}
         if isinstance(result.get("candidates"), list):
-            out["candidates"] = [visible(c) for c in result["candidates"] if isinstance(c, str)][:5]
+            out["candidates"] = [n for n in (visible(c, CAPS["name"]) for c in result["candidates"]) if n][:5]
         if isinstance(result.get("asOf"), str):
-            out["asOf"] = visible(result["asOf"])
+            out["asOf"] = visible(result["asOf"], CAPS["asOf"])
         dropped += len(set(result) - set(PERSON_NOT_FOUND_KEYS) - PERSON_KNOWN)
     elif found is True:
         out = {"found": True}
         person = result.get("person") if isinstance(result.get("person"), dict) else {}
         out["person"] = {}
-        for key in PERSON_FIELDS:
-            value = person.get(key)
-            if key == "met" and type(value) is bool:
-                out["person"][key] = value
-            elif key != "met" and (value is None or isinstance(value, str)) and key in person:
-                out["person"][key] = visible(value)
+        if isinstance(person.get("id"), str) and PERSON_ID.fullmatch(person["id"]):
+            out["person"]["id"] = person["id"]
+        for key in ("name", "role", "organization"):
+            if key in person and (person[key] is None or isinstance(person[key], str)):
+                out["person"][key] = visible(person[key], CAPS[key])
+        if type(person.get("met")) is bool:
+            out["person"]["met"] = person["met"]
+        if isinstance(person.get("url"), str) and PERSON_URL.fullmatch(person["url"]):
+            out["person"]["url"] = person["url"]
         dropped += len(set(person) - set(PERSON_FIELDS))
         cards = result.get("cards") if isinstance(result.get("cards"), dict) else {}
         out["cards"] = {}
         for name in PERSON_CARDS:
             if isinstance(cards.get(name), list):
-                out["cards"][name] = [visible(line) for line in cards[name] if isinstance(line, str)]
+                out["cards"][name] = [line for line in (visible(x, CAPS["line"]) for x in cards[name]) if line][:4]
         dropped += len(set(cards) - set(PERSON_CARDS))
         if isinstance(result.get("whatYouDo"), str):
-            out["whatYouDo"] = visible(result["whatYouDo"])
+            out["whatYouDo"] = visible(result["whatYouDo"], CAPS["whatYouDo"])
         raw_links = result.get("links") if isinstance(result.get("links"), list) else []
         links = [link for link in (person_link(item) for item in raw_links) if link][:8]
         out["links"] = links
         dropped += len(raw_links) - len(links)
         if isinstance(result.get("asOf"), str):
-            out["asOf"] = visible(result["asOf"])
+            out["asOf"] = visible(result["asOf"], CAPS["asOf"])
         if result.get("partial") in ("cards_unavailable", "profile_unavailable"):
             out["partial"] = result["partial"]
         dropped += len(set(result) - set(PERSON_KEYS) - PERSON_KNOWN)

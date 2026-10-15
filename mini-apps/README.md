@@ -149,10 +149,14 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   and VILLAGE claims, whatYouDo, public social profile links; never email,
   phone, Telegram handle or anything private). Appended last. `id` is lowercase,
   exactly as search returns it. The app's filter is primary; the plugin also
-  keeps only the reviewed answer keys, person fields and card names, strips
-  bidi and hidden characters, and keeps only `https` links whose host is not a
-  messaging, contact or booking host and whose path is not a DM, messaging,
-  add-contact or contact-info page (verify OV-355 S1). It does not rewrite prose.
+  keeps only the reviewed answer keys, person fields and card names, removes
+  every format character (bidi, zero-width, BOM, tag characters) and invisible
+  filler, caps strings at the app's limits (card lines 160, whatYouDo 300, 4
+  lines a card, 5 names, 8 links), and keeps only plain-ASCII `https` links
+  with no userinfo, backslash or odd port, whose host is not a messaging,
+  contact or booking host and whose path (fully percent-decoded) is not a DM,
+  messaging, add-contact or contact-info page; a kept link loses its query and
+  fragment (verify OV-355 S1). It does not rewrite prose.
 
 The reviewed gold-stars entry carries these nine operations in this order. The
 helper and the plugin still accept the eight-operation entry (ov#350, the CP's
