@@ -130,18 +130,27 @@ test("unknown bundles, versions, extra fields, permissions and duplicate ids are
   expect(() => validateProjection({ version: 1, apps: [], mcp: { url: "https://unreviewed.invalid" } })).toThrow();
 });
 
-test("BRIDGE-RESTORE: gold-stars carries rolodex.meeting + skylight.status; the pre-restore entry stays stageable byte for byte", () => {
+test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op entries stay stageable byte for byte", () => {
   const gold = REVIEWED_MINI_APPS[0];
-  expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]);
-  expect(PREVIOUS_REVIEWED_MINI_APPS[0].operations).toEqual(gold.operations.slice(0, 6));
-  // The plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
+  const [restored, previous] = PREVIOUS_REVIEWED_MINI_APPS;
+  expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
+  expect(restored.operations).toEqual(gold.operations.slice(0, 8));
+  expect(previous.operations).toEqual(gold.operations.slice(0, 6));
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(2);
+  for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
+  // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
   const list = (name: string) => JSON.parse(new RegExp(`^${name} = \\{"version": "1\\.1\\.0", "skills": \\["gold-stars"\\], "operations": (\\[[^\\]]*\\])\\}$`, "m").exec(plugin)![1]);
   expect(list("GOLD_STARS")).toEqual([...gold.operations]);
-  expect(list("GOLD_STARS_PREVIOUS")).toEqual([...PREVIOUS_REVIEWED_MINI_APPS[0].operations]);
+  expect(list("GOLD_STARS_RESTORED")).toEqual([...restored.operations]);
+  expect(list("GOLD_STARS_PREVIOUS")).toEqual([...previous.operations]);
+  expect(/^GOLD_STARS_ACCEPTED = \(GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS\)$/m.test(plugin)).toBe(true);
   expect(JSON.parse(readFileSync(join(REPO, "mini-apps", "gold-stars", "manifest.json"), "utf8")).operations).toEqual([...gold.operations]);
-  // Either catalog entry (CP before or after this overlay) stages, and the receipt hashes the CP's exact bytes.
-  for (const entry of [gold, PREVIOUS_REVIEWED_MINI_APPS[0]]) {
+  // The exact entry the CP projects for release ({id, version, operations, skills}, catalog.projection()).
+  expect(JSON.stringify({ id: gold.id, version: gold.version, operations: gold.operations, skills: gold.skills })).toBe(
+    '{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status","rolodex.person"],"skills":["gold-stars"]}');
+  // Any catalog entry (CP before or after this overlay) stages, and the receipt hashes the CP's exact bytes.
+  for (const entry of [gold, restored, previous]) {
     const projection = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
     const root = installedBox();
     const receipt = reconcileMiniApps(projection, root);
@@ -149,8 +158,12 @@ test("BRIDGE-RESTORE: gold-stars carries rolodex.meeting + skylight.status; the 
     expect(readFileSync(join(root, "mini-apps.json"), "utf8")).toBe(JSON.stringify(projection));
     expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
   }
-  // Never both entries at once.
-  expect(() => validateProjection({ version: 1, apps: [gold, PREVIOUS_REVIEWED_MINI_APPS[0]] })).toThrow("mini_apps_unreviewed_bundle");
+  // Never two gold-stars entries at once; rolodex.person only ever last, only after the restore.
+  for (const apps of [[gold, restored], [gold, previous], [restored, previous]]) expect(() => validateProjection({ version: 1, apps })).toThrow("mini_apps_unreviewed_bundle");
+  const eight = [...restored.operations], six = [...previous.operations];
+  for (const operations of [["rolodex.person", ...eight], [...eight.slice(0, 6), "rolodex.person", ...eight.slice(6)], [...six, "rolodex.person"], [...gold.operations, "rolodex.person"], [...eight, "rolodex.profile"]]) {
+    expect(() => validateProjection({ version: 1, apps: [{ ...gold, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+  }
 });
 
 test("symlink targets and ancestors cannot escape managed paths", () => {

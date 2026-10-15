@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import {
+  CODE_EXECUTION_MODE,
   COMPRESSION_THRESHOLD,
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
@@ -24,6 +25,7 @@ import {
   VILLAGE_TIMEZONE,
   configureCronScriptTimeout,
   configureVillageTimezone,
+  setCodeExecutionMode,
   setCompactionSettings,
   setCompressionTrigger,
   setContextFileMaxChars,
@@ -753,7 +755,8 @@ describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)
     const main = text.slice(text.indexOf("function main(): void {"));
     const body = main.slice(0, main.indexOf("\n}\n"));
     expect(body.match(/^.*setCompressionTrigger.*$/gm)).toEqual(["  setCompressionTrigger();"]);
-    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  configureTelegramDisplay\(\);$/m);
+    // CODE EXECUTION ON (rc42) runs its own step right after this one.
+    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  setCodeExecutionMode\(\);\n  configureTelegramDisplay\(\);$/m);
     expect(main.indexOf("setCompressionTrigger();")).toBeLessThan(main.indexOf("restartGateway();"));
   });
 
@@ -779,5 +782,102 @@ describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)
     const init = readFileSync(join(HERMES_REF, "agent/agent_init.py"), "utf8");
     expect(init).toContain("Explicit null is the ratio-only opt-out and stays None.");
     expect(init).toContain('threshold = float(cfg.get("threshold", 0.50))');
+  });
+});
+
+describe("CODE EXECUTION ON (rc42): code_execution.mode strict", () => {
+  const PATH = "code_execution.mode";
+  const SET = (why: string) => `→ set ${PATH}: strict (${why}; execute_code runs in an isolated temp dir, no approval card)`;
+  const lines = () => logSpy.mock.calls.map((c) => String(c[0]));
+
+  test("the mode is strict, Hermes's isolated one", () => {
+    expect(CODE_EXECUTION_MODE).toBe("strict");
+  });
+
+  test("absent, project, an unknown word, null or a non-string: set to strict, other code_execution keys and the rest kept", () => {
+    for (const [section, why] of [
+      [undefined, "was unset, Hermes's default project"],
+      [{ timeout: 300 }, "was unset, Hermes's default project"],
+      [{ mode: "project", timeout: 300 }, "was project"],
+      [{ mode: " Project ", timeout: 300 }, "was project"],
+      [{ mode: "sandbox-ish", timeout: 300 }, "was an unknown mode, Hermes reads project"],
+      [{ mode: null, timeout: 300 }, "was null, Hermes reads project"],
+      [{ mode: 7, timeout: 300 }, "was a number"],
+      [{ mode: ["strict"], timeout: 300 }, "was a list"],
+    ] as const) {
+      logSpy.mockClear();
+      const doc: Record<string, unknown> = { model: { default: "m", context_length: 90000 }, compression: { threshold: 0.75 } };
+      if (section !== undefined) doc.code_execution = section;
+      withDoc(doc);
+      setCodeExecutionMode();
+      const timeout = section !== undefined && "timeout" in section ? { timeout: 300 } : {};
+      expect(read()).toEqual({ ...doc, code_execution: { ...timeout, mode: "strict" } });
+      expect(lines()).toEqual([SET(why)]);
+      expect(logged()).not.toContain("sandbox-ish");
+    }
+  });
+
+  test("already strict (as Hermes reads it, any case or padding): left as is, the file not rewritten", () => {
+    for (const mode of ["strict", " STRICT "]) {
+      logSpy.mockClear();
+      const text = `# marker\ncode_execution:\n  mode: "${mode}"\n`;
+      withText(text);
+      setCodeExecutionMode();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(lines()).toEqual([`→ ${PATH} already strict; left as is`]);
+    }
+  });
+
+  test("idempotent: a second run keeps the same bytes", () => {
+    withDoc({ code_execution: { mode: "project" } });
+    setCodeExecutionMode();
+    const once = readFileSync(configPath(), "utf8");
+    setCodeExecutionMode();
+    expect(readFileSync(configPath(), "utf8")).toBe(once);
+    expect(read()).toEqual({ code_execution: { mode: "strict" } });
+  });
+
+  test("no config.yaml at all: the key written", () => {
+    setCodeExecutionMode();
+    expect(read()).toEqual({ code_execution: { mode: "strict" } });
+  });
+
+  test("code_execution not a mapping or holding a merge key, and a bad top level: nothing written, one warning", () => {
+    for (const [text, why] of [
+      ["code_execution: off\n", "code_execution is not a mapping"],
+      ["base: &b\n  mode: project\ncode_execution:\n  <<: *b\n", 'YAML merge key "<<" under code_execution; set it by hand'],
+    ] as const) {
+      logSpy.mockClear();
+      withText(text);
+      setCodeExecutionMode();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(lines()).toEqual([`→ warning: ${why}; left ${PATH} unset`]);
+    }
+    for (const text of ["- a\n- b\n", "base: &b\n  code_execution: {}\n<<: *b\n"]) {
+      logSpy.mockClear();
+      withText(text);
+      setCodeExecutionMode();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(logSpy.mock.calls).toHaveLength(1);
+      expect(logged()).toStartWith("→ warning: ");
+    }
+  });
+
+  test("install.ts runs the step once, before the restart", () => {
+    const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+    const main = text.slice(text.indexOf("function main(): void {"));
+    const body = main.slice(0, main.indexOf("\n}\n"));
+    expect(body.match(/^.*setCodeExecutionMode.*$/gm)).toEqual(["  setCodeExecutionMode();"]);
+    expect(main.indexOf("setCodeExecutionMode();")).toBeLessThan(main.indexOf("restartGateway();"));
+  });
+
+  // The modes as the Hermes the overlay pins defines them (local reference checkout; skipped in CI).
+  const HERMES_REF = "/Users/carter/dev/hermes-agent-ref-v2026.9.24";
+  test.skipIf(!existsSync(join(HERMES_REF, "tools/code_execution_tool.py")))("Hermes v2026.9.24 offers project and strict, project by default", () => {
+    const defaults = readFileSync(join(HERMES_REF, "hermes_cli/config_defaults.py"), "utf8");
+    expect(defaults).toContain('"code_execution": {  # execute_code settings (programmatic tool calls).');
+    const tool = readFileSync(join(HERMES_REF, "tools/code_execution_tool.py"), "utf8");
+    expect(tool).toContain('EXECUTION_MODES = ("project", "strict")');
+    expect(tool).toContain('str(_load_config().get("mode", DEFAULT_EXECUTION_MODE)).strip().lower()');
   });
 });
