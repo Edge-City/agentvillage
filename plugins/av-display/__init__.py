@@ -1,4 +1,5 @@
-"""Telegram tool-progress lines name the tool, never the command (RC28).
+"""Telegram tool-progress lines name the tool, never the command (RC28); Hermes's
+compaction housekeeping notices stay out of the chat (rc42).
 
 Hermes v2026.9.24 composes each "new"/"all" progress line in
 ``gateway/run_turn_runner.py`` (``_progress_build_message``, 292-300) from
@@ -34,13 +35,38 @@ plugin extends them once, at ``register()``:
   returns ``(None, None)`` (no block), and the line falls through to the verb
   path ("Running"); every other adapter gets Hermes's own result.
 
+* Hermes's session-hygiene compaction notices, on every platform (rc42). Before a
+  turn, the gateway may summarise a long session ("hygiene"); four outcomes post
+  a notice to the resident's chat, each through ``GatewayTurnMixin
+  ._hmwa_hygiene_notify(source, meta, message, what)`` (gateway/run_turn.py:902-910),
+  which calls ``adapter.emit_warning``: the turn-hold expiry, "ℹ️ Context
+  compression deferred — summary still streaming. Continuing without
+  compression this turn." (``what`` "compression-turnhold notice", :999-1001,
+  text locales/en.yaml:127), the no-progress timeout ("compression-timeout
+  warning", :1054-1061), an aborted summary ("compression-failure warning",
+  :1210-1215) and the auxiliary-model fallback ("aux-model-fallback notice",
+  :1221-1227). Each is internal: the conversation is kept as is, nothing was
+  lost, and the remedy it names (``/compress``, ``hermes doctor``,
+  ``auxiliary.compression.model`` in config.yaml) is the operator's. The one
+  config key that reaches them, ``display.suppress_warning_notifications``
+  (default false: gateway/display_config.py:24, hermes_cli/config_defaults.py:897,
+  read in gateway/warning_notifications.py:90-101), also hides failures a
+  resident must act on (a turn-error's detail, a failed upload, a stuck-turn or
+  aborted-turn notice, background-task and cron failures), so rc28 refused it
+  (install/config.ts ``setCompactionSettings``) and this plugin never sets it.
+  Instead it wraps that one method: a call whose ``what`` is one of the four
+  (``HYGIENE_NOTICES``) is logged and not sent; any other ``what`` (a notice a
+  later Hermes adds) goes to Hermes's own method. Compaction itself, its
+  cooldowns and its gateway log lines are untouched.
+
 ``web_search`` and ``web_extract`` keep their preview (the query or URL is the
 useful part). Verbose mode, which a resident can pick with ``/verbose``, still
 shows the full arguments (on Telegram as Hermes's JSON line rather than a code
-block). Only the two tables and that one display method are touched; tool
-execution is not. A Hermes without either table, or with a table of an
-unexpected type, or without ``TurnRunner._progress_terminal_blocks``, is left
-alone with one log line, and a missing module never raises. Idempotent.
+block). Only the two tables and those two display methods are touched; tool
+execution and compaction are not. A Hermes without either table, or with a
+table of an unexpected type, or without ``TurnRunner._progress_terminal_blocks``
+or ``GatewayTurnMixin._hmwa_hygiene_notify``, has that part left alone with one
+log line, and a missing module never raises. Idempotent.
 """
 
 from __future__ import annotations
@@ -143,9 +169,48 @@ def apply_terminal_blocks(runner_module: Any) -> bool:
     return True
 
 
+#: The ``what`` labels Hermes v2026.9.24 passes to ``GatewayTurnMixin._hmwa_hygiene_notify``
+#: (gateway/run_turn.py 999-1001, 1054-1061, 1210-1215, 1221-1227): compaction housekeeping only.
+HYGIENE_NOTICES: FrozenSet[str] = frozenset({
+    "compression-turnhold notice",
+    "compression-timeout warning",
+    "compression-failure warning",
+    "aux-model-fallback notice",
+})
+
+
+def apply_hygiene_notices(run_turn_module: Any) -> bool:
+    """Wrap ``GatewayTurnMixin._hmwa_hygiene_notify`` so the four compaction notices stay out of chat."""
+    mixin = getattr(run_turn_module, "GatewayTurnMixin", None)
+    original = getattr(mixin, "_hmwa_hygiene_notify", None) if mixin is not None else None
+    if not callable(original):
+        logger.info("av-display: gateway.run_turn has no GatewayTurnMixin._hmwa_hygiene_notify; left as is")
+        return False
+    if getattr(original, _WRAPPED_MARK, False):
+        return True
+
+    # Hermes calls it as (source, meta, message, what) and awaits it (run_turn.py:902); anything a
+    # later Hermes adds passes through untouched.
+    async def _hmwa_hygiene_notify(self: Any, source: Any, meta: Any, message: Any, what: Any, *args: Any, **kwargs: Any) -> Any:
+        if what in HYGIENE_NOTICES:
+            logger.info("av-display: Hermes's %s kept out of the chat (compaction housekeeping)", what)
+            return None
+        return await original(self, source, meta, message, what, *args, **kwargs)
+
+    setattr(_hmwa_hygiene_notify, _WRAPPED_MARK, True)
+    _hmwa_hygiene_notify.__wrapped__ = original  # type: ignore[attr-defined]
+    mixin._hmwa_hygiene_notify = _hmwa_hygiene_notify
+    logger.info("av-display: gateway.run_turn GatewayTurnMixin._hmwa_hygiene_notify wrapped (no compaction notices in chat)")
+    return True
+
+
 def register(ctx: Any) -> None:
-    """Hermes plugin entrypoint. No tools, no hooks: two display tables and one display method, once."""
-    for name, patch in (("agent.display", apply), ("gateway.run_turn_runner", apply_terminal_blocks)):
+    """Hermes plugin entrypoint. No tools, no hooks: two display tables and two display methods, once."""
+    for name, patch in (
+        ("agent.display", apply),
+        ("gateway.run_turn_runner", apply_terminal_blocks),
+        ("gateway.run_turn", apply_hygiene_notices),
+    ):
         try:
             module = importlib.import_module(name)
         except Exception:  # noqa: BLE001 - a display tweak must never stop the gateway
