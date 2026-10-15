@@ -26,6 +26,7 @@ from ._ask_village import register_ask_village_tool
 from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
+from . import _prompt_refresh
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
@@ -1203,6 +1204,7 @@ def build_hooks(collector_ref=_collector) -> dict:
     (DATA-312), which is the only thing in this plugin that returns a directive,
     and `pre_llm_call` by `with_clock_line` (CLOCK-1, the Now line on every turn)
     inside `with_approvals_reminder` (DATA-444), the two things that return context.
+    `post_tool_call` gets `with_memory_write_ack` (F1 PROMPT REFRESH), which returns nothing.
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
@@ -1216,6 +1218,10 @@ def build_hooks(collector_ref=_collector) -> dict:
             pass
         if name == "pre_tool_call":
             wrapped = with_terminal_args_fix(wrapped)
+        elif name == "post_tool_call":
+            # F1 PROMPT REFRESH (`_prompt_refresh.py`): the agent's own memory write is acknowledged,
+            # so it does not refresh the session's system prompt; outside `guarded`.
+            wrapped = _prompt_refresh.with_memory_write_ack(wrapped)
         elif name == "pre_llm_call":
             # CLOCK-1 (`_clock.py`): the Now line on every turn, cron and subagents included,
             # between the telemetry return and the DATA-444 reminder; outside `guarded`.
@@ -1239,6 +1245,8 @@ def _on_unload() -> None:
     """
     global _COLLECTOR, _REGISTERED
     _REGISTERED = False
+    # F1: Hermes's own build_turn_context goes back with the hooks (the memory acknowledgement is one).
+    _prompt_refresh.uninstall()
     # Lane B: the approval poller stops with the plugin (its pending state is on disk).
     try:
         _approval.stop_poller()
@@ -1325,6 +1333,13 @@ def register(ctx) -> None:
     try:
         register_ask_village_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
+    # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.
+    # Behind AV_PROMPT_REFRESH (default: team tenants only); a missing seam is one log line.
+    try:
+        _prompt_refresh.install(_collector)
+    except Exception:  # noqa: BLE001 - the refresh is optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.

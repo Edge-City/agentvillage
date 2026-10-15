@@ -9,7 +9,7 @@
  *   - F3: the triggers wait 60 s for the lock and stop at 100 s, so
  *     `cron.script_timeout_seconds` must be about 110 s or more.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import {
+  COMPRESSION_THRESHOLD,
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
   HYGIENE_MAX_TURN_HOLD_SECONDS,
@@ -24,6 +25,7 @@ import {
   configureCronScriptTimeout,
   configureVillageTimezone,
   setCompactionSettings,
+  setCompressionTrigger,
   setContextFileMaxChars,
 } from "../config";
 import { configureTelegramDisplay } from "../display_defaults";
@@ -561,5 +563,221 @@ describe("RC28: compaction settings (hold 25, summary reasoning off)", () => {
     const body = main.slice(0, main.indexOf("\n}\n"));
     expect(body.match(/^.*setCompactionSettings.*$/gm)).toEqual(["  setCompactionSettings();"]);
     expect(body).toMatch(/^  setContextFileMaxChars\(\);\n  setCompactionSettings\(\);$/m);
+  });
+});
+
+
+/**
+ * RC42 COMPRESSION TRIGGER (Carter, CLAIMS L7597 and L7607): the box context
+ * pin becomes 1,000,000 and compaction must stay at 75% of it. Hermes keeps 75%
+ * on its own only below 512K and caps the trigger at 256,000 tokens, so the
+ * installer writes `compression.threshold: 0.75` and
+ * `compression.threshold_tokens: null`: the trigger then reads only
+ * `model.context_length`, the key the control plane pins. Nothing else under
+ * `compression` is written (`protect_last_n` and the tool-result prune stay
+ * Hermes's).
+ */
+describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)", () => {
+  const RATIO = "compression.threshold";
+  const CAP = "compression.threshold_tokens";
+  const SET_RATIO = (why: string) => `→ set ${RATIO}: 0.75 (${why}; Hermes compacts at 75% of model.context_length, the control plane's pin)`;
+  const SET_CAP = (why: string) => `→ set ${CAP}: null (${why}; a token cap stops the trigger following the pin)`;
+  const TUNED = { threshold: 0.75, threshold_tokens: null };
+  // A box's shape after the RC28 step: the control plane's model block and the turn hold, nothing else under compression.
+  const BOX = {
+    _config_version: 46,
+    model: { default: "anthropic/claude-haiku-5.5", provider: "openrouter", context_length: 90000, max_tokens: 4096 },
+    cron: { wrap_response: false },
+    context_file_max_chars: 48000,
+    compression: { hygiene_max_turn_hold_seconds: 25 },
+    auxiliary: { compression: { reasoning_effort: "none" } },
+  };
+  // Hermes v2026.9.24's own compression block written out by a config save (hermes_cli/config_defaults.py, trimmed).
+  const HERMES_BLOCK = {
+    enabled: true, threshold: 0.5, threshold_tokens: 256000, target_ratio: 0.2, tail_mode: "lean", protect_last_n: 20,
+    max_attempts: 3, proactive_prune_tokens: 0, proactive_prune_min_result_chars: 8000, proactive_prune_min_reclaim_tokens: 4096,
+    hygiene_max_turn_hold_seconds: 10, protect_first_n: 3, model_thresholds: {},
+  };
+  const lines = () => logSpy.mock.calls.map((c) => String(c[0]));
+
+  test("a box's shape: the two keys added after the hold, every other key byte-for-byte in order, one line per key", () => {
+    withDoc(BOX);
+    setCompressionTrigger();
+    expect(COMPRESSION_THRESHOLD).toBe(0.75);
+    const doc = read();
+    expect(doc.compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...TUNED });
+    expect(Object.keys(doc.compression)).toEqual(["hygiene_max_turn_hold_seconds", "threshold", "threshold_tokens"]);
+    expect(readFileSync(configPath(), "utf8")).toBe(YAML.stringify({ ...BOX, compression: doc.compression }));
+    expect(readFileSync(configPath(), "utf8")).toContain("  threshold_tokens: null\n");
+    expect(lines()).toEqual([SET_RATIO("was unset"), SET_CAP("was unset, Hermes's default cap 256,000")]);
+  });
+
+  test("the pin is never read or written: model.context_length stays the control plane's, and the block is the same at any pin", () => {
+    const blocks = [];
+    for (const context_length of [90000, 128000, 1000000, undefined]) {
+      const model: Record<string, unknown> = { ...BOX.model, context_length };
+      if (context_length === undefined) delete model.context_length;
+      withDoc({ ...BOX, model });
+      setCompressionTrigger();
+      expect(read().model).toEqual(model);
+      blocks.push(read().compression);
+    }
+    expect(blocks).toEqual(Array(4).fill({ hygiene_max_turn_hold_seconds: 25, ...TUNED }));
+  });
+
+  test("no absolute token number is written: Hermes's 256,000 written out is cleared, and every other key (protect_last_n, the prune) stays", () => {
+    withDoc({ model: BOX.model, compression: HERMES_BLOCK });
+    setCompressionTrigger();
+    const compression = read().compression;
+    expect(compression).toEqual({ ...HERMES_BLOCK, ...TUNED });
+    expect(Object.keys(compression)).toEqual(Object.keys(HERMES_BLOCK));
+    expect(compression.protect_last_n).toBe(20);
+    expect(compression.proactive_prune_tokens).toBe(0);
+    expect(lines()).toEqual([SET_RATIO("was 0.5, below 0.75"), SET_CAP("was 256000")]);
+  });
+
+  test("on a box with no compression keys beyond the hold, only threshold and threshold_tokens are ever added", () => {
+    withDoc(BOX);
+    setCompressionTrigger();
+    setCompressionTrigger();
+    expect(Object.keys(read().compression).sort()).toEqual(["hygiene_max_turn_hold_seconds", "threshold", "threshold_tokens"]);
+    expect(logged()).not.toContain("protect_last_n");
+    expect(logged()).not.toContain("proactive_prune");
+  });
+
+  test("an operator's later trigger (0.75 to 1, or one written as a string) is kept", () => {
+    for (const [text, n] of [["0.75", 0.75], ["0.85", 0.85], ["1", 1], ['"0.9"', 0.9]] as const) {
+      logSpy.mockClear();
+      const before = `compression:\n  threshold: ${text}\n  threshold_tokens: null\n`;
+      withText(before);
+      setCompressionTrigger();
+      expect(readFileSync(configPath(), "utf8")).toBe(before);
+      const how = text.startsWith('"') ? ", written as a string Hermes reads as a number" : "";
+      expect(lines()[0]).toBe(`→ ${RATIO} already ${n}${how} (from 0.75 to 1); left as is`);
+    }
+  });
+
+  test("a ratio below 0.75, above 1, or not a number Hermes reads is set to 0.75; the log never echoes the text", () => {
+    const cases: [string, string][] = [
+      ["0.5", "was 0.5, below 0.75"],
+      ["0", "was 0, below 0.75"],
+      ["-0.8", "was -0.8, below 0.75"],
+      ["1.5", "was 1.5, above 1"],
+      ['"0.6"', "was 0.6 written as a string, below 0.75"],
+      [".inf", "was a non-finite number, not a number"],
+      ["secret-ish", "was a string, not a number"],
+      ["true", "was a boolean, not a number"],
+      ["{a: 1}", "was a mapping, not a number"],
+      ["null", "was null"],
+    ];
+    for (const [text, why] of cases) {
+      logSpy.mockClear();
+      withText(`compression:\n  threshold: ${text}\n`);
+      setCompressionTrigger();
+      expect(read().compression).toEqual(TUNED);
+      expect(lines()[0]).toBe(SET_RATIO(why));
+      expect(logged()).not.toContain("secret-ish");
+    }
+  });
+
+  test("any token cap is cleared to null, whatever it is; null is kept", () => {
+    for (const [text, why] of [["256000", "was 256000"], ["750000", "was 750000"], ["0", "was 0"], ["secret-ish", "was a string"], ["[1]", "was a list"]] as const) {
+      logSpy.mockClear();
+      withText(`compression:\n  threshold_tokens: ${text}\n`);
+      setCompressionTrigger();
+      expect(read().compression).toEqual({ threshold_tokens: null, threshold: 0.75 });
+      expect(lines()[1]).toBe(SET_CAP(why));
+      expect(logged()).not.toContain("secret-ish");
+    }
+    logSpy.mockClear();
+    withText("compression:\n  threshold: 0.75\n  threshold_tokens: null\n");
+    setCompressionTrigger();
+    expect(lines()[1]).toBe(`→ ${CAP} already null (no token cap; the trigger follows the pin); left as is`);
+  });
+
+  test("a second run changes nothing (same bytes), says so in one line per key, and does not rewrite the file", () => {
+    withDoc(BOX);
+    setCompressionTrigger();
+    const once = readFileSync(configPath(), "utf8");
+    logSpy.mockClear();
+    writeFileSync(configPath(), `# marker comment survives only if the file is not rewritten\n${once}`);
+    setCompressionTrigger();
+    expect(readFileSync(configPath(), "utf8")).toBe(`# marker comment survives only if the file is not rewritten\n${once}`);
+    expect(lines()).toEqual([
+      `→ ${RATIO} already 0.75 (from 0.75 to 1); left as is`,
+      `→ ${CAP} already null (no token cap; the trigger follows the pin); left as is`,
+    ]);
+  });
+
+  test("the RC28 step and this step run in sequence, in either order, without undoing each other", () => {
+    withDoc({ model: BOX.model });
+    setCompactionSettings();
+    setCompressionTrigger();
+    const once = readFileSync(configPath(), "utf8");
+    setCompressionTrigger();
+    setCompactionSettings();
+    expect(readFileSync(configPath(), "utf8")).toBe(once);
+    expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...TUNED });
+  });
+
+  test("no config.yaml at all: the two keys written", () => {
+    setCompressionTrigger();
+    expect(read()).toEqual({ compression: TUNED });
+  });
+
+  test("compression not a mapping, or holding a merge key, and a bad top level: nothing written, one warning", () => {
+    for (const [text, why] of [
+      ["compression: off\n", "compression is not a mapping"],
+      ["compression:\n  - 1\n", "compression is not a mapping"],
+      ["base: &b\n  threshold: 0.5\ncompression:\n  <<: *b\n", 'YAML merge key "<<" under compression; set them by hand'],
+    ] as const) {
+      logSpy.mockClear();
+      withText(text);
+      setCompressionTrigger();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(lines()).toEqual([`→ warning: ${why}; left ${RATIO} and ${CAP} unset`]);
+    }
+    for (const text of ["- a\n- b\n", "just a string\n", "base: &b\n  compression: {}\n<<: *b\n"]) {
+      logSpy.mockClear();
+      withText(text);
+      setCompressionTrigger();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(logSpy.mock.calls).toHaveLength(1);
+      expect(logged()).toStartWith("→ warning: ");
+      expect(logged()).toContain("left the compression trigger unset");
+    }
+  });
+
+  test("install.ts runs the step once, right after the RC28 compaction step, before the display step and the restart", () => {
+    const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+    const main = text.slice(text.indexOf("function main(): void {"));
+    const body = main.slice(0, main.indexOf("\n}\n"));
+    expect(body.match(/^.*setCompressionTrigger.*$/gm)).toEqual(["  setCompressionTrigger();"]);
+    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  configureTelegramDisplay\(\);$/m);
+    expect(main.indexOf("setCompressionTrigger();")).toBeLessThan(main.indexOf("restartGateway();"));
+  });
+
+  test("the installer source holds no context-pin or trigger token number in code (90k, 67,500, 750k, 1M)", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "config.ts"), "utf8");
+    // Code only: drop block and line comments before looking for the numbers.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const n of ["90000", "90_000", "67500", "67_500", "64428", "750000", "750_000", "1000000", "1_000_000", "256000", "256_000"]) {
+      expect([n, code.includes(n)]).toEqual([n, false]);
+    }
+  });
+
+  // Every key this step writes, and the numbers it relies on, exist in the Hermes the overlay pins (local
+  // reference checkout; skipped where it is absent, as in CI).
+  const HERMES_REF = "/Users/carter/dev/hermes-agent-ref-v2026.9.24";
+  test.skipIf(!existsSync(join(HERMES_REF, "agent/context_compressor.py")))("Hermes v2026.9.24 has these keys and constants", () => {
+    const defaults = readFileSync(join(HERMES_REF, "hermes_cli/config_defaults.py"), "utf8");
+    expect(defaults).toContain('"threshold": 0.50,');
+    expect(defaults).toContain('"threshold_tokens": 256_000,');
+    const compressor = readFileSync(join(HERMES_REF, "agent/context_compressor.py"), "utf8");
+    expect(compressor).toContain(`_SMALL_CTX_THRESHOLD_PERCENT = ${COMPRESSION_THRESHOLD}\n`);
+    expect(compressor).toContain("_SMALL_CTX_WINDOW_LIMIT = 512_000\n");
+    const init = readFileSync(join(HERMES_REF, "agent/agent_init.py"), "utf8");
+    expect(init).toContain("Explicit null is the ratio-only opt-out and stays None.");
+    expect(init).toContain('threshold = float(cfg.get("threshold", 0.50))');
   });
 });

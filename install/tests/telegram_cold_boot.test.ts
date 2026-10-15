@@ -13,6 +13,7 @@ import {
   configureStt,
   keepTelegramBacklogOnColdBoot,
   setCompactionSettings,
+  setCompressionTrigger,
   setContextFileMaxChars,
   setTerminalCwd,
 } from "../config";
@@ -283,9 +284,13 @@ function installerConfigPass(): void {
   keepTelegramBacklogOnColdBoot();
   setContextFileMaxChars();
   setCompactionSettings();
+  setCompressionTrigger();
   configureDashboardAuth();
   configureAvEvents();
 }
+
+// RC42: the compression trigger runs in the same pass (ratio 0.75, no token cap: 75% of the pin at any size).
+const RC42_TUNED = { threshold: 0.75, threshold_tokens: null };
 
 test("full installer config pass: sets the key once, keeps it, and is idempotent on re-run", () => {
   const path = withDoc({
@@ -305,7 +310,7 @@ test("full installer config pass: sets the key once, keeps it, and is idempotent
   expect(read(path).context_file_max_chars).toBe(48000);
   // RC28: the hygiene turn hold and the summary's reasoning off in the same pass; the Telegram
   // warning switch is never written (refute M1).
-  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...RC42_TUNED });
   expect(read(path).display).toBeUndefined();
   expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
   // AGENT-DATE: per-message timestamps pinned in the same pass, and kept by the re-run.
@@ -324,7 +329,7 @@ test("full installer config pass on a box's shape: hold raised, reasoning off, p
   installerConfigPass();
 
   expect(readFileSync(path, "utf8")).toBe(first);
-  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...RC42_TUNED });
   expect(read(path).display).toEqual({ platforms: { telegram: { tool_progress: "off" } } });
   expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
   expect((read(path).model as Record<string, unknown>).max_tokens).toBe(4096);
@@ -351,7 +356,7 @@ for (const [name, text] of [
     expect((read(path).terminal as Record<string, unknown>).cwd).toBe(process.env.HERMES_HOME);
     expect(extraOf(path).drop_pending_on_cold_boot).toBe(false);
     expect(read(path).context_file_max_chars).toBe(48000);
-    expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+    expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...RC42_TUNED });
     expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
   });
 }
