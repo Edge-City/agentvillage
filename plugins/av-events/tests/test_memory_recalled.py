@@ -39,7 +39,7 @@ def test_register_subscribes_to_the_recall_bus_event(plugin, ctx):
     # model-observer events (test_model_events.py). The set, not the order.
     assert set(ctx.subscriptions) == {
         "recall:memory.recalled", "av-approval:plugin.inventory", "av-approval:plugin.unknown",
-        "av-approval:model.observed", "av-approval:model.offlist"}
+        "av-approval:model.observed", "av-approval:model.offlist", "av-approval:gate.unverified"}
     assert all(len(callbacks) == 1 for callbacks in ctx.subscriptions.values())
     # Subscribing adds no hook: the spec hook set is unchanged.
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)

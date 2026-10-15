@@ -19,7 +19,15 @@ hook registers). Hermes loads plugins BEFORE it registers shell hooks, so
     by this uid that it can read (the lock: read and write), and a writable
     home when the lock is absent;
   - the shim present, executable, and its sha256 equal to the one the
-    installer recorded in `agent-hooks/approval-surface.json` (`shim_sha256`);
+    installer recorded in `agent-hooks/approval-surface.json` (`shim_sha256`),
+    to `VENDORED_SHIM_SHA256` (the vendored shim's digest, a constant in this
+    source: `shim-not-vendored`) and to the marker's digest as read once at
+    start and held in memory (`shim-changed-since-start`). CODE EXECUTION ON
+    (rc42, ov#357 refute M1): an `execute_code` program runs as this uid and
+    can rewrite the shim AND the marker together, which the marker check alone
+    reads as clean; the two copies it cannot reach from disk catch that within
+    one recheck. A full bypass now also needs this plugin rewritten and the
+    gateway restarted;
   - `AV_APPROVAL_URL` set.
 
 It registers a `pre_tool_call` callback that, for every GATED tool (the same
@@ -34,6 +42,14 @@ for the life of the process: the shell hooks were registered, or not, at
 start, and only a restart registers them again. A later failure blocks only
 while it lasts. Codes only are logged; the agent token is never read (the
 check never opens the token file and never reads `AV_APPROVAL_TOKEN`).
+
+GATE EVENTS (ov#357 refute M1 stopgap b): every change of the verdict (a failure
+at start, a later failure, a recovery) is published once on the plugin bus as
+`av-approval:gate.unverified` with `phase` (start|recheck|recovered), `codes`
+(the codes' names before any `:`, from `GATE_CODE_NAMES`, sorted; anything else
+is `other`) and `ts`. No path, matcher or file content is sent. av-events
+(`_gate_events.py`) turns it into the `gate.unverified` event. A ctx without
+`emit` is skipped; a bus that raises changes no verdict.
 
 Unset (never opted in) does nothing. Off is the kill switch, fail-open as
 documented below; the backstop belongs to the enforced-on mode only.
@@ -171,6 +187,18 @@ GATED_MATCHERS: tuple[str, ...] = (
     "x_search",
     # MINI-APPS (rc41, ov#312 re-cut): the village-bridge plugin's entry tool, exact name -> marketplace.app.read.
     "village",
+)
+#: sha256 of the vendored shim (skills/approval/scripts/hermes-hook-shim.sh), the bytes the installer
+#: writes to agent-hooks/. A test on each side holds this equal to the file and to what the installer
+#: records, so a shim change that forgets it fails CI.
+VENDORED_SHIM_SHA256 = "2e82fd5e53dbc9f34ca66dff13d6d7ec0cf395740db23ba0cd8f82558ac2b523"
+#: The plugin-bus event (the host namespaces it `av-approval:`) and the code names it may carry.
+GATE_EVENT = "gate.unverified"
+GATE_CODE_NAMES: tuple[str, ...] = (
+    "config-unreadable", "hooks-missing", "hook-missing", "fail-closed-off", "entry-timeout", "consent-missing",
+    "allowlist-unusable", "allowlist-lock-unusable", "allowlist-lock-uncreatable", "shim-missing",
+    "shim-not-executable", "manifest-missing", "shim-hash-mismatch", "shim-not-vendored",
+    "shim-changed-since-start", "url-missing", "check-error", "other",
 )
 #: The installer's per-entry timeout.
 ENTRY_TIMEOUT_S = 300
@@ -329,17 +357,33 @@ def _shim_codes(home: Path) -> list[str]:
     if not os.access(shim, os.X_OK):
         return ["shim-not-executable"]
     try:
-        with open(home / MARKER_RELPATH, encoding="utf-8") as fh:
-            recorded = json.load(fh).get("shim_sha256")
-    except Exception:  # noqa: BLE001
-        recorded = None
-    if not isinstance(recorded, str) or not recorded:
-        return ["manifest-missing"]
-    try:
         digest = hashlib.sha256(shim.read_bytes()).hexdigest()
     except OSError:
         return ["shim-missing"]
-    return [] if digest == recorded else ["shim-hash-mismatch"]
+    recorded = _marker_digest(home)
+    codes: list[str] = []
+    if recorded is None:
+        codes.append("manifest-missing")
+    elif digest != recorded:
+        codes.append("shim-hash-mismatch")
+    # The two references a program cannot rewrite on disk (ov#357 M1): the constant, and the marker
+    # as it stood when this process started.
+    if digest != VENDORED_SHIM_SHA256:
+        codes.append("shim-not-vendored")
+    started = _state.get("start_marker")
+    if isinstance(started, str) and digest != started:
+        codes.append("shim-changed-since-start")
+    return codes
+
+
+def _marker_digest(home: Path) -> Optional[str]:
+    """The `shim_sha256` the installer recorded, or None."""
+    try:
+        with open(home / MARKER_RELPATH, encoding="utf-8") as fh:
+            recorded = json.load(fh).get("shim_sha256")
+    except Exception:  # noqa: BLE001
+        return None
+    return recorded if isinstance(recorded, str) and recorded else None
 
 
 def integrity_problems(home: Optional[Path] = None) -> tuple[str, ...]:
@@ -378,7 +422,25 @@ def integrity_problems(home: Optional[Path] = None) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 _state_lock = threading.Lock()
-_state: dict[str, Any] = {"start": (), "codes": (), "checked_at": None}
+_state: dict[str, Any] = {"start": (), "codes": (), "checked_at": None, "start_marker": None, "ctx": None}
+
+
+def code_names(codes: tuple[str, ...]) -> list[str]:
+    """The codes' names for the gate event: the part before any `:`, one of GATE_CODE_NAMES, else `other`; sorted."""
+    names = {c.split(":", 1)[0] if isinstance(c, str) else "other" for c in codes}
+    return sorted(n if n in GATE_CODE_NAMES else "other" for n in names)
+
+
+def _emit_gate(phase: str, codes: tuple[str, ...]) -> None:
+    """Publish the verdict change on the plugin bus for av-events. Never raises; never under the state lock."""
+    ctx = _state.get("ctx")
+    emit = getattr(ctx, "emit", None) if ctx is not None else None
+    if not callable(emit):
+        return
+    try:
+        emit(GATE_EVENT, {"phase": phase, "codes": code_names(codes), "ts": int(time.time())})
+    except Exception:  # noqa: BLE001 - a bus that cannot take it changes no verdict
+        pass
 
 
 def _check() -> tuple[str, ...]:
@@ -391,6 +453,7 @@ def _check() -> tuple[str, ...]:
 def current_codes(now: Optional[float] = None) -> tuple[str, ...]:
     """The codes in force for a gated call: the start's (sticky), else the last check's, re-run at most once a minute."""
     now = time.monotonic() if now is None else now
+    event: Optional[tuple[str, tuple[str, ...]]] = None
     with _state_lock:
         if _state["start"]:
             return _state["start"]
@@ -401,9 +464,14 @@ def current_codes(now: Optional[float] = None) -> tuple[str, ...]:
             _state["codes"], _state["checked_at"] = codes, now
             if codes and codes != before:
                 _log_once("later:" + ",".join(codes), UNVERIFIED_LATER_FMT.format(codes=", ".join(codes)))
+                event = ("recheck", codes)
             elif before and not codes:
                 _log_once("recovered:" + ",".join(before), RECOVERED_LINE)
-        return _state["codes"]
+                event = ("recovered", ())
+        result = _state["codes"]
+    if event is not None:
+        _emit_gate(*event)
+    return result
 
 
 def _pre_tool_call(tool_name: Any = None, **_kwargs: Any) -> None:
@@ -417,7 +485,12 @@ def _pre_tool_call(tool_name: Any = None, **_kwargs: Any) -> None:
 
 
 def _start(now: Optional[float] = None) -> tuple[str, ...]:
-    """The start-time check; its failure is sticky for this process."""
+    """The start-time check; its failure is sticky for this process. Reads the marker's digest once, first,
+    and holds it for every later check (`shim-changed-since-start`)."""
+    try:
+        _state["start_marker"] = _marker_digest(hermes_home())
+    except Exception:  # noqa: BLE001
+        _state["start_marker"] = None
     codes = _check()
     with _state_lock:
         _state["start"] = codes
@@ -501,6 +574,7 @@ def _register_backstop(ctx: Any) -> None:
             else:
                 _log_once("disabled", DISABLED_LINE)
             return
+        _state["ctx"] = ctx
         # The check and the registration first: nothing that only logs may stand between them.
         codes = _start()
         try:
@@ -510,6 +584,7 @@ def _register_backstop(ctx: Any) -> None:
         _log_once("receipts-disabled", RECEIPTS_DISABLED_LINE)
         if codes:
             _log_once("start:" + ",".join(codes), UNVERIFIED_START_FMT.format(codes=", ".join(codes)))
+            _emit_gate("start", codes)
         else:
             try:
                 logger.info(VERIFIED_LINE)
@@ -524,6 +599,8 @@ __all__ = [
     "apply_custody",
     "DISABLED_LINE",
     "GATED_MATCHERS",
+    "GATE_CODE_NAMES",
+    "GATE_EVENT",
     "GateUnverified",
     "HOOKS",
     "PLUGIN_VERSION",
@@ -535,6 +612,7 @@ __all__ = [
     "integrity_problems",
     "is_gated",
     "switch",
+    "VENDORED_SHIM_SHA256",
     "register",
     "start_inventory",
     "start_model_observer",

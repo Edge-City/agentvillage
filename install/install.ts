@@ -350,7 +350,8 @@ function main(): void {
   setContextFileMaxChars();
   setCompactionSettings();
   setCompressionTrigger();
-  setCodeExecutionMode();
+  // rc43 (ov#357 review flags): fail loud like the two steps above; recorded, the run exits non-zero at its end.
+  const codeExecFailed = setCodeExecutionMode();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
@@ -429,6 +430,11 @@ function main(): void {
   if (modelAllowFailed) {
     console.log(modelAllowFailedLine(modelAllowFailed));
     console.error(`error: av_approval.model_allow was not written (${modelAllowFailed}); see the line above`);
+    process.exitCode = 1;
+  }
+  if (codeExecFailed) {
+    console.log(`agentvillage-install: code_execution_failed=${codeExecFailed}`);
+    console.error(`error: code_execution.mode is not strict (${codeExecFailed}); execute_code would run in Hermes's project mode`);
     process.exitCode = 1;
   }
 

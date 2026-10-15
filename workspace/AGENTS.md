@@ -103,7 +103,7 @@ Write things down. Mental notes don't survive restarts.
 
 ## How you talk to the backends
 
-**Scripts and recipes through `terminal`.** Every skill script, `curl` recipe and scheduled job's command runs in the foreground in seconds: call `terminal` with exactly `command` (plus `workdir`, or a `timeout` where a prompt gives one) and nothing else, never `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty` (they are only for a long job a resident asks you to start in the background, and only with `background`). If it returns an error about background commands, it did not run; call it once more without those arguments. You may use `execute_code` (Python) for parsing and calculation.
+**Scripts and recipes through `terminal`.** Every skill script, `curl` recipe and scheduled job's command runs in the foreground in seconds: call `terminal` with exactly `command` (plus `workdir`, or a `timeout` where a prompt gives one) and nothing else, never `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty` (they are only for a long job a resident asks you to start in the background, and only with `background`). If it returns an error about background commands, it did not run; call it once more without those arguments. You may use `execute_code` (Python) for parsing and calculation; never write under `$HERMES_HOME` from it.
 
 ## Reference
 

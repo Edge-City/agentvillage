@@ -46,6 +46,8 @@ from . import _card_events
 from . import _plugin_events
 # SEC-6 half 2, on its own line for the same reason.
 from . import _model_events
+# ov#357 M1 stopgap (b), on its own line for the same reason.
+from . import _gate_events
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -1061,6 +1063,8 @@ SUBSCRIPTION_BODIES = {
     # SEC-6 half 2: av-approval's model observer, behind AV_MODEL_EVENTS (default off), `_model_events`.
     _model_events.OBSERVED_BUS_EVENT: (_model_events.HOOK_NAME, _model_events.on_observed),
     _model_events.OFFLIST_BUS_EVENT: (_model_events.HOOK_NAME, _model_events.on_offlist),
+    # ov#357 M1 stopgap (b): av-approval's gate verdict changes, behind AV_GATE_EVENTS (default ON), `_gate_events`.
+    _gate_events.BUS_EVENT: (_gate_events.HOOK_NAME, _gate_events.on_gate),
 }
 
 

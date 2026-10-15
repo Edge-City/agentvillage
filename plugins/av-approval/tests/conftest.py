@@ -21,6 +21,8 @@ from typing import Any, Callable
 import pytest
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
+#: The shim the installer copies to agent-hooks/ (install/install_approval.ts SHIM_SOURCE).
+VENDORED_SHIM = PLUGIN_DIR.parents[1] / "skills" / "approval" / "scripts" / "hermes-hook-shim.sh"
 MODULE_NAME = "hermes_plugins.av_approval"
 ENV_VARS = (
     "AV_APPROVAL_ENABLED",
@@ -155,7 +157,8 @@ def write_gate(home: Path, matchers, *, entries=None, auto_accept=True, env_line
 
     shim = home / SHIM_REL
     shim.parent.mkdir(parents=True, exist_ok=True)
-    shim.write_text("#!/bin/sh\n# stand-in shim\ncat >/dev/null\necho '{}'\n", encoding="utf-8")
+    # The vendored shim's own bytes: the backstop compares the installed shim to VENDORED_SHIM_SHA256 (ov#357 M1).
+    shim.write_bytes(VENDORED_SHIM.read_bytes())
     shim.chmod(0o700)
     marker = {"daemon_id": None, "tenant_id": None, "installed_at": "2026-10-02T00:00:00Z", "overrides": [],
               "prior": {}, "shim_sha256": hashlib.sha256(shim.read_bytes()).hexdigest()}

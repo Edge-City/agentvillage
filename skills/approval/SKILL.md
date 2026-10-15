@@ -35,9 +35,14 @@ overlay sends each to the resident as a proposal and acts only on their tap.
   absolute path starting with `/`. A relative or missing path is refused the
   same way.
 - `execute_code` is not gated: you may use it for Python work such as parsing,
-  converting or calculating. It runs in its own temporary directory. Never use
-  it to do something a gated call was refused or is waiting for: that is
-  routing around the gate.
+  converting or calculating. Its working directory is a temporary one; that is
+  not isolation. Never use it to do something a gated call was refused or is
+  waiting for: that is routing around the gate.
+- Never write under `$HERMES_HOME` from code (`execute_code` included): the
+  approval gate's own files live there, and a change to them can block every
+  gated call until the box is reinstalled.
+- Python runs through `execute_code` only. `python` or `python3` through
+  `terminal` stays refused by the approval rules; do not retry it there.
 
 When a refusal names its repair, make that repair and call again once.
 

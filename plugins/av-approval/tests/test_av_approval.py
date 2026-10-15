@@ -397,8 +397,9 @@ def test_a_later_failure_is_found_within_a_minute_and_clears_when_repaired(gate,
             cb(tool_name="write_file")  # still inside the minute of the failing check
         clock[0] += 60
         assert cb(tool_name="terminal") is None
-    assert any("gate unverified (shim-hash-mismatch); gated tool calls are blocked while it lasts" in line
-               for line in _lines(caplog))
+    # ov#357 M1: the planted line also fails the constant and the start-time digest.
+    assert any("gate unverified (shim-hash-mismatch, shim-not-vendored, shim-changed-since-start); "
+               "gated tool calls are blocked while it lasts" in line for line in _lines(caplog))
     assert plugin.RECOVERED_LINE in _lines(caplog)
 
 
@@ -620,3 +621,139 @@ def test_backstop_in_a_real_hermes(tmp_path, scenario):
         assert result["terminal"] == ("pre_tool_call plugin callback _pre_tool_call raised GateUnverified: "
                                       "av-approval: gate unverified (allowlist-lock-unusable)")
         assert result["memory"] is None
+
+
+# ---------------------------------------------------------------------------
+# ov#357 refute M1 stopgaps: the shim digest a program cannot rewrite, and the gate event
+# ---------------------------------------------------------------------------
+
+class EmitCtx(FakeCtx):
+    def __init__(self) -> None:
+        super().__init__()
+        self.emitted: list[tuple[str, dict]] = []
+
+    def emit(self, event: str, payload: dict) -> None:
+        self.emitted.append((event, payload))
+
+
+def _rewrite_shim_and_marker(home: Path, body: bytes = b"#!/bin/sh\nexit 0\n") -> None:
+    """What one execute_code program can do as the gateway's uid: a new shim, and its digest in the marker."""
+    shim = home / "agent-hooks" / "hermes-hook-shim.sh"
+    shim.write_bytes(body)
+    shim.chmod(0o700)
+    marker_path = home / "agent-hooks" / "approval-surface.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["shim_sha256"] = hashlib.sha256(body).hexdigest()
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+
+def test_the_vendored_shim_digest_is_the_vendored_file():
+    plugin = load_plugin()
+    shim = REPO / "skills" / "approval" / "scripts" / "hermes-hook-shim.sh"
+    assert plugin.VENDORED_SHIM_SHA256 == hashlib.sha256(shim.read_bytes()).hexdigest()
+
+
+def test_a_clean_shim_passes(gate):
+    mp, home, plugin = gate
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    assert plugin.current_codes() == ()
+    assert _callback(ctx)(tool_name="terminal") is None
+    assert ctx.emitted == []
+
+
+def test_a_shim_and_marker_rewritten_together_are_caught_within_a_minute(gate, monkeypatch):
+    mp, home, plugin = gate
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    cb = _callback(ctx)
+    assert cb(tool_name="terminal") is None
+    _rewrite_shim_and_marker(home)
+    # The marker agrees with the new shim, so the installer's own check alone would read clean.
+    assert "shim-hash-mismatch" not in plugin.integrity_problems(home)
+    clock[0] += 61
+    with pytest.raises(plugin.GateUnverified, match=r"shim-not-vendored"):
+        cb(tool_name="terminal")
+    assert plugin.current_codes() == ("shim-not-vendored", "shim-changed-since-start")
+    assert cb(tool_name="memory") is None
+    assert [(e, p["phase"], p["codes"]) for e, p in ctx.emitted] == [
+        ("gate.unverified", "recheck", ["shim-changed-since-start", "shim-not-vendored"])]
+
+
+def test_a_shim_only_rewrite_is_caught(gate, monkeypatch):
+    mp, home, plugin = gate
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    shim = home / "agent-hooks" / "hermes-hook-shim.sh"
+    shim.write_bytes(b"#!/bin/sh\nexit 0\n")
+    clock[0] += 61
+    with pytest.raises(plugin.GateUnverified, match=r"shim-hash-mismatch"):
+        _callback(ctx)(tool_name="write_file")
+    assert plugin.current_codes() == ("shim-hash-mismatch", "shim-not-vendored", "shim-changed-since-start")
+
+
+def test_a_shim_and_marker_rewritten_before_a_restart_are_caught_at_start(gate):
+    mp, home, plugin = gate
+    _rewrite_shim_and_marker(home)
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    with pytest.raises(plugin.GateUnverified, match=r"shim-not-vendored"):
+        _callback(ctx)(tool_name="terminal")
+    # At start the in-memory copy is the rewritten marker; the constant is what catches it.
+    assert plugin.current_codes() == ("shim-not-vendored",)
+    assert [(e, p["phase"], p["codes"]) for e, p in ctx.emitted] == [("gate.unverified", "start", ["shim-not-vendored"])]
+
+
+def test_the_gate_event_carries_code_names_only_and_reports_the_recovery(gate, monkeypatch):
+    mp, home, plugin = gate
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    cb = _callback(ctx)
+    cfg_path = home / "config.yaml"
+    original = cfg_path.read_bytes()
+    cfg = yaml.safe_load(original)
+    cfg["hooks"]["pre_tool_call"] = [e for e in cfg["hooks"]["pre_tool_call"] if e["matcher"] != "terminal"]
+    cfg["hooks"]["pre_tool_call"].append({"matcher": "SENTINEL/home/resident", "command": "x"})
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    clock[0] += 61
+    with pytest.raises(plugin.GateUnverified):
+        cb(tool_name="terminal")
+    cfg_path.write_bytes(original)
+    clock[0] += 61
+    assert cb(tool_name="terminal") is None
+    assert [e for e, _ in ctx.emitted] == ["gate.unverified", "gate.unverified"]
+    (_, failed), (_, recovered) = ctx.emitted
+    assert list(failed) == ["phase", "codes", "ts"] and list(recovered) == ["phase", "codes", "ts"]
+    assert (failed["phase"], failed["codes"]) == ("recheck", ["hook-missing"])
+    assert (recovered["phase"], recovered["codes"]) == ("recovered", [])
+    assert type(failed["ts"]) is int and failed["ts"] > 1_700_000_000
+    assert "SENTINEL" not in json.dumps(ctx.emitted) and "terminal" not in json.dumps(ctx.emitted)
+
+
+def test_code_names_map_to_the_closed_set():
+    plugin = load_plugin()
+    assert plugin.code_names(("hook-missing:browser_.*", "consent-missing:env", "consent-missing:config", "weird:x")) == [
+        "consent-missing", "hook-missing", "other"]
+    assert set(plugin.code_names(tuple(plugin.GATE_CODE_NAMES))) == set(plugin.GATE_CODE_NAMES)
+
+
+def test_a_bus_that_raises_or_is_missing_changes_no_verdict(gate):
+    mp, home, plugin = gate
+    _rewrite_shim_and_marker(home)
+
+    class Raising(FakeCtx):
+        def emit(self, *_a, **_k):
+            raise RuntimeError("bus down")
+
+    for ctx in (Raising(), FakeCtx()):
+        fresh = load_plugin()
+        fresh.register(ctx)
+        with pytest.raises(fresh.GateUnverified, match=r"shim-not-vendored"):
+            _callback(ctx)(tool_name="terminal")
+

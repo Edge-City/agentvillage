@@ -1098,46 +1098,92 @@ export function setCompressionTrigger(): void {
  */
 export const CODE_EXECUTION_MODE = "strict";
 
+/** Why the box is not left in strict mode; `install.ts` prints it and exits non-zero at its end. */
+export type CodeExecutionFailure =
+  | "config-unreadable"
+  | "top-level-not-mapping"
+  | "merge-key-at-top"
+  | "merge-key-under-code_execution"
+  | "not-strict-after-write";
+
+/** `code_execution.mode` as Hermes reads it (`str(value).strip().lower()`, an unknown value is `project`). */
+export function effectiveCodeExecutionMode(doc: Record<string, unknown>): string {
+  const section = doc.code_execution;
+  const raw = isMapping(section) ? section.mode : undefined;
+  const mode = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return mode === "strict" || mode === "project" ? mode : "project";
+}
+
 /**
- * Pin `code_execution.mode: strict` (see `CODE_EXECUTION_MODE`). A value Hermes
- * already reads as strict (it lowercases and trims) is left as is; anything
- * else (absent, `project`, an unknown word, which Hermes would read as
- * `project`, a non-string) is set to `strict`. No other `code_execution` key is
- * written. `code_execution` not a mapping, or a merge key at the top or under
- * it, leaves the key unset with a warning. One `→` line; a config value is never
- * echoed (only `strict`, `project` or a kind). Idempotent: a second run does not
- * rewrite the file. Hermes reads the mode at each `execute_code` call.
+ * Pin `code_execution.mode: strict` (see `CODE_EXECUTION_MODE`) and VERIFY it.
+ * Returns null when config.yaml, read back, says strict; otherwise the reason,
+ * which `install.ts` prints as an error and turns into a non-zero exit at the
+ * end of the run (fail loud, as `configureSlashAccess`), so a box never rolls
+ * on quietly in Hermes's default `project` mode (rc43 fix of the two automated
+ * security-review flags on ov#357, "fail-open" and "insecure-default").
+ *
+ * - A value Hermes already reads as strict (it lowercases and trims): left as
+ *   is, the file not rewritten.
+ * - Absent, `project`, an unknown word, null or a non-string: set to `strict`.
+ * - `code_execution` not a mapping (a scalar, null, a list): replaced by
+ *   `{mode: strict}`. Hermes cannot read any other key from it anyway.
+ * - A YAML merge key at the top or under `code_execution`: nothing written and
+ *   a failure (`merge-key-...`). PyYAML merges what the `yaml` package reads
+ *   literally, so no write here could be sure of what Hermes sees; set it by hand.
+ * - A top level that is not a mapping, or a config that cannot be read: a failure.
+ *
+ * No other `code_execution` key is written. One `→` line; a config value is
+ * never echoed (only `strict`, `project` or a kind). Hermes reads the mode at
+ * each `execute_code` call.
  */
-export function setCodeExecutionMode(): void {
+export function setCodeExecutionMode(): CodeExecutionFailure | null {
   const path = "code_execution.mode";
-  const doc: unknown = readConfig();
+  let doc: unknown;
+  try {
+    doc = readConfig();
+  } catch {
+    console.log(`→ error: config.yaml could not be read; ${path} not verified strict`);
+    return "config-unreadable";
+  }
   if (!isMapping(doc)) {
-    console.log(`→ warning: the top level of config.yaml is not a mapping; left ${path} unset`);
-    return;
+    console.log(`→ error: the top level of config.yaml is not a mapping; ${path} not set (execute_code would run in project mode)`);
+    return "top-level-not-mapping";
   }
   if ("<<" in doc) {
-    console.log(`→ warning: YAML merge key "<<" at the top of config.yaml; left ${path} unset (set it by hand)`);
-    return;
+    console.log(`→ error: YAML merge key "<<" at the top of config.yaml; ${path} not set (set it by hand)`);
+    return "merge-key-at-top";
   }
-  const section = doc.code_execution ?? {};
-  if (!isMapping(section) || "<<" in section) {
-    const why = isMapping(section) ? 'YAML merge key "<<" under code_execution; set it by hand' : "code_execution is not a mapping";
-    console.log(`→ warning: ${why}; left ${path} unset`);
-    return;
+  const section = doc.code_execution;
+  if (isMapping(section) && "<<" in section) {
+    console.log(`→ error: YAML merge key "<<" under code_execution; ${path} not set (set it by hand)`);
+    return "merge-key-under-code_execution";
   }
-  const raw = section.mode;
-  if (typeof raw === "string" && raw.trim().toLowerCase() === CODE_EXECUTION_MODE) {
+  const raw = isMapping(section) ? section.mode : undefined;
+  if (isMapping(section) && typeof raw === "string" && raw.trim().toLowerCase() === CODE_EXECUTION_MODE) {
     console.log(`→ ${path} already ${CODE_EXECUTION_MODE}; left as is`);
-    return;
+  } else {
+    const why =
+      section !== undefined && !isMapping(section) ? `code_execution was ${section === null ? "null" : kindOf(section)}, replaced`
+      : raw === undefined ? "was unset, Hermes's default project"
+      : raw === null ? "was null, Hermes reads project"
+      : typeof raw === "string" ? (raw.trim().toLowerCase() === "project" ? "was project" : "was an unknown mode, Hermes reads project")
+      : `was ${typeof raw === "number" ? "a number" : kindOf(raw)}`;
+    doc.code_execution = { ...(isMapping(section) ? section : {}), mode: CODE_EXECUTION_MODE };
+    writeConfig(doc);
+    console.log(`→ set ${path}: ${CODE_EXECUTION_MODE} (${why}; execute_code works in a temp dir, no approval card)`);
   }
-  const why =
-    raw === undefined ? "was unset, Hermes's default project"
-    : raw === null ? "was null, Hermes reads project"
-    : typeof raw === "string" ? (raw.trim().toLowerCase() === "project" ? "was project" : "was an unknown mode, Hermes reads project")
-    : `was ${typeof raw === "number" ? "a number" : kindOf(raw)}`;
-  doc.code_execution = { ...section, mode: CODE_EXECUTION_MODE };
-  writeConfig(doc);
-  console.log(`→ set ${path}: ${CODE_EXECUTION_MODE} (${why}; execute_code runs in an isolated temp dir, no approval card)`);
+  // Read it back: what is on disk is what Hermes reads.
+  let back: unknown;
+  try {
+    back = readConfig();
+  } catch {
+    back = null;
+  }
+  if (!isMapping(back) || effectiveCodeExecutionMode(back) !== CODE_EXECUTION_MODE) {
+    console.log(`→ error: ${path} reads back as not ${CODE_EXECUTION_MODE}`);
+    return "not-strict-after-write";
+  }
+  return null;
 }
 
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";

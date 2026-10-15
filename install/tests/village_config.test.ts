@@ -18,6 +18,7 @@ import YAML from "yaml";
 
 import {
   CODE_EXECUTION_MODE,
+  effectiveCodeExecutionMode,
   COMPRESSION_THRESHOLD,
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
@@ -756,7 +757,7 @@ describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)
     const body = main.slice(0, main.indexOf("\n}\n"));
     expect(body.match(/^.*setCompressionTrigger.*$/gm)).toEqual(["  setCompressionTrigger();"]);
     // CODE EXECUTION ON (rc42) runs its own step right after this one.
-    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  setCodeExecutionMode\(\);\n  configureTelegramDisplay\(\);$/m);
+    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  \/\/ rc43 .*\n  const codeExecFailed = setCodeExecutionMode\(\);\n  configureTelegramDisplay\(\);$/m);
     expect(main.indexOf("setCompressionTrigger();")).toBeLessThan(main.indexOf("restartGateway();"));
   });
 
@@ -785,16 +786,16 @@ describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)
   });
 });
 
-describe("CODE EXECUTION ON (rc42): code_execution.mode strict", () => {
+describe("CODE EXECUTION ON (rc42): code_execution.mode strict, verified (rc43: fail loud)", () => {
   const PATH = "code_execution.mode";
-  const SET = (why: string) => `→ set ${PATH}: strict (${why}; execute_code runs in an isolated temp dir, no approval card)`;
+  const SET = (why: string) => `→ set ${PATH}: strict (${why}; execute_code works in a temp dir, no approval card)`;
   const lines = () => logSpy.mock.calls.map((c) => String(c[0]));
 
   test("the mode is strict, Hermes's isolated one", () => {
     expect(CODE_EXECUTION_MODE).toBe("strict");
   });
 
-  test("absent, project, an unknown word, null or a non-string: set to strict, other code_execution keys and the rest kept", () => {
+  test("absent, project, an unknown word, null or a non-string: set to strict, other code_execution keys and the rest kept, verified", () => {
     for (const [section, why] of [
       [undefined, "was unset, Hermes's default project"],
       [{ timeout: 300 }, "was unset, Hermes's default project"],
@@ -809,7 +810,7 @@ describe("CODE EXECUTION ON (rc42): code_execution.mode strict", () => {
       const doc: Record<string, unknown> = { model: { default: "m", context_length: 90000 }, compression: { threshold: 0.75 } };
       if (section !== undefined) doc.code_execution = section;
       withDoc(doc);
-      setCodeExecutionMode();
+      expect(setCodeExecutionMode()).toBe(null);
       const timeout = section !== undefined && "timeout" in section ? { timeout: 300 } : {};
       expect(read()).toEqual({ ...doc, code_execution: { ...timeout, mode: "strict" } });
       expect(lines()).toEqual([SET(why)]);
@@ -817,12 +818,28 @@ describe("CODE EXECUTION ON (rc42): code_execution.mode strict", () => {
     }
   });
 
-  test("already strict (as Hermes reads it, any case or padding): left as is, the file not rewritten", () => {
+  test("flag 2 (insecure default): code_execution not a mapping is replaced by {mode: strict}, never left to Hermes's project", () => {
+    for (const [text, why] of [
+      ["code_execution: false\n", "code_execution was a boolean, replaced"],
+      ["code_execution: off\n", "code_execution was a string, replaced"],
+      ["code_execution:\n", "code_execution was null, replaced"],
+      ["code_execution: strict\n", "code_execution was a string, replaced"],
+      ["code_execution:\n  - mode\n", "code_execution was a list, replaced"],
+    ] as const) {
+      logSpy.mockClear();
+      withText(`model:\n  default: m\n${text}`);
+      expect(setCodeExecutionMode()).toBe(null);
+      expect(read()).toEqual({ model: { default: "m" }, code_execution: { mode: "strict" } });
+      expect(lines()).toEqual([SET(why)]);
+    }
+  });
+
+  test("already strict (as Hermes reads it, any case or padding): left as is, the file not rewritten, verified", () => {
     for (const mode of ["strict", " STRICT "]) {
       logSpy.mockClear();
       const text = `# marker\ncode_execution:\n  mode: "${mode}"\n`;
       withText(text);
-      setCodeExecutionMode();
+      expect(setCodeExecutionMode()).toBe(null);
       expect(readFileSync(configPath(), "utf8")).toBe(text);
       expect(lines()).toEqual([`→ ${PATH} already strict; left as is`]);
     }
@@ -830,45 +847,64 @@ describe("CODE EXECUTION ON (rc42): code_execution.mode strict", () => {
 
   test("idempotent: a second run keeps the same bytes", () => {
     withDoc({ code_execution: { mode: "project" } });
-    setCodeExecutionMode();
+    expect(setCodeExecutionMode()).toBe(null);
     const once = readFileSync(configPath(), "utf8");
-    setCodeExecutionMode();
+    expect(setCodeExecutionMode()).toBe(null);
     expect(readFileSync(configPath(), "utf8")).toBe(once);
     expect(read()).toEqual({ code_execution: { mode: "strict" } });
   });
 
   test("no config.yaml at all: the key written", () => {
-    setCodeExecutionMode();
+    expect(setCodeExecutionMode()).toBe(null);
     expect(read()).toEqual({ code_execution: { mode: "strict" } });
   });
 
-  test("code_execution not a mapping or holding a merge key, and a bad top level: nothing written, one warning", () => {
-    for (const [text, why] of [
-      ["code_execution: off\n", "code_execution is not a mapping"],
-      ["base: &b\n  mode: project\ncode_execution:\n  <<: *b\n", 'YAML merge key "<<" under code_execution; set it by hand'],
+  test("flag 1 (fail open): a merge key or a bad top level writes nothing and RETURNS the failure (never just a warning)", () => {
+    for (const [text, failure] of [
+      ["base: &b\n  mode: project\ncode_execution:\n  <<: *b\n", "merge-key-under-code_execution"],
+      ["base: &b\n  code_execution: {}\n<<: *b\n", "merge-key-at-top"],
+      ["- a\n- b\n", "top-level-not-mapping"],
+      ["just a string\n", "top-level-not-mapping"],
+      ["a: [unclosed\n", "config-unreadable"],
     ] as const) {
       logSpy.mockClear();
       withText(text);
-      setCodeExecutionMode();
-      expect(readFileSync(configPath(), "utf8")).toBe(text);
-      expect(lines()).toEqual([`→ warning: ${why}; left ${PATH} unset`]);
-    }
-    for (const text of ["- a\n- b\n", "base: &b\n  code_execution: {}\n<<: *b\n"]) {
-      logSpy.mockClear();
-      withText(text);
-      setCodeExecutionMode();
+      expect([text, setCodeExecutionMode()]).toEqual([text, failure]);
       expect(readFileSync(configPath(), "utf8")).toBe(text);
       expect(logSpy.mock.calls).toHaveLength(1);
-      expect(logged()).toStartWith("→ warning: ");
+      expect(logged()).toStartWith("→ error: ");
     }
   });
 
-  test("install.ts runs the step once, before the restart", () => {
+  test("flag 1 (fail open): the read-back reads the mode as Hermes does (an unknown or missing value is project)", () => {
+    for (const [doc, mode] of [
+      [{ code_execution: { mode: "strict" } }, "strict"],
+      [{ code_execution: { mode: " STRICT\t" } }, "strict"],
+      [{ code_execution: { mode: "project" } }, "project"],
+      [{ code_execution: { mode: "strict-ish" } }, "project"],
+      [{ code_execution: { mode: ["strict"] } }, "project"],
+      [{ code_execution: { mode: true } }, "project"],
+      [{ code_execution: "strict" }, "project"],
+      [{ code_execution: null }, "project"],
+      [{}, "project"],
+    ] as const) {
+      expect([doc, effectiveCodeExecutionMode(doc as Record<string, unknown>)]).toEqual([doc, mode]);
+    }
+  });
+
+  test("install.ts records the failure, runs every later step, and exits non-zero at its end with one error line", () => {
     const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
     const main = text.slice(text.indexOf("function main(): void {"));
     const body = main.slice(0, main.indexOf("\n}\n"));
-    expect(body.match(/^.*setCodeExecutionMode.*$/gm)).toEqual(["  setCodeExecutionMode();"]);
+    expect(body.match(/^.*setCodeExecutionMode.*$/gm)).toEqual(["  const codeExecFailed = setCodeExecutionMode();"]);
     expect(main.indexOf("setCodeExecutionMode();")).toBeLessThan(main.indexOf("restartGateway();"));
+    expect(body).toContain([
+      "  if (codeExecFailed) {",
+      "    console.log(`agentvillage-install: code_execution_failed=${codeExecFailed}`);",
+      "    console.error(`error: code_execution.mode is not strict (${codeExecFailed}); execute_code would run in Hermes's project mode`);",
+      "    process.exitCode = 1;",
+      "  }",
+    ].join("\n"));
   });
 
   // The modes as the Hermes the overlay pins defines them (local reference checkout; skipped in CI).

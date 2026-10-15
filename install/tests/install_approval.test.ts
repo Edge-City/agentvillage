@@ -499,6 +499,17 @@ describe("installing the gate", () => {
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
   });
 
+  test("ov#357 M1 stopgap: the av-approval plugin's VENDORED_SHIM_SHA256 is the shim this installer writes and records", () => {
+    const home = tenant();
+    installApproval(SOURCE_SKILLS, opts());
+    const py = readFileSync(join(import.meta.dir, "..", "..", "plugins", APPROVAL_PLUGIN, "__init__.py"), "utf8");
+    const pinned = py.match(/^VENDORED_SHIM_SHA256 = "([0-9a-f]{64})"$/m)?.[1];
+    expect(pinned).toBe(createHash("sha256").update(readFileSync(SHIM_SOURCE)).digest("hex"));
+    expect(createHash("sha256").update(readFileSync(approvalShimPath())).digest("hex")).toBe(pinned!);
+    expect(JSON.parse(readFileSync(approvalSurfacePath(), "utf8")).shim_sha256).toBe(pinned!);
+    expect(home).toContain(".hermes");
+  });
+
   test("CODE EXECUTION ON (rc42): execute_code reaches no hook (no card, no refusal); terminal, write_file, web_search and village still do", () => {
     const home = tenant();
     installApproval(SOURCE_SKILLS, opts());
