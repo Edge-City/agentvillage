@@ -214,6 +214,22 @@ def test_both_village_tools_are_admitted_for_group_chat_queries(catalog, query):
     assert {"ask_village", "search_village"} <= set(found), (query, found)
 
 
+#: VILLAGE QUERY: a query naming SQL ranks `query_village` first; the plain group-chat queries above still rank
+#: ask_village first (its description says "posts", not "messages", in its first sentence for that reason).
+QUERY_QUERIES = ("query_village", "sql", "village group chat sql", "sql group chat messages", "sqlite select")
+
+
+@pytest.mark.parametrize("query", QUERY_QUERIES)
+def test_tool_search_finds_query_village_first_for_sql_queries(catalog, query):
+    found = search_catalog(catalog, query)
+    assert found and found[0] == "query_village", (query, found)
+
+
+def test_query_village_is_in_the_catalog_beside_the_other_village_tools(catalog):
+    assert {"ask_village", "search_village", "query_village"} <= set(catalog)
+    assert "query_village" in search_catalog(catalog, "village group chat")
+
+
 @pytest.mark.parametrize("query", INTENT_QUERIES)
 def test_every_query_token_is_in_ask_village_text(catalog, query):
     # Stemmer-independent: whichever token is the query's rarest in the real catalog,

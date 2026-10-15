@@ -633,13 +633,14 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     lines = [r.getMessage() for r in caplog.records if r.name == "av-events"]
     # DATA-212: `record_intention` logs its own one line (switch off by default); so do `pray` (PRAYER P3)
-    # and `ask_village` (ASK-VILLAGE) and `search_village` (VILLAGE SEARCH), and F1's prompt refresh (no Hermes here to wrap).
+    # and `ask_village` (ASK-VILLAGE) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh (no Hermes here to wrap).
     assert lines == [
         "av-events: consent_status skipped=no_register_tool",
         "av-events: record_intention skipped=switch_off",
         "av-events: pray skipped=switch_off",
         "av-events: ask_village skipped=switch_off",
         "av-events: search_village skipped=switch_off",
+        "av-events: query_village skipped=switch_off",
         "av-events: prompt_refresh: agent.conversation_loop not importable; left as is",
     ]
 
