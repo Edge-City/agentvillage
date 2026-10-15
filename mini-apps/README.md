@@ -146,12 +146,12 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 - `rolodex.person` (rc42, CLAIMS 7799/7804) with exactly one of `id` (a strict
   uuid that `rolodex.search` returned) or `query` (1 to 120 characters): a
   **read** (`READ_OPERATIONS`) of one other resident's public profile (PUBLIC
-  and VILLAGE claims, whatYouDo, public social profile links; never email,
+  and VILLAGE card lines, public social profile links; never email,
   phone, Telegram handle or anything private). Appended last. `id` is lowercase,
   exactly as search returns it. The app's filter is primary; the plugin also
   keeps only the reviewed answer keys, person fields and card names, removes
   every format character (bidi, zero-width, BOM, tag characters) and invisible
-  filler, caps strings at the app's limits (card lines 160, whatYouDo 300, 4
+  filler, caps strings at the app's limits (card lines 160, 4
   lines a card, 5 names, 8 links), and keeps only plain-ASCII `https` links
   with no userinfo, backslash or odd port, whose host is not a messaging,
   contact or booking host and whose path (fully percent-decoded) is not a DM,
@@ -161,7 +161,8 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   deny-listed host, an email or a phone number is refused; every Unicode
   format character, variation selector and invisible filler is removed from
   every key and string; an app body carrying an `error` key is rebuilt from
-  the plugin's own codes. A card line, or the whole whatYouDo, that holds an
+  the plugin's own codes. `whatYouDo` is never forwarded (CLAIMS L8029). A card
+  line, a role or an organization that holds an
   email, a 7+ digit phone run, an @handle, a deny-listed host or a messaging
   label with a handle is dropped whole (after hidden-character removal and
   NFKC; never redacted inside a line, false positives accepted). Every bound

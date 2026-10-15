@@ -66,7 +66,9 @@ LOG = logging.getLogger("village_bridge")
 # The app's filter (app#290) is primary; this keeps only the reviewed shape, strips hidden characters and
 # drops messaging/contact/booking links. It never rewrites prose (the app scrubs it; the skill forbids
 # sharing contact details).
-PERSON_KEYS = ("found", "person", "cards", "whatYouDo", "links", "asOf", "partial")
+# whatYouDo is NOT forwarded (CLAIMS L8029, "admitted lines only"): the cards' admitted lines stand in for it,
+# and the key is dropped (counted, never read) if an app ever sends it.
+PERSON_KEYS = ("found", "person", "cards", "links", "asOf", "partial")
 PERSON_NOT_FOUND_KEYS = ("found", "reason", "candidates", "asOf")
 PERSON_FIELDS = ("id", "name", "role", "organization", "met", "url")
 PERSON_CARDS = ("here", "work", "meet", "offer", "curious", "fun", "about")
@@ -96,9 +98,9 @@ CONTACT_HOSTS = (
 # Messaging, DM, add-contact, booking and contact-info pages on any host (snapchat.com/add, instagram.com/direct,
 # linkedin.com/messaging, x.com/messages, Google appointment pages, linkedin .../overlay/contact-info).
 CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "message", "add", "appointments", "contact-info", "contactinfo"})
-# The app's caps (app#290 person.ts): card lines 160, whatYouDo 300, names 240, role/organization 120 code points;
+# The app's caps (app#290 person.ts): card lines 160, names 240, role/organization 120 code points;
 # at most 4 lines a card, 5 candidate names and 8 links.
-CAPS = {"line": 160, "whatYouDo": 300, "name": 240, "role": 120, "organization": 120, "asOf": 40}
+CAPS = {"line": 160, "name": 240, "role": 120, "organization": 120, "asOf": 40}
 # Invisible characters outside category Cf (visible() removes every Cf character): soft hyphen (also Cf),
 # combining grapheme joiner, Hangul fillers, Khmer inherent vowels, Mongolian variation selectors, braille
 # blank, and the variation selectors U+FE00-FE0F and U+E0100-E01EF. Escapes only: no raw invisible bytes here.
@@ -108,7 +110,7 @@ PERSON_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0-9a-f-]{36}")
 
 
-# Fix 4 (prose), coordinator's ruling: a card line, or the whole whatYouDo, that looks like it carries a contact
+# Fix 4 (prose), coordinator's ruling: a card line (or a short field) that looks like it carries a contact
 # detail is DROPPED whole (never redacted inside the line). False positives are accepted: a dropped line is cheap.
 # Third security-review round: every length bound is applied BEFORE any regex, NFKC step or URL parse; the checks
 # are linear scans (no nested or overlapping quantifiers); and the text that is checked is exactly the text that is
@@ -118,18 +120,20 @@ PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0
 # skill's never-share rule backs it up; this layer only removes the common shapes.
 PROSE_CHECK_MAX = 1200  # longer text is never checked: it is dropped (the app's longest field is 300)
 RAW_FACTOR = 4  # raw text may carry hidden characters; anything over cap * RAW_FACTOR is dropped unread
-STRONG_LABELS = frozenset({"telegram", "tg", "whatsapp", "threema", "wechat", "discord", "snapchat", "kakao",
-                           "kakaotalk", "viber", "skype"})
-WEAK_LABELS = frozenset({"signal", "line", "snap"})
-CONNECTORS = frozenset({"is", "as", "at", "on", "via", "id", "handle", "username", "user", "me", "i", "i'm", "im", "am", "my"})
-WEAK_SEPARATORS = frozenset({":", "=", "-", "\u2013", "\u2014", "\u2192", ">"})
+# Fourth security-review round (control regression): each linear scan below accepts at least everything the
+# fix-4 regexes (02ae3e85) matched, so the ReDoS rewrite cannot weaken a control. Each docstring names the
+# regex it supersets; test_prose_never_weaker_than_fix_4 checks that against those regexes as an oracle.
+STRONG_LABELS = ("telegram", "tg", "whatsapp", "threema", "wechat", "discord", "snapchat",
+                 "kakaotalk", "kakao", "viber", "skype")
+WEAK_LABELS = ("signal", "line", "snap")
+CONNECTORS = frozenset({"is", "as", "at", "on", "via", "id", "handle", "username", "user", "me", "i'm", "im", "my"})
+WEAK_SEPARATORS = frozenset(":=-\u2013\u2014\u2192>")
 SEPARATORS = WEAK_SEPARATORS | {","}
-PHONE_GAP = frozenset(" \t.-()")  # what may sit between the digits of one number (whitespace folds to " ")
+TOKEN_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_.")
 LOCAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._%+-")
-DOMAIN_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
-HANDLE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_.")
+DOMAIN_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")  # "_" too: the 553e2060 scan accepted it
+ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyz")
 HOST_SET = frozenset(CONTACT_HOSTS)
-SCAN_CHARS = DOMAIN_CHARS | HANDLE_CHARS
 
 
 def bounded(check):
@@ -140,9 +144,20 @@ def bounded(check):
     return guarded
 
 
+def _word(ch):
+    """Python's \\w for one character: Unicode letters, digits and numerics, and the underscore."""
+    return ch.isalnum() or ch == "_"
+
+
+def _phone_gap(ch):
+    """What may sit between two digits of one number: any Unicode whitespace (\\s), . - ( ) and every dash."""
+    return ch.isspace() or ch in ".-()\u2212" or unicodedata.category(ch) == "Pd"
+
+
 @bounded
 def _has_phone(text):
-    """An optional +, then 7 or more digits with at most 3 of space . - ( ) between any two. Linear."""
+    """Superset of \\+?\\d(?:[\\s.\\-()]{0,3}\\d){6,}: 7 or more digits (any Unicode digit, str.isdigit), at most
+    3 gap characters between two of them. One pass."""
     run = gap = 0
     for ch in text:
         if ch.isdigit():
@@ -150,7 +165,7 @@ def _has_phone(text):
             gap = 0
             if run >= 7:
                 return True
-        elif ch in PHONE_GAP and run:
+        elif run and _phone_gap(ch):
             gap += 1
             if gap > 3:
                 run = gap = 0
@@ -159,59 +174,171 @@ def _has_phone(text):
     return False
 
 
+def _domain_ok(text, start):
+    """Superset of [A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,} at text[start:]: a non-empty first label,
+    then a later label (no empty label before it) that starts with two ASCII letters. Returns (match, end)."""
+    end = start
+    while end < len(text) and (text[end] in DOMAIN_CHARS or text[end] == "."):
+        end += 1
+    labels = text[start:end].split(".")
+    if labels[0]:
+        for label in labels[1:]:
+            if len(label) >= 2 and label[0] in ASCII_LETTERS and label[1] in ASCII_LETTERS:
+                return True, end
+            if not label:
+                break
+    return False, end
+
+
 @bounded
 def _has_email_or_handle(lowered):
-    """x@y.tld, or an @handle not glued to a word or dot before it. One forward scan per @; linear."""
+    """Superset of the email regex [A-Za-z0-9._%+-]+@<domain> and the handle regex (?<![\\w.])@[A-Za-z0-9_.]{2,}.
+    Each @ is checked for both independently; the domain scan stops at the next @, so the pass is linear."""
     at = lowered.find("@")
     while at != -1:
         before = lowered[at - 1] if at else " "
-        end = at + 1
-        while end < len(lowered) and lowered[end] in SCAN_CHARS:
-            end += 1
-        after = lowered[at + 1:end]
-        if before in LOCAL_CHARS:
-            labels = after.strip(".").split(".")
-            if len(labels) >= 2 and all(labels) and labels[-1].isalpha() and len(labels[-1]) >= 2:
-                return True  # an email
-        elif not (before.isalnum() or before in "_.") and len(after) >= 2 and all(c in HANDLE_CHARS for c in after[:2]):
+        if before in LOCAL_CHARS and _domain_ok(lowered, at + 1)[0]:
+            return True  # an email
+        after = lowered[at + 1:at + 3]
+        if not (_word(before) or before == ".") and len(after) == 2 and all(c in TOKEN_CHARS for c in after):
             return True  # an @handle
-        at = lowered.find("@", end if end > at else at + 1)
+        at = lowered.find("@", at + 1)
     return False
 
 
 @bounded
 def _names_host(lowered):
-    """A deny-listed host (or a subdomain of one) named anywhere, also with spaced dots ("t . me"). Linear."""
+    """Superset of (?<![a-z0-9-])<host>(?![a-z0-9-]) after \\s*\\.\\s* -> ".": every window of dot-separated labels
+    in each [a-z0-9.-] run, also with spaced dots ("t . me"). Linear."""
     folded = " ".join(lowered.split()).replace(" .", ".").replace(". ", ".")
     for token in re.findall(r"[a-z0-9.-]+", folded):
         labels = [label for label in token.strip(".-").split(".") if label]
-        for size in (1, 2, 3, 4):
+        for size in (2, 3, 4):
             for i in range(len(labels) - size + 1):
                 if ".".join(labels[i:i + size]) in HOST_SET:
                     return True
     return False
 
 
+def _skip(text, i, chars=None):
+    """Index after a run of whitespace (or of `chars`) from i."""
+    while i < len(text) and (text[i].isspace() if chars is None else text[i] in chars):
+        i += 1
+    return i
+
+
+def _skip_gap(text, i, seps):
+    """Skip whitespace and separator characters; returns (index, saw_whitespace, saw_separator)."""
+    ws = sep = False
+    while i < len(text):
+        if text[i].isspace():
+            ws = True
+        elif text[i] in seps:
+            sep = True
+        else:
+            break
+        i += 1
+    return i, ws, sep
+
+
+def _token_at(text, i, length=2):
+    """@?[a-z0-9_.]{2}: a handle-like token starts at i."""
+    if i < len(text) and text[i] == "@":
+        i += 1
+    return i + length <= len(text) and all(c in TOKEN_CHARS for c in text[i:i + length])
+
+
+def _labels_at(text, i, labels):
+    """The label that starts at i on a word boundary and ends on one, or None."""
+    if i and _word(text[i - 1]):
+        return None
+    for label in labels:
+        if text.startswith(label, i) and (i + len(label) == len(text) or not _word(text[i + len(label)])):
+            return label
+    return None
+
+
 @bounded
 def _has_messaging_label(lowered):
-    """A messaging label followed by a handle-like token, within 4 tokens. Linear (bounded look-ahead)."""
-    tokens = re.findall(r"[a-z0-9_.@#']+|[:=,>\u2013\u2014\u2192-]", lowered.replace("\u2019", "'").replace("whats app", "whatsapp"))
+    """Supersets of the fix-4 messaging regexes, scanned per position with a bounded look-ahead:
+    strong: \\b(label)\\b(?:\\s*[sep]+\\s*|\\s+) then @?[a-z0-9_.]{2} (connector words are tokens too);
+    weak (signal|line|snap): an optional id/handle/username/user, then [:=-\\u2013\\u2014\\u2192>] and a token;
+    or any gap, connector words, then a token holding a digit, _ or @;
+    and \\b(dm|text|call)\\s+me\\b then any non-space character."""
+    text = re.sub(r"whats\sapp", "whatsapp", lowered.replace("\u2019", "'"))
+    n = len(text)
+    for i in range(n):
+        label = _labels_at(text, i, STRONG_LABELS)
+        if label:
+            j, ws, sep = _skip_gap(text, i + len(label), SEPARATORS)
+            if (ws or sep) and _token_at(text, j):
+                return True
+            if (ws or sep) and text.startswith("i'm", j):  # the one connector that is not itself a token
+                j = _skip_gap(text, j + 3, ":,-")[0]
+                if _token_at(text, j):
+                    return True
+            continue
+        label = _labels_at(text, i, WEAK_LABELS)
+        if label:
+            j = _skip(text, i + len(label))
+            for word in ("username", "handle", "user", "id"):
+                if text.startswith(word, j):
+                    j = _skip(text, j + len(word))
+                    break
+            k, _, sep = _skip_gap(text, j, WEAK_SEPARATORS)
+            if sep and _token_at(text, k):
+                return True
+            j, ws, sep = _skip_gap(text, i + len(label), SEPARATORS)
+            if not (ws or sep):
+                continue
+            for _ in range(8):  # connector words, each followed by [\s:,-]*
+                end = j
+                while end < n and (text[end] in TOKEN_CHARS or text[end] in "@'"):
+                    end += 1
+                word = text[j:end]
+                if word in CONNECTORS and (end == n or not _word(text[end])):
+                    j = _skip(text, end, None)
+                    while j < n and (text[j].isspace() or text[j] in ":,-"):
+                        j += 1
+                    continue
+                if any(c.isdigit() or c in "_@" for c in word):
+                    return True
+                break
+            continue
+        label = _labels_at(text, i, ("dm", "text", "call"))
+        if label:
+            j = _skip(text, i + len(label))
+            if j > i + len(label) and text.startswith("me", j) and (j + 2 == n or not _word(text[j + 2])):
+                k = _skip(text, j + 2)
+                if k < n:
+                    return True
+    return False
+
+
+TOKEN_CONNECTORS = CONNECTORS | {"i", "am"}
+
+
+@bounded
+def _has_messaging_token(lowered):
+    """The 553e2060 token scan, kept alongside the regex-superset scan so neither earlier head's coverage is lost:
+    a messaging label then, within 4 tokens (punctuation outside the token class skipped), a handle-like token."""
+    tokens = re.findall(r"[a-z0-9_.@#']+|[:=,>\u2013\u2014\u2192-]", re.sub(r"whats\sapp", "whatsapp", lowered.replace("\u2019", "'")))
     tokens = [t if len(t) == 1 and t in SEPARATORS else t.strip(".") for t in tokens]
     tokens = [t for t in tokens if t]
     for i, token in enumerate(tokens):
         if token in ("dm", "text", "call") and i + 2 < len(tokens) and tokens[i + 1] == "me":
             return True
-        if token not in STRONG_LABELS and token not in WEAK_LABELS:
+        if token not in STRONG_LABELS and token not in WEAK_LABELS and token != "kakao":
             continue
         separated = False
         for nxt in tokens[i + 1:i + 5]:
             if nxt in SEPARATORS:
-                separated = separated or nxt in WEAK_SEPARATORS or token in STRONG_LABELS
+                separated = separated or nxt in WEAK_SEPARATORS or token not in WEAK_LABELS
                 continue
-            if nxt in CONNECTORS or nxt in ("id", "handle", "username"):
+            if nxt in TOKEN_CONNECTORS:
                 continue
             handle_like = len(nxt) >= 2 and (nxt[0].isalnum() or nxt[0] == "@")
-            if handle_like and (token in STRONG_LABELS or separated or any(c.isdigit() or c in "_@" for c in nxt)):
+            if handle_like and (token not in WEAK_LABELS or separated or any(c.isdigit() or c in "_@" for c in nxt)):
                 return True
             break
     return False
@@ -226,7 +353,8 @@ def contact_shaped(text):
     # Cheap bypasses closed: bracketed "at"/"dot" ("probe [at] example [dot] io").
     for obfuscated, plain in (("[at]", "@"), ("(at)", "@"), ("{at}", "@"), ("[dot]", "."), ("(dot)", "."), ("{dot}", ".")):
         lowered = lowered.replace(" " + obfuscated + " ", plain).replace(obfuscated, plain)
-    return _has_phone(lowered) or _has_email_or_handle(lowered) or _names_host(lowered) or _has_messaging_label(lowered)
+    return (_has_phone(lowered) or _has_email_or_handle(lowered) or _names_host(lowered) or _has_messaging_label(lowered)
+            or _has_messaging_token(lowered))
 
 
 def normalised(value, cap):
@@ -239,8 +367,23 @@ def normalised(value, cap):
     return text if text and len(text) <= cap else None
 
 
+def short_field(value, cap):
+    """A name, role, organization or candidate: truncated BEFORE the check (raw bound, hidden characters, NFKC,
+    then the cap), and the truncated, normalised value is exactly what is checked and emitted. None when it
+    is contact-shaped (a role reading "DM me on tg @naman")."""
+    if not isinstance(value, str):
+        return None
+    text = visible(unicodedata.normalize("NFKC", visible(value[:cap * RAW_FACTOR])), cap)
+    return None if not text or contact_shaped(text) else text
+
+
+def stamp(value):
+    """asOf: a timestamp's characters only (digits, T, Z, : . + -), at most 40, else omitted."""
+    return value if isinstance(value, str) and 0 < len(value) <= 40 and all(c in "0123456789TZ:.+-" for c in value) else None
+
+
 def prose(value, cap):
-    """A card line or whatYouDo as it may reach the agent, or None (dropped)."""
+    """A card line as it may reach the agent, or None (dropped)."""
     text = normalised(value, cap)
     return None if text is None or contact_shaped(text) else text
 
@@ -260,7 +403,9 @@ def visible(value, cap=None):
             continue
         out.append(" " if category in ("Cc", "Zl", "Zp") else ch)
     text = "".join(out).strip()
-    return text[:cap] if cap else text
+    # Strip again after the cut, so visible() is idempotent: scrubbed_tree() re-applying it never changes a value
+    # that was already checked (the checked value is the emitted value, byte for byte).
+    return text[:cap].strip() if cap else text
 
 
 def _host_ok(host):
@@ -323,7 +468,7 @@ def person_link(item):
         if ":/" in lowered or _names_host(lowered.replace("/", " ")):
             return None
         for seg in lowered.split("/"):
-            if ("@" in seg and "." in seg[seg.index("@"):]) or (seg and all(c.isdigit() or c in "+ ().~-" for c in seg) and sum(c.isdigit() for c in seg) >= 7):
+            if ("@" in seg and "." in seg[seg.index("@"):]) or (seg and all(c.isdigit() or c.isspace() or c in "+().~-" for c in seg) and sum(c.isdigit() for c in seg) >= 7):
                 return None
     # The emitted link is built from exactly the parts checked above: https, the checked host, the checked path
     # (query and fragment dropped: contact details can ride there).
@@ -348,9 +493,9 @@ def person_answer(result):
     if found is False:
         out = {"found": False, "reason": result.get("reason") if result.get("reason") in ("none", "ambiguous", "self") else "none"}
         if isinstance(result.get("candidates"), list):
-            out["candidates"] = [n for n in (visible(c, CAPS["name"]) for c in result["candidates"][:10]) if n][:5]
-        if isinstance(result.get("asOf"), str):
-            out["asOf"] = visible(result["asOf"], CAPS["asOf"])
+            out["candidates"] = [n for n in (short_field(c, CAPS["name"]) for c in result["candidates"][:10]) if n][:5]
+        if stamp(result.get("asOf")):
+            out["asOf"] = result["asOf"]
         dropped += len(set(result) - set(PERSON_NOT_FOUND_KEYS) - PERSON_KNOWN)
     elif found is True:
         out = {"found": True}
@@ -359,8 +504,14 @@ def person_answer(result):
         if isinstance(person.get("id"), str) and len(person["id"]) == 36 and PERSON_ID.fullmatch(person["id"]):
             out["person"]["id"] = person["id"]
         for key in ("name", "role", "organization"):
-            if key in person and (person[key] is None or isinstance(person[key], str)):
-                out["person"][key] = visible(person[key], CAPS[key])
+            if key in person and person[key] is None:
+                out["person"][key] = None
+            elif isinstance(person.get(key), str):
+                field = short_field(person[key], CAPS[key])
+                if field is None and key != "name" and person[key].strip():
+                    lines += 1
+                if field is not None or key != "name":
+                    out["person"][key] = field
         if type(person.get("met")) is bool:
             out["person"]["met"] = person["met"]
         if isinstance(person.get("url"), str) and len(person["url"]) <= 80 and PERSON_URL.fullmatch(person["url"]):
@@ -376,18 +527,12 @@ def person_answer(result):
                 if any(kept):
                     out["cards"][name] = [line for line in kept if line][:4]
         dropped += len(set(cards) - set(PERSON_CARDS))
-        if isinstance(result.get("whatYouDo"), str) and result["whatYouDo"].strip():
-            what = prose(result["whatYouDo"], CAPS["whatYouDo"])
-            if what:
-                out["whatYouDo"] = what
-            else:
-                lines += 1
         raw_links = result.get("links")[:16] if isinstance(result.get("links"), list) else []
         links = [link for link in (person_link(item) for item in raw_links) if link][:8]
         out["links"] = links
         dropped += len(raw_links) - len(links)
-        if isinstance(result.get("asOf"), str):
-            out["asOf"] = visible(result["asOf"], CAPS["asOf"])
+        if stamp(result.get("asOf")):
+            out["asOf"] = result["asOf"]
         if result.get("partial") in ("cards_unavailable", "profile_unavailable"):
             out["partial"] = result["partial"]
         dropped += len(set(result) - set(PERSON_KEYS) - PERSON_KNOWN)
