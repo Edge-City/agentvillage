@@ -70,12 +70,35 @@ class FakeMemoryStore:
     def format_for_system_prompt(self, target):
         return self._snapshot.get(target) or None
 
-    def add(self, target, text):
-        """The agent's own `memory` write: disk and live entries, never the snapshot."""
-        self.entries[target].append(text)
+    def _reread(self, target):
+        """`_mutate`: re-read the file under the lock, so a write keeps what another writer added."""
+        path = self._path_for(target)
+        raw = path.read_text(encoding="utf-8") if path.exists() else ""
+        self.entries[target] = list(dict.fromkeys(e.strip() for e in raw.split("\n§\n") if e.strip()))
+
+    def _save(self, target):
         path = self._path_for(target)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n§\n".join(self.entries[target]), encoding="utf-8")
+
+    def add(self, target, text):
+        """The agent's own `memory` write: disk and live entries, never the snapshot."""
+        self.apply(target, {"action": "add", "content": text})
+
+    def apply(self, target, args):
+        """memory_tool + apply_batch, reduced: one op or a batch, `new_text` aliasing `content`."""
+        self._reread(target)
+        work = self.entries[target]
+        for op in args.get("operations") or [args]:
+            content = (op.get("content") or op.get("new_text") or "").strip()
+            old_text = (op.get("old_text") or "").strip()
+            if op["action"] == "add":
+                if content not in work:
+                    work.append(content)
+                continue
+            index = next(i for i, entry in enumerate(work) if old_text in entry)
+            work[index:index + 1] = [content] if op["action"] == "replace" else []
+        self._save(target)
 
 
 HERMES: dict = {}
@@ -420,10 +443,20 @@ def test_check_time_truncation_warnings_are_not_left_for_the_next_build(hermes, 
 # ---- the agent's own memory writes ---------------------------------------------------------------
 
 
+def memory_call(h, agent, args, store=None, session_id=None):
+    """The `memory` tool as Hermes runs it (`tools/memory_tool.py:405-413`: target defaults to
+    memory), then `post_tool_call` with the call's own args (`model_tools.py:697`)."""
+    target = "memory" if args.get("target") is None else args["target"]
+    (store or agent._memory_store).apply("user" if target == "user" else "memory", args)
+    h.ctx.fire("post_tool_call", tool_name="memory", args=args, result="{}",
+               session_id=session_id or agent.session_id, task_id=agent.session_id, tool_call_id="c1", turn_id="t")
+
+
 def _own_write(h, agent, text):
-    agent._memory_store.add("user", text)
-    h.ctx.fire("post_tool_call", tool_name="memory", args={"action": "add"}, result="{}",
-               session_id=agent.session_id, task_id=agent.session_id, tool_call_id="c1", turn_id="t")
+    memory_call(h, agent, {"action": "add", "target": "user", "content": text})
+
+
+VOTE = "[Village vote, kept by the Agent Village app] Weekly theme poll is open until Friday"
 
 
 def test_the_agents_own_memory_write_does_not_refresh_until_an_external_one(hermes, caplog):
@@ -459,6 +492,106 @@ def test_a_memory_write_in_another_session_refreshes_this_one(hermes):
     dm, group = started(hermes, "tg-dm-1"), started(hermes, "tg-group-1")
     _own_write(hermes, group, "Likes chess")
     assert "Likes chess" in run_turn(hermes.loop, dm, "hi", HISTORY)["system"]
+
+
+def test_an_external_user_md_write_is_not_swallowed_by_an_own_memory_md_write(hermes, caplog):
+    """intro probe 2 (S1 a): the cp writes the vote note into USER.md mid-turn and, in the same turn,
+    the agent saves a MEMORY.md note. Only MEMORY.md is acknowledged, so the note reaches the
+    prompt at the next turn, and the row, so a fresh agent (an idle eviction) has it too."""
+    agent = started(hermes)
+    run_turn(hermes.loop, agent, "hi", HISTORY)
+    write("memories/USER.md", "Name: Test Resident\n§\n" + VOTE)
+    memory_call(hermes, agent, {"action": "add", "content": "Likes chess"})  # no target: memory
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        nxt = run_turn(hermes.loop, agent, "hi", HISTORY)
+    assert VOTE in nxt["system"] and "Likes chess" in nxt["system"]
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md,memory_md"]
+    assert VOTE in run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"]
+
+
+@pytest.mark.parametrize("fork_target", ["memory", "user"])
+def test_a_background_review_write_between_turns_does_not_swallow_an_external_write(hermes, fork_target):
+    """S1, the fork shape: the review fork shares the parent's session id
+    (`agent/background_review.py:1000`), so its memory call fires `post_tool_call` for the parent's
+    session after the turn, with no turn running. Its own write is acknowledged only when it is the
+    whole change: not when the cp's vote note landed in the other file (a), nor in the same file (b)."""
+    agent = started(hermes)
+    run_turn(hermes.loop, agent, "hi", HISTORY)
+    calls = HERMES["calls"]
+    write("memories/USER.md", "Name: Test Resident\n§\n" + VOTE)
+    fork_store = FakeMemoryStore()
+    fork_store.load_from_disk()
+    memory_call(hermes, agent, {"action": "add", "target": fork_target, "content": "Plays go on Sundays"},
+                store=fork_store)
+    assert HERMES["calls"] == calls  # no turn ran
+    assert VOTE in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert VOTE in run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"]
+
+
+ONE_ENTRY_MORE = "Name: Test Resident\n§\nWorks on the garden crew"
+OWN_CALLS = {
+    "add": {"action": "add", "target": "user", "content": "Likes chess"},
+    "add-new_text": {"action": "add", "target": "user", "new_text": "Likes chess"},
+    "replace": {"action": "replace", "target": "user", "old_text": "garden", "content": "Works on the kitchen crew"},
+    "remove": {"action": "remove", "target": "user", "old_text": "garden crew"},
+    "batch": {"target": "user", "operations": [
+        {"action": "add", "content": "Likes chess"},
+        {"action": "replace", "old_text": "garden", "new_text": "Works on the kitchen crew"}]},
+    "null-target": {"action": "add", "target": None, "content": "Likes chess"},
+}
+
+
+@pytest.mark.parametrize("call", sorted(OWN_CALLS))
+@pytest.mark.parametrize("external", [False, True], ids=["own-only", "plus-external"])
+def test_an_own_write_is_acknowledged_only_when_its_args_explain_the_change(hermes, caplog, call, external):
+    """S1 b: add / replace / remove / batch, each acknowledged on its own; with an external entry in
+    the same file (written before the call, which re-reads the file and keeps it) nothing is."""
+    write("memories/USER.md", ONE_ENTRY_MORE)
+    agent = started(hermes)
+    run_turn(hermes.loop, agent, "hi", HISTORY)
+    stored = hermes.db.rows["tg-dm-1"]["system_prompt"]
+    target = "memory" if OWN_CALLS[call]["target"] is None else "user"
+    if external:
+        name = "memories/USER.md" if target == "user" else "memories/MEMORY.md"
+        before = (_home() / name).read_text(encoding="utf-8")
+        write(name, before + "\n§\n" + VOTE)
+    memory_call(hermes, agent, OWN_CALLS[call])
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    if external:
+        assert VOTE in got and len(refresh_lines(caplog)) == 1
+    else:
+        assert got == stored and hermes.db.writes == 1 and not refresh_lines(caplog)
+
+
+@pytest.mark.parametrize("args", [
+    {"action": "add", "target": "profile", "content": "Likes chess"},
+    {"target": "user", "operations": [{"action": "add", "content": "Likes chess", "target": "memory"}]},
+    {"action": "append", "target": "user", "content": "Likes chess"},
+    "not a dict",
+], ids=["unknown-target", "mixed-target", "unknown-action", "no-args"])
+def test_a_call_whose_target_or_action_is_unknown_or_mixed_acknowledges_nothing(hermes, args):
+    agent = started(hermes)
+    run_turn(hermes.loop, agent, "hi", HISTORY)
+    agent._memory_store.add("user", "Likes chess")  # the file changed; the call's args cannot say how
+    recorded = pr(hermes.plugin)._recorded("tg-dm-1")
+    assert pr(hermes.plugin).acknowledge_memory_write(
+        {"tool_name": "memory", "args": args, "session_id": "tg-dm-1"}) is False
+    assert pr(hermes.plugin)._recorded("tg-dm-1") == recorded
+    assert "Likes chess" in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]  # refreshed instead
+
+
+@pytest.mark.parametrize(("before", "after", "added", "selectors", "ok"), [
+    (("a", "b"), ("a", "b", "c"), ["c"], [], True),
+    (("a", "b"), ("a", "b", "c", "d"), ["c"], [], False),          # one more than the call wrote
+    (("a", "b"), ("a", "B"), ["B"], ["b"], True),                  # replace in place
+    (("a", "b", "c"), ("b", "a", "c", "d"), ["d"], [], False),     # kept entries reordered
+    (("a", "b"), ("a",), [], ["b"], True),
+    (("a", "b"), (), [], ["a"], False),                            # removed more than it selected
+    (("a", "bb"), ("a",), [], ["x"], False),                       # removed one it did not select
+], ids=["add", "add-plus-one", "replace", "reorder", "remove", "remove-two", "remove-other"])
+def test_explained(plugin, before, after, added, selectors, ok):
+    assert pr(plugin).explained(before, after, added, selectors) is ok
 
 
 # ---- never where it does not belong --------------------------------------------------------------
@@ -535,6 +668,41 @@ def test_hermes_errors_pass_through_once_and_a_cached_prompt_is_put_back(hermes)
     assert HERMES["calls"] == calls + 1 and agent._cached_system_prompt == stored
 
 
+@pytest.mark.parametrize("failures", [1, 2])
+def test_a_failed_persist_on_a_cached_agent_reaches_the_row_before_it_is_recorded(hermes, caplog, failures):
+    """intro probe 1 (S2): the cached agent keeps the rebuilt prompt while the row keeps the old bytes.
+    A later turn that finds nothing stale writes the row again and reads it back; only then is the
+    session recorded, so a fresh agent after the gateway's idle eviction replays the note."""
+    agent = started(hermes)
+    write("memories/USER.md", "Name: Test Resident\n§\n" + VOTE)
+    hermes.db.fail = True
+    turns = []
+    with caplog.at_level(logging.INFO):
+        for turn in range(3):
+            if turn == failures:
+                hermes.db.fail = False
+            turns.append(run_turn(hermes.loop, agent, "hi", HISTORY)["system"])
+            assert (VOTE in hermes.db.rows["tg-dm-1"]["system_prompt"]) is (turn >= failures)
+    assert all(VOTE in system for system in turns)
+    assert len(refresh_lines(caplog)) == 1  # the row is written again, the prompt is not rebuilt again
+    assert caplog.text.count("Session DB update_system_prompt failed") == failures
+    assert VOTE in run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"]
+
+
+def test_an_unpersisted_session_is_checked_even_when_the_files_go_back(hermes):
+    """S2: the note is removed again before the failed persist is retried, so the files match the
+    digests recorded before it. The cached agent still holds the note: it is checked, not skipped."""
+    agent = started(hermes)
+    original = (_home() / "memories/USER.md").read_text(encoding="utf-8")
+    write("memories/USER.md", original + "\n§\n" + VOTE)
+    hermes.db.fail = True
+    assert VOTE in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    hermes.db.fail = False
+    write("memories/USER.md", original)
+    got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert VOTE not in got and hermes.db.rows["tg-dm-1"]["system_prompt"] == got
+
+
 def test_a_persist_that_did_not_land_is_checked_again(hermes, caplog):
     started(hermes)
     write("memories/USER.md", "Name: Changed")
@@ -561,6 +729,10 @@ def test_a_persist_that_did_not_land_is_checked_again(hermes, caplog):
     ("1", None, "", True),
     ("yes", None, "", True),
     ("1", "1", "pre_llm_call, Prompt_Refresh", False),
+    ("", "1", "", True),           # blank: the default, `team`
+    ("disabled", "1", "", False),  # unknown: off, not `team`
+    ("O", "1", "", False),
+    ("nope", None, "", False),
 ])
 def test_the_switch(hermes, monkeypatch, mode, team, hooks_disabled, refreshes):
     for name, value in (("AV_PROMPT_REFRESH", mode), ("AV_TEAM_TENANT", team), ("AV_HOOKS_DISABLED", hooks_disabled)):
@@ -571,6 +743,22 @@ def test_the_switch(hermes, monkeypatch, mode, team, hooks_disabled, refreshes):
     agent = started(hermes)  # its first hook re-reads the collector's kill switches (a new session)
     write("memories/USER.md", "Name: Changed")
     assert ("Changed" in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]) is refreshes
+
+
+def test_an_unknown_switch_value_is_off_with_one_warning(plugin, monkeypatch, home, caplog):
+    """N2: a mistyped off (`disabled`, `none`, `O`) must not leave F1 on for the team set."""
+    pr(plugin).reset()
+    monkeypatch.setenv("AV_TEAM_TENANT", "1")
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        for value in ("disabled", "none", "O", "disabled"):
+            monkeypatch.setenv("AV_PROMPT_REFRESH", value)
+            assert pr(plugin).mode() == "off" and not pr(plugin).enabled(None)
+        for value in ("", "  ", "TEAM"):
+            monkeypatch.setenv("AV_PROMPT_REFRESH", value)
+            assert pr(plugin).mode() == "team" and pr(plugin).enabled(None)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["av-events: prompt_refresh: AV_PROMPT_REFRESH has an unknown value; off (use team, 1 or 0)"]
+    assert "disabled" not in caplog.text
 
 
 def test_without_a_collector_the_kill_switch_is_read_from_the_env(plugin, monkeypatch, home):
@@ -608,6 +796,64 @@ def test_a_missing_or_reshaped_seam_is_one_log_line_and_nothing_else(plugin, ctx
         "av-events: prompt_refresh: agent.conversation_loop has no build_turn_context(agent, system_message, "
         "conversation_history, restore_or_build_system_prompt) / _persist_system_prompt / "
         "stage_surface_switch_note; left as is"]
+
+
+@pytest.mark.parametrize(("module", "attr", "files", "seam"), [
+    ("tools.memory_tool_store", "MemoryStore", None, "tools.memory_tool_store.MemoryStore._path_for"),
+    ("tools.memory_tool_store", "MEMORY_BLOCK_HEADERS", None, "tools.memory_tool_store.MEMORY_BLOCK_HEADERS"),
+    ("agent.system_prompt", "reconstruct_static_prefix", None, "agent.system_prompt.reconstruct_static_prefix"),
+    ("agent.runtime_cwd", "resolve_context_cwd", "all", "agent.runtime_cwd.resolve_context_cwd"),
+    ("agent.system_prompt", "_skills_prompt", "all", "agent.system_prompt._skills_prompt"),
+], ids=["path_for", "headers", "static-prefix", "context-cwd-all", "skills-all"])
+def test_a_missing_seam_outside_the_loop_is_one_log_line_and_nothing_else(
+        plugin, ctx, monkeypatch, home, caplog, module, attr, files, seam):
+    """N3 (intro probe 5): a renamed `MemoryStore._path_for` used to WARN on every turn."""
+    loop = install_hermes(monkeypatch)
+    if files:
+        monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
+    if attr == "MemoryStore":
+        monkeypatch.setattr(sys.modules[module], attr, type("MemoryStore", (), {}))  # `_path_for` renamed
+    else:
+        monkeypatch.delattr(sys.modules[module], attr)
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        plugin.register(ctx)
+    assert loop.build_turn_context is build_turn_context
+    assert [r.getMessage() for r in caplog.records if "prompt_refresh" in r.getMessage()] == [
+        f"av-events: prompt_refresh: Hermes has no {seam}; left as is"]
+    pr(plugin).uninstall()
+
+
+def test_the_context_seams_are_only_required_in_all_mode(plugin, ctx, monkeypatch, home):
+    loop = install_hermes(monkeypatch)
+    monkeypatch.delattr(sys.modules["agent.runtime_cwd"], "resolve_context_cwd")
+    plugin.register(ctx)
+    try:
+        assert loop.build_turn_context.__wrapped__ is build_turn_context
+    finally:
+        pr(plugin).uninstall()
+
+
+def test_a_gate_failure_warns_once_per_process_then_logs_debug(hermes, caplog, monkeypatch):
+    """N3: the gate records nothing, so a seam renamed after install would fail every turn."""
+    agent = started(hermes)
+    stored = agent._cached_system_prompt
+    monkeypatch.setattr(pr(hermes.plugin), "file_digests", lambda agent: 1 / 0)
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        for _ in range(5):
+            assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == stored
+    gate = [r for r in caplog.records if "prompt_refresh gate failed (ZeroDivisionError)" in r.getMessage()]
+    assert [r.levelno for r in gate] == [logging.WARNING] + [logging.DEBUG] * 4
+
+
+def test_the_agents_md_digest_follows_hermes_cwd_choice(hermes, monkeypatch, tmp_path):
+    """N6: `_context_files_part` passes cwd=None for a launch-artifact cwd, so the launch dir."""
+    launch_dir = tmp_path / "ov354fix-launch-dir"
+    launch_dir.mkdir()
+    monkeypatch.chdir(launch_dir)
+    agent = FakeAgent(hermes.db)
+    assert pr(hermes.plugin)._agents_md_path(agent) == _home() / "AGENTS.md" != launch_dir / "AGENTS.md"
+    agent._context_cwd_is_launch_artifact = True
+    assert pr(hermes.plugin)._agents_md_path(agent) == launch_dir / "AGENTS.md"
 
 
 def test_install_is_idempotent_survives_a_reload_and_uninstalls(hermes, caplog):

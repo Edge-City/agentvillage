@@ -58,7 +58,7 @@ plugins/av-events/
 | `AV_MODEL_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `model.observed@1` and `model.offlist@1` from av-approval's model observer (SEC-6 half 2; see "Events from other plugins"). A switch of its own, separate from `AV_PLUGIN_EVENTS`. **Off until agentvillage-data's DATA-477 release that registers both types is live**; while off each delivery is counted `model_dropped_switch_off` (a counter only, never a log line) and nothing is emitted. Rollback is this switch off. Read like the other switches (process environment, then `.env`), on every delivery. |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_EDGEOS_CURL_GUARD` | `1` | Any of `0`, `false`, `no`, `off` turns off the refusal of hand-written calls to EdgeOS's directory and `/humans/me` (see "Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)"). **Process environment only**, read on every `pre_tool_call`. Independent of every telemetry switch. |
-| `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset, blank or any unknown value): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all three. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. |
+| `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset or blank): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. |
 | `AV_PROMPT_REFRESH_FILES` | `memory` | Which files trigger F1's refresh. `memory` (also unset, blank or unknown): USER.md and MEMORY.md only. `all`: AGENTS.md and the skills index too. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
@@ -2005,7 +2005,11 @@ compaction is rare. `_prompt_refresh.py` closes that gap without patching Hermes
 by bare name at :1489, once per user turn, before the tool loop); av-display wraps a display method
 the same way. Unload puts Hermes's function back. A Hermes without that function, without
 `restore_or_build_system_prompt` in its signature, or without `_persist_system_prompt` /
-`stage_surface_switch_note` is left as is with one log line.
+`stage_surface_switch_note` is left as is with one log line. So is one without any other seam the
+refresh uses: `MemoryStore._path_for`, `MEMORY_BLOCK_HEADERS`, `restore_plugin_prompt_sections` and
+`reconstruct_static_prefix`, plus, when `AV_PROMPT_REFRESH_FILES=all` at install,
+`resolve_context_cwd`, `_identity_parts`, `_context_files_part` and `_skills_prompt` (`Hermes has no
+<seam>; left as is`).
 
 **When.** Only at a turn's start, only in a resident session: not a cron run (`platform=cron`, a
 `cron_` session), not a subagent (`_delegate_depth`), not a background-review or side-question fork
@@ -2027,14 +2031,23 @@ INFO line per refresh, never content:
 av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills> session=<sha256(session id)[:8]>
 ```
 
-(several reasons are joined with commas). A persist that did not land (read back from the row) is
-checked again next turn.
+(several reasons are joined with commas). A persist that did not land (read back from the row)
+marks the session: it is not recorded and skips the pre-filter. On a cached agent the next turn
+finds the prompt current (the agent holds the rebuilt bytes) and writes it to the row again; only a
+read-back that matches clears the mark. Without this, the row kept the old bytes and a fresh agent
+after the gateway's one-hour idle eviction replayed them.
 
 **The agent's own memory writes do not refresh**: Hermes keeps them out of the frozen prompt on
 purpose (they are already in the transcript). `post_tool_call` for the `memory` tool re-records the
-session's USER.md / MEMORY.md hashes (AGENTS.md's is kept, so an AGENTS.md change in the same turn
-still refreshes); a later external write refreshes and carries both. After a gateway restart, a
-session's own writes from before it are picked up at its first turn (one refresh).
+hash of the one file the call wrote (`args.target`: `memory`, the default, is MEMORY.md, `user` is
+USER.md; an unknown target, or a batch op naming another one, acknowledges nothing). And only when
+the call's own arguments explain the change: the file's entries are compared with the ones this
+session was verified against; every new entry must be a `content` / `new_text` of the call, every
+gone entry one an `old_text` selects, and the rest must keep their order. An external write in the
+same window, such as the cp's vote note landing mid-turn or during a background memory review
+(the review fork shares the parent's session id), is therefore not absorbed: the next turn
+refreshes and carries both. After a gateway restart, a session's own writes from before it are
+picked up at its first turn (one refresh).
 
 **Cost.** tools[] and the stable tier keep their cached prefix; the context and volatile tiers and
 the messages re-prefill once per change. Most resident turns arrive after the 5-minute cache TTL, so
@@ -2044,7 +2057,8 @@ knows about the vote on its next turn.
 
 **Fail-open.** Any exception in the gate, the check or the rebuild leaves the turn exactly as today
 (the stored bytes, their plugin sections and the static prefix put back) with one WARNING naming the
-exception class only; a failed rebuild is not retried until a file changes again. Exceptions from
+exception class only; a failed rebuild is not retried until a file changes again. The gate runs every
+turn and records nothing, so its WARNING is logged once per process and later ones at DEBUG. Exceptions from
 Hermes's own code pass through unchanged, once.
 
 **Rollout.** `AV_PROMPT_REFRESH` defaults to `team`: on only for team tenants (`AV_TEAM_TENANT=1`),

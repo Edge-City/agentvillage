@@ -17,11 +17,13 @@ user turn (:36 import, :1489 call), before the tool loop. The wrapper:
 1. Gate: on per the switch below; the turn carries history; not a review / side-question fork
    (`_persist_disabled`, `_turn_origin`), not a subagent (`_delegate_depth`), not cron
    (`platform == "cron"` or a `cron_` session); the agent has a session DB and the two rebuild
-   methods. Anything else delegates untouched.
+   methods. Anything else delegates untouched. A gate exception logs one WARNING per process, then
+   DEBUG (it would otherwise repeat every turn).
 2. Pre-filter: sha256 of USER.md, MEMORY.md (`MemoryStore._path_for`, :210-212) and, with
    `AV_PROMPT_REFRESH_FILES=all`, AGENTS.md in the context cwd (`resolve_context_cwd`, gateway `terminal.cwd = $HERMES_HOME`). Equal to the digests
    verified for this session id (in-process, LRU 512) -> delegate untouched. A session first seen in
-   this process (a restart, an rc roll) always gets step 3.
+   this process (a restart, an rc roll), or one whose last refresh did not reach the row, always
+   gets step 3.
 3. Exact test, in Hermes's restore slot (`restore_or_build_system_prompt`, called at
    `agent/turn_context.py:1085-1087` only when `_cached_system_prompt` is None): a cached gateway
    agent's prompt is set aside so the slot runs and is put back as is; a fresh agent gets Hermes's
@@ -38,16 +40,26 @@ user turn (:36 import, :1489 call), before the tool loop. The wrapper:
    Chat it does not clear the skills index cache (or its disk snapshot): step 3 rendered the index
    through that same cache, so the rebuild carries what the test saw. One INFO line:
    `av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills> session=<sha8>`. A persist
-   that did not land (read back from the row) is not recorded, so the next turn checks again.
+   that did not land (read back from the row) marks the session unpersisted: it is not recorded,
+   it skips the pre-filter, and a later turn whose check finds nothing stale (the cached agent
+   already holds the rebuilt prompt) writes the prompt to the row again and reads it back. Only a
+   match clears the mark and records the session.
 
 The agent's own memory writes do not refresh (Hermes keeps them out of the frozen prompt on purpose,
 they are in the transcript): `with_memory_write_ack` chains onto `post_tool_call` and, after a
-`memory` tool call, re-records that session's USER.md / MEMORY.md digests. A later external write
-changes them again and the refresh then carries both.
+`memory` tool call, re-records the digest of the one file the call wrote (`args.target`: `memory`,
+the default, is MEMORY.md; `user` is USER.md; anything else, or a batch op naming another target,
+acknowledges nothing). Only when the change on disk is explained by the call's own arguments: the
+file's entries are compared with the entries verified for this session, and every added entry must
+be a `content` / `new_text` of the call, every removed one must be selected by an `old_text`, and
+the kept entries must keep their order. Anything else (an external USER.md write landing in the same
+turn, or in a background review fork, which shares the parent's session id) is not acknowledged, so
+the next turn's exact test refreshes and carries both. The other file's digest is never touched.
 
-Switch: `AV_PROMPT_REFRESH` = `team` (default; also unset, blank or unknown): on only where
+Switch: `AV_PROMPT_REFRESH` = `team` (default; also unset or blank): on only where
 `AV_TEAM_TENANT` is exactly `1` (the control plane writes it per tenant into `$HERMES_HOME/.env`,
-control-plane/src/team-tenant-env.js) | `1` (on|true|yes) everywhere | `0` (off|false|no). Plus
+control-plane/src/team-tenant-env.js) | `1` (on|true|yes) everywhere | `0` (off|false|no). Any other
+value is off, with one WARNING per process (a mistyped off must not leave it on). Plus
 `prompt_refresh` in `AV_HOOKS_DISABLED`, which wins. Sub-switch `AV_PROMPT_REFRESH_FILES` = `memory`
 (default; also unset or unknown: only USER.md and MEMORY.md trigger) | `all` (AGENTS.md and the
 skills index trigger too; steps 2 and 3 above). A refresh always rebuilds the whole prompt, so a
@@ -56,7 +68,10 @@ memory-triggered one also carries a newer AGENTS.md. Read every turn (`_core.env
 
 Fail-open: any exception in the gate, the check or the rebuild leaves the turn as today (the stored
 bytes go back into `_cached_system_prompt`) with one WARNING naming the exception class only. A
-missing seam (renamed in a later Hermes) is one INFO line at install and nothing else. Never inside
+missing seam (renamed in a later Hermes) is one INFO line at install and nothing else: `install()`
+checks the loop's seams, `MemoryStore._path_for`, `MEMORY_BLOCK_HEADERS`, the two put-back helpers
+in `agent.system_prompt` and, when `AV_PROMPT_REFRESH_FILES=all` at install, `resolve_context_cwd`
+and the three context renderers. Never inside
 the tool loop: every API call of the turn uses the prompt fixed here, and messages are not touched.
 Standard library only; no content is ever logged.
 """
@@ -71,7 +86,7 @@ import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ._core import env
 
@@ -89,6 +104,12 @@ OFF_VALUES = frozenset({"0", "false", "no", "off"})
 
 #: Sessions whose verified digests are remembered (a gateway holds far fewer open sessions).
 MAX_SESSIONS = 512
+#: Parsed entry lists kept by file digest (the files the sessions were verified against; few per box).
+MAX_ENTRY_LISTS = 64
+#: Hermes's entry delimiter (`tools/memory_tool_store.py:23`); a different one only makes acks fail.
+ENTRY_DELIMITER = "\n§\n"
+#: The memory tool's `target` -> the digest key of the file it writes (`MemoryStore._path_for`).
+TARGET_FILES = {"memory": "memory_md", "user": "user_md"}
 #: The files the pre-filter hashes, by the reason name the log line uses.
 FILE_SOURCES = ("user_md", "memory_md", "agents_md")
 MEMORY_SOURCES = ("user_md", "memory_md")
@@ -101,10 +122,17 @@ _MARK = "_av_prompt_refresh"
 #: This module's identity on the wrapper it installs (a reload re-wraps the original, not the wrapper).
 _TOKEN = object()
 _SEEN: "OrderedDict[str, Dict[str, str]]" = OrderedDict()
+#: Entries of a memory file by its sha256 (the "verified entry list" an acknowledgement diffs against).
+_ENTRIES: "OrderedDict[str, Tuple[str, ...]]" = OrderedDict()
+#: Sessions whose rebuilt prompt did not reach the row: re-persisted and read back before recording.
+_UNPERSISTED: "OrderedDict[str, None]" = OrderedDict()
 _LOCK = threading.Lock()
+#: One WARNING per process for each repeating failure, then DEBUG.
+_LATCHED: set = set()
+#: Hermes's `failure_message` for `_persist_system_prompt` (it adds the session id and the error).
 _PERSIST_FAILED = (
     "av-events prompt_refresh: Session DB update_system_prompt failed (session=%s): %s. "
-    "The refresh re-fires next turn."
+    "The session is checked again next turn and the prompt written to the row again."
 )
 
 
@@ -112,13 +140,17 @@ _PERSIST_FAILED = (
 
 
 def mode() -> str:
-    """`off`, `on` or `team` from `AV_PROMPT_REFRESH` (unset, blank or unknown: `team`)."""
+    """`off`, `on` or `team` from `AV_PROMPT_REFRESH`. Unset or blank: `team`. Any other unknown value:
+    `off` with one WARNING per process (the other av-events switches read unknown as off too)."""
     value = env(MODE_VAR).strip().lower()
+    if not value or value == "team":
+        return "team"
     if value in OFF_VALUES:
         return "off"
     if value in ON_VALUES:
         return "on"
-    return "team"
+    _latched_log("mode", "av-events: prompt_refresh: %s has an unknown value; off (use team, 1 or 0)", MODE_VAR)
+    return "off"
 
 
 def disabled_by_hooks(collector: Any) -> bool:
@@ -148,17 +180,54 @@ def enabled(collector: Any = None) -> bool:
 # ---- digests -------------------------------------------------------------------------------------
 
 
-def _digest(path: Optional[Path]) -> str:
-    """sha256 of the file's bytes; `-` when absent, `?` when unreadable."""
+def _parse_entries(raw: bytes) -> Optional[Tuple[str, ...]]:
+    """A memory file's entries the way Hermes reads them (`_read_raw_checked` + `_parse_entries` +
+    the load's dedup): utf-8-sig, strict; None when undecodable."""
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    return tuple(dict.fromkeys(e for e in (part.strip() for part in text.split(ENTRY_DELIMITER)) if e))
+
+
+def _keep_entries(digest: str, raw: bytes) -> None:
+    with _LOCK:
+        if digest in _ENTRIES:
+            _ENTRIES.move_to_end(digest)
+            return
+    entries = _parse_entries(raw)
+    if entries is None:
+        return
+    with _LOCK:
+        _ENTRIES[digest] = entries
+        while len(_ENTRIES) > MAX_ENTRY_LISTS:
+            _ENTRIES.popitem(last=False)
+
+
+def _entries_for(digest: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """The entries of the file with this digest (`-`: absent, so none); None when unknown."""
+    if digest == "-":
+        return ()
+    with _LOCK:
+        return _ENTRIES.get(digest) if digest else None
+
+
+def _digest(path: Optional[Path], *, entries: bool = False) -> str:
+    """sha256 of the file's bytes; `-` when absent, `?` when unreadable. With `entries`, the file's
+    parsed entries are kept by that digest (parsed only for a digest not seen before)."""
     if path is None:
         return "-"
     try:
         with open(path, "rb") as handle:
-            return hashlib.sha256(handle.read()).hexdigest()
+            raw = handle.read()
     except FileNotFoundError:
         return "-"
     except OSError:
         return "?"
+    digest = hashlib.sha256(raw).hexdigest()
+    if entries:
+        _keep_entries(digest, raw)
+    return digest
 
 
 def _memory_store_class(agent: Any = None) -> Any:
@@ -168,20 +237,26 @@ def _memory_store_class(agent: Any = None) -> Any:
     return importlib.import_module("tools.memory_tool_store").MemoryStore
 
 
-def _agents_md_path() -> Path:
-    cwd = importlib.import_module("agent.runtime_cwd").resolve_context_cwd()
+def _agents_md_path(agent: Any = None) -> Path:
+    """The cwd's AGENTS.md as `system_prompt._context_files_part` picks the cwd (`None` for a launch
+    artifact, so the launch dir). Hermes's git-root chain and `AGENTS.override.md` are not followed."""
+    launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False) if agent is not None else False
+    cwd = None if launch_artifact else importlib.import_module("agent.runtime_cwd").resolve_context_cwd()
     return Path(cwd if cwd is not None else os.getcwd()) / "AGENTS.md"
 
 
 def memory_digests(agent: Any = None) -> Dict[str, str]:
     store_cls = _memory_store_class(agent)
-    return {"user_md": _digest(store_cls._path_for("user")), "memory_md": _digest(store_cls._path_for("memory"))}
+    return {
+        "user_md": _digest(store_cls._path_for("user"), entries=True),
+        "memory_md": _digest(store_cls._path_for("memory"), entries=True),
+    }
 
 
 def file_digests(agent: Any) -> Dict[str, str]:
     digests = memory_digests(agent)
     if files_mode() == "all":
-        digests["agents_md"] = _digest(_agents_md_path())
+        digests["agents_md"] = _digest(_agents_md_path(agent))
     return digests
 
 
@@ -201,13 +276,57 @@ def _record(session_id: str, digests: Dict[str, str]) -> None:
             _SEEN.popitem(last=False)
 
 
+def _acknowledge(session_id: str, key: str, verified: str, current: str) -> bool:
+    """Move one file's recorded digest from `verified` to `current`, unless it changed meanwhile."""
+    with _LOCK:
+        found = _SEEN.get(session_id)
+        if found is None or found.get(key) != verified:
+            return False
+        found[key] = current
+        _SEEN.move_to_end(session_id)
+        return True
+
+
+def _unpersisted(session_id: str) -> bool:
+    with _LOCK:
+        return session_id in _UNPERSISTED
+
+
+def _mark_unpersisted(session_id: str, marked: bool) -> None:
+    with _LOCK:
+        if not marked:
+            _UNPERSISTED.pop(session_id, None)
+            return
+        _UNPERSISTED[session_id] = None
+        _UNPERSISTED.move_to_end(session_id)
+        while len(_UNPERSISTED) > MAX_SESSIONS:
+            _UNPERSISTED.popitem(last=False)
+
+
 def _session_tag(session_id: str) -> str:
     return hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
 
 
-def _warn(what: str, exc: BaseException) -> None:
+def _latched_log(key: str, message: str, *args: Any) -> None:
+    """WARNING the first time `key` fires in this process, DEBUG after that."""
+    with _LOCK:
+        level = logging.DEBUG if key in _LATCHED else logging.WARNING
+        _LATCHED.add(key)
     try:
-        logger.warning("av-events: prompt_refresh %s failed (%s); left as is", what, type(exc).__name__)
+        logger.log(level, message, *args)
+    except BaseException:  # noqa: BLE001 - a log line must not cost the turn
+        pass
+
+
+def _warn(what: str, exc: BaseException, *, once: bool = False) -> None:
+    """One WARNING naming the exception class only. `once`: per process, then DEBUG (the gate runs
+    every turn and records nothing, so a seam renamed after install would repeat it)."""
+    message = "av-events: prompt_refresh %s failed (%s); left as is"
+    if once:
+        _latched_log(what, message, what, type(exc).__name__)
+        return
+    try:
+        logger.warning(message, what, type(exc).__name__)
     except BaseException:  # noqa: BLE001 - a log line must not cost the turn
         pass
 
@@ -326,11 +445,25 @@ def refresh(agent: Any, loop: Any, system_message: Any, history: Any) -> bool:
     agent._cached_system_prompt = rebuilt
     loop.stage_surface_switch_note(agent, rebuilt, history)
     loop._persist_system_prompt(agent, _PERSIST_FAILED)
+    return _row_holds(agent, rebuilt)
+
+
+def _row_holds(agent: Any, prompt: str) -> bool:
+    """The session row's stored prompt is exactly `prompt` (read back; unknown counts as no)."""
     try:
         row = agent._session_db.get_session(agent.session_id)
-        return bool(row) and row.get("system_prompt") == rebuilt
+        return bool(row) and row.get("system_prompt") == prompt
     except Exception:  # noqa: BLE001 - unknown: check again next turn
         return False
+
+
+def persist_again(agent: Any, loop: Any, prompt: str) -> bool:
+    """An unpersisted session's prompt is current: write it to the row (unless it is there already)
+    and read it back. True when the row now holds it."""
+    if _row_holds(agent, prompt):
+        return True
+    loop._persist_system_prompt(agent, _PERSIST_FAILED)
+    return _row_holds(agent, prompt)
 
 
 def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, digests: Dict[str, str]) -> None:
@@ -347,6 +480,19 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
         _record(session_id, digests)
         return
     if not reasons:
+        if _unpersisted(session_id):
+            # A cached agent kept the rebuilt prompt while its row kept the old bytes (a persist
+            # that did not land): the row is what a fresh agent replays after an idle eviction.
+            try:
+                landed = persist_again(agent, loop, prompt)
+            except BaseException as exc:  # noqa: BLE001
+                if isinstance(exc, SystemExit):
+                    raise
+                _warn("persist", exc)
+                landed = False
+            if not landed:
+                return  # still marked, not recorded: checked again next turn
+            _mark_unpersisted(session_id, False)
         _record(session_id, digests)
         return
     try:
@@ -358,6 +504,7 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
         _warn("rebuild", exc)
         _record(session_id, digests)
         return
+    _mark_unpersisted(session_id, not persisted)
     if persisted:
         _record(session_id, digests)
     try:
@@ -413,7 +560,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
             if getattr(agent, "_cached_system_prompt", None) is None:
                 _record(agent.session_id, digests)
             return None
-        if _recorded(agent.session_id) == digests:
+        if _recorded(agent.session_id) == digests and not _unpersisted(agent.session_id):
             return None
         return bound, agent, digests
 
@@ -423,7 +570,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
         except BaseException as exc:  # noqa: BLE001 - the gate never costs the turn
             if isinstance(exc, SystemExit):
                 raise
-            _warn("gate", exc)
+            _warn("gate", exc, once=True)
             plan = None
         if plan is None:
             return original(*args, **kwargs)
@@ -458,6 +605,37 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
     return build_turn_context
 
 
+def _module_or_none(name: str) -> Any:
+    try:
+        return importlib.import_module(name)
+    except Exception:  # noqa: BLE001 - reported as a missing seam
+        return None
+
+
+def missing_seams() -> List[str]:
+    """The seams outside the loop module the refresh uses, by name, that this Hermes lacks. With
+    `AV_PROMPT_REFRESH_FILES=all` at install, also the AGENTS.md / skills renderers and the cwd."""
+    missing = []
+    store = _module_or_none("tools.memory_tool_store")
+    if not callable(getattr(getattr(store, "MemoryStore", None), "_path_for", None)):
+        missing.append("tools.memory_tool_store.MemoryStore._path_for")
+    try:
+        headers = store.MEMORY_BLOCK_HEADERS  # type: ignore[union-attr]
+        ok = all(isinstance(headers[target], str) for target in ("user", "memory"))
+    except Exception:  # noqa: BLE001
+        ok = False
+    if not ok:
+        missing.append("tools.memory_tool_store.MEMORY_BLOCK_HEADERS")
+    names = ["restore_plugin_prompt_sections", "reconstruct_static_prefix"]
+    if files_mode() == "all":
+        names += ["_identity_parts", "_context_files_part", "_skills_prompt"]
+        if not callable(getattr(_module_or_none("agent.runtime_cwd"), "resolve_context_cwd", None)):
+            missing.append("agent.runtime_cwd.resolve_context_cwd")
+    system_prompt = _module_or_none("agent.system_prompt")
+    missing += [f"agent.system_prompt.{name}" for name in names if not callable(getattr(system_prompt, name, None))]
+    return missing
+
+
 def install(collector_ref: Callable[[], Any]) -> bool:
     """Wrap `agent.conversation_loop.build_turn_context`. False (one log line, nothing touched) when
     Hermes is not importable or a seam is missing or reshaped. Idempotent; a reloaded av-events
@@ -482,6 +660,10 @@ def install(collector_ref: Callable[[], Any]) -> bool:
             LOOP_MODULE, WRAPPED_NAME, ", ".join(REQUIRED_PARAMS),
         )
         return False
+    missing = missing_seams()
+    if missing:
+        logger.info("av-events: prompt_refresh: Hermes has no %s; left as is", ", ".join(missing))
+        return False
     setattr(loop, WRAPPED_NAME, _wrap(original, signature, loop, collector_ref))
     logger.info("av-events: prompt_refresh: %s.%s wrapped (mode %s)", LOOP_MODULE, WRAPPED_NAME, mode())
     return True
@@ -501,10 +683,70 @@ def uninstall() -> None:
 # ---- the agent's own memory writes ---------------------------------------------------------------
 
 
+def _text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def call_target(args: Any) -> Optional[str]:
+    """The file a `memory` call writes: `memory` (also an omitted or null target, as Hermes reads it,
+    `tools/memory_tool.py:217, 412`) or `user`. None when unknown, or when a batch op names another."""
+    if not isinstance(args, dict):
+        return None
+    target = args.get("target")
+    target = "memory" if target is None else target
+    if target not in TARGET_FILES:
+        return None
+    operations = args.get("operations")
+    if operations:
+        if not isinstance(operations, list) or not all(isinstance(op, dict) for op in operations):
+            return None
+        if any(op.get("target", target) != target for op in operations):
+            return None  # mixed: Hermes ignores it, but it is not a call this can explain
+    return target
+
+
+def call_changes(args: Dict[str, Any]) -> Optional[Tuple[List[str], List[str]]]:
+    """(entries the call may add, old_texts that may select removed entries), read the way Hermes
+    applies them (`memory_tool.py:216`, `memory_tool_store.py:427`). None for an unknown action."""
+    operations = args.get("operations")
+    if operations:
+        shaped = [(op.get("action"), _text(op.get("content")) or _text(op.get("new_text")), _text(op.get("old_text")))
+                  for op in operations]
+    else:
+        content = args.get("content")
+        shaped = [(args.get("action"), _text(args.get("new_text") if content is None else content), _text(args.get("old_text")))]
+    added, selectors = [], []
+    for action, content, old_text in shaped:
+        if action not in ("add", "replace", "remove"):
+            return None
+        if action != "remove" and content:
+            added.append(content)
+        if action != "add" and old_text:
+            selectors.append(old_text)
+    return added, selectors
+
+
+def explained(before: Tuple[str, ...], after: Tuple[str, ...], added: List[str], selectors: List[str]) -> bool:
+    """Is the change from `before` to `after` the call's own: every new entry one the call wrote,
+    every gone entry one an `old_text` selects, at most one of each per op, the rest in order."""
+    before_set, after_set = set(before), set(after)
+    new = [entry for entry in after if entry not in before_set]
+    gone = [entry for entry in before if entry not in after_set]
+    if [e for e in before if e in after_set] != [e for e in after if e in before_set]:
+        return False
+    if len(new) > len(added) or len(gone) > len(selectors):
+        return False
+    if any(entry not in added for entry in new):
+        return False
+    return all(any(old_text in entry for old_text in selectors) for entry in gone)
+
+
 def acknowledge_memory_write(kwargs: Dict[str, Any]) -> bool:
-    """After the agent's own `memory` call, re-record that session's USER.md / MEMORY.md digests so
-    the write does not refresh. Only a session already verified in this process; AGENTS.md's digest
-    is kept, so an external change to it still refreshes."""
+    """After the agent's own `memory` call, re-record the digest of the one file it wrote, so the
+    write does not refresh. Only a session already verified in this process, and only when the
+    file's change since then is explained by the call's arguments (`explained`); otherwise nothing is
+    acknowledged and the next turn's exact test refreshes. The other files' digests are kept, so an
+    external change to them still refreshes. True when the session's record is current for it."""
     if kwargs.get("tool_name") != "memory":
         return False
     session_id = kwargs.get("session_id")
@@ -513,9 +755,20 @@ def acknowledge_memory_write(kwargs: Dict[str, Any]) -> bool:
     recorded = _recorded(session_id)
     if recorded is None:
         return False
-    recorded.update(memory_digests())
-    _record(session_id, recorded)
-    return True
+    args = kwargs.get("args")
+    target = call_target(args)
+    changes = call_changes(args) if target is not None else None
+    if changes is None:
+        return False
+    key = TARGET_FILES[target]
+    verified = recorded.get(key)
+    current = _digest(_memory_store_class()._path_for(target), entries=True)
+    if current == verified:
+        return True  # nothing to acknowledge (a failed or no-op call)
+    before, after = _entries_for(verified), _entries_for(current)
+    if before is None or after is None or not explained(before, after, *changes):
+        return False
+    return _acknowledge(session_id, key, verified, current)
 
 
 def with_memory_write_ack(telemetry: Callable) -> Callable:
@@ -537,9 +790,12 @@ def with_memory_write_ack(telemetry: Callable) -> Callable:
 
 
 def reset() -> None:
-    """Forget every verified session (tests)."""
+    """Forget every verified session, entry list, unpersisted mark and log latch (tests)."""
     with _LOCK:
         _SEEN.clear()
+        _ENTRIES.clear()
+        _UNPERSISTED.clear()
+        _LATCHED.clear()
 
 
 __all__ = [
@@ -549,12 +805,17 @@ __all__ = [
     "FILES_VAR",
     "TEAM_VAR",
     "acknowledge_memory_write",
+    "call_changes",
+    "call_target",
     "check_and_refresh",
     "enabled",
+    "explained",
     "file_digests",
     "files_mode",
     "install",
+    "missing_seams",
     "mode",
+    "persist_again",
     "refresh",
     "reset",
     "stale_reasons",
