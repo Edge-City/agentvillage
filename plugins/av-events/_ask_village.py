@@ -130,7 +130,14 @@ DEFAULT_CODES = {400: "invalid_body", 401: "unauthorized", 403: "no_village_cons
                  413: "too_large", 422: "question_invalid", 429: "rate_limited",
                  502: "unavailable", 503: "unavailable", 504: "unavailable"}
 
+#: The first sentence carries the words a model writes in a tool_search query ("group chat",
+#: "messages", "conversation", "said", "history"): Hermes v2026.9.24 defers plugin tools and
+#: admits a tool only if its text carries the query's rarest stemmed token
+#: (tools/tool_search_catalog.py:177-213), and the catalog listing shows this sentence's first
+#: 60 characters. A resident's "group chat" question picked session_search without it (rc41).
 TOOL_DESCRIPTION = (
+    "Village group chat: search and ask what people said or are saying in the village's main Telegram "
+    "group chat (messages, conversation, discussion, history). "
     "Ask one question about what has been discussed in the village's main Telegram group, e.g. what the "
     "village thinks of a plan, or what a named person has been saying in the group. The god agents read "
     "the group's messages and answer; they never see private chats, and nothing about you or your resident "
