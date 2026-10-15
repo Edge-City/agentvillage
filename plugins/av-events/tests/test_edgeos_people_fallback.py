@@ -4,9 +4,13 @@ A resident asked their agent about a person. The agent searched Index matches,
 hit the attendee directory, and stopped on "the attendee directory is still
 unavailable because its access has expired". The edgeos skill's §0 and §9 told
 it what to say on exit 2 and exit 4 and nothing about trying another source.
-Now §9 carries a people-lookup fallback (rolodex.search when installed, then
-ask_village, then the website copy, then the web), §0 points there, and the only
-thing the agent may say about the directory is one short line.
+The verify lane then found no grant expired fleet-wide: the agent had never
+called the directory at all and repeated a stale belief from earlier in its
+session (the 13-14 Oct box-token outage). So the rule is: on any person lookup,
+call a source this turn; an earlier failure is stale; only a failure this turn
+sends the agent to the next source (rolodex.search when installed, then
+ask_village, then the website copy, then the web); and the only thing it may say
+about the directory is one short line. §0, rolodex and AGENTS.md point there.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ REPO = Path(__file__).resolve().parents[3]
 SKILL = REPO / "skills" / "edgeos" / "SKILL.md"
 AGENTS = REPO / "workspace" / "AGENTS.md"
 INDIA = REPO / "skills" / "edge-india" / "SKILL.md"
+ROLODEX = REPO / "skills" / "rolodex" / "SKILL.md"
+AGENTS_CLAUSE = "Call them this turn, not only Index; never call one unavailable from earlier."
 
 ONE_LINE = "the directory isn't reachable right now"
 
@@ -65,8 +71,9 @@ def test_the_resident_hears_at_most_one_short_line_and_never_an_expiry():
 def test_section_0_sends_people_lookups_to_the_fallback():
     body = flat(section(0))
     assert ("**Looking someone up is different.** When the person asks who someone is, about a person, or how to "
-            "reach them, a directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 and exit 4 "
-            "messages above and follow §9's people-lookup fallback instead.") in body
+            "reach them, run the directory script this turn (§9), even if it failed earlier in the conversation, and a "
+            "directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 and exit 4 messages above and "
+            "follow §9's people-lookup fallback instead.") in body
     # The bullet sits after both messages it overrides.
     assert body.index("When the script exits 2") < body.index("**Looking someone up is different.**")
     assert body.index("**Exit 4** (profile or directory script)") < body.index("**Looking someone up is different.**")
@@ -94,3 +101,30 @@ def test_agents_md_routing_moves_on_when_a_step_fails():
     assert at == sorted(at), dict(zip(order, at))
     assert "if a step fails or finds no one, try the next" in route
     assert not re.search(r"\b(stop|give up)\b", route)
+
+
+def test_every_person_lookup_calls_a_source_this_turn_and_earlier_failures_are_stale():
+    text = fallback()
+    assert ("always call a source this turn: the directory script (`--search` the name), or `village` "
+            "`rolodex.search`, or `ask_village`. Index matches are not a people search.") in text
+    assert ("Never report a source as unavailable, expired or not connected from memory or from earlier in the "
+            "conversation: an earlier failure is stale, so call it again now. Only a failure in this turn counts.") in text
+    # The stale rule comes before the fallback order, which applies only to a failure this turn.
+    assert text.index("an earlier failure is stale") < text.index("When the directory really fails this turn")
+    assert text.index("When the directory really fails this turn") < text.index("1. `village` `rolodex.search`")
+    assert "run the directory script this turn (§9), even if it failed earlier in the conversation" in flat(section(0))
+
+
+def test_rolodex_moves_on_to_the_directory_and_never_trusts_an_old_failure():
+    body = flat(ROLODEX.read_text(encoding="utf-8"))
+    assert ("For who is X, that or any other failure means you go on to the `edgeos` directory this turn "
+            "(AGENTS.md order). Never call Rolodex or the directory unavailable from earlier in the conversation: "
+            "an earlier failure is stale, so call again now.") in body
+    assert body.index("`mini_app_not_installed`") < body.index("For who is X, that or any other failure")
+
+
+def test_agents_md_carries_the_one_short_this_turn_clause():
+    body = flat(AGENTS.read_text(encoding="utf-8"))
+    assert len(AGENTS_CLAUSE) <= 80
+    assert body.count(AGENTS_CLAUSE) == 1
+    assert f"if a step fails or finds no one, try the next. {AGENTS_CLAUSE}" in body
