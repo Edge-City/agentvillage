@@ -36,6 +36,7 @@ plugins/av-events/
   _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
   _ask_village.py  the ask_village tool, dark behind AV_ASK_VILLAGE: one question about the main group, answered by the god agents through the control plane
   _search_village.py  the search_village tool, dark behind AV_SEARCH_VILLAGE: the main group's scrubbed messages matching words, through the control plane (no model call)
+  _query_village.py   the query_village tool, on the same switch: one read-only SQL SELECT the app runs over the main group's scrubbed messages (in-memory SQLite), through the control plane
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -71,8 +72,8 @@ plugins/av-events/
 | `AV_BACKUP_GRACE_S` | `90` | Least time between a snapshot request and the pass that covers it, so the background memory review's writes after a turn are included. |
 | `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
 | `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
-| `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` tool (see "Searching the village group (VILLAGE SEARCH)"). Unset: not registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
-| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village` and `search_village` (the last two send the key only to a `CP_HOSTS` host). |
+| `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` and `query_village` tools (see "Searching the village group (VILLAGE SEARCH)" and "Querying the village group with SQL (VILLAGE QUERY)"). Unset: neither is registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
+| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village`, `search_village` and `query_village` (the last three send the key only to a `CP_HOSTS` host). |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -1936,6 +1937,47 @@ Else `{error, retry_after_s?, message}` with the same codes as `ask_village` plu
 `order_invalid` and the control plane's `not_enabled`. Not routed through the approval gate
 (`NOT_GATED`). Never logged: the query, a message, the key or the tenant; one line of codes and
 counts per call.
+
+---
+
+## Querying the village group with SQL (VILLAGE QUERY)
+
+On the same switch, `AV_SEARCH_VILLAGE`, the plugin registers `query_village` (toolset `av-events`,
+`_query_village.py`) right after `search_village`: `query_village({sql, window?})` sends ONE read-only
+SQLite statement (SELECT, or WITH ... SELECT) and gets back its rows. The contract is
+`VILLAGE-SEARCH-CONTRACT.md` §1b (lead lane, 15 Oct): the same control plane route as
+`search_village` (`POST /tenants/{TENANT_ID}/village/search`, the body carries `sql` instead of
+`query`), the same key, headers, host pin, retry rule, session rule, 35 s deadline and per-tenant
+limits (one budget for both tools). The app builds an in-memory SQLite table per request from the
+same scrubbed, labelled rows search reads (never Postgres, never data's store) and runs the statement
+in a sandbox (SELECT only, no PRAGMA/ATTACH/extensions, about 2 s, at most 500 rows / 100,000 bytes).
+The table, which the tool description spells out:
+
+```
+messages(id INTEGER, topic TEXT, sent_at TEXT 'YYYY-MM-DDTHH:MMZ' UTC, sender TEXT, text TEXT)
+```
+
+The box checks the shape only: `sql` a string, trimmed, 1-3000 characters (UTF-16 units, as the
+control plane counts), no NUL, sent as written; `window` `24h`, `7d` or `all` (default `all`). It
+never parses the SQL: the app is the authority on what may run.
+
+The agent gets only `{handling, rows, column_count, row_count, table_rows?, truncated?, cut?, window?}`:
+`rows` is one `<village_rows>` … `</village_rows>` frame under a fixed `handling` preface (the same
+untrusted-content sentences as `search_village`). Its first line is a JSON array of the column names
+(an alias is free text, so it is framed like a cell); each further line is one compact JSON array per
+row in that order, so code execution can parse it with `lines = rows.splitlines()[1:-1];
+header = json.loads(lines[0]); data = [json.loads(l) for l in lines[1:]]`. Every string cell and column
+name is cleaned as `ask_village`'s answer (newlines folded) and any spelling of any frame's tag name
+(`village_rows`, `village_messages`, `village_answer`, `village_query_result`, `memory-context`) is
+rewritten to plain words; numbers and nulls pass as they are; at most 500 rows, 4,000 characters a
+cell, 60,000 characters of frame measured on the tool's final escaped JSON, so a near-cap answer stays
+under Hermes's inline result size (`truncated` past that, or when the control plane's own `row_count`
+exceeds the rows shown). Else `{error, retry_after_s?, message, handling?, detail?}` with search's
+codes plus `sql_invalid`, `sql_timeout` and `sql_too_large`, whose `detail` is the
+app's own SQLite error (cleaned, at most 300 characters) inside its own `<village_rows>` frame under a
+`handling` preface, since it can quote the statement. Not routed through the approval gate
+(`NOT_GATED`). Never logged: the SQL, a cell, a column name, an error detail, the key or the tenant;
+one line of codes and counts per call.
 
 ---
 
