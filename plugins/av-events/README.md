@@ -35,6 +35,7 @@ plugins/av-events/
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
   _ask_village.py  the ask_village tool, dark behind AV_ASK_VILLAGE: one question about the main group, answered by the god agents through the control plane
+  _search_village.py  the search_village tool, dark behind AV_SEARCH_VILLAGE: the main group's scrubbed messages matching words, through the control plane (no model call)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -70,7 +71,8 @@ plugins/av-events/
 | `AV_BACKUP_GRACE_S` | `90` | Least time between a snapshot request and the pass that covers it, so the background memory review's writes after a turn are included. |
 | `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
 | `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
-| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray` and `ask_village` (which sends its key only to a `CP_HOSTS` host). |
+| `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` tool (see "Searching the village group (VILLAGE SEARCH)"). Unset: not registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
+| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village` and `search_village` (the last two send the key only to a `CP_HOSTS` host). |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -1909,6 +1911,31 @@ arguments are a closed object.
   once. The contract is `tests/vectors/ask-village-contract.json`.
 - **Not routed through the approval gate** (`NOT_GATED` in `install/tests/plugin_tools_gated.test.ts`).
 - **Never logged:** the question, the answer, the key or the tenant; one line of codes per call.
+
+---
+
+## Searching the village group (VILLAGE SEARCH)
+
+With `AV_SEARCH_VILLAGE` on, the plugin registers `search_village` (toolset `av-events`,
+`_search_village.py`) next to `ask_village`: `search_village({query, window?, limit?, order?})`
+returns the main group's messages that match the query's words, not a summary. `query` is 1-200
+characters (folded and checked as `ask_village`'s question); `window` is `24h`, `7d` or `all` (the
+app's default for search is `all`); `limit` an integer 1-30 (default 10); `order` `relevance`
+(default), `newest` or `oldest`. There is no cursor: the agent digs by calling again with other
+words, another window or another order; `more: true` says further matches exist. The contract is
+`VILLAGE-SEARCH-CONTRACT.md` (lead lane, 15 Oct): the tool POSTs to the control plane's
+`/tenants/{TENANT_ID}/village/search` with the same key, headers, host pin, retry rule and session
+rule as `ask_village`, with a 35 s deadline (the control plane waits 30 s on the app). The app reads
+the same store with the same contact scrub as `ask_village` and calls no model.
+
+The agent gets only `{handling, results, count, more?, cut?, window?, terms?}`: every message is one
+line `- [YYYY-MM-DD HH:MMZ] topic · sender: text` inside one `<village_messages>` …
+`</village_messages>` frame under a fixed `handling` preface, each field cleaned as `ask_village`'s
+answer (newlines folded, either frame's tag name rewritten), at most 30 lines and 20,000 characters.
+Else `{error, retry_after_s?, message}` with the same codes as `ask_village` plus `limit_invalid`,
+`order_invalid` and the control plane's `not_enabled`. Not routed through the approval gate
+(`NOT_GATED`). Never logged: the query, a message, the key or the tenant; one line of codes and
+counts per call.
 
 ---
 

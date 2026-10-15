@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 
 from . import _approval, _approvals_reminder, _edgeos, _edgeos_guard, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._ask_village import register_ask_village_tool
+from ._search_village import register_search_village_tool
 from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
@@ -1277,7 +1278,8 @@ def register(ctx) -> None:
     on — `record_intention` (`_record_intention.py`, DATA-212); and, behind
     `AV_DIGEST_SHARE` / `AV_VILLAGE_VOTE`, `share_digest` and `village_vote`
     (`_share_vote.py`, lane O3); and, behind `AV_PRAY`, `pray` (`_pray.py`,
-    PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`).
+    PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
+    `AV_SEARCH_VILLAGE`, `search_village` (`_search_village.py`).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -1332,6 +1334,12 @@ def register(ctx) -> None:
     # behind `AV_ASK_VILLAGE` (unset: not registered). Not routed through the approval gate.
     try:
         register_ask_village_tool(ctx)
+    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # VILLAGE SEARCH: `search_village`, scrubbed group messages matching words, next to `ask_village`,
+    # behind `AV_SEARCH_VILLAGE` (unset: not registered). Not routed through the approval gate.
+    try:
+        register_search_village_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
