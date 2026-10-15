@@ -166,7 +166,7 @@ test("install.ts runs the step after configureSlashAccess and exits non-zero whe
   expect(step).toBeGreaterThan(slash);
   const tail = source.slice(source.indexOf("if (modelAllowFailed) {"));
   expect(tail.indexOf("process.exitCode = 1;")).toBeGreaterThan(0);
-  expect(tail.indexOf("process.exitCode = 1;")).toBeLessThan(tail.indexOf("const receipt = gateReceiptLine();"));
+  expect(tail.indexOf("process.exitCode = 1;")).toBeLessThan(tail.indexOf("const receipt = codeExecFailed ? null : gateReceiptLine();"));
   expect(tail.indexOf("console.log(modelAllowFailedLine(modelAllowFailed));")).toBeGreaterThan(0);
   expect(source).toContain("recordModelAllowStatus(hermesHome(), modelAllowFailed);");
   expect(source).toContain("recordModelAllowStatus(hermesHome(), parseFailed);"); // the early parse-error exit too
