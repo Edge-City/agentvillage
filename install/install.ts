@@ -21,6 +21,8 @@
  *   - `context_file_max_chars: 48000` unless already 48000 or more (Hermes's dynamic 21,600 cap truncated AGENTS.md)
  *   - `compression.threshold: 0.75` unless already 0.75-1, and `compression.threshold_tokens: null` (RC42: compaction
  *     at 75% of the control plane's `model.context_length` pin at any window, the 1,000,000 pin included)
+ *   - `code_execution.mode: strict` (RC42 CODE EXECUTION ON: `execute_code` is off the approval gate's list and
+ *     runs in Hermes's isolated temp-dir mode)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Index Hermes plugin (`index-network`) for `AV_MORALMOD_ARM=on` residents only: installed at the
  *     reviewed commit `INDEX_PLUGIN_REF` (no Hermes call once there), listed in `plugins.enabled`, and
@@ -84,6 +86,7 @@ import {
   configureVillageTimezone,
   disableTelegramLinkPreviews,
   keepTelegramBacklogOnColdBoot,
+  setCodeExecutionMode,
   setCompactionSettings,
   setCompressionTrigger,
   setContextFileMaxChars,
@@ -92,6 +95,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay } from "./av_display";
+import { configureAvVote } from "./av_vote";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -347,6 +351,7 @@ function main(): void {
   setContextFileMaxChars();
   setCompactionSettings();
   setCompressionTrigger();
+  setCodeExecutionMode();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
@@ -355,6 +360,7 @@ function main(): void {
   for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
   configureIndexLinks();
   configureAvDisplay();
+  configureAvVote();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 

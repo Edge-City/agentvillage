@@ -34,9 +34,10 @@ overlay sends each to the resident as a proposal and acts only on their tap.
 - `write_file`, `patch`, `read_file`, `search_files`: always give `path` as an
   absolute path starting with `/`. A relative or missing path is refused the
   same way.
-- Do not use `execute_code`. It is always refused
-  (`hook-hermes-execute-code-unbound`) because the gate cannot see what the code
-  would do. Run the same work through `terminal` with an absolute `workdir`.
+- `execute_code` is not gated: you may use it for Python work such as parsing,
+  converting or calculating. It runs in its own temporary directory. Never use
+  it to do something a gated call was refused or is waiting for: that is
+  routing around the gate.
 
 When a refusal names its repair, make that repair and call again once.
 
