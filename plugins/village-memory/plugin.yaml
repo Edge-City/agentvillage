@@ -1,0 +1,14 @@
+name: village-memory
+version: 0.1.0
+description: "Agent Village memory provider (D3): the control plane's resident profile (knowledge/agentvillage/_profile.md) in each session prompt (reduced outside private chats), plus the resident_profile and resident_context tools (private sessions only). Activated by memory.provider: village-memory."
+author: Edge City
+# A memory provider: Hermes's memory discovery loads it by name (memory.provider); the general
+# plugin manager records it and never imports it (hermes_cli/plugins_discovery.py:253-257).
+kind: exclusive
+optional_env:
+  - AV_VILLAGE_MEMORY
+# Documentation (and install/tests/plugin_tools_gated.test.ts's gate inventory): Hermes takes a
+# memory provider's tools from get_tool_schemas(), never from this list.
+provides_tools:
+  - resident_context
+  - resident_profile

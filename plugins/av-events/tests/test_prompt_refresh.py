@@ -138,7 +138,9 @@ def build_system_prompt(agent, system_message=None):
     stable = "\n\n".join(_identity_parts(agent, None)[0])
     context = "\n\n".join(p for p in [system_message, *_context_files_part(agent, None, False)] if p)
     memory = [agent._memory_store.format_for_system_prompt(t) for t in ("memory", "user")]
-    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, "Conversation started: Thursday"] if p)
+    manager = getattr(agent, "_memory_manager", None)  # system_prompt._memory_parts: the provider block
+    provider = manager.build_system_prompt() if manager is not None else ""
+    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, provider, "Conversation started: Thursday"] if p)
     agent._cached_system_prompt_static = stable
     for warning in list(TRUNCATION.get() or []):
         HERMES["shown_warnings"].append(warning)
@@ -242,6 +244,7 @@ class FakeAgent:
         self._cached_system_prompt = self._cached_system_prompt_static = None
         self.tools = [{"name": "memory"}, {"name": "terminal"}]
         self.context_compressor = None
+        self._memory_manager = None
 
     def _build_system_prompt(self, system_message=None):
         HERMES["build_attempts"] = HERMES.get("build_attempts", 0) + 1
@@ -1081,3 +1084,136 @@ def test_the_hermes_0_21_5_seams_are_where_the_wrapper_expects_them():
     assert callable(runtime_cwd.resolve_context_cwd)
     for name in ("_invalidate_system_prompt", "_build_system_prompt"):
         assert callable(getattr(run_agent.AIAgent, name))
+
+
+# ---- D3 / D7: the village-memory provider's _profile.md ----------------------------------------------
+
+VILLAGE_MEMORY_DIR = Path(__file__).resolve().parents[2] / "village-memory"
+PROFILE = "knowledge/agentvillage/_profile.md"
+
+
+class FakeMemoryManager:
+    """agent/memory_manager.py `MemoryManager`, reduced: `providers` and `build_system_prompt` (:432-436)."""
+
+    def __init__(self, *providers):
+        self.providers = list(providers)
+
+    def build_system_prompt(self):
+        return "\n\n".join(b for b in (p.system_prompt_block() for p in self.providers) if b and b.strip())
+
+
+def village_memory_provider():
+    """The real plugin, loaded the way Hermes loads a user memory provider, for a DM session."""
+    import importlib.util
+
+    name = "hermes_test_village_memory"
+    sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(name, VILLAGE_MEMORY_DIR / "__init__.py",
+                                                  submodule_search_locations=[str(VILLAGE_MEMORY_DIR)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    provider = module.VillageMemoryProvider()
+    provider.initialize("tg-dm-1", hermes_home=str(_home()), platform="telegram", chat_type="dm")
+    return module, provider
+
+
+def profile_agent(h, session_id="tg-dm-1"):
+    agent = FakeAgent(h.db, session_id)
+    agent._memory_manager = FakeMemoryManager(village_memory_provider()[1])
+    return agent
+
+
+def started_with_profile(h):
+    agent = profile_agent(h)
+    run_turn(h.loop, agent, "hello", [])
+    return agent
+
+
+def test_profile_block_mark_is_the_providers_first_two_lines(hermes):
+    module, _provider = village_memory_provider()
+    assert pr(hermes.plugin).PROFILE_BLOCK_MARK == f"{module.SEPARATOR}\n{module.BLOCK_TITLE}"
+    assert pr(hermes.plugin).PROFILE_PROVIDER == module.PROVIDER_NAME
+
+
+@pytest.mark.parametrize("cached", [True, False], ids=["cached-agent", "fresh-agent"])
+def test_a_profile_rerender_refreshes_and_persists(hermes, caplog, cached):
+    write(PROFILE, "## Context tags\n- Here for a courtyard garden (you)\n")
+    agent = started_with_profile(hermes)
+    assert "courtyard garden" in agent._cached_system_prompt
+    write(PROFILE, "## Context tags\n- Here for a rooftop orchard (you)\n")
+    turn_agent = agent if cached else profile_agent(hermes)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, turn_agent, "what do you know about me?", HISTORY)
+    assert "rooftop orchard" in got["system"] and "courtyard garden" not in got["system"]
+    assert "Name: Test Resident" in got["system"]  # the built-in snapshot rides along
+    assert hermes.db.rows["tg-dm-1"]["system_prompt"] == got["system"] and hermes.db.writes == 2
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["profile_md"]
+    assert "orchard" not in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, profile_agent(hermes), "and now?", HISTORY)["system"] == got["system"]
+    assert hermes.db.writes == 2 and not refresh_lines(caplog)
+
+
+def test_a_profile_appearing_and_disappearing_refreshes(hermes, caplog):
+    agent = started_with_profile(hermes)
+    assert "RESIDENT PROFILE" not in agent._cached_system_prompt
+    write(PROFILE, "## Context tags\n- Here for kelp farming (you)\n")
+    assert "kelp farming" in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    (_home() / PROFILE).unlink()  # the cp reset the tenant
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)
+    assert "RESIDENT PROFILE" not in got["system"] and "kelp" not in got["system"]
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["profile_md"]
+
+
+def test_without_the_provider_the_profile_is_not_hashed(hermes, caplog):
+    write(PROFILE, "## Context tags\n- one (you)\n")
+    agent = started(hermes)
+    stored = agent._cached_system_prompt
+    assert "profile_md" not in pr(hermes.plugin).file_digests(agent)
+    write(PROFILE, "## Context tags\n- two (you)\n")
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == stored
+    assert not refresh_lines(caplog)
+
+
+@pytest.mark.parametrize("bad", ["undecodable", "fifo", "mode_000", "symlink"])
+def test_an_unreadable_profile_never_blocks_and_never_holds_back_user_md(hermes, caplog, bad, tmp_path):
+    """Refute S3: F1 reads the profile through the provider's safe reader. A FIFO or a symlink never
+    blocks the turn; a file the provider refuses is an empty block (the stale profile leaves the
+    prompt), and a USER.md change (a vote note) still reaches the live session."""
+    if bad == "mode_000" and hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root reads mode 000")
+    write(PROFILE, "## Context tags\n- Here for a courtyard garden (you)\n")
+    agent = started_with_profile(hermes)
+    assert "courtyard garden" in agent._cached_system_prompt
+    path = _home() / PROFILE
+    path.unlink()
+    if bad == "undecodable":
+        path.write_bytes(b"\xff\xfe broken \xc3\x28")
+    elif bad == "fifo":
+        os.mkfifo(path)  # a plain open() would block this turn forever
+    elif bad == "mode_000":
+        path.write_text("## Context tags\n- x (you)\n", encoding="utf-8")
+        path.chmod(0)
+    else:
+        (tmp_path / "elsewhere.md").write_text("## Context tags\n- linked (you)\n", encoding="utf-8")
+        path.symlink_to(tmp_path / "elsewhere.md")
+    try:
+        with caplog.at_level(logging.INFO, logger="av-events"):
+            got = run_turn(hermes.loop, agent, "hi", HISTORY)
+        assert "courtyard garden" not in got["system"] and "RESIDENT PROFILE" not in got["system"]
+        assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["profile_md"]
+        caplog.clear()
+        write("memories/USER.md", "Name: Test Resident\n§\nVote note: the weekly theme closes Friday")
+        with caplog.at_level(logging.INFO, logger="av-events"):
+            again = run_turn(hermes.loop, agent, "and now?", HISTORY)
+        assert "Vote note: the weekly theme closes Friday" in again["system"]
+        assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+        assert "could not be read strictly" not in caplog.text
+    finally:
+        if bad == "mode_000":
+            path.chmod(0o600)
+
