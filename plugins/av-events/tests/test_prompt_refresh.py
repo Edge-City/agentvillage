@@ -57,7 +57,10 @@ class FakeMemoryStore:
             raise OSError("disk says no")
         for target in ("memory", "user"):
             path = self._path_for(target)
-            raw = path.read_text(encoding="utf-8") if path.exists() else ""
+            try:  # `_read_file`: [] on any read or decode error (memory_tool_store.py:514-518)
+                raw = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+            except (OSError, UnicodeDecodeError):
+                raw = ""
             entries = list(dict.fromkeys(e.strip() for e in raw.split("\n§\n") if e.strip()))
             self.entries[target] = entries
             shown = [f"[BLOCKED: {path.name} entry contained threat pattern(s): prompt_injection.]"
@@ -115,7 +118,10 @@ def _identity_parts(agent, ctx_len):
 
 def _context_files_part(agent, ctx_len, soul_loaded):
     path = _home() / "AGENTS.md"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    try:  # `prompt_builder._read_context_file`: "" when unreadable
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+    except (OSError, UnicodeDecodeError):
+        text = ""
     if len(text) > 200:
         if TRUNCATION.get() is None:
             TRUNCATION.set([])
@@ -238,7 +244,11 @@ class FakeAgent:
         self.context_compressor = None
 
     def _build_system_prompt(self, system_message=None):
-        if HERMES.get("build_raises"):
+        HERMES["build_attempts"] = HERMES.get("build_attempts", 0) + 1
+        raises = HERMES.get("build_raises")
+        if isinstance(raises, type):
+            raise raises()
+        if raises:
             raise RuntimeError("resident secret text in the message")
         return build_system_prompt(self, system_message)
 
@@ -686,20 +696,93 @@ def test_never_inside_the_tool_loop(hermes):
 # ---- fail-open -----------------------------------------------------------------------------------
 
 
-def test_a_failing_rebuild_is_todays_behaviour(hermes, caplog):
+def test_a_failing_rebuild_is_todays_behaviour_and_given_up_after_three_turns(hermes, caplog):
     agent = FakeAgent(hermes.db)
     run_turn(hermes.loop, agent, "hello", [])
     stored = agent._cached_system_prompt
     write("memories/USER.md", "Name: Changed")
     HERMES["build_raises"] = True
+    attempts = HERMES.get("build_attempts", 0)
     with caplog.at_level(logging.INFO, logger="av-events"):
-        got = run_turn(hermes.loop, agent, "hi", HISTORY)
-        again = run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)
-    assert got["system"] == stored == again["system"] and hermes.db.writes == 1
+        got = [run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"]
+               for turn_agent in (agent, FakeAgent(hermes.db), agent, agent, FakeAgent(hermes.db))]
+    assert got == [stored] * 5 and hermes.db.writes == 1
+    assert HERMES["build_attempts"] - attempts == 3  # N1: three turns, then given up for this change
     assert agent._cached_system_prompt_static == "You are the resident's agent."  # cache layout restored
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and r.name == "av-events"]
-    assert warnings == ["av-events: prompt_refresh rebuild failed (RuntimeError); left as is"]  # once, no retry
+    assert warnings == ["av-events: prompt_refresh rebuild failed (RuntimeError); left as is"]  # once
     assert "secret" not in caplog.text and not refresh_lines(caplog)
+
+
+def test_a_failed_rebuild_is_tried_again_and_lands_when_it_succeeds(hermes, caplog):
+    """N1 (lead refute): a transient rebuild error used to drop the change until the next file
+    change; a vote note whose refresh hit it never reached the session."""
+    agent = started(hermes)
+    write("memories/USER.md", "Name: Test Resident\n§\n" + VOTE)
+    HERMES["build_raises"] = True
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        for turn_agent in (agent, FakeAgent(hermes.db)):
+            assert VOTE not in run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"]
+        HERMES["build_raises"] = False
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert VOTE in got and hermes.db.rows["tg-dm-1"]["system_prompt"] == got
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "av-events"]
+    assert caplog.text.count("prompt_refresh rebuild failed (RuntimeError); tried again next turn") == 2
+
+
+def test_an_interrupt_during_a_rebuild_is_not_swallowed(hermes):
+    """N5 (lead refute): Ctrl-C in the CLI stops the turn; the stored prompt is put back first."""
+    agent = started(hermes)
+    stored = agent._cached_system_prompt
+    write("memories/USER.md", "Name: Changed")
+    HERMES["build_raises"] = KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        run_turn(hermes.loop, agent, "hi", HISTORY)
+    assert agent._cached_system_prompt == stored and hermes.db.writes == 1
+
+
+@pytest.mark.parametrize(("bad", "files", "also_changed", "fixed_text"), [
+    ("memories/USER.md", None, None, VOTE),
+    ("memories/MEMORY.md", None, None, "Prefers long replies"),
+    ("AGENTS.md", "all", None, "Village rules v2"),
+    ("AGENTS.md", None, "memories/USER.md", "Village rules v2"),  # any refresh rebuilds AGENTS.md
+    ("memories/USER.md", None, "eacces", VOTE),
+], ids=["user-md-byte", "memory-md-byte", "agents-md-byte-all", "agents-md-byte-memory-mode", "user-md-unreadable"])
+def test_an_unreadable_file_is_no_verdict_and_a_fixed_one_refreshes(hermes, caplog, monkeypatch, bad, files,
+                                                                    also_changed, fixed_text):
+    """S1 (lead refute, reproduced on real Hermes): one stray byte in USER.md (an agent's file tool, a
+    hand edit) made Hermes read it as empty, so the refresh persisted a prompt without the profile into
+    every live session. Now: no verdict. The prompt and the row keep the profile, nothing is
+    refreshed, one WARNING names the file kind; once fixed, the next turn refreshes normally."""
+    if files:
+        monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
+    agent = started(hermes)
+    stored = hermes.db.rows["tg-dm-1"]["system_prompt"]
+    path = _home() / bad
+    good = path.read_bytes()
+    if also_changed == "eacces":
+        path.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("running as a user that can read a mode-0 file")
+    else:
+        path.write_bytes(good + b"\n\xff")
+    if also_changed and also_changed != "eacces":
+        write(also_changed, "Name: Test Resident\n§\n" + VOTE)
+    reason = {"memories/USER.md": "user_md", "memories/MEMORY.md": "memory_md", "AGENTS.md": "agents_md"}[bad]
+    try:
+        with caplog.at_level(logging.DEBUG, logger="av-events"):
+            for turn_agent in (agent, agent, FakeAgent(hermes.db)):
+                assert run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"] == stored
+    finally:
+        path.chmod(0o644)
+    assert hermes.db.writes == 1 and hermes.db.rows["tg-dm-1"]["system_prompt"] == stored
+    assert HEADERS["user"] in stored and not refresh_lines(caplog)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and r.name == "av-events"]
+    assert warnings == [f"av-events: prompt_refresh: {reason} could not be read strictly; prompt left as is"]
+    sep = "\n" if bad == "AGENTS.md" else "\n§\n"
+    path.write_bytes(good + (sep + fixed_text).encode("utf-8"))
+    got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert fixed_text in got and hermes.db.rows["tg-dm-1"]["system_prompt"] == got
 
 
 def test_a_failing_check_or_gate_is_todays_behaviour(hermes, caplog, monkeypatch):
@@ -708,7 +791,8 @@ def test_a_failing_check_or_gate_is_todays_behaviour(hermes, caplog, monkeypatch
     write("memories/USER.md", "Name: Changed")
     HERMES["load_raises"] = True
     with caplog.at_level(logging.WARNING, logger="av-events"):
-        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == stored
+        for _ in range(3):  # tried for 3 turns, then given up with the WARNING
+            assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == stored
     HERMES["load_raises"] = False
     monkeypatch.setattr(pr(hermes.plugin), "file_digests", lambda agent: 1 / 0)
     with caplog.at_level(logging.WARNING, logger="av-events"):
@@ -759,10 +843,10 @@ def test_a_marked_session_whose_check_keeps_raising_warns_once(hermes, caplog):
     hermes.db.fail = False
     HERMES["load_raises"] = True
     with caplog.at_level(logging.DEBUG, logger="av-events"):
-        for _ in range(4):
+        for _ in range(6):  # two give-ups (turns 3 and 6), the second one latched
             assert VOTE in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
     check = [r.levelno for r in caplog.records if "prompt_refresh check failed (OSError)" in r.getMessage()]
-    assert check == [logging.WARNING] + [logging.DEBUG] * 3
+    assert check == [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.DEBUG, logging.DEBUG]
 
 
 def test_an_unpersisted_session_is_checked_even_when_the_files_go_back(hermes):

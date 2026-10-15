@@ -1,5 +1,5 @@
-"""F1 PROMPT REFRESH: a long session's system prompt catches up with USER.md, MEMORY.md, AGENTS.md
-and the skills index, once per change, at the start of a turn.
+"""F1 PROMPT REFRESH: a long session's system prompt catches up with USER.md, MEMORY.md and AGENTS.md
+(and the skills index, see `all` below), once per change, at the start of a turn.
 
 Why. Hermes v2026.9.24 builds a session's system prompt once and replays the stored bytes on every
 later turn (`agent/conversation_loop.py:729-744`; the gateway also keeps the agent itself cached).
@@ -31,7 +31,11 @@ user turn (:36 import, :1489 call), before the tool loop. The wrapper:
    throwaway `MemoryStore` with the agent's limits (same `[BLOCKED: ...]` placeholders, same usage
    header) and, with `all`, `system_prompt._context_files_part` (AGENTS.md) and
    `system_prompt._skills_prompt` (the skills index, the in-process cache Hermes itself builds through). Stale iff a current block is
-   not in the session's prompt, or a memory block emptied on disk is still in it.
+   not in the session's prompt, or a memory block emptied on disk is still in it. The skills index is
+   not hashed: a skills change alone is seen at a session's first turn in a process (a restart, an
+   rc roll) or with the next change to a hashed file. No verdict when an enabled memory file or the
+   cwd's AGENTS.md exists but cannot be read strictly (Hermes would render it empty): the prompt is
+   kept, nothing is recorded or refreshed, and one WARNING per process names the file kind.
 4. Refresh on stale, exactly the Bot Chat sequence (:716-727) with compaction's reload in front
    (`agent/conversation_compression.py:3138-3171`): `_invalidate_system_prompt()` (reloads memory,
    `agent/system_prompt.py:802-820`), `_build_system_prompt(system_message)`,
@@ -62,13 +66,16 @@ Switch: `AV_PROMPT_REFRESH` = `team` (default; also unset or blank): on only whe
 control-plane/src/team-tenant-env.js) | `1` (on|true|yes) everywhere | `0` (off|false|no). Any other
 value is off, with one WARNING per process (a mistyped off must not leave it on). Plus
 `prompt_refresh` in `AV_HOOKS_DISABLED`, which wins. Sub-switch `AV_PROMPT_REFRESH_FILES` = `memory`
-(default; also unset or unknown: only USER.md and MEMORY.md trigger) | `all` (AGENTS.md and the
-skills index trigger too; steps 2 and 3 above). A refresh always rebuilds the whole prompt, so a
+(default; also unset or unknown: only USER.md and MEMORY.md trigger) | `all` (AGENTS.md triggers
+too, and the exact test also compares the skills index, which is not hashed: a skills change alone
+is caught at a session's first turn in a process or with the next hashed change; steps 2 and 3). A refresh always rebuilds the whole prompt, so a
 memory-triggered one also carries a newer AGENTS.md. Read every turn (`_core.env`, process env then
 `.env`), so no restart is needed.
 
 Fail-open: any exception in the gate, the check or the rebuild leaves the turn as today (the stored
-bytes go back into `_cached_system_prompt`) with one WARNING naming the exception class only. A
+bytes go back into `_cached_system_prompt`) naming the exception class only. A failed check or
+rebuild is tried again for the same change at the next turn, up to 3 turns (DEBUG), then given up
+with one WARNING; `KeyboardInterrupt` and `SystemExit` are never swallowed. A
 missing seam (renamed in a later Hermes) is one INFO line at install and nothing else: `install()`
 checks the loop's seams, `MemoryStore._path_for`, `MEMORY_BLOCK_HEADERS`, the two put-back helpers
 in `agent.system_prompt` and, when `AV_PROMPT_REFRESH_FILES=all` at install, `resolve_context_cwd`
@@ -131,6 +138,12 @@ _UNPERSISTED: "OrderedDict[str, None]" = OrderedDict()
 _LOCK = threading.Lock()
 #: One WARNING per process for each repeating failure, then DEBUG.
 _LATCHED: set = set()
+#: Turns a failed check or rebuild of one change is tried on before it is given up (recorded).
+RETRY_TURNS = 3
+#: Per session: (the digests of the change that failed, how many turns it has failed on).
+_FAILURES: "OrderedDict[str, Tuple[Tuple[Tuple[str, str], ...], int]]" = OrderedDict()
+#: Never swallowed (an operator's Ctrl-C in the CLI, an interpreter exit).
+_INTERRUPTS = (SystemExit, KeyboardInterrupt)
 #: Hermes's `failure_message` for `_persist_system_prompt` (it adds the session id and the error).
 _PERSIST_FAILED = (
     "av-events prompt_refresh: Session DB update_system_prompt failed (session=%s): %s. "
@@ -272,6 +285,7 @@ def _recorded(session_id: str) -> Optional[Dict[str, str]]:
 
 def _record(session_id: str, digests: Dict[str, str]) -> None:
     with _LOCK:
+        _FAILURES.pop(session_id, None)
         _SEEN[session_id] = dict(digests)
         _SEEN.move_to_end(session_id)
         while len(_SEEN) > MAX_SESSIONS:
@@ -415,9 +429,59 @@ def _context_reasons(agent: Any, prompt: str) -> list:
     return reasons
 
 
+class Unreadable(Exception):
+    """A file the prompt is built from exists but cannot be read the way Hermes reads it. Hermes
+    would render it as empty (`MemoryStore._read_file` and `prompt_builder._read_context_file` return
+    nothing on a read or decode error), so neither the exact test nor a rebuild can be trusted."""
+
+
+def _strictly_readable(path: Optional[Path], encoding: str) -> bool:
+    """Absent (a real empty block) or readable and decodable as Hermes decodes it."""
+    if path is None:
+        return True
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        raw.decode(encoding)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def unreadable_sources(agent: Any) -> List[str]:
+    """The reason names of the prompt's files that exist but cannot be read strictly: the enabled
+    memory files (utf-8-sig, `_read_raw_checked`) and the cwd's AGENTS.md (utf-8, `_read_context_file`).
+    AGENTS.md is checked in both files modes, because any refresh rebuilds it. In `memory` mode a
+    Hermes without `resolve_context_cwd` skips that check (install only requires it for `all`)."""
+    store_cls = _memory_store_class(agent)
+    found = []
+    for target, flag, reason in (("user", "_user_profile_enabled", "user_md"), ("memory", "_memory_enabled", "memory_md")):
+        if getattr(agent, flag, False) and not _strictly_readable(store_cls._path_for(target), "utf-8-sig"):
+            found.append(reason)
+    try:
+        agents_md = _agents_md_path(agent)
+    except Exception:  # noqa: BLE001
+        if files_mode() == "all":
+            raise
+        agents_md = None
+    if not _strictly_readable(agents_md, "utf-8"):
+        found.append("agents_md")
+    return found
+
+
 def stale_reasons(agent: Any, prompt: str) -> list:
     """Which of USER.md, MEMORY.md (and with `AV_PROMPT_REFRESH_FILES=all`, AGENTS.md and the skills
-    index) the prompt is behind on."""
+    index) the prompt is behind on. Raises `Unreadable` when a file it is built from cannot be read:
+    an undecodable USER.md would otherwise read as emptied, and the refresh would persist a prompt
+    without the profile into every live session."""
+    unreadable = unreadable_sources(agent)
+    if unreadable:
+        raise Unreadable(",".join(unreadable))
     reasons = _memory_reasons(agent, prompt)
     if files_mode() == "all":
         reasons += _context_reasons(agent, prompt)
@@ -468,6 +532,29 @@ def persist_again(agent: Any, loop: Any, prompt: str) -> bool:
     return _row_holds(agent, prompt)
 
 
+def _failed(session_id: str, digests: Dict[str, str], what: str, exc: BaseException, *, once: bool = False) -> None:
+    """A check or rebuild that raised. The same change (these digests) is tried again at the next
+    turn, up to `RETRY_TURNS` turns, with a DEBUG line each; then it is given up (recorded, so the
+    pre-filter skips it until a file changes again) with one WARNING. A transient error therefore
+    does not freeze a vote note out of the session, and a persistent one costs a bounded retry."""
+    key = tuple(sorted(digests.items()))
+    with _LOCK:
+        previous = _FAILURES.get(session_id)
+        count = previous[1] + 1 if previous is not None and previous[0] == key else 1
+        _FAILURES[session_id] = (key, count)
+        _FAILURES.move_to_end(session_id)
+        while len(_FAILURES) > MAX_SESSIONS:
+            _FAILURES.popitem(last=False)
+    if count < RETRY_TURNS:
+        try:
+            logger.debug("av-events: prompt_refresh %s failed (%s); tried again next turn", what, type(exc).__name__)
+        except BaseException:  # noqa: BLE001
+            pass
+        return
+    _warn(what, exc, once=once)
+    _record(session_id, digests)
+
+
 def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, digests: Dict[str, str]) -> None:
     prompt = getattr(agent, "_cached_system_prompt", None)
     session_id = getattr(agent, "session_id", None)
@@ -475,12 +562,17 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
         return
     try:
         reasons = stale_reasons(agent, prompt)
-    except BaseException as exc:  # noqa: BLE001 - no verdict: today's prompt, no retry until a file changes
-        if isinstance(exc, SystemExit):
+    except Unreadable as exc:
+        # No verdict: today's prompt, nothing recorded (so the next turn checks again and a fixed
+        # file refreshes normally), nothing refreshed. Reason names only, never content.
+        _latched_log("unreadable", "av-events: prompt_refresh: %s could not be read strictly; prompt left as is",
+                     str(exc))
+        return
+    except BaseException as exc:  # noqa: BLE001 - no verdict: today's prompt, retried for a few turns
+        if isinstance(exc, _INTERRUPTS):
             raise
         # A marked session skips the pre-filter, so a check that keeps raising would WARN every turn.
-        _warn("check", exc, once=_unpersisted(session_id))
-        _record(session_id, digests)
+        _failed(session_id, digests, "check", exc, once=_unpersisted(session_id))
         return
     if not reasons:
         if _unpersisted(session_id):
@@ -489,7 +581,7 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
             try:
                 landed = persist_again(agent, loop, prompt)
             except BaseException as exc:  # noqa: BLE001
-                if isinstance(exc, SystemExit):
+                if isinstance(exc, _INTERRUPTS):
                     raise
                 _warn("persist", exc)
                 landed = False
@@ -501,11 +593,10 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
     try:
         persisted = refresh(agent, loop, system_message, history)
     except BaseException as exc:  # noqa: BLE001
-        if isinstance(exc, SystemExit):
-            raise
         _put_back(agent, prompt, system_message)
-        _warn("rebuild", exc)
-        _record(session_id, digests)
+        if isinstance(exc, _INTERRUPTS):
+            raise
+        _failed(session_id, digests, "rebuild", exc)
         return
     _mark_unpersisted(session_id, not persisted)
     if persisted:
@@ -571,7 +662,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
         try:
             plan = _plan(args, kwargs)
         except BaseException as exc:  # noqa: BLE001 - the gate never costs the turn
-            if isinstance(exc, SystemExit):
+            if isinstance(exc, _INTERRUPTS):
                 raise
             _warn("gate", exc, once=True)
             plan = None
@@ -804,7 +895,7 @@ def with_memory_write_ack(telemetry: Callable) -> Callable:
         try:
             acknowledge_memory_write(kwargs)
         except BaseException as exc:  # noqa: BLE001 - an acknowledgement never costs the tool call
-            if isinstance(exc, SystemExit):
+            if isinstance(exc, _INTERRUPTS):
                 raise
             _warn("memory ack", exc)
         return result
@@ -820,6 +911,7 @@ def reset() -> None:
         _ENTRIES.clear()
         _UNPERSISTED.clear()
         _LATCHED.clear()
+        _FAILURES.clear()
 
 
 __all__ = [

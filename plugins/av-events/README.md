@@ -59,7 +59,7 @@ plugins/av-events/
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_EDGEOS_CURL_GUARD` | `1` | Any of `0`, `false`, `no`, `off` turns off the refusal of hand-written calls to EdgeOS's directory and `/humans/me` (see "Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)"). **Process environment only**, read on every `pre_tool_call`. Independent of every telemetry switch. |
 | `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset or blank): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. |
-| `AV_PROMPT_REFRESH_FILES` | `memory` | Which files trigger F1's refresh. `memory` (also unset, blank or unknown): USER.md and MEMORY.md only. `all`: AGENTS.md and the skills index too. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
+| `AV_PROMPT_REFRESH_FILES` | `memory` | Which files trigger F1's refresh. `memory` (also unset, blank or unknown): USER.md and MEMORY.md only. `all`: AGENTS.md too, and the exact test also compares the skills index. The skills index is not hashed, so a skills change on its own is caught only at a session's first turn in a process (a restart, an rc roll) or together with the next change to a hashed file. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
@@ -2019,7 +2019,13 @@ since the last check for this session: nothing else happens. Changed, or the ses
 restore slot (`agent/turn_context.py:1085`) the current blocks are rendered from disk the way Hermes
 renders them (a throwaway `MemoryStore` with the agent's limits; with `all`, also
 `_context_files_part` and `_skills_prompt`) and compared with the session's prompt. A block missing from it, or an emptied
-memory block still in it, is stale.
+memory block still in it, is stale. **No verdict** when an enabled USER.md / MEMORY.md, or the
+cwd's AGENTS.md, exists but cannot be read the way Hermes reads it (a read error, or bytes that are
+not strict UTF-8, such as one stray byte from a file tool). Hermes would render it as empty, so a
+refresh would persist a prompt without the profile into every live session. Instead the prompt is
+kept, nothing is recorded or refreshed, and one WARNING per process names the file kind
+(`user_md could not be read strictly; prompt left as is`); once the file is fixed, the next turn
+checks and refreshes as usual.
 
 **What.** Stale: the sequence Hermes's own Bot Chat refresh runs (`conversation_loop.py:716-727`),
 with compaction's memory reload in front: `_invalidate_system_prompt()`, `_build_system_prompt()`,
@@ -2060,8 +2066,11 @@ knows about the vote on its next turn.
 
 **Fail-open.** Any exception in the gate, the check or the rebuild leaves the turn exactly as today
 (the stored bytes, their plugin sections and the static prefix put back) with one WARNING naming the
-exception class only; a failed rebuild is not retried until a file changes again. The gate runs every
-turn and records nothing, so its WARNING is logged once per process and later ones at DEBUG. Exceptions from
+exception class only. A failed check or rebuild is tried again for the same change at the next
+turn, up to 3 turns (DEBUG lines), then given up for that change with one WARNING, so a transient
+error does not keep a vote note out of a session until the next file change. `KeyboardInterrupt`
+and `SystemExit` are never swallowed. The gate runs every turn and records nothing, so its WARNING
+is logged once per process and later ones at DEBUG. Exceptions from
 Hermes's own code pass through unchanged, once.
 
 **Rollout.** `AV_PROMPT_REFRESH` defaults to `team`: on only for team tenants (`AV_TEAM_TENANT=1`),
