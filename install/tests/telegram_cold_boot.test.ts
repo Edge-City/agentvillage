@@ -12,6 +12,7 @@ import {
   configureHostedGateway,
   configureStt,
   keepTelegramBacklogOnColdBoot,
+  setCodeExecutionMode,
   setCompactionSettings,
   setCompressionTrigger,
   setContextFileMaxChars,
@@ -285,6 +286,7 @@ function installerConfigPass(): void {
   setContextFileMaxChars();
   setCompactionSettings();
   setCompressionTrigger();
+  setCodeExecutionMode();
   configureDashboardAuth();
   configureAvEvents();
 }
@@ -312,6 +314,8 @@ test("full installer config pass: sets the key once, keeps it, and is idempotent
   // warning switch is never written (refute M1).
   expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25, ...RC42_TUNED });
   expect(read(path).display).toBeUndefined();
+  // CODE EXECUTION ON (rc42): execute_code in Hermes's strict mode, in the same pass.
+  expect(read(path).code_execution).toEqual({ mode: "strict" });
   expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
   // AGENT-DATE: per-message timestamps pinned in the same pass, and kept by the re-run.
   expect((read(path).gateway as Record<string, unknown>).message_timestamps).toEqual({ enabled: true });
