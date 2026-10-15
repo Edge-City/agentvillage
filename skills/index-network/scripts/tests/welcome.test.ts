@@ -47,7 +47,7 @@ import golden from "./fixtures/welcome-texts.json";
 
 const SCRIPT = join(import.meta.dir, "..", "welcome.ts");
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
-const INTENTS_URL = "https://agents.edgecity.live/intents";
+const INTENTS_URL = "https://agents.edgecity.live/intents-v2";
 /** The control plane sends its fixed greeting instead of a welcome this long or longer (telegram-onboarding.js WELCOME_MAX_CHARS). */
 const CONTROL_PLANE_WELCOME_MAX = 2100;
 /** A nickname at the profile's 32 code points, each a supplementary-plane letter: 64 UTF-16 code units, the longest name in `.length`. */
@@ -57,7 +57,7 @@ const words = (n: number, letter = "w") => `${letter.repeat(4)} `.repeat(Math.ce
 
 /** An AV_CONNECTIONS_URL whose Intents link is exactly `length` characters (dot-separated labels of at most 60). */
 function connectionsUrlFor(length: number): string {
-  const host = "h".repeat(length - "https://".length - "/intents".length - ".example".length);
+  const host = "h".repeat(length - "https://".length - "/intents-v2".length - ".example".length);
   const labels = host.match(/.{1,60}/g)!.join(".").slice(0, host.length).replace(/\.$/, "h");
   return `https://${labels}.example/insights`;
 }
@@ -351,7 +351,7 @@ describe("the welcome text", () => {
 
   test("never over WELCOME_MAX_CHARS for any mix of title lengths, and titles that fit stay whole", () => {
     const names = ["Edge", "Mira", "Abcdefghij Klmnopqrst Uvwxyzabcd", ASTRAL_NAME];
-    const links = [INTENTS_URL, `https://${"h".repeat(INTENTS_URL_MAX - 16)}/intents`];
+    const links = [INTENTS_URL, `https://${"h".repeat(INTENTS_URL_MAX - 19)}/intents-v2`];
     const lengths = [1, 40, 120, 175, 176, 230, 234, 299, TITLE_MAX];
     for (const name of names) {
       for (const link of links) {
@@ -469,11 +469,11 @@ describe("the agent's name", () => {
   test("the Intents link follows AV_CONNECTIONS_URL's host", () => {
     expect(intentsPageUrl(home)).toBe(INTENTS_URL);
     process.env.AV_CONNECTIONS_URL = "https://staging.agents.example/insights";
-    expect(intentsPageUrl(home)).toBe("https://staging.agents.example/intents");
+    expect(intentsPageUrl(home)).toBe("https://staging.agents.example/intents-v2");
   });
   test("an Intents link longer than INTENTS_URL_MAX gives way to the default host's", () => {
     process.env.AV_CONNECTIONS_URL = connectionsUrlFor(INTENTS_URL_MAX);
-    expect(intentsPageUrl(home)).toBe(new URL("/intents", process.env.AV_CONNECTIONS_URL).href);
+    expect(intentsPageUrl(home)).toBe(new URL("/intents-v2", process.env.AV_CONNECTIONS_URL).href);
     process.env.AV_CONNECTIONS_URL = connectionsUrlFor(INTENTS_URL_MAX + 1);
     expect(intentsPageUrl(home)).toBe(INTENTS_URL);
   });

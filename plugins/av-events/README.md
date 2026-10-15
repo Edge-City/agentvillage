@@ -281,7 +281,7 @@ credential shape redacted in it still verifies at the door.
 and fragment go, so a signed one-tap accept link
 (`/o/<id>?action=accept&viewer=..&sig=..&surface=telegram`, a bearer capability since rc20) leaves
 the box as `/o/<id>`. An `edgecity.live` URL loses its query only when it names `sig` or `viewer`
-(the portal's `rolodex?person=` and `intents?intent=` links stay as they are). Then, fail-closed,
+(the portal's `rolodex?person=`, `intents-v2/<id>` and `intents?intent=` links stay as they are). Then, fail-closed,
 every `sig` or `viewer` parameter value left anywhere (another host, a URL the first pass did not
 read: a host split by an invisible character or a Unicode dot; raw, JSON-escaped or
 percent-encoded) becomes `[redacted]`. Nothing is labelled, nothing else in the string changes, and
@@ -589,7 +589,7 @@ records only through `record_intention` with `source=ambient`, and records nothi
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
 | `confirm`, approval not configured | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set but `AV_APPROVAL_ENABLED` is not on) |
 
-`url` (`https://agents.edgecity.live/intents?intent=<Index id>`, also the last words of `message`
+`url` (`https://agents.edgecity.live/intents-v2/<Index id>`, the Intents V2 page, also the last words of `message`
 after "Link it as: ") is only on a publish made by this call: a capture published now, directly or
 through the approval policy in the same call, or a `confirm` that published now. Never on `update`,
 `withdraw`, an "already published" `confirm` or any result with `publish_refused`.

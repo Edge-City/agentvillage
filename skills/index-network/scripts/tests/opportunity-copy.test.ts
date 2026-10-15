@@ -44,7 +44,9 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
 
   test("tools.md: a card without an acceptUrl: plain text, one Connections pointer per reply, the ban, right after the no-invented-URL rule", () => {
     const rule =
-      "A `pending` card the tool returns without an `acceptUrl` has no message link: write `message Name` as plain text and, once per reply after the list, point the resident in words to the Connections line in the morning brief (the app's people and opportunities page, where they can see who is waiting). That page cannot accept or message anyone: never say it can, and never write a URL that is not already in the conversation.";
+      "A `pending` card the tool returns without an `acceptUrl` has no message link: write `message Name` as plain text and, once per reply after the list, point the resident in words to the Connections line in the morning brief (the app's people and opportunities page, where they can see who is waiting). Never write a URL that is not already in the conversation.";
+    // INTENTS-RELINK (G4): the app accepts and messages now, so the pointer no longer says it cannot.
+    expect(tools).not.toContain("cannot accept or message");
     expect(count(tools, rule)).toBe(1);
     expect(count(tools, "Never build an accept link, an `/o/<id>?action=accept` path or a Telegram link yourself, and never present the opportunity page, the profile link or the Connections page as the message link.")).toBe(1);
     const line = tools.split("\n").find((l) => l.includes("Call `list_opportunities`."))!;
@@ -59,7 +61,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(tools).not.toContain("If `acceptUrl` is missing, the action is plain text.");
     expect(tools).not.toContain(", no link)");
     expect(count(tools, "`acceptUrl` is the card's signed accept link. Copy it. Do not build `/o/<id>` for that action.")).toBe(1);
-    expect(count(tools, "Opening a message link opens Agent Village, where one tap accepts the introduction and, once you have both accepted, opens Telegram with them: say so in one sentence before the list, never as a look or a preview.")).toBe(1);
+    expect(count(tools, "Opening a message link opens Agent Village, where one tap accepts the introduction and lets you message them: say so in one sentence before the list, never as a look or a preview.")).toBe(1);
     expect(count(tools, "- Message: the card's `acceptUrl`, copied as returned.")).toBe(1);
     expect(count(tools, "Do not use `/c/` connect redirects as the opportunity link. Do not invent `/profile/` or `/opportunity/create` paths.")).toBe(1);
   });
@@ -103,7 +105,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     const bullets = tools.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"));
     expect(bullets).toHaveLength(1);
     const bullet = bullets[0];
-    const accept = "Opening it opens Agent Village, where one tap accepts the introduction and, once you have both accepted, opens Telegram with that person: say so in plain words, and never present it as a look or a preview.";
+    const accept = "Opening it opens Agent Village, where one tap accepts the introduction and lets you message that person: say so in plain words, and never present it as a look or a preview.";
     const profiles = "The lead line's name links are profiles, not the action: every pending introduction (not a community ask) gets its own `[message Name](acceptUrl)`.";
     const missing = "A pending card without an `acceptUrl` gets `message Name` as plain text and, once per reply, a pointer in words to the Connections line in the morning brief, never an invented link.";
     expect(count(tools, accept)).toBe(1);

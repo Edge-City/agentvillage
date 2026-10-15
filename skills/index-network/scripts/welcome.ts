@@ -898,8 +898,8 @@ async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, des
  * longer than INTENTS_URL_MAX characters.
  */
 export function intentsPageUrl(home: string): string {
-  const href = new URL("/intents", connectionsUrl(home)).href;
-  return href.length <= INTENTS_URL_MAX ? href : new URL("/intents", DEFAULT_CONNECTIONS_URL).href;
+  const href = new URL("/intents-v2", connectionsUrl(home)).href;
+  return href.length <= INTENTS_URL_MAX ? href : new URL("/intents-v2", DEFAULT_CONNECTIONS_URL).href;
 }
 
 /** The agent's name: the resident's nickname for it, else Edge. Never throws, never logs. */

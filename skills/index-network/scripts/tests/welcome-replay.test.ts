@@ -108,11 +108,11 @@ const RAISE = "Want advice on raising a seed round in India";
 
 /** The seeded welcome for `titles`, singular for one (welcome-texts.json seededThree, seededOne, seededPausedThree, seededPausedOne). */
 function seededWelcome(name: string | null, titles: string[], mode: Mode = "publish"): string {
-  return W1.welcomeText(name ?? "Edge", { kind: "listed", titles, seeded: mode }, "https://agents.edgecity.live/intents");
+  return W1.welcomeText(name ?? "Edge", { kind: "listed", titles, seeded: mode }, "https://agents.edgecity.live/intents-v2");
 }
 /** Today's listed welcome for one to three `titles` (welcome-texts.json one, two, three). */
 function listedWelcome(name: string | null, titles: string[]): string {
-  return W1.welcomeText(name ?? "Edge", { kind: "listed", titles }, "https://agents.edgecity.live/intents");
+  return W1.welcomeText(name ?? "Edge", { kind: "listed", titles }, "https://agents.edgecity.live/intents-v2");
 }
 
 // ---------------------------------------------------------------------------

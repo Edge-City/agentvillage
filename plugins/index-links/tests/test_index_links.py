@@ -78,6 +78,20 @@ def test_05_person_signal_and_autolink_go_to_the_portal(plugin):
     assert hook(plugin, "<https://index.network/u/abc>") == "https://agents.edgecity.live/rolodex?person=abc"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://agents.edgecity.live/intents?intent=int9",
+        "[build](https://agents.edgecity.live/intents?intent=int9)",
+        "https://agents.edgecity.live/intents-v2/int9",
+        "https://agents.edgecity.live/intents-v2?opportunity=o1#opportunity-o1",
+    ],
+)
+def test_05b_portal_intent_links_of_either_form_pass_untouched(plugin, text):
+    """INTENTS-RELINK: an Intents link the agent already holds, V1 or V2, is left as written."""
+    assert hook(plugin, text) is None
+
+
 @pytest.mark.parametrize("result", [{"url": "https://index.network/u/abc"}, "no links here", None])
 def test_06_non_strings_and_linkless_text_unchanged(plugin, result):
     assert hook(plugin, result) is None

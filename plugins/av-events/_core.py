@@ -546,7 +546,7 @@ def register_literal_secret(value: str) -> None:
 # - pass 1: a URL whose host is `index.network` or any subdomain of it (any
 #   case, a root dot and a port allowed; with or without a scheme) loses its
 #   whole query string and fragment; a URL whose host is `edgecity.live` or a
-#   subdomain (the portal, whose `/rolodex?person=` and `/intents?intent=`
+#   subdomain (the portal, whose `/rolodex?person=`, `/intents-v2/<id>` and `/intents?intent=`
 #   links carry no capability) loses them only when they name `sig` or
 #   `viewer` (after percent- and \uXXXX-decoding);
 # - pass 2, fail-closed: every `sig` or `viewer` parameter value left anywhere

@@ -267,7 +267,7 @@ describe("the morning brief", () => {
         newlyResolved: [],
       }) as any,
     }));
-    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI / ML and / or data roles", link: `${PORTAL_WEB}/intents?intent=s1` }]);
+    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI / ML and / or data roles", link: `${PORTAL_WEB}/intents-v2/s1` }]);
   });
 
   test("Index unreadable: no count, no names, the link line still there; the overnight prefetch fills in when it has today", async () => {
@@ -435,7 +435,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));
     expect(output(result.lines)).toEqual({
       agentName: "Edge", job: "people-follow-up", date: DATE,
-      yourSignals: [{ text: "Looking for soil scientists", link: `${PORTAL_WEB}/intents?intent=s1` }],
+      yourSignals: [{ text: "Looking for soil scientists", link: `${PORTAL_WEB}/intents-v2/s1` }],
       waitingOnYou: [{ name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=n0`, messageUrl: MSG("n0") }],
       agentsTalking: [{ name: "Talking Person", profileUrl: `${PORTAL_WEB}/rolodex?person=t` }],
       newConnections: [],

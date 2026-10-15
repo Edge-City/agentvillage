@@ -1654,7 +1654,7 @@ def _approval_on() -> Optional[bool]:
 _NO_OTHER_WAY = "Do not publish it another way."
 #: index-links never sees this tool's result, so a published call names the
 #: portal page. Without it the agent builds https://index.network/i/<id>.
-_PORTAL_INTENT = "https://agents.edgecity.live/intents?intent="
+_PORTAL_INTENT = "https://agents.edgecity.live/intents-v2/"
 
 
 def _attach_intent_link(result: dict) -> dict:

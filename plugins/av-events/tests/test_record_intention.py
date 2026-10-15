@@ -357,7 +357,7 @@ def test_publish_returns_index_id(tctx, index):
     assert out["intention_id"] == INDEX_ID
     assert out["index_intent_id"] == INDEX_ID
     assert out["published"] is True
-    assert out["url"] == f"https://agents.edgecity.live/intents?intent={INDEX_ID}"
+    assert out["url"] == f"https://agents.edgecity.live/intents-v2/{INDEX_ID}"
     assert out["url"] in out["message"]
     assert "publish_refused" not in out and "local_reason" not in out
 
@@ -2781,12 +2781,13 @@ def test_data448_with_approval_on_the_update_is_still_approval_required(tctx, in
 # The portal link (ov#273 fix round 1): only on a publish made by this call
 # --------------------------------------------------------------------------
 
-PORTAL = "https://agents.edgecity.live/intents?intent="
+PORTAL = "https://agents.edgecity.live/intents-v2/"
 
 
 def _no_link(out: dict) -> None:
     assert "url" not in out
     assert "Link it as" not in out.get("message", "") and PORTAL not in out.get("message", "")
+    assert "agents.edgecity.live/intents" not in out.get("message", "")
 
 
 def test_link_a_capture_publish_names_index_id_and_ends_the_message(tctx, index):
@@ -2794,6 +2795,13 @@ def test_link_a_capture_publish_names_index_id_and_ends_the_message(tctx, index)
     assert out["url"] == PORTAL + INDEX_ID
     # N1: the url is last, with nothing glued to it.
     assert out["message"].endswith("Link it as: " + out["url"])
+
+
+def test_link_is_the_intents_v2_detail_page_never_the_v1_query(tctx, index):
+    """INTENTS-RELINK: the Intents tab is Intents V2; a published signal links its detail page."""
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["url"] == "https://agents.edgecity.live/intents-v2/" + INDEX_ID
+    assert "?intent=" not in out["message"] and "/intents?" not in out["message"]
 
 
 def test_link_never_on_a_withdrawal_of_a_published_intention(tctx, index):

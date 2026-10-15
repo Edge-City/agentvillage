@@ -676,7 +676,7 @@ def test_a_stated_capture_is_proposed_and_published_in_the_same_call(tctx, serve
     out = call(tctx, {"text": STATED, "source": "message"})
     iid = out["intention_id"]
     assert out["published"] is True and out["index_intent_id"] == INDEX_ID and iid != INDEX_ID
-    assert out["url"] == f"https://agents.edgecity.live/intents?intent={INDEX_ID}"
+    assert out["url"] == f"https://agents.edgecity.live/intents-v2/{INDEX_ID}"
     assert out["approved_by"] == "rule" and out["approval_state"] == "published"
     # propose, the same propose again after the claim (the authority re-read), start.
     assert serve.verbs() == ["propose", "propose", "start"]
@@ -1841,12 +1841,13 @@ def test_data387_rejected_by_index_drops_both_hashes(tctx, serve, index, mods):
 # The portal link (ov#273 fix round 1): only on a publish made by this call
 # --------------------------------------------------------------------------
 
-PORTAL = "https://agents.edgecity.live/intents?intent="
+PORTAL = "https://agents.edgecity.live/intents-v2/"
 
 
 def _no_link(out: dict) -> None:
     assert "url" not in out
     assert "Link it as" not in out.get("message", "") and PORTAL not in out.get("message", "")
+    assert "agents.edgecity.live/intents" not in out.get("message", "")
 
 
 def test_link_an_inferred_publish_in_the_call_names_index_id_not_the_local_one(tctx, serve, index, mods):

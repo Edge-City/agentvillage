@@ -61,6 +61,9 @@ def test_other_hosts_keep_their_url_and_lose_only_sig_and_viewer_values(plugin):
     for text in (
         "https://agents.edgecity.live/rolodex?person=abc",
         "https://agents.edgecity.live/intents?intent=x#top",
+        "https://agents.edgecity.live/intents-v2/x",
+        "https://agents.edgecity.live/intents-v2?opportunity=o1#opportunity-o1",
+        "https://agents.edgecity.live/intents-v2?conversation=c1",
         "https://example.com/o/x?action=accept&surface=telegram",
         "design=1 signal=2 reviewer=3 x-sig=4 sig_x=5",
     ):

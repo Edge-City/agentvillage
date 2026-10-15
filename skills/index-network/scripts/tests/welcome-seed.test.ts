@@ -56,7 +56,7 @@ import { CREATE_CALL, type CreateReply, FAKE_API_KEY, type FakeCall, type ToolHa
 import golden from "./fixtures/welcome-texts.json";
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "welcome-texts.json");
-const INTENTS_URL = "https://agents.edgecity.live/intents";
+const INTENTS_URL = "https://agents.edgecity.live/intents-v2";
 /** sha256 of the six texts on origin/main 336fdec9, concatenated in this order. */
 const OLD_KEYS = ["three", "moreThanThree", "two", "one", "zero", "unreachable"] as const;
 const OLD_SHA256 = "a69563f1dedda0afab68f1348a7ff64522ec5779548b0cb1696ccce8e5e6123c";
@@ -1150,7 +1150,7 @@ describe("the seeded texts", () => {
     const names = ["Edge", "Mira", "Abcdefghij Klmnopqrst Uvwxyzabcd", ASTRAL_NAME];
     const lengths = [1, 40, 120, 200, 240, 260, 299, TITLE_MAX];
     // The link is not in the seeded text; the longest one changes nothing.
-    const links = [INTENTS_URL, `https://${"h".repeat(INTENTS_URL_MAX - 16)}/intents`];
+    const links = [INTENTS_URL, `https://${"h".repeat(INTENTS_URL_MAX - 19)}/intents-v2`];
     for (const seeded of ["publish", "paused"] as const) {
       for (const name of names) {
         for (const link of links) {

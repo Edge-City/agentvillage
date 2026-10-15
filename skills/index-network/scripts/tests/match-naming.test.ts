@@ -356,7 +356,8 @@ describe("prompt text: name the match before the link, one honest link sentence,
     // Fix round 1 (refute M2): the raw chat headline is never copied (opportunity-copy.test.ts pins the rule's full text).
     expect(tools).not.toMatch(/headline`?[^.\n]*copied as returned/);
     expect(tools).not.toContain("about <headline>");
-    expect(count(tools, `Opening a message link ${HONEST("them")}: say so in one sentence before the list, never as a look or a preview.`)).toBe(1);
+    // INTENTS-RELINK (G4): since cp#263 / app#308 the accepter can message at once; tools.md says so (the prompts keep HONEST).
+    expect(count(tools, "Opening a message link opens Agent Village, where one tap accepts the introduction and lets you message them: say so in one sentence before the list, never as a look or a preview.")).toBe(1);
     expect(count(tools, 'Say nothing the tool result does not state: no reassurance or status sentence, such as "nothing has gone out yet" or "without your say-so".')).toBe(1);
     const start = exemplars.indexOf('## Asked in chat: "any intros?"');
     const section = exemplars.slice(start, exemplars.indexOf("## Connector-flow rendering rule"));
