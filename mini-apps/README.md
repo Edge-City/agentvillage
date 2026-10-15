@@ -143,12 +143,19 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 - `skylight.status` with no other argument: the owner's own Skylight status,
   a **read** (`READ_OPERATIONS`). No tenant, person or agent argument exists; the app derives the
   account from the bearer.
+- `rolodex.person` (rc42, CLAIMS 7799/7804) with exactly one of `id` (a strict
+  uuid that `rolodex.search` returned) or `query` (1 to 120 characters): a
+  **read** (`READ_OPERATIONS`) of one other resident's public profile (PUBLIC
+  and VILLAGE claims, whatYouDo, public social profile links; never email,
+  phone, Telegram handle or anything private). Appended last.
 
-The CP catalog's gold-stars entry carries the same eight operations in the same
-order. The helper and the plugin still accept the six-operation entry from
-before the restore (meeting and Skylight refused under it), so the overlay can
-roll out first. The order is one way only: overlay first, then the catalog
-(with a re-stage of installed rows); an older overlay refuses the eight-op entry.
+The reviewed gold-stars entry carries these nine operations in this order. The
+helper and the plugin still accept the eight-operation entry (ov#350, the CP's
+entry until it moves; `rolodex.person` refused under it) and the six-operation
+entry from before the restore (meeting, Skylight and person refused under it),
+so the overlay can roll out first. The order is one way only: overlay first,
+then the catalog (cp#244's drift re-stage then re-stages installed rows); an
+older overlay refuses a longer entry and loses every Gold Stars operation.
 
 ## Disk staging and lifecycle
 
@@ -161,7 +168,7 @@ Only the pinned local checkout's exact reviewed `SKILL.md` files are copied.
 `bun install/install_miniapps.ts` reads this projection from stdin:
 
 ```json
-{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status"],"skills":["gold-stars"]}]}
+{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status","rolodex.person"],"skills":["gold-stars"]}]}
 ```
 
 `HERMES_HOME` selects the disk target. Add `--verify` to check without writing.

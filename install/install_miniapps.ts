@@ -6,21 +6,25 @@ import { dirname, join, resolve, parse } from "node:path";
 import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
 
 /**
- * BRIDGE-RESTORE (rc41, CLAIMS L7212/L7216): the gold-stars entry also carries ov#300's native
- * `rolodex.meeting` (owner-requested mark/undo) and `skylight.status` (the owner's own read), appended
- * in this exact order; plugins/village-bridge/_mini_apps.py GOLD_STARS and the control-plane catalog's
- * gold-stars entry carry the same list, so the CP's projection hash matches the receipt.
+ * ROLODEX.PERSON (rc42, CLAIMS 7799): the gold-stars entry also carries `rolodex.person` (a read of
+ * another resident's public profile), appended LAST after ov#350's `rolodex.meeting` and
+ * `skylight.status`. plugins/village-bridge/_mini_apps.py GOLD_STARS carries the same list; the
+ * control-plane catalog's gold-stars entry moves to it only after boxes run this overlay, so the CP's
+ * projection hash matches the receipt.
  */
 export const REVIEWED_MINI_APPS = [
-  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
+  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"], skills: ["gold-stars"] },
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
 /**
- * The gold-stars entry before the restore (ov#343), still staged byte for byte so this overlay can roll
- * out BEFORE the CP catalog moves (overlay first, then the catalog with a re-stage; never the reverse). It carries no meeting or Skylight operation (the plugin refuses
- * them under it). Remove after the CP catalog serves the restored list everywhere.
+ * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
+ * catalog moves (overlay first, then the catalog with a re-stage; never the reverse): the restored
+ * eight-op entry (ov#350, _mini_apps.py GOLD_STARS_RESTORED; the CP's current entry, rolodex.person
+ * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
+ * Skylight or person operation). Remove each after the CP catalog serves a newer list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
+  { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
