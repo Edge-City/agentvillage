@@ -37,8 +37,12 @@ full-matches, while the check fails, the callback raises
 (`hermes_cli/plugins_dispatch.py`, `_policy_error_block_directive`), so the
 call does not run. Any other tool returns `None` at once. A failure found at
 start is sticky for the process (only a restart re-registers shell hooks); a
-gated call re-runs the check at most once a minute, re-parsing the config only
-when its sha256 changed, and a later failure blocks while it lasts. Codes are
+gated call hashes the shim every time (ov#360 refute S1: a swap made and undone
+between two checks is still caught) and re-runs the rest of the check at most
+once a minute, re-parsing the config only when its sha256 changed, and a later
+failure blocks while it lasts. `plugin.yaml` declares `requires_plugins:
+av-events` so Hermes loads av-events first and the start event has a
+subscriber (ov#360 refute S2). Codes are
 listed in `skills/approval/README.md`. `register` never raises; it registers
 the callback before it logs anything.
 
@@ -370,12 +374,15 @@ The installer's kill switch removes the entries and keeps this plugin listed. So
 facade (`http.server` on loopback) proves the plugin sends nothing in any
 state; a fake ctx proves each broken gate state blocks every gated call and no
 ungated one, the healthy state never blocks, the start failure is sticky, the
-re-check runs at most once a minute, the token is never read, and `register`
-never raises. `test_backstop_in_a_real_hermes` runs the plugin inside a real
+shim is hashed on every gated call and the rest of the re-check runs at most
+once a minute, the token is never read, and `register` never raises. `test_backstop_in_a_real_hermes` runs the plugin inside a real
 Hermes (opt-in: `AV_HERMES_SRC=<Hermes source tree>
 AV_HERMES_PYTHON=<its interpreter>`): healthy, 36 shell hooks register (including `village`) and
 nothing blocks; with a mode-000 allowlist lock, `register_from_config` raises
 `PermissionError` and the backstop blocks `terminal`.
+`test_the_start_event_reaches_av_events_in_a_real_hermes` (same opt-in) loads
+av-approval and av-events through Hermes's `PluginManager` and checks the start
+event reaches one subscriber.
 
 `tests/test_custody.py`: the decisions file, each lever against fake Hermes
 modules, the switch, the inventory scan (every credential-shaped name the

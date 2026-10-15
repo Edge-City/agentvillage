@@ -25,9 +25,12 @@ hook registers). Hermes loads plugins BEFORE it registers shell hooks, so
     start and held in memory (`shim-changed-since-start`). CODE EXECUTION ON
     (rc42, ov#357 refute M1): an `execute_code` program runs as this uid and
     can rewrite the shim AND the marker together, which the marker check alone
-    reads as clean; the two copies it cannot reach from disk catch that within
-    one recheck. A full bypass now also needs this plugin rewritten and the
-    gateway restarted;
+    reads as clean; the two copies it cannot reach from disk catch that on the
+    next gated call (the shim is hashed on every one: ov#360 refute S1, so a
+    swap made and undone between two checks is caught too). NOT a full
+    defence: a same-uid program can still set `AV_APPROVAL_ENABLED=0` in
+    `.env`, unlist this plugin, or rewrite it, and force a restart; only a
+    read-only `$HERMES_HOME` for the kernel child (Landlock) closes that;
   - `AV_APPROVAL_URL` set.
 
 It registers a `pre_tool_call` callback that, for every GATED tool (the same
@@ -36,7 +39,8 @@ full-match matchers the installer writes, `GATED_MATCHERS`), RAISES
 fails. Hermes turns a raising `pre_tool_call` callback into a block directive
 (hermes_cli/plugins_dispatch.py `invoke_hook`, `_policy_error_block_directive`
 at v2026.9.24), so the call does not run. Ungated tools are never touched.
-The check re-runs at most once a minute on a gated call (the config is
+The shim's digests are checked on every gated call; the rest of the check
+(config, consent, allowlist, URL) re-runs at most once a minute (the config is
 re-parsed only when its sha256 changed). A failure found at START is sticky
 for the life of the process: the shell hooks were registered, or not, at
 start, and only a restart registers them again. A later failure blocks only
@@ -206,7 +210,8 @@ SHIM_RELPATH = "agent-hooks/hermes-hook-shim.sh"
 MARKER_RELPATH = "agent-hooks/approval-surface.json"
 ALLOWLIST_FILE = "shell-hooks-allowlist.json"
 ALLOWLIST_LOCK_FILE = ALLOWLIST_FILE + ".lock"
-#: A gated call re-runs the check at most this often.
+#: A gated call re-runs the config, consent, allowlist and URL checks at most this often. The shim's
+#: digests are checked on every gated call (ov#360 refute S1: ~50 us against the shim's own round trip).
 RECHECK_S = 60.0
 
 #: Hooks registered when the switch is on.
@@ -392,6 +397,18 @@ def integrity_problems(home: Optional[Path] = None) -> tuple[str, ...]:
     File and environment state only. Never reads the agent token.
     """
     home = home or hermes_home()
+    return _join(_slow_codes(home), _shim_codes(home))
+
+
+def _join(slow: tuple[list[str], list[str]], shim: list[str]) -> tuple[str, ...]:
+    """The codes in the check's order: config, consent and allowlist, then the shim's, then the URL's."""
+    head, tail = slow
+    return tuple(dict.fromkeys([*head, *shim, *tail]))
+
+
+def _slow_codes(home: Path) -> tuple[list[str], list[str]]:
+    """Every check but the shim's, as (before the shim's codes, after them): the parses a gated call
+    re-runs at most once a minute (`RECHECK_S`)."""
     codes: list[str] = []
     try:
         text = (home / "config.yaml").read_bytes()
@@ -411,10 +428,8 @@ def integrity_problems(home: Optional[Path] = None) -> tuple[str, ...]:
     if os.environ.get("HERMES_ACCEPT_HOOKS", "").strip().lower() not in _TRUTHY:
         codes.append("consent-missing:env")
     codes.extend(_allowlist_codes(home))
-    codes.extend(_shim_codes(home))
-    if not os.environ.get("AV_APPROVAL_URL", "").strip():
-        codes.append("url-missing")
-    return tuple(dict.fromkeys(codes))
+    tail = [] if os.environ.get("AV_APPROVAL_URL", "").strip() else ["url-missing"]
+    return codes, tail
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +437,8 @@ def integrity_problems(home: Optional[Path] = None) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 _state_lock = threading.Lock()
-_state: dict[str, Any] = {"start": (), "codes": (), "checked_at": None, "start_marker": None, "ctx": None}
+_state: dict[str, Any] = {"start": (), "codes": (), "slow": ([], []), "checked_at": None, "start_marker": None,
+                          "ctx": None}
 
 
 def code_names(codes: tuple[str, ...]) -> list[str]:
@@ -443,15 +459,23 @@ def _emit_gate(phase: str, codes: tuple[str, ...]) -> None:
         pass
 
 
-def _check() -> tuple[str, ...]:
+def _slow_check() -> tuple[list[str], list[str]]:
     try:
-        return integrity_problems()
+        return _slow_codes(hermes_home())
     except Exception:  # noqa: BLE001 - a check that cannot run verifies nothing
-        return ("check-error",)
+        return ["check-error"], []
+
+
+def _shim_check() -> list[str]:
+    try:
+        return _shim_codes(hermes_home())
+    except Exception:  # noqa: BLE001
+        return ["check-error"]
 
 
 def current_codes(now: Optional[float] = None) -> tuple[str, ...]:
-    """The codes in force for a gated call: the start's (sticky), else the last check's, re-run at most once a minute."""
+    """The codes in force for a gated call: the start's (sticky), else this call's shim check joined with
+    the last config, consent, allowlist and URL check (re-run at most once a minute)."""
     now = time.monotonic() if now is None else now
     event: Optional[tuple[str, tuple[str, ...]]] = None
     with _state_lock:
@@ -459,16 +483,17 @@ def current_codes(now: Optional[float] = None) -> tuple[str, ...]:
             return _state["start"]
         checked = _state["checked_at"]
         if checked is None or now - checked >= RECHECK_S:
-            before = _state["codes"]
-            codes = _check()
-            _state["codes"], _state["checked_at"] = codes, now
-            if codes and codes != before:
-                _log_once("later:" + ",".join(codes), UNVERIFIED_LATER_FMT.format(codes=", ".join(codes)))
-                event = ("recheck", codes)
-            elif before and not codes:
-                _log_once("recovered:" + ",".join(before), RECOVERED_LINE)
-                event = ("recovered", ())
-        result = _state["codes"]
+            _state["slow"], _state["checked_at"] = _slow_check(), now
+        before = _state["codes"]
+        codes = _join(_state["slow"], _shim_check())
+        _state["codes"] = codes
+        if codes and codes != before:
+            _log_once("later:" + ",".join(codes), UNVERIFIED_LATER_FMT.format(codes=", ".join(codes)))
+            event = ("recheck", codes)
+        elif before and not codes:
+            _log_once("recovered:" + ",".join(before), RECOVERED_LINE)
+            event = ("recovered", ())
+        result = codes
     if event is not None:
         _emit_gate(*event)
     return result
@@ -491,10 +516,12 @@ def _start(now: Optional[float] = None) -> tuple[str, ...]:
         _state["start_marker"] = _marker_digest(hermes_home())
     except Exception:  # noqa: BLE001
         _state["start_marker"] = None
-    codes = _check()
+    slow = _slow_check()
+    codes = _join(slow, _shim_check())
     with _state_lock:
         _state["start"] = codes
         _state["codes"] = codes
+        _state["slow"] = slow
         _state["checked_at"] = time.monotonic() if now is None else now
     return codes
 

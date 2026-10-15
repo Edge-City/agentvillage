@@ -236,8 +236,9 @@ fails; Hermes turns a raising `pre_tool_call` callback into a block
 (`hermes_cli/plugins_dispatch.py` `invoke_hook` at v2026.9.24). Ungated tools
 are never touched. A failure found at start holds until the gateway restarts
 (the hooks were registered, or not, at start). After start, a gated call
-re-runs the check at most once a minute (the config is re-parsed only when its
-sha256 changes), and a failure then blocks while it lasts. Codes only are
+hashes the shim every time and re-runs the rest of the check at most once a
+minute (the config is re-parsed only when its sha256 changes), and a failure
+then blocks while it lasts. Codes only are
 logged. Unset does nothing; off (the kill switch) stays fail-open, logged.
 
 | Code | Meaning |
@@ -397,9 +398,10 @@ What the gate does not see, or does not judge, today:
   `web_search`, `x_search`, `image_generate`, `video_generate` and
   `text_to_speech` (the policy's `tools:` list prices them); the rest would be
   recorded under `harness.tool.unmapped` if routed.
-- **Recheck cadence.** After a healthy start the backstop re-runs its check at
-  most once a minute, so a mid-run plugin force-reload that drops a shell hook
-  can leave up to 60 s before the next gated call is refused. A failure seen
+- **Recheck cadence.** After a healthy start the backstop hashes the shim on
+  every gated call but re-runs the rest of its check at most once a minute, so
+  a mid-run plugin force-reload that drops a shell hook can leave up to 60 s
+  before the next gated call is refused. A failure seen
   at start is sticky until restart.
 - **Config scope.** The integrity check reads the raw `config.yaml`; Hermes
   registers from the deep-merged config. On Agent Village sandboxes the

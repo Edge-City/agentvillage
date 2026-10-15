@@ -385,18 +385,14 @@ def test_a_later_failure_is_found_within_a_minute_and_clears_when_repaired(gate,
     original = shim.read_bytes()
     shim.write_bytes(original + b"# planted\n")
     clock[0] += 30
-    assert cb(tool_name="terminal") is None  # inside the minute: not re-checked yet
-    clock[0] += 31
     with caplog.at_level(logging.WARNING, logger="av-approval"):
+        # ov#360 refute S1: the shim is hashed on every gated call, not once a minute.
         with pytest.raises(plugin.GateUnverified, match=r"shim-hash-mismatch"):
             cb(tool_name="terminal")
         assert cb(tool_name="memory") is None
         shim.write_bytes(original)
         clock[0] += 10
-        with pytest.raises(plugin.GateUnverified):
-            cb(tool_name="write_file")  # still inside the minute of the failing check
-        clock[0] += 60
-        assert cb(tool_name="terminal") is None
+        assert cb(tool_name="write_file") is None  # restored: the next gated call reads clean
     # ov#357 M1: the planted line also fails the constant and the start-time digest.
     assert any("gate unverified (shim-hash-mismatch, shim-not-vendored, shim-changed-since-start); "
                "gated tool calls are blocked while it lasts" in line for line in _lines(caplog))
@@ -408,8 +404,11 @@ def test_the_check_runs_at_most_once_a_minute_and_reparses_config_only_on_change
     clock = [1000.0]
     monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
     checks = []
-    real = plugin.integrity_problems
-    monkeypatch.setattr(plugin, "integrity_problems", lambda *a, **k: checks.append(1) or real(*a, **k))
+    real = plugin._slow_codes
+    monkeypatch.setattr(plugin, "_slow_codes", lambda *a, **k: checks.append(1) or real(*a, **k))
+    shim_checks = []
+    real_shim = plugin._shim_codes
+    monkeypatch.setattr(plugin, "_shim_codes", lambda *a, **k: shim_checks.append(1) or real_shim(*a, **k))
     parses = []
     real_load = yaml.safe_load
     monkeypatch.setattr(yaml, "safe_load", lambda *a, **k: parses.append(1) or real_load(*a, **k))
@@ -422,14 +421,15 @@ def test_the_check_runs_at_most_once_a_minute_and_reparses_config_only_on_change
     for _ in range(100):
         cb(tool_name="terminal")
         clock[0] += 0.5
-    assert len(checks) == 1  # 50 s of calls: no re-check
+    assert len(checks) == 1  # 50 s of calls: no re-check of the config, consent, allowlist or URL
+    assert len(shim_checks) == 101  # ov#360 refute S1: the shim is hashed at start and on every gated call
     clock[0] += 11
     cb(tool_name="terminal")
     assert (len(checks), len(parses)) == (2, 1)  # re-checked; config unchanged, not re-parsed
     for _ in range(10):
         cb(tool_name="memory")  # ungated calls never check
         clock[0] += 61
-    assert len(checks) == 2
+    assert len(checks) == 2 and len(shim_checks) == 102
     _set_entries(home, lambda c: c.__setitem__("model", {"default": "other"}))
     parses.clear()
     cb(tool_name="terminal")
@@ -527,12 +527,14 @@ def test_register_never_raises_when_logging_or_the_check_breaks(gate, monkeypatc
     monkeypatch.setattr(plugin.logger, "warning", boom)
     monkeypatch.setattr(plugin.logger, "info", boom)
     plugin.register(FakeCtx())
-    monkeypatch.setattr(plugin, "integrity_problems", boom)
-    ctx = FakeCtx()
-    plugin.register(ctx)
-    # A check that cannot run verifies nothing: gated calls are blocked with its own code.
-    with pytest.raises(plugin.GateUnverified, match=r"check-error"):
-        _callback(ctx)(tool_name="terminal")
+    for part in ("_slow_codes", "_shim_codes"):
+        with monkeypatch.context() as m:
+            m.setattr(plugin, part, boom)
+            ctx = FakeCtx()
+            plugin.register(ctx)
+            # A check that cannot run verifies nothing: gated calls are blocked with its own code.
+            with pytest.raises(plugin.GateUnverified, match=r"check-error"):
+                _callback(ctx)(tool_name="terminal")
 
 
 def test_token_never_reaches_the_log(clean_env, caplog):
@@ -584,6 +586,12 @@ with open(os.path.join(home, ".env"), "w") as fh:
     fh.write("HERMES_ACCEPT_HOOKS=1\nAV_APPROVAL_ENABLED=1\nAV_APPROVAL_URL=http://127.0.0.1:4682\n")
 shutil.copytree(plugin_dir, os.path.join(home, "plugins", "av-approval"),
                 ignore=shutil.ignore_patterns("tests", "__pycache__"))
+# The stand-in is not the vendored shim: hold the copy's constant to it, so only the scenario can block.
+init = os.path.join(home, "plugins", "av-approval", "__init__.py")
+src = open(init, encoding="utf-8").read()
+vendored = src.split('VENDORED_SHIM_SHA256 = "', 1)[1].split('"', 1)[0]
+with open(init, "w", encoding="utf-8") as fh:
+    fh.write(src.replace(vendored, hashlib.sha256(open(shim, "rb").read()).hexdigest()))
 if scenario == "lock000":
     lock = os.path.join(home, "shell-hooks-allowlist.json.lock")
     open(lock, "w").close()
@@ -662,7 +670,7 @@ def test_a_clean_shim_passes(gate):
     assert ctx.emitted == []
 
 
-def test_a_shim_and_marker_rewritten_together_are_caught_within_a_minute(gate, monkeypatch):
+def test_a_shim_and_marker_rewritten_together_are_caught_on_the_next_gated_call(gate, monkeypatch):
     mp, home, plugin = gate
     clock = [1000.0]
     monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
@@ -673,13 +681,48 @@ def test_a_shim_and_marker_rewritten_together_are_caught_within_a_minute(gate, m
     _rewrite_shim_and_marker(home)
     # The marker agrees with the new shim, so the installer's own check alone would read clean.
     assert "shim-hash-mismatch" not in plugin.integrity_problems(home)
-    clock[0] += 61
+    clock[0] += 1  # inside the minute: the shim is hashed on every gated call (ov#360 refute S1)
     with pytest.raises(plugin.GateUnverified, match=r"shim-not-vendored"):
         cb(tool_name="terminal")
     assert plugin.current_codes() == ("shim-not-vendored", "shim-changed-since-start")
     assert cb(tool_name="memory") is None
     assert [(e, p["phase"], p["codes"]) for e, p in ctx.emitted] == [
         ("gate.unverified", "recheck", ["shim-changed-since-start", "shim-not-vendored"])]
+
+
+@pytest.mark.parametrize("marker_too", [False, True])
+def test_a_swap_and_restore_between_two_checks_is_blocked_and_reported(gate, monkeypatch, marker_too):
+    """ov#360 refute S1 (the transient probe): one gated call refreshes the check, the program swaps the
+    shim (and its marker), makes gated calls, then puts the original bytes back, all inside one minute.
+    Every gated call made while the swap stands is blocked, and each swap is reported once."""
+    mp, home, plugin = gate
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    cb = _callback(ctx)
+    shim = home / "agent-hooks" / "hermes-hook-shim.sh"
+    marker = home / "agent-hooks" / "approval-surface.json"
+    original_shim, original_marker = shim.read_bytes(), marker.read_bytes()
+    expected = (["shim-changed-since-start", "shim-not-vendored"] if marker_too
+                else ["shim-changed-since-start", "shim-hash-mismatch", "shim-not-vendored"])
+    for _cycle in range(3):
+        assert cb(tool_name="web_search") is None  # refreshes the check
+        clock[0] += 1
+        if marker_too:
+            _rewrite_shim_and_marker(home)
+        else:
+            shim.write_bytes(b"#!/bin/sh\nexit 0\n")
+        for _ in range(3):
+            clock[0] += 1
+            with pytest.raises(plugin.GateUnverified, match=r"shim-"):
+                cb(tool_name="terminal")
+        shim.write_bytes(original_shim)
+        marker.write_bytes(original_marker)
+        clock[0] += 1
+        assert cb(tool_name="terminal") is None
+    assert [(e, p["phase"], p["codes"]) for e, p in ctx.emitted] == [
+        ("gate.unverified", "recheck", expected), ("gate.unverified", "recovered", [])] * 3
 
 
 def test_a_shim_only_rewrite_is_caught(gate, monkeypatch):
@@ -757,3 +800,78 @@ def test_a_bus_that_raises_or_is_missing_changes_no_verdict(gate):
         with pytest.raises(fresh.GateUnverified, match=r"shim-not-vendored"):
             _callback(ctx)(tool_name="terminal")
 
+
+
+# ---------------------------------------------------------------------------
+# ov#360 refute S2: av-events loads first, so the start event has a subscriber
+# ---------------------------------------------------------------------------
+
+def test_the_manifest_loads_av_events_first():
+    """Hermes (v2026.9.24 `resolve_plugin_load_order`) loads alphabetically unless a manifest declares
+    `requires_plugins`, so without this av-approval's start event is published before av-events subscribes."""
+    mine = yaml.safe_load((PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8"))
+    assert {"id": "av-events"} in mine["requires_plugins"]
+    # A cycle would make Hermes fall back to alphabetical order for every plugin.
+    theirs = yaml.safe_load((REPO / "plugins" / "av-events" / "plugin.yaml").read_text(encoding="utf-8"))
+    assert not any((d if isinstance(d, str) else d.get("id")) == "av-approval"
+                   for d in theirs.get("requires_plugins") or [])
+
+
+_REAL_LOAD = r'''
+import hashlib, json, os, shutil, sys
+home, repo, matchers = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+os.environ.update(HERMES_HOME=home, HERMES_ACCEPT_HOOKS="1", AV_APPROVAL_ENABLED="1",
+                  AV_APPROVAL_URL="http://127.0.0.1:9")
+hooks = os.path.join(home, "agent-hooks")
+os.makedirs(hooks)
+shim = os.path.join(hooks, "hermes-hook-shim.sh")
+body = b"#!/bin/sh\nexit 0\n"  # a program rewrote the shim and its marker, then forced a restart
+with open(shim, "wb") as fh:
+    fh.write(body)
+os.chmod(shim, 0o700)
+with open(os.path.join(hooks, "approval-surface.json"), "w") as fh:
+    json.dump({"shim_sha256": hashlib.sha256(body).hexdigest()}, fh)
+import yaml
+cfg = {"hooks": {"pre_tool_call": [{"matcher": m, "command": shim, "timeout": 300, "fail_closed": True}
+                                   for m in matchers]},
+       "hooks_auto_accept": True, "plugins": {"enabled": ["av-approval", "av-events"]}}
+with open(os.path.join(home, "config.yaml"), "w") as fh:
+    fh.write(yaml.safe_dump(cfg))
+with open(os.path.join(home, ".env"), "w") as fh:
+    fh.write("HERMES_ACCEPT_HOOKS=1\nAV_APPROVAL_ENABLED=1\nAV_APPROVAL_URL=http://127.0.0.1:9\n")
+for name in ("av-approval", "av-events"):
+    shutil.copytree(os.path.join(repo, "plugins", name), os.path.join(home, "plugins", name),
+                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
+from hermes_cli import plugins as hp
+manager = hp.get_plugin_manager()
+order, dispatched = [], []
+real_load, real_dispatch = manager._load_plugin, manager._dispatch_event
+def load(manifest):
+    order.append(manifest.name)
+    return real_load(manifest)
+def dispatch(event, payload):
+    n = real_dispatch(event, payload)
+    dispatched.append([event, n, payload.get("phase"), payload.get("codes")])
+    return n
+manager._load_plugin, manager._dispatch_event = load, dispatch
+manager.discover_and_load()
+print(json.dumps({"order": [n for n in order if n in ("av-approval", "av-events")],
+                  "gate": [d for d in dispatched if d[0] == "av-approval:gate.unverified"]}))
+'''
+
+
+@pytest.mark.skipif(not (_HERMES_SRC and _HERMES_PY),
+                    reason="set AV_HERMES_SRC (a Hermes source tree) and AV_HERMES_PYTHON (its interpreter)")
+def test_the_start_event_reaches_av_events_in_a_real_hermes(tmp_path):
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_"))}
+    env.update(PYTHONPATH=_HERMES_SRC, PYTHONDONTWRITEBYTECODE="1")
+    out = subprocess.run([_HERMES_PY, "-c", _REAL_LOAD, str(home), str(REPO),
+                          json.dumps(list(load_plugin().GATED_MATCHERS))],
+                         capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
+    assert out.returncode == 0, out.stderr[-2000:]
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    # One dispatch, to one subscriber (av-events); 0 when av-approval loads first.
+    assert result["gate"] == [["av-approval:gate.unverified", 1, "start", ["shim-not-vendored"]]]
+    assert result["order"] == ["av-events", "av-approval"]
