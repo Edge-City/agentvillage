@@ -374,3 +374,46 @@ def test_handle_tool_call_and_the_block_never_raise(provider, monkeypatch, vm):
 
 def test_profile_path_is_the_providers_home(provider, home):
     assert provider.profile_path() == Path(home) / "knowledge" / "agentvillage" / "_profile.md"
+
+
+# ---- review folds (ov#359 refute S1 wording, S3 safe reader) -------------------------------------
+
+
+def test_no_profile_answer_is_plain_and_points_at_user_md(provider, write_profile):
+    for setup in ("absent", "empty"):
+        if setup == "empty":
+            write_profile("\n")
+        result = json.loads(provider.handle_tool_call("resident_profile", {}))
+        assert result["status"] == "unavailable" and result["reason"] == "no_profile"
+        assert result["say"] == "No saved context profile is available for them yet. Use memories/USER.md and this conversation, or ask them."
+        assert "rendered" not in json.dumps(result)
+
+
+def test_descriptions_never_promise_a_block(provider):
+    for schema in provider.get_tool_schemas():
+        text = schema["description"]
+        assert "Your system prompt holds" not in text
+    profile = next(s for s in provider.get_tool_schemas() if s["name"] == "resident_profile")["description"]
+    assert "when there is one" in profile and "memories/USER.md" in profile and "ask them" in profile
+
+
+@pytest.mark.parametrize("case", ["absent", "fifo", "symlink", "directory", "ok"])
+def test_profile_digest_never_blocks_or_follows(provider, home, write_profile, tmp_path_factory, case):
+    import hashlib
+
+    path = home / "knowledge" / "agentvillage" / "_profile.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if case == "fifo":
+        os.mkfifo(path)
+    elif case == "symlink":
+        target = tmp_path_factory.mktemp("o") / "x.md"
+        target.write_text("x\n", encoding="utf-8")
+        path.symlink_to(target)
+    elif case == "directory":
+        path.mkdir()
+    elif case == "ok":
+        write_profile("## Context tags\n")
+    digest = provider.profile_digest()
+    expected = {"absent": "-", "fifo": "?not_a_regular_file", "symlink": "?symlink", "directory": "?not_a_regular_file",
+                "ok": hashlib.sha256(b"## Context tags\n").hexdigest()}[case]
+    assert digest == expected

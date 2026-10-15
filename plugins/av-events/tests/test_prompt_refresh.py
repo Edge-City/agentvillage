@@ -1179,12 +1179,41 @@ def test_without_the_provider_the_profile_is_not_hashed(hermes, caplog):
     assert not refresh_lines(caplog)
 
 
-def test_an_undecodable_profile_is_no_verdict(hermes, caplog):
+@pytest.mark.parametrize("bad", ["undecodable", "fifo", "mode_000", "symlink"])
+def test_an_unreadable_profile_never_blocks_and_never_holds_back_user_md(hermes, caplog, bad, tmp_path):
+    """Refute S3: F1 reads the profile through the provider's safe reader. A FIFO or a symlink never
+    blocks the turn; a file the provider refuses is an empty block (the stale profile leaves the
+    prompt), and a USER.md change (a vote note) still reaches the live session."""
+    if bad == "mode_000" and hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root reads mode 000")
     write(PROFILE, "## Context tags\n- Here for a courtyard garden (you)\n")
     agent = started_with_profile(hermes)
-    stored = agent._cached_system_prompt
-    (_home() / PROFILE).write_bytes(b"\xff\xfe broken \xc3\x28")
-    with caplog.at_level(logging.INFO, logger="av-events"):
-        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == stored
-    assert not refresh_lines(caplog) and "profile_md could not be read strictly" in caplog.text
-    assert hermes.db.writes == 1
+    assert "courtyard garden" in agent._cached_system_prompt
+    path = _home() / PROFILE
+    path.unlink()
+    if bad == "undecodable":
+        path.write_bytes(b"\xff\xfe broken \xc3\x28")
+    elif bad == "fifo":
+        os.mkfifo(path)  # a plain open() would block this turn forever
+    elif bad == "mode_000":
+        path.write_text("## Context tags\n- x (you)\n", encoding="utf-8")
+        path.chmod(0)
+    else:
+        (tmp_path / "elsewhere.md").write_text("## Context tags\n- linked (you)\n", encoding="utf-8")
+        path.symlink_to(tmp_path / "elsewhere.md")
+    try:
+        with caplog.at_level(logging.INFO, logger="av-events"):
+            got = run_turn(hermes.loop, agent, "hi", HISTORY)
+        assert "courtyard garden" not in got["system"] and "RESIDENT PROFILE" not in got["system"]
+        assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["profile_md"]
+        caplog.clear()
+        write("memories/USER.md", "Name: Test Resident\n§\nVote note: the weekly theme closes Friday")
+        with caplog.at_level(logging.INFO, logger="av-events"):
+            again = run_turn(hermes.loop, agent, "and now?", HISTORY)
+        assert "Vote note: the weekly theme closes Friday" in again["system"]
+        assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+        assert "could not be read strictly" not in caplog.text
+    finally:
+        if bad == "mode_000":
+            path.chmod(0o600)
+

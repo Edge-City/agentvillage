@@ -73,13 +73,16 @@ memory-triggered one also carries a newer AGENTS.md. Read every turn (`_core.env
 `.env`), so no restart is needed.
 
 D3 / D7: with the `village-memory` memory provider active (`agent._memory_manager` holds a provider of
-that name), the cp's `knowledge/agentvillage/_profile.md` (the provider's `profile_path()`) is hashed
-in the pre-filter too, in both files modes, and the exact test renders the provider block the way
-Hermes does (`MemoryManager.build_system_prompt`, behind the same `memory_provider_tools_exposed` gate
-as `agent/system_prompt.py:515-540`): stale iff that block is not in the session's prompt, or it is
+that name), the cp's `knowledge/agentvillage/_profile.md` is hashed in
+the pre-filter too, in both files modes, through the provider's own safe reader
+(`profile_digest()`: no plain open, so a FIFO, symlink, directory or oversized file never blocks a
+turn; `?<reason>` for a file it refuses). The exact test renders the provider block the way Hermes
+does (`MemoryManager.build_system_prompt`, behind the same `memory_provider_tools_exposed` gate as
+`agent/system_prompt.py:515-540`): stale iff that block is not in the session's prompt, or it is
 empty now while the prompt still holds its marker lines (the cp removed the file). Reason
-`profile_md`. A profile that exists but cannot be read strictly (utf-8) is no verdict, as above. The
-refresh is the same rebuild + persist, so the provider block and the built-in snapshot move together.
+`profile_md`. A profile the provider cannot read is an empty block, never "no verdict": it never
+holds back a USER.md / MEMORY.md change (a vote note). The refresh is the same rebuild + persist, so
+the provider block and the built-in snapshot move together.
 
 Fail-open: any exception in the gate, the check or the rebuild leaves the turn as today (the stored
 bytes go back into `_cached_system_prompt`) naming the exception class only. A failed check or
@@ -291,23 +294,18 @@ def _profile_provider(agent: Any) -> Any:
     except Exception:  # noqa: BLE001
         return None
     for provider in providers:
-        if getattr(provider, "name", None) == PROFILE_PROVIDER and callable(getattr(provider, "profile_path", None)):
+        if getattr(provider, "name", None) == PROFILE_PROVIDER and callable(getattr(provider, "profile_digest", None)):
             return provider
     return None
-
-
-def _profile_path(agent: Any) -> Optional[Path]:
-    provider = _profile_provider(agent)
-    return Path(provider.profile_path()) if provider is not None else None
 
 
 def file_digests(agent: Any) -> Dict[str, str]:
     digests = memory_digests(agent)
     if files_mode() == "all":
         digests["agents_md"] = _digest(_agents_md_path(agent))
-    profile = _profile_path(agent)
-    if profile is not None:
-        digests["profile_md"] = _digest(profile)
+    provider = _profile_provider(agent)
+    if provider is not None:
+        digests["profile_md"] = str(provider.profile_digest())
     return digests
 
 
@@ -524,8 +522,6 @@ def unreadable_sources(agent: Any) -> List[str]:
         agents_md = None
     if not _strictly_readable(agents_md, "utf-8"):
         found.append("agents_md")
-    if not _strictly_readable(_profile_path(agent), "utf-8"):
-        found.append("profile_md")
     return found
 
 
