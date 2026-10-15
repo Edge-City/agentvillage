@@ -68,6 +68,7 @@ import { installIndex } from "./install_index";
 import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
+import { safeConfigureVillageMemory } from "./village_memory";
 import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
@@ -96,7 +97,6 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay } from "./av_display";
-import { safeConfigureVillageMemory } from "./village_memory";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -361,10 +361,10 @@ function main(): void {
   for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
   configureIndexLinks();
   configureAvDisplay();
-  // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
-  safeConfigureVillageMemory();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
+  // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
+  safeConfigureVillageMemory();
 
   // Index cron jobs that failed to reconcile. They do not fail the install:
   // the control plane stops a roll on any non-zero exit, before its later
