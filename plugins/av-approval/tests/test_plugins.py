@@ -523,8 +523,9 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
         manager.fire()
     assert manager.unloaded == [] and unlisted == [] and (home / "config.yaml").read_bytes() == before
     (inventory,) = _events(ctx, "plugin.inventory")
-    # Eight from rc41: the overlay staged in full, village-bridge included (MINI-APPS re-cut).
-    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 8, "expected_missing": 0,
+    # Eight from rc41: the overlay staged in full, village-bridge included (MINI-APPS re-cut); nine with
+    # village-memory (D3), which this fake manager loads like the rest (Hermes keeps it a placeholder).
+    assert inventory == {"trigger": "boot", "mode": "report", "expected_loaded": 9, "expected_missing": 0,
                          "bundled_loaded": 0, "unknown_count": 1, "allowed_count": 0,
                          "expected_set_version": mod.load_expected()["expected_set_version"],
                          "hermes_version": inventory["hermes_version"]}
@@ -532,7 +533,7 @@ def test_report_mode_sends_and_logs_but_changes_nothing(box, caplog):
     assert (unknown["name"], unknown["state"], unknown["action"], unknown["install_host"], unknown["tools"]) == (
         "fixture-echo", "loaded", "none", "git.example.com", 1)
     assert [r.getMessage() for r in caplog.records] == [
-        "av-approval: plugins: 8 expected, 0 bundled, 1 unknown (mode report)"]
+        "av-approval: plugins: 9 expected, 0 bundled, 1 unknown (mode report)"]
 
 
 def test_quarantine_unloads_and_unlists_and_reports_each_outcome_once(box):

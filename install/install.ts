@@ -33,6 +33,7 @@
  *     the managed MoralMod release runs for ON only and only when it is the pinned one (`release_unpinned`);
  *     an OFF or unset arm with MoralMod files present is OFF (`index_plugin_note`: `moralmod_arm_not_on`) and removes
  *     the managed MoralMod files (`moralmod_cleanup` when one could not be removed)
+ *   - D3 memory provider: `memory.provider: village-memory` (`village_memory.ts`; never fatal)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -92,6 +93,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay } from "./av_display";
+import { safeConfigureVillageMemory } from "./village_memory";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -355,6 +357,8 @@ function main(): void {
   for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
   configureIndexLinks();
   configureAvDisplay();
+  // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
+  safeConfigureVillageMemory();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
