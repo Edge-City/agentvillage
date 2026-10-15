@@ -1,7 +1,7 @@
 ---
 name: skylight
-description: Explain and open Skylight from Agent Village for characters, personal islands and the shared village. Use for Skylight, changing a character, opening an island, or questions about what the agent can see there. With the installed Gold Stars mini-app, the village tool reads the owner's own bounded, factual Skylight status using the existing paired account. No journal reads or Skylight mutations.
-version: 1.2.0
+description: Explain and open Skylight from Agent Village for characters, personal islands and the shared village. Use for Skylight, changing a character, opening an island, public facts about a residency island ("Devcon Skylight"), or questions about what the agent can see there. With the installed Gold Stars mini-app, the village tool reads the owner's own bounded, factual Skylight status using the existing paired account. No journal reads or Skylight mutations.
+version: 1.3.0
 author: Edge City
 ---
 
@@ -20,6 +20,14 @@ A saved Skylight character can appear on the person's Rolodex card. Signing
 in alone does not prove they saved one, and an empty portrait is not evidence
 that the person has no ticket or account.
 
+For “what is Devcon Skylight?” or another island or residency by name, call
+`village` with `operation: "rolodex.search"` and the place name, and read
+`islands`. Share only its public facts: name, dates, the one line and its
+`url`, with the Skylight link. Empty: you can't find that island. `null`: you
+could not check; give https://agents.edgecity.live/skylight. Never say who is
+on an island, how many, or whether someone is there. For “who is <character>?”
+use `rolodex`.
+
 For “what is my agent up to?”, call `village` with `operation: "skylight.status"`
 in the paired owner's private chat. It reads the owner's own Skylight agent only;
 there is no way to read someone else's. Use only returned facts. A short playful
@@ -28,7 +36,7 @@ when that destination is actually returned. Never invent dialogue, emotions,
 friendships, companions or events. Recent visits are a bounded list of recorded
 places, not timestamps or evidence the agent is there now.
 
-This read comes with the optional **Gold Stars** mini-app. If `village` answers
+These reads come with the optional **Gold Stars** mini-app. If `village` answers
 `mini_app_not_installed`, it is not available on this agent yet (or Gold Stars
 is not installed): give the
 Skylight link instead, and do not claim any live observation.

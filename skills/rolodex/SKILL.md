@@ -1,7 +1,7 @@
 ---
 name: rolodex
-description: Follow up on people you recommended, check whether the owner has marked them met, find Rolodex cards, mark or undo meetings when the owner asks, and offer gratitude after a meaningful interaction. Use for meeting updates and replies to introduction or evening questions. Native reads and marks come with the installed Gold Stars mini-app and the existing paired account; writes need the owner's request. The website works for everyone.
-version: 1.3.0
+description: Follow up on people you recommended, check whether the owner has marked them met, find Rolodex cards (also by Skylight character name), mark or undo meetings when the owner asks, and offer gratitude after a meaningful interaction. Use for meeting updates and replies to introduction or evening questions. Native reads and marks come with the installed Gold Stars mini-app and the existing paired account; writes need the owner's request. The website works for everyone.
+version: 1.4.0
 author: Edge City
 ---
 
@@ -27,6 +27,14 @@ ask which one, using their shared role/organization to distinguish them. Never
 choose the first result, guess an id, or infer a meeting from a match. Then
 call `rolodex.meeting` with that `attendeeId` and `met: true`. A clear request
 to undo uses `met: false`. Search again if the target is unclear.
+
+“Who is Hermie?” may name a Skylight character. Search the name the same way.
+A person with `matchedBy: "character"` has a character called `character.name`:
+give their shared name, role/organization and Rolodex link. If several match,
+ask which. `characters: "off"` or `"unavailable"` means character names could
+not be checked: say so and offer the Rolodex link. No match is not evidence the
+character doesn't exist. Never say where someone is, what they are doing or
+which island they are on; nothing here answers that.
 
 Mark or undo only when the owner asks. A clear request authorizes the meeting
 change using the existing paired account. Do not ask for redundant website
