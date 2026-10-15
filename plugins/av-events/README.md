@@ -2040,8 +2040,11 @@ after the gateway's one-hour idle eviction replayed them.
 **The agent's own memory writes do not refresh**: Hermes keeps them out of the frozen prompt on
 purpose (they are already in the transcript). `post_tool_call` for the `memory` tool re-records the
 hash of the one file the call wrote (`args.target`: `memory`, the default, is MEMORY.md, `user` is
-USER.md; an unknown target, or a batch op naming another one, acknowledges nothing). And only when
-the call's own arguments explain the change: the file's entries are compared with the ones this
+USER.md; an unknown target, or a batch op naming another one, acknowledges nothing). Only a call
+whose result says it wrote: `success: true` and not staged for approval (a failed call, a staged
+one such as a background review's replace / remove, or an unparseable result acknowledges nothing,
+since its `old_text` could otherwise "explain" an entry the control plane removed in the same
+window). And only when the call's own arguments explain the change: the file's entries are compared with the ones this
 session was verified against; every new entry must be a `content` / `new_text` of the call, every
 gone entry one an `old_text` selects, and the rest must keep their order. An external write in the
 same window, such as the cp's vote note landing mid-turn or during a background memory review

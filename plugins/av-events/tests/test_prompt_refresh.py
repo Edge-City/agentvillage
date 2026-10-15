@@ -443,13 +443,23 @@ def test_check_time_truncation_warnings_are_not_left_for_the_next_build(hermes, 
 # ---- the agent's own memory writes ---------------------------------------------------------------
 
 
+def ok_result(target="user"):
+    """`MemoryStore._success_response`, as the tool returns it (a JSON string)."""
+    return json.dumps({"success": True, "done": True, "target": target, "usage": "1% — 20/1,375 chars",
+                       "entry_count": 2, "message": "Entry added.", "note": "Write saved."})
+
+
+def fire_memory_hook(h, session_id, args, result, **extra):
+    h.ctx.fire("post_tool_call", tool_name="memory", args=args, result=result, session_id=session_id,
+               task_id=session_id, tool_call_id="c1", turn_id="t", **extra)
+
+
 def memory_call(h, agent, args, store=None, session_id=None):
     """The `memory` tool as Hermes runs it (`tools/memory_tool.py:405-413`: target defaults to
-    memory), then `post_tool_call` with the call's own args (`model_tools.py:697`)."""
+    memory), then `post_tool_call` with the call's own args and result (`model_tools.py:697`)."""
     target = "memory" if args.get("target") is None else args["target"]
     (store or agent._memory_store).apply("user" if target == "user" else "memory", args)
-    h.ctx.fire("post_tool_call", tool_name="memory", args=args, result="{}",
-               session_id=session_id or agent.session_id, task_id=agent.session_id, tool_call_id="c1", turn_id="t")
+    fire_memory_hook(h, session_id or agent.session_id, args, ok_result(target))
 
 
 def _own_write(h, agent, text):
@@ -581,6 +591,57 @@ def test_a_call_whose_target_or_action_is_unknown_or_mixed_acknowledges_nothing(
     assert "Likes chess" in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]  # refreshed instead
 
 
+CLOSED_NOTE_CALLS = {
+    "remove": {"action": "remove", "target": "user", "old_text": "Village vote"},
+    "replace": {"action": "replace", "target": "user", "old_text": "Village vote", "content": "Voted on the theme"},
+}
+NOT_WRITTEN = {
+    "no-match": json.dumps({"success": False, "error": "No entry matched 'Village vote'.", "current_entries": []}),
+    "tool-error": json.dumps({"error": "Unknown action 'append'. Use: add, replace, remove", "success": False}),
+    "error-only": json.dumps({"error": "Memory is not available."}),
+    "gate-staged": json.dumps({"success": True, "staged": True, "pending_id": "p1", "message": "Needs approval."}),
+    "review-staged": json.dumps({"success": True, "staged": True, "proposal_staged": True, "pending_id": "p2",
+                                 "message": "Staged for your approval."}),
+    "unparseable": "Entry removed.",
+    "empty": "",
+    "none": None,
+}
+
+
+@pytest.mark.parametrize("result", sorted(NOT_WRITTEN))
+@pytest.mark.parametrize("call", sorted(CLOSED_NOTE_CALLS))
+def test_a_failed_or_staged_edit_of_a_note_the_cp_removed_acknowledges_nothing(hermes, call, result):
+    """N8 (intro's recheck, reproduced on real Hermes): the cp removes the closed vote note at
+    `closes_at`; in the same window the agent's (or a review fork's) remove / replace of it fails (no
+    entry matched) or is staged. Its `old_text` still selects the gone note, so only the result can
+    say the call wrote nothing. No ack: the next turn drops the closed note, and so does a fresh agent."""
+    original = (_home() / "memories/USER.md").read_text(encoding="utf-8")
+    agent = started(hermes)
+    write("memories/USER.md", original + "\n§\n" + VOTE)
+    assert VOTE in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]  # delivered and verified
+    write("memories/USER.md", original)  # closed by the cp
+    fire_memory_hook(hermes, agent.session_id, CLOSED_NOTE_CALLS[call], NOT_WRITTEN[result])
+    assert VOTE not in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert VOTE not in run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"]
+
+
+@pytest.mark.parametrize(("result", "extra", "acked"), [
+    (ok_result(), {}, True),
+    (json.loads(ok_result()), {}, True),                       # a dict, should a middleware decode it
+    (ok_result(), {"status": "ok"}, True),
+    (ok_result(), {"status": "error"}, False),                 # the observer's own verdict
+    (NOT_WRITTEN["no-match"], {}, False),
+    (NOT_WRITTEN["review-staged"], {}, False),
+    (NOT_WRITTEN["unparseable"], {}, False),
+], ids=["success", "success-dict", "status-ok", "status-error", "failed", "staged", "unparseable"])
+def test_only_a_call_that_wrote_is_acknowledged(hermes, result, extra, acked):
+    agent = started(hermes)
+    agent._memory_store.add("user", "Likes chess")
+    kwargs = {"tool_name": "memory", "args": {"action": "add", "target": "user", "content": "Likes chess"},
+              "result": result, "session_id": agent.session_id, **extra}
+    assert pr(hermes.plugin).acknowledge_memory_write(kwargs) is acked
+
+
 @pytest.mark.parametrize(("before", "after", "added", "selectors", "ok"), [
     (("a", "b"), ("a", "b", "c"), ["c"], [], True),
     (("a", "b"), ("a", "b", "c", "d"), ["c"], [], False),          # one more than the call wrote
@@ -687,6 +748,21 @@ def test_a_failed_persist_on_a_cached_agent_reaches_the_row_before_it_is_recorde
     assert len(refresh_lines(caplog)) == 1  # the row is written again, the prompt is not rebuilt again
     assert caplog.text.count("Session DB update_system_prompt failed") == failures
     assert VOTE in run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"]
+
+
+def test_a_marked_session_whose_check_keeps_raising_warns_once(hermes, caplog):
+    """N9: a marked session skips the pre-filter, so a check that keeps raising runs every turn."""
+    agent = started(hermes)
+    write("memories/USER.md", "Name: Test Resident\n§\n" + VOTE)
+    hermes.db.fail = True
+    run_turn(hermes.loop, agent, "hi", HISTORY)
+    hermes.db.fail = False
+    HERMES["load_raises"] = True
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        for _ in range(4):
+            assert VOTE in run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    check = [r.levelno for r in caplog.records if "prompt_refresh check failed (OSError)" in r.getMessage()]
+    assert check == [logging.WARNING] + [logging.DEBUG] * 3
 
 
 def test_an_unpersisted_session_is_checked_even_when_the_files_go_back(hermes):

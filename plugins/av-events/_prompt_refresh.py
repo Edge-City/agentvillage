@@ -49,7 +49,8 @@ The agent's own memory writes do not refresh (Hermes keeps them out of the froze
 they are in the transcript): `with_memory_write_ack` chains onto `post_tool_call` and, after a
 `memory` tool call, re-records the digest of the one file the call wrote (`args.target`: `memory`,
 the default, is MEMORY.md; `user` is USER.md; anything else, or a batch op naming another target,
-acknowledges nothing). Only when the change on disk is explained by the call's own arguments: the
+acknowledges nothing). Only a call whose result says it wrote (`success: true`, not staged for
+approval; a failed or staged call acknowledges nothing). Only when the change on disk is explained by the call's own arguments: the
 file's entries are compared with the entries verified for this session, and every added entry must
 be a `content` / `new_text` of the call, every removed one must be selected by an `old_text`, and
 the kept entries must keep their order. Anything else (an external USER.md write landing in the same
@@ -81,6 +82,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import inspect
+import json
 import logging
 import os
 import threading
@@ -476,7 +478,8 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
     except BaseException as exc:  # noqa: BLE001 - no verdict: today's prompt, no retry until a file changes
         if isinstance(exc, SystemExit):
             raise
-        _warn("check", exc)
+        # A marked session skips the pre-filter, so a check that keeps raising would WARN every turn.
+        _warn("check", exc, once=_unpersisted(session_id))
         _record(session_id, digests)
         return
     if not reasons:
@@ -687,6 +690,27 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def call_succeeded(kwargs: Dict[str, Any]) -> bool:
+    """The call wrote: its result parses to `success: true` and is not staged for approval. Hermes's
+    shapes (v2026.9.24): `_success_response` `{"success": true, "done": true, ...}`
+    (`tools/memory_tool_store.py:468-481`); errors `{"success": false, "error": ...}` (`_error`, :32) or
+    `tool_error` `{"error": ...}`; staged `{"success": true, "staged": true, "pending_id": ...}` from the
+    approval gate (`tools/memory_tool.py:99`) or, with `proposal_staged`, from a background review fork's
+    replace / remove (:195). A failed or staged call can still name an entry another writer removed,
+    so its args must not explain that change. No result, or one that does not parse: False."""
+    if kwargs.get("status") not in (None, "ok"):
+        return False
+    result = kwargs.get("result")
+    if isinstance(result, (str, bytes, bytearray)):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return False
+    if not isinstance(result, dict) or result.get("success") is not True or "error" in result:
+        return False
+    return not any(result.get(key) for key in ("staged", "proposal_staged", "pending_id"))
+
+
 def call_target(args: Any) -> Optional[str]:
     """The file a `memory` call writes: `memory` (also an omitted or null target, as Hermes reads it,
     `tools/memory_tool.py:217, 412`) or `user`. None when unknown, or when a batch op names another."""
@@ -743,8 +767,8 @@ def explained(before: Tuple[str, ...], after: Tuple[str, ...], added: List[str],
 
 def acknowledge_memory_write(kwargs: Dict[str, Any]) -> bool:
     """After the agent's own `memory` call, re-record the digest of the one file it wrote, so the
-    write does not refresh. Only a session already verified in this process, and only when the
-    file's change since then is explained by the call's arguments (`explained`); otherwise nothing is
+    write does not refresh. Only a call that wrote (`call_succeeded`), only a session already
+    verified in this process, and only when the file's change since then is explained by the call's arguments (`explained`); otherwise nothing is
     acknowledged and the next turn's exact test refreshes. The other files' digests are kept, so an
     external change to them still refreshes. True when the session's record is current for it."""
     if kwargs.get("tool_name") != "memory":
@@ -753,7 +777,7 @@ def acknowledge_memory_write(kwargs: Dict[str, Any]) -> bool:
     if type(session_id) is not str or not session_id:
         return False
     recorded = _recorded(session_id)
-    if recorded is None:
+    if recorded is None or not call_succeeded(kwargs):
         return False
     args = kwargs.get("args")
     target = call_target(args)
@@ -806,6 +830,7 @@ __all__ = [
     "TEAM_VAR",
     "acknowledge_memory_write",
     "call_changes",
+    "call_succeeded",
     "call_target",
     "check_and_refresh",
     "enabled",
