@@ -190,10 +190,28 @@ def test_description_leads_with_the_searchable_sentence(ask_mod):
     assert ask_mod.TOOL_DESCRIPTION[:60].startswith("Village group chat")
 
 
-@pytest.mark.parametrize("query", INTENT_QUERIES)
+#: VILLAGE SEARCH: an explicit "search ... messages" query ranks `search_village` (the tool that returns the
+#: messages themselves) first; ask_village is still admitted right behind it (test below).
+SEARCH_QUERIES = ("search group chat messages", "search village messages", "search_village")
+
+
+@pytest.mark.parametrize("query", [q for q in INTENT_QUERIES if q not in SEARCH_QUERIES])
 def test_tool_search_finds_ask_village_first(catalog, query):
     found = search_catalog(catalog, query)
     assert found and found[0] == "ask_village", (query, found)
+
+
+@pytest.mark.parametrize("query", SEARCH_QUERIES)
+def test_tool_search_finds_search_village_first_for_search_queries(catalog, query):
+    found = search_catalog(catalog, query)
+    assert found and found[0] == "search_village", (query, found)
+
+
+@pytest.mark.parametrize("query", ["search group chat messages", "group chat messages", "group chat",
+                                   "village group chat"])
+def test_both_village_tools_are_admitted_for_group_chat_queries(catalog, query):
+    found = search_catalog(catalog, query)
+    assert {"ask_village", "search_village"} <= set(found), (query, found)
 
 
 @pytest.mark.parametrize("query", INTENT_QUERIES)

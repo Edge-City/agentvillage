@@ -100,12 +100,34 @@ const NOT_GATED: readonly NotGated[] = [
       "registered only with AV_ASK_VILLAGE on; refused in group sessions; per-tenant limits on the cp",
   },
   {
+    name: "search_village",
+    plugin: "av-events",
+    reason:
+      "SIDE EFFECT, raised with the lead (same reasoning as ask_village): sends one ≤200-char query to the cp, which " +
+      "returns at most 30 of the main group's messages, contact details scrubbed by the app; reads only, writes and " +
+      "grants nothing; registered only with AV_SEARCH_VILLAGE on; refused in group sessions; per-tenant limits on the cp",
+  },
+  {
     name: "pray",
     plugin: "av-events",
     reason:
       "SIDE EFFECT, raised with the lead: sends one request with a ≤600-char reason to the cp for human review; nothing is " +
       "granted without an admin's approval on /admin/prayers; registered only with AV_PRAY on; refused in group sessions; " +
       "per-tenant limits on the cp",
+  },
+  {
+    name: "resident_context",
+    plugin: "village-memory",
+    reason:
+      "read: a local keyword scan of knowledge/agentvillage/*.md (what the cp wrote for the resident); writes nothing, " +
+      "no network; a memory-provider tool (get_tool_schemas), offered and answered only in private sessions",
+  },
+  {
+    name: "resident_profile",
+    plugin: "village-memory",
+    reason:
+      "read: re-reads knowledge/agentvillage/_profile.md (the cp's render); writes nothing, no network; a memory-provider " +
+      "tool (get_tool_schemas), offered and answered only in private sessions",
   },
   {
     name: "recall",
@@ -471,11 +493,15 @@ describe("OV-300 S2: every plugin tool is gated or explicitly NOT_GATED", () => 
     // Resolved by reading the source: consent_status (_consent.py TOOL_NAME), record_intention
     // (_record_intention.py TOOL_NAME = RECORD_INTENTION_TOOL, _intentions.py), share_digest and
     // village_vote (_share_vote.py wanted table: SHARE_TOOL, VOTE_TOOL), pray (_pray.py TOOL_NAME),
-    // ask_village (_ask_village.py TOOL_NAME), recall (recall TOOL_NAME), village (village-bridge literal).
+    // ask_village (_ask_village.py TOOL_NAME), search_village (_search_village.py TOOL_NAME), recall (recall
+    // TOOL_NAME), village (village-bridge literal), resident_context and resident_profile (village-memory
+    // plugin.yaml provides_tools: a memory provider's tools come from get_tool_schemas, which no register_tool
+    // scan sees).
     expect([...inv.tools.keys()].sort()).toEqual([
-      "ask_village", "consent_status", "pray", "recall", "record_intention", "share_digest", "village", "village_vote",
+      "ask_village", "consent_status", "pray", "recall", "record_intention", "resident_context", "resident_profile",
+      "search_village", "share_digest", "village", "village_vote",
     ]);
-    expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(8);
+    expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(9);
   });
 
   test("each tool full-matches an APPROVAL_GATED_TOOLS pattern or has a NOT_GATED entry for its plugin, not both", () => {

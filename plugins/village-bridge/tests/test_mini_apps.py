@@ -130,6 +130,48 @@ class ProjectionTest(unittest.TestCase):
             path.symlink_to(other)
             self.assertFalse(mini.installed(home, "gold-stars", "gold-stars.send"))
 
+    def test_rolodex_person_entries_9_8_6_each_carry_their_own_operations(self):
+        # ROLODEX.PERSON (rc42): the 9-op entry appends rolodex.person LAST; the 8-op (ov#350, the CP's
+        # current entry) and 6-op (ov#343) entries stay accepted, each for exactly its own operations.
+        nine = mini.GOLD_STARS["operations"]
+        eight = mini.GOLD_STARS_RESTORED["operations"]
+        six = mini.GOLD_STARS_PREVIOUS["operations"]
+        self.assertEqual(nine, eight + ["rolodex.person"])
+        self.assertEqual(eight, six + ["rolodex.meeting", "skylight.status"])
+        self.assertEqual(mini.GOLD_STARS_ACCEPTED, (mini.GOLD_STARS, mini.GOLD_STARS_RESTORED, mini.GOLD_STARS_PREVIOUS))
+        for entry in mini.GOLD_STARS_ACCEPTED:
+            self.assertEqual((entry["version"], entry["skills"]), ("1.1.0", ["gold-stars"]))
+        everything = sorted(mini.READ_OPERATIONS | mini.WRITE_OPERATIONS - {"mini-app.read"})
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            path = home / "mini-apps.json"
+            for entry in mini.GOLD_STARS_ACCEPTED:
+                path.write_text(json.dumps({"version": 1, "apps": [{"id": "gold-stars", **entry}]}))
+                for op in everything:
+                    with self.subTest(ops=len(entry["operations"]), op=op):
+                        self.assertEqual(mini.installed(home, "gold-stars", op), op in entry["operations"])
+            app = {"id": "gold-stars", **mini.GOLD_STARS}
+            restored = {"id": "gold-stars", **mini.GOLD_STARS_RESTORED}
+            previous = {"id": "gold-stars", **mini.GOLD_STARS_PREVIOUS}
+            refused = (
+                [{**app, "operations": ["rolodex.person"] + eight}],  # not appended last
+                [{**app, "operations": eight[:6] + ["rolodex.person"] + eight[6:]}],
+                [{**previous, "operations": six + ["rolodex.person"]}],  # person without the restore
+                [{**app, "operations": nine + ["rolodex.person"]}],
+                [{**app, "operations": nine + ["rolodex.profile"]}],
+                [{**app, "version": "1.2.0"}], [app, restored], [restored, previous], [app, previous],
+            )
+            for apps in refused:
+                path.write_text(json.dumps({"version": 1, "apps": apps}))
+                with self.subTest(apps=apps):
+                    self.assertFalse(mini.installed(home, "gold-stars", "rolodex.person"))
+                    self.assertFalse(mini.installed(home, "gold-stars", "rolodex.search"))
+
+    def test_rolodex_person_is_a_read(self):
+        self.assertIn("rolodex.person", mini.READ_OPERATIONS)
+        self.assertNotIn("rolodex.person", mini.WRITE_OPERATIONS)
+        self.assertFalse(mini.READ_OPERATIONS & mini.WRITE_OPERATIONS)
+
     def test_disabled_missing_and_unverified_authority_refused(self):
         for configured, switch, codes in ((False, "on", ()), (True, "off", ()), (True, "on", ("hook-missing:village",))):
             ap = types.SimpleNamespace(configured=lambda: configured)

@@ -143,12 +143,42 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 - `skylight.status` with no other argument: the owner's own Skylight status,
   a **read** (`READ_OPERATIONS`). No tenant, person or agent argument exists; the app derives the
   account from the bearer.
+- `rolodex.person` (rc42, CLAIMS 7799/7804) with exactly one of `id` (a strict
+  uuid that `rolodex.search` returned) or `query` (1 to 120 characters): a
+  **read** (`READ_OPERATIONS`) of one other resident's public profile (PUBLIC
+  and VILLAGE card lines, public social profile links; never email,
+  phone, Telegram handle or anything private). Appended last. `id` is lowercase,
+  exactly as search returns it. The app's filter is primary; the plugin also
+  keeps only the reviewed answer keys, person fields and card names, removes
+  every format character (bidi, zero-width, BOM, tag characters) and invisible
+  filler, caps strings at the app's limits (card lines 160, 4
+  lines a card, 5 names, 8 links), and keeps only plain-ASCII `https` links
+  with no userinfo, backslash or odd port, whose host is not a messaging,
+  contact or booking host and whose path (fully percent-decoded) is not a DM,
+  messaging, add-contact or contact-info page; a kept link loses its query and
+  fragment (verify OV-355 S1). URL shorteners, link-in-bio pages and
+  redirectors count as contact hosts; a path that carries another link, a
+  deny-listed host, an email or a phone number is refused; every Unicode
+  format character, variation selector and invisible filler is removed from
+  every key and string; an app body carrying an `error` key is rebuilt from
+  the plugin's own codes. `whatYouDo` is never forwarded (CLAIMS L8029). A card
+  line, a role or an organization that holds an
+  email, a 7+ digit phone run, an @handle, a deny-listed host or a messaging
+  label with a handle is dropped whole (after hidden-character removal and
+  NFKC; never redacted inside a line, false positives accepted). Every bound
+  (a 64 KB answer, 8 lines a card, 16 links, each field's length) applies
+  before any regex, NFKC step or URL parse; the checks are linear scans; the
+  text that is checked is the text that is sent; an answer with a duplicate
+  JSON key is refused. Known limit: a heuristic can be bypassed (a number
+  spelled out in words); the app's filter and the skill rule are primary.
 
-The CP catalog's gold-stars entry carries the same eight operations in the same
-order. The helper and the plugin still accept the six-operation entry from
-before the restore (meeting and Skylight refused under it), so the overlay can
-roll out first. The order is one way only: overlay first, then the catalog
-(with a re-stage of installed rows); an older overlay refuses the eight-op entry.
+The reviewed gold-stars entry carries these nine operations in this order. The
+helper and the plugin still accept the eight-operation entry (ov#350, the CP's
+entry until it moves; `rolodex.person` refused under it) and the six-operation
+entry from before the restore (meeting, Skylight and person refused under it),
+so the overlay can roll out first. The order is one way only: overlay first,
+then the catalog (cp#244's drift re-stage then re-stages installed rows); an
+older overlay refuses a longer entry and loses every Gold Stars operation.
 
 ## Disk staging and lifecycle
 
@@ -161,7 +191,7 @@ Only the pinned local checkout's exact reviewed `SKILL.md` files are copied.
 `bun install/install_miniapps.ts` reads this projection from stdin:
 
 ```json
-{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status"],"skills":["gold-stars"]}]}
+{"version":1,"apps":[{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status","rolodex.person"],"skills":["gold-stars"]}]}
 ```
 
 `HERMES_HOME` selects the disk target. Add `--verify` to check without writing.

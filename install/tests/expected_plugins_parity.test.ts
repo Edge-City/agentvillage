@@ -8,8 +8,9 @@
  *
  * - `overlay` == every directory under `plugins/` minus `NOT_STAGED_PLUGINS` (what `stagePlugins` copies);
  * - `index` == {`INDEX_PLUGIN`, `INDEX_PLUGIN_REF`} (the installer's `--ref` for index-network);
- * - `conditional` (present on some boxes only, so never `expected_missing`) == `recall`, the index plugin,
- *   and `village-bridge` only while it is staged;
+ * - `conditional` (present on some boxes only, or never loaded by the general manager, so never
+ *   `expected_missing`) == `recall`, the index plugin, `village-memory` (a memory provider), and
+ *   `village-bridge` only while it is staged;
  * - `expected_set_version` == the first 12 hex of sha256 over the canonical JSON of the set (keys sorted,
  *   no spaces), the same function as `_plugins.set_version` in Python.
  */
@@ -67,8 +68,10 @@ describe("expected_plugins.json is the installer's set", () => {
     expect(INDEX_PLUGIN_REF).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  test("conditional == recall, the index plugin, and village-bridge only while staged", () => {
-    const want = ["recall", INDEX_PLUGIN, ...(NOT_STAGED_PLUGINS.has("village-bridge") ? [] : ["village-bridge"])].sort();
+  // village-memory (D3) is a memory provider (`kind: exclusive`): Hermes's general manager records it as a
+  // placeholder and never loads it, so it can never count as loaded and must not count as missing.
+  test("conditional == recall, the index plugin, village-memory, and village-bridge only while staged", () => {
+    const want = ["recall", INDEX_PLUGIN, "village-memory", ...(NOT_STAGED_PLUGINS.has("village-bridge") ? [] : ["village-bridge"])].sort();
     expect(expected.conditional).toEqual(want);
     for (const name of expected.conditional) expect([...expected.overlay, INDEX_PLUGIN]).toContain(name);
   });
