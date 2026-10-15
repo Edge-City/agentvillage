@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
@@ -1104,7 +1105,35 @@ export type CodeExecutionFailure =
   | "top-level-not-mapping"
   | "merge-key-at-top"
   | "merge-key-under-code_execution"
-  | "not-strict-after-write";
+  | "not-strict-after-write"
+  | "not-strict-for-hermes"
+  | "hermes-readback-failed";
+
+/**
+ * The mode as Hermes's own reader sees the file: PyYAML `safe_load` (YAML 1.1: duplicate keys, the
+ * last one wins; merge keys merged) and code_execution_tool.py:803-813's normalisation. Run with
+ * Hermes's interpreter, `-I`, the path as an argument; prints `strict`, `project` or nothing.
+ */
+const HERMES_MODE_READBACK = [
+  "import sys, yaml",
+  "with open(sys.argv[1], encoding='utf-8') as fh:",
+  "    cfg = yaml.safe_load(fh) or {}",
+  "sec = cfg.get('code_execution', {}) if isinstance(cfg, dict) else {}",
+  "raw = sec.get('mode', 'project') if isinstance(sec, dict) else 'project'",
+  "mode = str(raw).strip().lower()",
+  "print(mode if mode in ('project', 'strict') else 'project')",
+].join("\n");
+
+/** `code_execution.mode` read back by Hermes's interpreter, or null when that read could not run. */
+export function hermesCodeExecutionMode(python: string, configPath: string): string | null {
+  try {
+    const r = spawnSync(python, ["-I", "-c", HERMES_MODE_READBACK, configPath], { encoding: "utf8", timeout: 30_000 });
+    const out = typeof r.stdout === "string" ? r.stdout.trim() : "";
+    return r.status === 0 && (out === "strict" || out === "project") ? out : null;
+  } catch {
+    return null;
+  }
+}
 
 /** `code_execution.mode` as Hermes reads it (`str(value).strip().lower()`, an unknown value is `project`). */
 export function effectiveCodeExecutionMode(doc: Record<string, unknown>): string {
@@ -1130,13 +1159,19 @@ export function effectiveCodeExecutionMode(doc: Record<string, unknown>): string
  * - A YAML merge key at the top or under `code_execution`: nothing written and
  *   a failure (`merge-key-...`). PyYAML merges what the `yaml` package reads
  *   literally, so no write here could be sure of what Hermes sees; set it by hand.
- * - A top level that is not a mapping, or a config that cannot be read: a failure.
+ * - A top level that is not a mapping, or a config that cannot be read (a
+ *   duplicate key included: the `yaml` package refuses it, PyYAML would take the
+ *   last one): a failure.
+ * - The write goes through `writeConfig` (parse, then `dumpConfig`), never a
+ *   text edit. It is then read back twice: by this parser, and, given
+ *   `hermesPython`, by Hermes's own PyYAML (`not-strict-for-hermes`,
+ *   `hermes-readback-failed`), so a parser differential fails the run too.
  *
  * No other `code_execution` key is written. One `→` line; a config value is
  * never echoed (only `strict`, `project` or a kind). Hermes reads the mode at
  * each `execute_code` call.
  */
-export function setCodeExecutionMode(): CodeExecutionFailure | null {
+export function setCodeExecutionMode(options: { hermesPython?: string | null } = {}): CodeExecutionFailure | null {
   const path = "code_execution.mode";
   let doc: unknown;
   try {
@@ -1182,6 +1217,20 @@ export function setCodeExecutionMode(): CodeExecutionFailure | null {
   if (!isMapping(back) || effectiveCodeExecutionMode(back) !== CODE_EXECUTION_MODE) {
     console.log(`→ error: ${path} reads back as not ${CODE_EXECUTION_MODE}`);
     return "not-strict-after-write";
+  }
+  // And as Hermes reads it (PyYAML, YAML 1.1), when its interpreter is known: no parser differential
+  // between this writer and Hermes's loader may leave the box in project mode.
+  const python = options.hermesPython;
+  if (python) {
+    const mode = hermesCodeExecutionMode(python, join(hermesHome(), "config.yaml"));
+    if (mode === null) {
+      console.log(`→ error: ${path} could not be read back with Hermes's YAML loader`);
+      return "hermes-readback-failed";
+    }
+    if (mode !== CODE_EXECUTION_MODE) {
+      console.log(`→ error: Hermes's YAML loader reads ${path} as ${mode}`);
+      return "not-strict-for-hermes";
+    }
   }
   return null;
 }

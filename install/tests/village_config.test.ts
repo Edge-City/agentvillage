@@ -19,6 +19,7 @@ import YAML from "yaml";
 import {
   CODE_EXECUTION_MODE,
   effectiveCodeExecutionMode,
+  hermesCodeExecutionMode,
   COMPRESSION_THRESHOLD,
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
@@ -757,7 +758,7 @@ describe("RC42: compression trigger at 75% of the pin (ratio 0.75, no token cap)
     const body = main.slice(0, main.indexOf("\n}\n"));
     expect(body.match(/^.*setCompressionTrigger.*$/gm)).toEqual(["  setCompressionTrigger();"]);
     // CODE EXECUTION ON (rc42) runs its own step right after this one.
-    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  \/\/ rc43 .*\n  const codeExecFailed = setCodeExecutionMode\(\);\n  configureTelegramDisplay\(\);$/m);
+    expect(body).toMatch(/^  setCompactionSettings\(\);\n  setCompressionTrigger\(\);\n  \/\/ rc43 .*\n  const codeExecFailed = setCodeExecutionMode\(\{ hermesPython: resolveHermesPython\(\) \}\);\n  configureTelegramDisplay\(\);$/m);
     expect(main.indexOf("setCompressionTrigger();")).toBeLessThan(main.indexOf("restartGateway();"));
   });
 
@@ -892,11 +893,79 @@ describe("CODE EXECUTION ON (rc42): code_execution.mode strict, verified (rc43: 
     }
   });
 
+  test("flag 3 (parser differential): a duplicate key, at the top or under code_execution, is refused with nothing written", () => {
+    for (const text of [
+      "code_execution:\n  mode: project\ncode_execution:\n  mode: strict\n",
+      "code_execution:\n  mode: strict\ncode_execution:\n  mode: project\n",
+      "code_execution:\n  mode: strict\n  mode: project\n",
+    ]) {
+      logSpy.mockClear();
+      withText(text);
+      expect([text, setCodeExecutionMode()]).toEqual([text, "config-unreadable"]);
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(logged()).toStartWith("→ error: ");
+    }
+  });
+
+  test("flag 3 (parser differential): a commented-out key counts for nothing; the real key is written and read back", () => {
+    for (const text of [
+      "model:\n  default: m\n# code_execution:\n#   mode: strict\n",
+      "model:\n  default: m\ncode_execution:\n  # mode: strict\n  timeout: 300\n",
+      "model:\n  default: m\ncode_execution:\n  mode: project # strict\n",
+    ]) {
+      logSpy.mockClear();
+      withText(text);
+      expect(setCodeExecutionMode()).toBe(null);
+      expect(lines()[0]).toStartWith(`→ set ${PATH}: strict (`);
+      expect(effectiveCodeExecutionMode(read())).toBe("strict");
+      expect(readFileSync(configPath(), "utf8").match(/^code_execution:$/gm)).toHaveLength(1);
+    }
+  });
+
+  test("flag 3 (parser differential): Hermes's interpreter reading anything but strict, or not reading, fails the run", () => {
+    const bin = mkdtempSync(join(tmpdir(), "codeexec-fakepy-"));
+    try {
+      const fake = (name: string, body: string) => {
+        const path = join(bin, name);
+        writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        return path;
+      };
+      const cases = [
+        [fake("says-project", "echo project"), "not-strict-for-hermes"],
+        [fake("fails", "exit 1"), "hermes-readback-failed"],
+        [fake("says-garbage", "echo strictish"), "hermes-readback-failed"],
+        [join(bin, "missing"), "hermes-readback-failed"],
+        [fake("says-strict", "echo strict"), null],
+      ] as const;
+      for (const [python, failure] of cases) {
+        withDoc({ code_execution: { mode: "project" } });
+        expect([python, setCodeExecutionMode({ hermesPython: python })]).toEqual([python, failure]);
+      }
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  const PY_WITH_YAML = (() => {
+    const r = Bun.spawnSync(["python3", "-I", "-c", "import yaml"]);
+    return r.exitCode === 0 ? "python3" : null;
+  })();
+  test.skipIf(!PY_WITH_YAML)("flag 3 (parser differential): PyYAML itself reads the written file as strict (python3 + PyYAML)", () => {
+    for (const doc of [{}, { code_execution: { mode: "project", timeout: 300 } }, { code_execution: "off" }, { code_execution: { mode: "on" } }]) {
+      withDoc(doc);
+      expect([doc, setCodeExecutionMode({ hermesPython: PY_WITH_YAML })]).toEqual([doc, null]);
+      expect(hermesCodeExecutionMode(PY_WITH_YAML!, configPath())).toBe("strict");
+    }
+    // The reader is Hermes's: on a duplicate key PyYAML takes the last one, which is why this side refuses it.
+    withText("code_execution:\n  mode: strict\ncode_execution:\n  mode: project\n");
+    expect(hermesCodeExecutionMode(PY_WITH_YAML!, configPath())).toBe("project");
+  }, 60_000);
+
   test("install.ts records the failure, runs every later step, and exits non-zero at its end with one error line", () => {
     const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
     const main = text.slice(text.indexOf("function main(): void {"));
     const body = main.slice(0, main.indexOf("\n}\n"));
-    expect(body.match(/^.*setCodeExecutionMode.*$/gm)).toEqual(["  const codeExecFailed = setCodeExecutionMode();"]);
+    expect(body.match(/^.*setCodeExecutionMode.*$/gm)).toEqual(["  const codeExecFailed = setCodeExecutionMode({ hermesPython: resolveHermesPython() });"]);
     expect(main.indexOf("setCodeExecutionMode();")).toBeLessThan(main.indexOf("restartGateway();"));
     expect(body).toContain([
       "  if (codeExecFailed) {",

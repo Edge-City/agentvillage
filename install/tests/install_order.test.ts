@@ -132,7 +132,7 @@ describe("install.ts runs the stages in that order", () => {
     const helper = text.slice(text.indexOf("function installIndexHermesPlugin("), text.indexOf("function restartGateway("));
     expect(helper).toContain("installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified())");
     expect(text.match(/lastInstallVerified\(\)/g)).toHaveLength(1);
-    expect(text).toContain('import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, runApprovalStep, stagePlugins } from "./install_approval";');
+    expect(text).toContain('import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, resolveHermesPython, runApprovalStep, stagePlugins } from "./install_approval";');
     expect(main.indexOf("if (!runApprovalStep(SOURCE_SKILLS)) {")).toBeLessThan(main.indexOf("const indexPluginFailed = installIndexHermesPlugin();"));
   });
 

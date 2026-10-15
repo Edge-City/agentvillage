@@ -22,7 +22,8 @@
  *   - `compression.threshold: 0.75` unless already 0.75-1, and `compression.threshold_tokens: null` (RC42: compaction
  *     at 75% of the control plane's `model.context_length` pin at any window, the 1,000,000 pin included)
  *   - `code_execution.mode: strict` (RC42 CODE EXECUTION ON: `execute_code` is off the approval gate's list and
- *     runs in Hermes's isolated temp-dir mode)
+ *     works in a temp dir), read back by this parser and by Hermes's PyYAML; when it is not strict the run prints
+ *     `agentvillage-install: code_execution_failed=<why>` and exits non-zero after every other step (rc43)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Index Hermes plugin (`index-network`) for `AV_MORALMOD_ARM=on` residents only: installed at the
  *     reviewed commit `INDEX_PLUGIN_REF` (no Hermes call once there), listed in `plugins.enabled`, and
@@ -67,7 +68,7 @@ import { installIndex } from "./install_index";
 import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, runApprovalStep, stagePlugins } from "./install_approval";
+import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, resolveHermesPython, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -351,7 +352,7 @@ function main(): void {
   setCompactionSettings();
   setCompressionTrigger();
   // rc43 (ov#357 review flags): fail loud like the two steps above; recorded, the run exits non-zero at its end.
-  const codeExecFailed = setCodeExecutionMode();
+  const codeExecFailed = setCodeExecutionMode({ hermesPython: resolveHermesPython() });
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
@@ -442,7 +443,9 @@ function main(): void {
   // carrying the control plane's per-exec nonce (AV_GATE_NONCE) and what Hermes's own parse of
   // config.yaml routes. Nothing is printed after it; without a nonce or a successful approval
   // install it is not printed at all.
-  const receipt = gateReceiptLine();
+  // rc43 (fail closed): a box whose strict mode could not be verified sends no receipt, so the control
+  // plane never reads it as ready while execute_code may run in Hermes's project mode.
+  const receipt = codeExecFailed ? null : gateReceiptLine();
   if (receipt) process.stdout.write(`${receipt}\n`);
 }
 
