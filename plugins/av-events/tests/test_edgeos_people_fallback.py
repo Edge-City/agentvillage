@@ -66,16 +66,18 @@ def test_the_fallback_covers_every_directory_failure():
 def test_the_resident_hears_at_most_one_short_line_and_never_an_expiry():
     text = fallback()
     assert f'At most add one short line: "{ONE_LINE}".' in text
-    assert "Never tell the person their directory access or sign-in has expired, lapsed or is unavailable" in text
-    assert "never end the answer on it" in text
+    assert "Never say the directory or its access expired or is unavailable" in text
+    assert "never give a failure as the reason you can't find someone, and never end the answer on it" in text
+    assert "No other line about the directory." in text
 
 
 def test_section_0_sends_people_lookups_to_the_fallback():
     body = flat(section(0))
     assert ("**Looking someone up is different.** When the person asks who someone is, about a person, or how to "
             "reach them, run the directory script this turn (§9), even if it failed earlier in the conversation, and a "
-            "directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 and exit 4 messages above and "
-            "follow §9's people-lookup fallback instead.") in body
+            "directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 message above and follow §9's "
+            "people-lookup fallback instead. On a real exit 4 in this turn, answer from the other sources first, then "
+            "add the exit 4 sign-in line above once, after the answer (§9).") in body
     # The bullet sits after both messages it overrides.
     assert body.index("When the script exits 2") < body.index("**Looking someone up is different.**")
     assert body.index("**Exit 4** (profile or directory script)") < body.index("**Looking someone up is different.**")
@@ -130,3 +132,23 @@ def test_agents_md_carries_the_one_short_this_turn_clause():
     assert len(AGENTS_CLAUSE) <= 80
     assert body.count(AGENTS_CLAUSE) == 1
     assert f"if a step fails or finds no one, try the next. {AGENTS_CLAUSE}" in body
+
+
+def test_a_real_exit_4_this_turn_still_answers_then_adds_the_sign_in_line_once():
+    """The residents with no Edge City grant hit exit 4 (not connected). They still get an answer from the other
+    sources; the §0 sign-in line comes once, after it, in place of the short line, and is the only other line."""
+    text = fallback()
+    exception = text[text.index("The one exception is a real exit 4 in this turn"):]
+    assert exception.startswith(
+        "The one exception is a real exit 4 in this turn (the person's Edge City sign-in isn't connected): still answer "
+        "from the other sources first, then add §0's exit 4 sign-in line once, after the answer, instead of the short "
+        "line. No other line about the directory.")
+    # The exception comes after the one-line limit it amends, and after the fallback order it relies on.
+    assert text.index(ONE_LINE) < text.index("The one exception is a real exit 4")
+    assert text.index("3. the public website copy") < text.index("The one exception is a real exit 4")
+    # The line it points to is §0's, with the sign-in link, and asks for no secret.
+    body0 = flat(section(0))
+    assert ("Say: \"I can't reach your Edge City details right now because your sign-in to the Agent Village app has "
+            "lapsed. Sign in once at https://agents.edgecity.live/signin and I can look them up again.\"") in body0
+    assert "Never ask for a code, password or token." in body0
+    assert "then add the exit 4 sign-in line above once, after the answer (§9)" in body0
