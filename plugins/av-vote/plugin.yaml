@@ -1,0 +1,10 @@
+name: av-vote
+version: 0.1.0
+description: "VOTE CALLBACK (rc42): a resident taps an option on the referendum vote card in Telegram and the vote is recorded in the chat, no browser and no sign-in. Registers one Telegram CallbackQueryHandler scoped to callback_data that starts with avv: (ctx.register_platform_handler; Hermes wires plugin handlers before its core catch-all, and every core button flow keeps its own prefix). On avv:<optionIndex>:<token> from the box's own resident (the paired Telegram home channel) it POSTs the app-signed vote token to the app's vote-record endpoint (AV_APP_ORIGIN, else https://agents.edgecity.live; 10 s timeout), answers the tap with Recorded: <option>, and marks the chosen option on the card (the others stay tappable, the web row is kept). Anyone else is told the card is not theirs. Failure answers a short error and leaves the card as it is. Never logs the token (tenant id8 and an outcome code only). Fail-open: no tools, no hooks, never raises into the gateway."
+author: Edge City
+kind: backend
+optional_env:
+  - AV_APP_ORIGIN
+  - TELEGRAM_HOME_CHANNEL
+  - AV_TENANT_ID
+  - TENANT_ID
