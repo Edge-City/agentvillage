@@ -156,7 +156,12 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   with no userinfo, backslash or odd port, whose host is not a messaging,
   contact or booking host and whose path (fully percent-decoded) is not a DM,
   messaging, add-contact or contact-info page; a kept link loses its query and
-  fragment (verify OV-355 S1). It does not rewrite prose.
+  fragment (verify OV-355 S1). URL shorteners, link-in-bio pages and
+  redirectors count as contact hosts; a path that carries another link, a
+  deny-listed host, an email or a phone number is refused; every Unicode
+  format character, variation selector and invisible filler is removed from
+  every key and string; an app body carrying an `error` key is rebuilt from
+  the plugin's own codes. It does not rewrite prose.
 
 The reviewed gold-stars entry carries these nine operations in this order. The
 helper and the plugin still accept the eight-operation entry (ov#350, the CP's

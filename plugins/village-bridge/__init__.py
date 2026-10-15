@@ -82,6 +82,15 @@ CONTACT_HOSTS = (
     "threema.id", "threema.ch", "skype.com", "zoom.us", "teams.microsoft.com", "teams.live.com",
     "calendly.com", "cal.com", "tidycal.com", "calendar.app.google", "calendar.google.com",
     "mail.google.com", "gmail.com", "outlook.com", "proton.me", "protonmail.com",
+    # Second security-review round: more messaging, meeting and booking hosts, and URL shorteners and
+    # redirectors (a shortened link can land on any of the above).
+    "matrix.to", "chat.google.com", "meet.google.com", "hangouts.google.com", "join.slack.com", "wire.com",
+    "facetime.apple.com", "whereby.com", "meet.jit.si", "chat.whatsapp.com", "snapchat.com", "kik.me", "icq.im",
+    "outlook.office.com", "outlook.office365.com", "meetings.hubspot.com", "youcanbook.me", "acuityscheduling.com",
+    "savvycal.com", "zcal.co", "koalendar.com", "doodle.com", "topmate.io", "superpeer.com", "intro.co", "clarity.fm",
+    "bit.ly", "t.co", "tinyurl.com", "goo.gl", "ow.ly", "is.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+    "rb.gy", "tiny.cc", "lnkd.in", "s.id", "bl.ink", "short.io", "linktr.ee", "lnk.bio", "beacons.ai", "bio.link",
+    "web.archive.org", "archive.org", "translate.goog",
 )
 # Messaging, DM, add-contact, booking and contact-info pages on any host (snapchat.com/add, instagram.com/direct,
 # linkedin.com/messaging, x.com/messages, Google appointment pages, linkedin .../overlay/contact-info).
@@ -89,22 +98,26 @@ CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "message", "add
 # The app's caps (app#290 person.ts): card lines 160, whatYouDo 300, names 240, role/organization 120 code points;
 # at most 4 lines a card, 5 candidate names and 8 links.
 CAPS = {"line": 160, "whatYouDo": 300, "name": 240, "role": 120, "organization": 120, "asOf": 40}
-# Invisible letters that are not format characters (Hangul fillers, Khmer inherent vowels, combining grapheme joiner).
-INVISIBLE = frozenset("͏ᅟᅠ឴឵ㅤﾠ")
+# Invisible characters outside category Cf (visible() removes every Cf character): soft hyphen (also Cf),
+# combining grapheme joiner, Hangul fillers, Khmer inherent vowels, Mongolian variation selectors, braille
+# blank, and the variation selectors U+FE00-FE0F and U+E0100-E01EF. Escapes only: no raw invisible bytes here.
+INVISIBLE = frozenset("\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b\u180c\u180d\u180f\u2800\u3164\uffa0"
+                      + "".join(map(chr, range(0xFE00, 0xFE10))) + "".join(map(chr, range(0xE0100, 0xE01F0))))
 PERSON_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0-9a-f-]{36}")
 
 
 def visible(value, cap=None):
-    """Every forwarded string: format (Cf: bidi, zero-width, BOM, soft hyphen, tag characters U+E0000-E007F),
-    surrogate, private-use and invisible-filler characters removed; controls and line/paragraph separators
-    become spaces; then capped in code points."""
+    """Every forwarded string: every format character (unicodedata category Cf: bidi, zero-width, BOM, soft
+    hyphen, tag characters U+E0000-E007F, ...), surrogate, private-use and unassigned (Cn: a newer Unicode's
+    format characters) code point and every INVISIBLE character removed; controls and line/paragraph
+    separators become spaces; then capped in code points."""
     if not isinstance(value, str):
         return None
     out = []
     for ch in value:
         category = unicodedata.category(ch)
-        if category in ("Cf", "Cs", "Co") or ch in INVISIBLE:
+        if category in ("Cf", "Cs", "Co", "Cn") or ch in INVISIBLE:
             continue
         out.append(" " if category in ("Cc", "Zl", "Zp") else ch)
     text = "".join(out).strip()
@@ -125,13 +138,16 @@ def person_link(item):
         port = parts.port
     except ValueError:
         return None
-    if parts.username is not None or parts.password is not None or port not in (None, 443):
+    if parts.username is not None or parts.password is not None or port not in (None, 443) or "@" in parts.netloc \
+            or (":" in parts.netloc and not parts.netloc.endswith(":443")):
         return None  # https://x.com@t.me/ and odd ports
     host = (parts.hostname or "").rstrip(".")
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+", host):
-        return None  # percent-escaped, IP-v6, empty or odd hosts
+    # Letters, digits and hyphens only, and an alphabetic top-level label: refuses percent-escaped, IPv6,
+    # empty hosts and every host a browser reads as IPv4 (1.2.3.4, 0x7f.1, 2130706433).
+    if not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}", host):
+        return None
     if any(label.startswith("xn--") for label in host.split(".")):
-        return None  # punycode look-alikes
+        return None  # punycode/IDN refused outright (stricter than IDNA-decoding: no look-alike reaches the list)
     try:
         ipaddress.ip_address(host)
         return None
@@ -146,8 +162,15 @@ def person_link(item):
         path = unquote(path)
         readings.append(path)
     for reading in readings:
-        segments = {re.sub(r"[^a-z0-9-]", "", seg) for seg in re.split(r"[/;\\]", reading.lower())}
+        lowered = reading.lower()
+        segments = {re.sub(r"[^a-z0-9-]", "", seg) for seg in re.split(r"[/;\\]", lowered)}
         if CONTACT_SEGMENTS & segments:
+            return None
+        # A link carried in the path (a redirector or proxy), a deny-listed host named in it, an email, or a
+        # segment that is a phone number.
+        if ":/" in lowered or any(re.search(r"(?<![a-z0-9-])" + re.escape(d) + r"(?![a-z0-9-])", lowered) for d in CONTACT_HOSTS):
+            return None
+        if any(re.search(r"@[^@]*\.", seg) or (re.fullmatch(r"\+?[\d\s().~-]+", seg) and len(re.sub(r"\D", "", seg)) >= 7) for seg in lowered.split("/")):
             return None
     # The link without its query or fragment (contact details can ride there): scheme, host and path only.
     return {"platform": platform, "url": "https://" + host + (parts.path or "/")}
@@ -158,7 +181,14 @@ def person_answer(result):
     if not isinstance(result, dict):
         return {"error": "village_unavailable"}
     if "error" in result:
-        return result  # this plugin's own refusal shapes
+        # Only this plugin's own transport codes, rebuilt from constants: an app body that carries an "error"
+        # key is never a way around the filter (second security-review round).
+        code = result["error"] if result["error"] in ("response_too_large", "connection_or_request_refused") else "village_unavailable"
+        out = {"error": code}
+        if code == "connection_or_request_refused" and type(result.get("status")) is int:
+            out.update(status=result["status"], settingsUrl=SETTINGS)
+        out["instruction"] = "Do not describe this person from memory or guesses. Offer the Rolodex link: https://agents.edgecity.live/rolodex"
+        return out
     dropped = 0
     found = result.get("found")
     if found is False:
@@ -203,7 +233,16 @@ def person_answer(result):
         return {"error": "village_unavailable"}
     if dropped:
         LOG.warning("village_bridge rolodex_person_filtered dropped=%d", dropped)  # code and count only
-    return out
+    return scrubbed_tree(out)
+
+
+def scrubbed_tree(value):
+    """visible() on every key and string value at every depth (the forwarded keys are this plugin's own)."""
+    if isinstance(value, dict):
+        return {visible(k): scrubbed_tree(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [scrubbed_tree(v) for v in value]
+    return visible(value) if isinstance(value, str) else value
 
 
 class NoRedirect(HTTPRedirectHandler):
