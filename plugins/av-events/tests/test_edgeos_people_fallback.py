@@ -26,6 +26,7 @@ ROLODEX = REPO / "skills" / "rolodex" / "SKILL.md"
 AGENTS_CLAUSE = "Call them this turn, not only Index; never call one unavailable from earlier."
 
 ONE_LINE = "the directory isn't reachable right now"
+SIGNIN_LINE = "To let me search the attendee directory too, sign in once at https://agents.edgecity.live/signin."
 
 
 def flat(text: str) -> str:
@@ -47,8 +48,8 @@ def fallback() -> str:
 def test_section_9_has_the_fallback_in_order():
     text = fallback()
     chain = text[text.index("When the directory really fails this turn"):]
-    order = ["1. `village` `rolodex.search`", "2. `ask_village`", "3. the public website copy in the `edge-india` skill",
-             "then a web search"]
+    order = ["1. `village` `rolodex.search`", "2. `ask_village`", "3. the public website copy in the `edge-india` skill. "
+             "The chain ends there."]
     at = [chain.index(step) for step in order]
     assert at == sorted(at), dict(zip(order, at))
     assert "when that tool is installed" in text
@@ -66,7 +67,7 @@ def test_the_fallback_covers_every_directory_failure():
 def test_the_resident_hears_at_most_one_short_line_and_never_an_expiry():
     text = fallback()
     assert f'At most add one short line: "{ONE_LINE}".' in text
-    assert "Never say the directory or its access expired or is unavailable" in text
+    assert "Apart from the one line allowed below, never say the directory or its access expired or is unavailable" in text
     assert "never give a failure as the reason you can't find someone, and never end the answer on it" in text
     assert "No other line about the directory." in text
 
@@ -75,9 +76,9 @@ def test_section_0_sends_people_lookups_to_the_fallback():
     body = flat(section(0))
     assert ("**Looking someone up is different.** When the person asks who someone is, about a person, or how to "
             "reach them, run the directory script this turn (§9), even if it failed earlier in the conversation, and a "
-            "directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 message above and follow §9's "
-            "people-lookup fallback instead. On a real exit 4 in this turn, answer from the other sources first, then "
-            "add the exit 4 sign-in line above once, after the answer (§9).") in body
+            "directory failure (exit 1, 2 or 4) never ends the answer: skip the exit 2 and exit 4 messages above and "
+            "follow §9's people-lookup fallback instead. On a real exit 4 in this turn, answer from the other sources "
+            "first, then add §9's directory sign-in line once, after the answer.") in body
     # The bullet sits after both messages it overrides.
     assert body.index("When the script exits 2") < body.index("**Looking someone up is different.**")
     assert body.index("**Exit 4** (profile or directory script)") < body.index("**Looking someone up is different.**")
@@ -136,19 +137,38 @@ def test_agents_md_carries_the_one_short_this_turn_clause():
 
 def test_a_real_exit_4_this_turn_still_answers_then_adds_the_sign_in_line_once():
     """The residents with no Edge City grant hit exit 4 (not connected). They still get an answer from the other
-    sources; the §0 sign-in line comes once, after it, in place of the short line, and is the only other line."""
+    sources; §9's own directory sign-in line comes once, after it, in place of the short line, and is the only other
+    line. It names the directory, not "your details", and claims no lapse (a never-granted resident had nothing to
+    lapse)."""
     text = fallback()
     exception = text[text.index("The one exception is a real exit 4 in this turn"):]
     assert exception.startswith(
         "The one exception is a real exit 4 in this turn (the person's Edge City sign-in isn't connected): still answer "
-        "from the other sources first, then add §0's exit 4 sign-in line once, after the answer, instead of the short "
-        "line. No other line about the directory.")
+        "from the other sources first, then add this directory sign-in line once, after the answer, instead of the short "
+        f'line: "{SIGNIN_LINE}" No other line about the directory.')
+    for word in ("your details", "lapsed", "expired", "look them up again"):
+        assert word not in SIGNIN_LINE
     # The exception comes after the one-line limit it amends, and after the fallback order it relies on.
     assert text.index(ONE_LINE) < text.index("The one exception is a real exit 4")
     assert text.index("3. the public website copy") < text.index("The one exception is a real exit 4")
-    # The line it points to is §0's, with the sign-in link, and asks for no secret.
+    # §0 points at §9's line, not at its own "your Edge City details" line, which stays for the profile.
     body0 = flat(section(0))
-    assert ("Say: \"I can't reach your Edge City details right now because your sign-in to the Agent Village app has "
-            "lapsed. Sign in once at https://agents.edgecity.live/signin and I can look them up again.\"") in body0
+    assert "then add §9's directory sign-in line once, after the answer." in body0
+    assert "add the exit 4 sign-in line above" not in body0
     assert "Never ask for a code, password or token." in body0
-    assert "then add the exit 4 sign-in line above once, after the answer (§9)" in body0
+
+
+def test_no_web_step_and_no_contact_lookup_in_the_people_fallback():
+    """Verify M1: the chain ends at the edge-india site (as AGENTS.md does); nothing sends a named resident to the
+    open web, and nothing looks up contact details. ask_village asks what was said about them, never for contacts."""
+    text = fallback()
+    chain = text[text.index("When the directory really fails this turn"):text.index("Answer from what those find.")]
+    assert "web" not in chain.replace("public website copy", "")
+    assert "web search" not in text and "search the web" not in text and "web_search" not in text
+    assert "4." not in chain
+    assert ("2. `ask_village`: ask what people said about them in the main village group, never for their contact "
+            "details") in chain
+    assert ("For how do I reach someone, never look up contact details anywhere else: share only what the directory or "
+            "Rolodex shows, and otherwise suggest their Rolodex card or a village intro instead.") in chain
+    route = flat(AGENTS.read_text(encoding="utf-8"))
+    assert "then the website copy in `edge-india`;" in route and "web search" not in route[route.index("**People and the group.**"):][:900]
