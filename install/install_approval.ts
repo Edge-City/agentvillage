@@ -51,7 +51,8 @@
  *      `APPROVAL_GATED_TOOLS`, each `fail_closed: true`, `timeout: 300`;
  *      `hooks_auto_accept: true`; `plugins.hook_callback_timeout: 600`.
  *   3. `.env` gets `HERMES_ACCEPT_HOOKS=1` and the shim's settings.
- *   4. `execute_code` and relative `workdir`s are refused by the core adapter.
+ *   4. Relative `workdir`s are refused by the core adapter. `execute_code` is
+ *      not routed (CODE EXECUTION ON, rc42), so no card and no refusal reach it.
  *   5. No `APPROVAL.md` is written: the daemon holds the policy.
  *   6. The skill is staged and the `av-approval` plugin enabled.
  *   7. `$HERMES_HOME/agent-hooks/approval-surface.json` records
@@ -131,8 +132,8 @@ export const APPROVAL_PLUGIN = "av-approval";
 
 /**
  * One `pre_tool_call` entry per matcher (Hermes matchers are full-match
- * regexes). The first six are docs/03 section 3.1's gated tools
- * (`execute_code` listed so the core adapter refuses it). The rest reach
+ * regexes). The first five are docs/03 section 3.1's gated tools; its sixth,
+ * `execute_code`, left the list in rc42 (see CODE EXECUTION ON below). The rest reach
  * manual-class effects outside the classifier's view today; they are routed
  * through the gate now so the day the core adapter refuses or classifies them
  * nothing here changes. At core 6b74ca72 the adapter passes an unknown tool
@@ -168,13 +169,24 @@ export const APPROVAL_PLUGIN = "av-approval";
  * unverified, as every entry here is.
  *
  * MINI-APPS (rc41, ov#312 re-cut; approval@edge CLAIMS L6285): `village`, the
- * village-bridge plugin's one entry tool, exact name, is the 36th entry. The
+ * village-bridge plugin's one entry tool, exact name, is the last entry. The
  * resident policy maps it to `marketplace.app.read` (read-only: the app
  * catalogue and the tenant's own installs). A Gold Star send through it also
  * needs the plugin's own manual `marketplace.app.action` grant from the daemon
- * (plugins/village-bridge/_mini_apps.py). The control plane accepts this list
- * (36, 3cea251a) and the previous one without `village` (35, 9cb621bb) until
- * the roll after rc41.
+ * (plugins/village-bridge/_mini_apps.py).
+ *
+ * CODE EXECUTION ON (rc42; Carter, DECISIONS 2026-10-15 05:1xZ, "execute_code
+ * ungated, phase-1 risk accepted"): `execute_code` is no longer routed. The
+ * core adapter refused every call (28 of 28 in 48 h), so the tool never ran;
+ * unrouted, the hook never fires for it, so there is no card and no refusal.
+ * The box runs it in Hermes's `strict` mode (config.ts `setCodeExecutionMode`).
+ * Custody still strips the service keys from its child env (the `execute_code`
+ * lever in plugins/av-approval/_custody.py), but code it runs can open
+ * `$HERMES_HOME/.env` and reach the network, as `terminal` already can: that is
+ * the accepted phase-1 risk. The list is 35 entries, sorted digest 551d13e3.
+ * The control plane accepts it as CURRENT and the rc41 list (36, 3cea251a, with
+ * `execute_code`) as PREVIOUS until the roll after rc42, so it must take that
+ * pair at its rc42 boot before any box runs this overlay.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -182,7 +194,6 @@ export const APPROVAL_GATED_TOOLS = [
   "patch",
   "read_file",
   "search_files",
-  "execute_code",
   "process(_manage)?",
   "web_extract",
   "browser_.*",
@@ -227,7 +238,7 @@ export const APPROVAL_GATED_TOOLS = [
  *
  * Empty from rc41 (MINI-APPS re-cut of ov#312): `village-bridge` (OV-300 M1,
  * held back since ov#300) is staged again. Its one tool, `village`, is the 36th
- * entry of APPROVAL_GATED_TOOLS, and a Gold Star send through it also needs the
+ * entry of APPROVAL_GATED_TOOLS (the 35th since rc42), and a Gold Star send through it also needs the
  * plugin's own manual `marketplace.app.action` grant. Without the control
  * plane's mini-apps.json on the box every operation is refused.
  */

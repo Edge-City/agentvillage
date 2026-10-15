@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
 import json
 import logging
 import os
@@ -33,7 +34,7 @@ def _callback(ctx: FakeCtx):
     return ctx.hooks["pre_tool_call"][0]
 
 
-GATED_SAMPLE = ("terminal", "write_file", "patch", "read_file", "search_files", "execute_code", "process",
+GATED_SAMPLE = ("terminal", "write_file", "patch", "read_file", "search_files", "process",
                 "process_manage", "web_extract", "browser_exec", "browser_navigate", "skill_manage",
                 "delegate_task", "cronjob_manage", "cronjob", "send_message",
                 # R3b (DATA-344): the side-effecting tools the policy's tools: list judges.
@@ -42,7 +43,8 @@ GATED_SAMPLE = ("terminal", "write_file", "patch", "read_file", "search_files", 
                 "mcp__index__reject_opportunity", "mcp__index__update_my_profile", "mcp__index__enrich_my_profile",
                 "index_create_intent", "index_update_opportunity", "index_research_profile",
                 "image_generate", "video_generate", "text_to_speech", "web_search", "x_search")
-UNGATED_SAMPLE = ("memory", "todo_list", "mcp_index_search", "cronjob_manager", "mcp__index__list_intents",
+# CODE EXECUTION ON (rc42): execute_code is not routed (no card, no backstop block).
+UNGATED_SAMPLE = ("execute_code", "memory", "todo_list", "mcp_index_search", "cronjob_manager", "mcp__index__list_intents",
                   "mcp__index__get_opportunity", "index_read_intents", "skill_view", "record_intention", "recall",
                   "vision_analyze", "index_accept_opportunity", "index_open_app", None)
 
@@ -158,6 +160,17 @@ def test_healthy_never_blocks_even_after_many_rechecks(gate, monkeypatch):
         clock[0] += 61
         for tool in GATED_SAMPLE:
             assert cb(tool_name=tool) is None
+
+
+def test_code_execution_on_execute_code_is_not_gated_and_the_list_is_35():
+    plugin = load_plugin()
+    assert "execute_code" not in plugin.GATED_MATCHERS
+    assert not plugin.is_gated("execute_code")
+    assert len(plugin.GATED_MATCHERS) == 35
+    digest = hashlib.sha256("\n".join(sorted(plugin.GATED_MATCHERS)).encode()).hexdigest()
+    assert digest == "551d13e3861b9fb80e4f2af33d5d5ef04d0faf22a78a43b05bc663dc6ab72cbc"
+    for tool in ("terminal", "write_file", "web_search", "village"):
+        assert plugin.is_gated(tool), tool
 
 
 def test_matchers_are_full_match_and_equal_the_installers():
