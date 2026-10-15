@@ -164,7 +164,12 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   the plugin's own codes. A card line, or the whole whatYouDo, that holds an
   email, a 7+ digit phone run, an @handle, a deny-listed host or a messaging
   label with a handle is dropped whole (after hidden-character removal and
-  NFKC; never redacted inside a line, false positives accepted).
+  NFKC; never redacted inside a line, false positives accepted). Every bound
+  (a 64 KB answer, 8 lines a card, 16 links, each field's length) applies
+  before any regex, NFKC step or URL parse; the checks are linear scans; the
+  text that is checked is the text that is sent; an answer with a duplicate
+  JSON key is refused. Known limit: a heuristic can be bypassed (a number
+  spelled out in words); the app's filter and the skill rule are primary.
 
 The reviewed gold-stars entry carries these nine operations in this order. The
 helper and the plugin still accept the eight-operation entry (ov#350, the CP's

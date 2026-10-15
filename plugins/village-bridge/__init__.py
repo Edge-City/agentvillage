@@ -6,6 +6,7 @@ current deployment/pairing, expiry, revocation, quotas and durable receipts.
 Only the app-scoped credential is local; never a browser/fleet/shared secret.
 """
 from __future__ import annotations
+import functools
 import ipaddress
 import json
 import logging
@@ -108,48 +109,150 @@ PERSON_URL = re.compile(r"(?:https://agents\.edgecity\.live)?/rolodex\?person=[0
 
 
 # Fix 4 (prose), coordinator's ruling: a card line, or the whole whatYouDo, that looks like it carries a contact
-# detail is DROPPED whole (never redacted inside the line). Checked after hidden characters are removed and
-# after NFKC (full-width @ and digits fold to ASCII). False positives are accepted: a dropped line is cheap.
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
-PHONE = re.compile(r"\+?\d(?:[\s.\-()]{0,3}\d){6,}")  # 7 or more digits; spaces, dots, dashes, brackets between
-HANDLE = re.compile(r"(?<![\w.])@[A-Za-z0-9_.]{2,}")
-_TOKEN = r"@?[A-Za-z0-9_.]{2,}"
-_CONNECT = r"(?:\s*[:=\-\u2013\u2014\u2192>,]+\s*|\s+)(?:(?:is|as|at|on|via|id|handle|username|user|me|i'm|im|my)\b[\s:,\-]*)*"
-MESSAGING = (
-    # Strong labels: the label then any handle-like token ("Telegram: naman", "find me on tg as naman").
-    re.compile(r"\b(?:telegram|tg|whats\s?app|threema|wechat|discord|snapchat|kakao(?:talk)?|viber|skype)\b" + _CONNECT + _TOKEN, re.I),
-    # Ambiguous words (a signal, a line, a snap): only with an explicit separator or a token holding a digit, _ or @.
-    re.compile(r"\b(?:signal|line|snap)\b(?:\s*(?:id|handle|username|user))?\s*[:=\-\u2013\u2014\u2192>]+\s*" + _TOKEN, re.I),
-    re.compile(r"\b(?:signal|line|snap)\b" + _CONNECT + r"@?[A-Za-z0-9_.]*[0-9_@][A-Za-z0-9_.]*", re.I),
-    # "dm me", "text me", "call me" followed by anything.
-    re.compile(r"\b(?:dm|text|call)\s+me\b\s*\S", re.I),
-)
+# detail is DROPPED whole (never redacted inside the line). False positives are accepted: a dropped line is cheap.
+# Third security-review round: every length bound is applied BEFORE any regex, NFKC step or URL parse; the checks
+# are linear scans (no nested or overlapping quantifiers); and the text that is checked is exactly the text that is
+# emitted (hidden characters removed, NFKC applied once, then checked, then sent).
+# KNOWN LIMIT: this is a heuristic and can always be bypassed (a number spelled out as words, a handle split
+# across lines, an unusual obfuscation). The app's filter (app#290) is the primary control and the rolodex
+# skill's never-share rule backs it up; this layer only removes the common shapes.
+PROSE_CHECK_MAX = 1200  # longer text is never checked: it is dropped (the app's longest field is 300)
+RAW_FACTOR = 4  # raw text may carry hidden characters; anything over cap * RAW_FACTOR is dropped unread
+STRONG_LABELS = frozenset({"telegram", "tg", "whatsapp", "threema", "wechat", "discord", "snapchat", "kakao",
+                           "kakaotalk", "viber", "skype"})
+WEAK_LABELS = frozenset({"signal", "line", "snap"})
+CONNECTORS = frozenset({"is", "as", "at", "on", "via", "id", "handle", "username", "user", "me", "i", "i'm", "im", "am", "my"})
+WEAK_SEPARATORS = frozenset({":", "=", "-", "\u2013", "\u2014", "\u2192", ">"})
+SEPARATORS = WEAK_SEPARATORS | {","}
+PHONE_GAP = frozenset(" \t.-()")  # what may sit between the digits of one number (whitespace folds to " ")
+LOCAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._%+-")
+DOMAIN_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
+HANDLE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_.")
+HOST_SET = frozenset(CONTACT_HOSTS)
+SCAN_CHARS = DOMAIN_CHARS | HANDLE_CHARS
+
+
+def bounded(check):
+    """Every prose check refuses (reports contact-shaped) text over PROSE_CHECK_MAX before reading it."""
+    @functools.wraps(check)
+    def guarded(text):
+        return True if not isinstance(text, str) or len(text) > PROSE_CHECK_MAX else check(text)
+    return guarded
+
+
+@bounded
+def _has_phone(text):
+    """An optional +, then 7 or more digits with at most 3 of space . - ( ) between any two. Linear."""
+    run = gap = 0
+    for ch in text:
+        if ch.isdigit():
+            run = run + 1 if run and gap <= 3 else 1
+            gap = 0
+            if run >= 7:
+                return True
+        elif ch in PHONE_GAP and run:
+            gap += 1
+            if gap > 3:
+                run = gap = 0
+        else:
+            run = gap = 0
+    return False
+
+
+@bounded
+def _has_email_or_handle(lowered):
+    """x@y.tld, or an @handle not glued to a word or dot before it. One forward scan per @; linear."""
+    at = lowered.find("@")
+    while at != -1:
+        before = lowered[at - 1] if at else " "
+        end = at + 1
+        while end < len(lowered) and lowered[end] in SCAN_CHARS:
+            end += 1
+        after = lowered[at + 1:end]
+        if before in LOCAL_CHARS:
+            labels = after.strip(".").split(".")
+            if len(labels) >= 2 and all(labels) and labels[-1].isalpha() and len(labels[-1]) >= 2:
+                return True  # an email
+        elif not (before.isalnum() or before in "_.") and len(after) >= 2 and all(c in HANDLE_CHARS for c in after[:2]):
+            return True  # an @handle
+        at = lowered.find("@", end if end > at else at + 1)
+    return False
+
+
+@bounded
+def _names_host(lowered):
+    """A deny-listed host (or a subdomain of one) named anywhere, also with spaced dots ("t . me"). Linear."""
+    folded = " ".join(lowered.split()).replace(" .", ".").replace(". ", ".")
+    for token in re.findall(r"[a-z0-9.-]+", folded):
+        labels = [label for label in token.strip(".-").split(".") if label]
+        for size in (1, 2, 3, 4):
+            for i in range(len(labels) - size + 1):
+                if ".".join(labels[i:i + size]) in HOST_SET:
+                    return True
+    return False
+
+
+@bounded
+def _has_messaging_label(lowered):
+    """A messaging label followed by a handle-like token, within 4 tokens. Linear (bounded look-ahead)."""
+    tokens = re.findall(r"[a-z0-9_.@#']+|[:=,>\u2013\u2014\u2192-]", lowered.replace("\u2019", "'").replace("whats app", "whatsapp"))
+    tokens = [t if len(t) == 1 and t in SEPARATORS else t.strip(".") for t in tokens]
+    tokens = [t for t in tokens if t]
+    for i, token in enumerate(tokens):
+        if token in ("dm", "text", "call") and i + 2 < len(tokens) and tokens[i + 1] == "me":
+            return True
+        if token not in STRONG_LABELS and token not in WEAK_LABELS:
+            continue
+        separated = False
+        for nxt in tokens[i + 1:i + 5]:
+            if nxt in SEPARATORS:
+                separated = separated or nxt in WEAK_SEPARATORS or token in STRONG_LABELS
+                continue
+            if nxt in CONNECTORS or nxt in ("id", "handle", "username"):
+                continue
+            handle_like = len(nxt) >= 2 and (nxt[0].isalnum() or nxt[0] == "@")
+            if handle_like and (token in STRONG_LABELS or separated or any(c.isdigit() or c in "_@" for c in nxt)):
+                return True
+            break
+    return False
 
 
 def contact_shaped(text):
-    folded = unicodedata.normalize("NFKC", text)
-    lowered = re.sub(r"\s*\.\s*", ".", folded.lower())
-    return bool(EMAIL.search(folded) or PHONE.search(folded) or HANDLE.search(folded)
-                or any(m.search(folded) for m in MESSAGING)
-                or any(re.search(r"(?<![a-z0-9-])" + re.escape(d) + r"(?![a-z0-9-])", lowered) for d in CONTACT_HOSTS))
+    """The prose check, on text that is already hidden-character-free and NFKC-normalised (prose() does both).
+    Text over PROSE_CHECK_MAX is treated as contact-shaped (dropped) without being scanned."""
+    if not isinstance(text, str) or len(text) > PROSE_CHECK_MAX:
+        return True
+    lowered = text.lower()
+    # Cheap bypasses closed: bracketed "at"/"dot" ("probe [at] example [dot] io").
+    for obfuscated, plain in (("[at]", "@"), ("(at)", "@"), ("{at}", "@"), ("[dot]", "."), ("(dot)", "."), ("{dot}", ".")):
+        lowered = lowered.replace(" " + obfuscated + " ", plain).replace(obfuscated, plain)
+    return _has_phone(lowered) or _has_email_or_handle(lowered) or _names_host(lowered) or _has_messaging_label(lowered)
+
+
+def normalised(value, cap):
+    """Bounded, hidden-character-free, NFKC text, or None if over the bound before or after: the one form that is
+    both checked and emitted. Never truncates (a cut could hide part of a number), it drops."""
+    if not isinstance(value, str) or len(value) > cap * RAW_FACTOR:
+        return None
+    text = unicodedata.normalize("NFKC", visible(value))
+    text = visible(text)  # NFKC can compose new hidden characters; strip again
+    return text if text and len(text) <= cap else None
 
 
 def prose(value, cap):
-    """A card line or whatYouDo as it may reach the agent, or None: hidden characters removed, then dropped
-    whole if contact-shaped, then capped (the check runs before the cap so a cut cannot hide a number)."""
-    text = visible(value)
-    if not text or contact_shaped(text):
-        return None
-    return text[:cap]
+    """A card line or whatYouDo as it may reach the agent, or None (dropped)."""
+    text = normalised(value, cap)
+    return None if text is None or contact_shaped(text) else text
 
 
 def visible(value, cap=None):
     """Every forwarded string: every format character (unicodedata category Cf: bidi, zero-width, BOM, soft
     hyphen, tag characters U+E0000-E007F, ...), surrogate, private-use and unassigned (Cn: a newer Unicode's
     format characters) code point and every INVISIBLE character removed; controls and line/paragraph
-    separators become spaces; then capped in code points."""
+    separators become spaces; then capped in code points. The raw input is bounded first."""
     if not isinstance(value, str):
         return None
+    value = value[:(cap or 4096) * RAW_FACTOR]
     out = []
     for ch in value:
         category = unicodedata.category(ch)
@@ -160,14 +263,29 @@ def visible(value, cap=None):
     return text[:cap] if cap else text
 
 
+def _host_ok(host):
+    """Letters, digits and hyphens per label (no leading or trailing hyphen, at most 63), at least two labels,
+    and an alphabetic top-level label (refuses every host a browser reads as IPv4). Linear, no regex."""
+    if len(host) > 253:
+        return False
+    labels = host.split(".")
+    if len(labels) < 2:
+        return False
+    for label in labels:
+        if not 1 <= len(label) <= 63 or label[0] == "-" or label[-1] == "-" or not all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in label):
+            return False
+    return labels[-1].isalpha() and len(labels[-1]) >= 2
+
+
 def person_link(item):
     if not isinstance(item, dict) or not isinstance(item.get("url"), str):
         return None
     url = item["url"]
     platform = item.get("platform") if item.get("platform") in PERSON_PLATFORMS else "other"
-    # ASCII only, no whitespace, controls or backslashes (a browser reads "\\" as "/"), https only: refuses
-    # http, mailto:, tel:, sms:, tg:, javascript:, protocol-relative and bare hosts, IDN and hidden characters.
-    if len(url) > 500 or not re.fullmatch(r"https://[\x21-\x7e]+", url) or "\\" in url:
+    # Bounded first. ASCII only, no whitespace, controls or backslashes (a browser reads "\\" as "/"), https
+    # only: refuses http, mailto:, tel:, sms:, tg:, javascript:, protocol-relative and bare hosts, IDN and
+    # hidden characters.
+    if len(url) > 500 or not url.startswith("https://") or "\\" in url or not all("\x21" <= c <= "\x7e" for c in url):
         return None
     try:
         parts = urlsplit(url)
@@ -178,9 +296,7 @@ def person_link(item):
             or (":" in parts.netloc and not parts.netloc.endswith(":443")):
         return None  # https://x.com@t.me/ and odd ports
     host = (parts.hostname or "").rstrip(".")
-    # Letters, digits and hyphens only, and an alphabetic top-level label: refuses percent-escaped, IPv6,
-    # empty hosts and every host a browser reads as IPv4 (1.2.3.4, 0x7f.1, 2130706433).
-    if not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}", host):
+    if not _host_ok(host):
         return None
     if any(label.startswith("xn--") for label in host.split(".")):
         return None  # punycode/IDN refused outright (stricter than IDNA-decoding: no look-alike reaches the list)
@@ -192,23 +308,25 @@ def person_link(item):
     if any(host == d or host.endswith("." + d) for d in CONTACT_HOSTS):
         return None
     # The path as written and fully percent-decoded (double encoding too); segments split on / ; and
-    # empty ones (double slashes) ignored, each reduced to its letters, digits and hyphens.
+    # backslash, empty ones (double slashes) ignored, each reduced to its letters, digits and hyphens.
     path, readings = parts.path, [parts.path]
     for _ in range(4):
         path = unquote(path)
         readings.append(path)
     for reading in readings:
         lowered = reading.lower()
-        segments = {re.sub(r"[^a-z0-9-]", "", seg) for seg in re.split(r"[/;\\]", lowered)}
+        segments = {"".join(c for c in seg if c.isalnum() or c == "-") for seg in re.split(r"[/;\\]", lowered)}
         if CONTACT_SEGMENTS & segments:
             return None
         # A link carried in the path (a redirector or proxy), a deny-listed host named in it, an email, or a
         # segment that is a phone number.
-        if ":/" in lowered or any(re.search(r"(?<![a-z0-9-])" + re.escape(d) + r"(?![a-z0-9-])", lowered) for d in CONTACT_HOSTS):
+        if ":/" in lowered or _names_host(lowered.replace("/", " ")):
             return None
-        if any(re.search(r"@[^@]*\.", seg) or (re.fullmatch(r"\+?[\d\s().~-]+", seg) and len(re.sub(r"\D", "", seg)) >= 7) for seg in lowered.split("/")):
-            return None
-    # The link without its query or fragment (contact details can ride there): scheme, host and path only.
+        for seg in lowered.split("/"):
+            if ("@" in seg and "." in seg[seg.index("@"):]) or (seg and all(c.isdigit() or c in "+ ().~-" for c in seg) and sum(c.isdigit() for c in seg) >= 7):
+                return None
+    # The emitted link is built from exactly the parts checked above: https, the checked host, the checked path
+    # (query and fragment dropped: contact details can ride there).
     return {"platform": platform, "url": "https://" + host + (parts.path or "/")}
 
 
@@ -230,7 +348,7 @@ def person_answer(result):
     if found is False:
         out = {"found": False, "reason": result.get("reason") if result.get("reason") in ("none", "ambiguous", "self") else "none"}
         if isinstance(result.get("candidates"), list):
-            out["candidates"] = [n for n in (visible(c, CAPS["name"]) for c in result["candidates"]) if n][:5]
+            out["candidates"] = [n for n in (visible(c, CAPS["name"]) for c in result["candidates"][:10]) if n][:5]
         if isinstance(result.get("asOf"), str):
             out["asOf"] = visible(result["asOf"], CAPS["asOf"])
         dropped += len(set(result) - set(PERSON_NOT_FOUND_KEYS) - PERSON_KNOWN)
@@ -238,32 +356,33 @@ def person_answer(result):
         out = {"found": True}
         person = result.get("person") if isinstance(result.get("person"), dict) else {}
         out["person"] = {}
-        if isinstance(person.get("id"), str) and PERSON_ID.fullmatch(person["id"]):
+        if isinstance(person.get("id"), str) and len(person["id"]) == 36 and PERSON_ID.fullmatch(person["id"]):
             out["person"]["id"] = person["id"]
         for key in ("name", "role", "organization"):
             if key in person and (person[key] is None or isinstance(person[key], str)):
                 out["person"][key] = visible(person[key], CAPS[key])
         if type(person.get("met")) is bool:
             out["person"]["met"] = person["met"]
-        if isinstance(person.get("url"), str) and PERSON_URL.fullmatch(person["url"]):
+        if isinstance(person.get("url"), str) and len(person["url"]) <= 80 and PERSON_URL.fullmatch(person["url"]):
             out["person"]["url"] = person["url"]
         dropped += len(set(person) - set(PERSON_FIELDS))
         cards = result.get("cards") if isinstance(result.get("cards"), dict) else {}
         out["cards"] = {}
         for name in PERSON_CARDS:
             if isinstance(cards.get(name), list):
-                kept = [prose(x, CAPS["line"]) for x in cards[name] if isinstance(x, str) and visible(x)]
+                raw = [x for x in cards[name][:8] if isinstance(x, str) and x.strip()]
+                kept = [prose(x, CAPS["line"]) for x in raw]
                 lines += kept.count(None)
                 if any(kept):
                     out["cards"][name] = [line for line in kept if line][:4]
         dropped += len(set(cards) - set(PERSON_CARDS))
-        if isinstance(result.get("whatYouDo"), str) and visible(result["whatYouDo"]):
+        if isinstance(result.get("whatYouDo"), str) and result["whatYouDo"].strip():
             what = prose(result["whatYouDo"], CAPS["whatYouDo"])
             if what:
                 out["whatYouDo"] = what
             else:
                 lines += 1
-        raw_links = result.get("links") if isinstance(result.get("links"), list) else []
+        raw_links = result.get("links")[:16] if isinstance(result.get("links"), list) else []
         links = [link for link in (person_link(item) for item in raw_links) if link][:8]
         out["links"] = links
         dropped += len(raw_links) - len(links)
@@ -290,6 +409,15 @@ def scrubbed_tree(value):
     return visible(value) if isinstance(value, str) else value
 
 
+def no_duplicate_keys(pairs):
+    """json object_pairs_hook for rolodex.person: an answer with a repeated key at any depth is refused, so no
+    check can read one value while another is forwarded."""
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate_key")
+    return dict(pairs)
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -300,9 +428,14 @@ def transport(config, payload):
     opener = build_opener(ProxyHandler({}), NoRedirect())
     try:
         with opener.open(request, timeout=60 if payload.get("operation") == "gold-stars.send" else 25) as response:
-            data = response.read(262145)
-            if len(data) > 262144:
+            # rolodex.person: a tighter overall byte bound (the largest legitimate answer is about 30 KB), applied
+            # before any parse, and a duplicate key at any depth refuses the whole answer.
+            limit = 65536 if payload.get("operation") == "rolodex.person" else 262144
+            data = response.read(limit + 1)
+            if len(data) > limit:
                 return {"error": "response_too_large", "instruction": "Narrow the query or reduce the result limit; no partial result was returned."}
+            if payload.get("operation") == "rolodex.person":
+                return json.loads(data, object_pairs_hook=no_duplicate_keys)
             return json.loads(data)
     except HTTPError as error:
         # Never print URLs, headers or response text on failure.
