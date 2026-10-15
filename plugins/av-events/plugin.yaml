@@ -54,6 +54,10 @@ optional_env:
   - EDGEOS_API_KEY
   # pray / ask_village: a cron run may use them only when it reports to this DM (fail closed).
   - TELEGRAM_HOME_CHANNEL
+  # F1 PROMPT REFRESH: team (default; on where AV_TEAM_TENANT=1) | 1 | 0; files: memory (default) | all.
+  - AV_PROMPT_REFRESH
+  - AV_PROMPT_REFRESH_FILES
+  - AV_TEAM_TENANT
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:

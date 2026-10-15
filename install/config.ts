@@ -978,6 +978,115 @@ export function setCompactionSettings(): void {
   for (const line of lines) console.log(line);
 }
 
+/**
+ * RC42: the compaction trigger as a share of the box's context window,
+ * `compression.threshold` (Hermes default 0.50, hermes_cli/config_defaults.py:562-565,
+ * read at agent/agent_init.py:1421-1425; Hermes v2026.9.24). Hermes multiplies
+ * it by `model.context_length` less `model.max_tokens`
+ * (agent/context_compressor.py:2608-2642), so the trigger reads the same key as
+ * the control plane's pin (its `HERMES_CONTEXT_LENGTH`) and the overlay holds no
+ * token number of its own.
+ *
+ * Why 0.75 is written: Hermes raises any window under 512K to 0.75 by itself
+ * (`_SMALL_CTX_THRESHOLD_PERCENT`, :1139-1142 and :2601-2605), which is the 75%
+ * the boxes have had at the old pin. At 512K or more that floor is gone and
+ * 0.50 applies, so at the 1,000,000 pin (Carter, CLAIMS L7597) the trigger
+ * would drop to half the window. Writing 0.75 keeps it at 75% of any pin.
+ */
+export const COMPRESSION_THRESHOLD = 0.75;
+
+/**
+ * Make Hermes compact at 75% of the pinned window at every pin size (Carter's
+ * rulings, CLAIMS L7597 and L7607). Two keys under the top-level `compression`
+ * mapping:
+ *
+ * 1. `threshold: 0.75` (see `COMPRESSION_THRESHOLD`). A number from 0.75 to 1,
+ *    or one written as a string (Hermes reads it with float()), is an
+ *    operator's later trigger and is left as is. Anything else is set to 0.75:
+ *    absent, null, below 0.75 (Hermes's 0.50 written out included), above 1, a
+ *    boolean, a word, a list.
+ * 2. `threshold_tokens: null`. Hermes caps the trigger at this many tokens
+ *    (default 256,000, config_defaults.py:566-570; agent_init.py:1490-1494 reads
+ *    an explicit null as "ratio only"; the cap is applied at
+ *    context_compressor.py:2507-2516). Any number there is an absolute token
+ *    count that stops the trigger following the pin (Hermes's 256,000 puts a
+ *    1,000,000 window's trigger at about a quarter of it), so a value other
+ *    than null is replaced, whatever it is.
+ *
+ * Never written: `model.context_length` (the control plane's pin) and every
+ * other compression key (`protect_last_n` and the tool-result prune stay at
+ * Hermes's defaults, CLAIMS L7607). At a pin up to about 341,000 the two keys
+ * change nothing: Hermes already applies 0.75 there, and its 256,000 cap sits
+ * above 75% of the window.
+ *
+ * `compression` not a mapping, or holding a YAML merge key, leaves both unset
+ * with a warning; so does a top level that is not a mapping or holds a merge
+ * key. One `→` line per key; a config value is never echoed (only a number or
+ * a kind). Idempotent: a second run changes nothing and does not rewrite the
+ * file. Hermes reads both keys when it builds an agent, so a box picks them up
+ * at the gateway restart that ends every install and roll.
+ */
+export function setCompressionTrigger(): void {
+  const ratioPath = "compression.threshold";
+  const capPath = "compression.threshold_tokens";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log("→ warning: the top level of config.yaml is not a mapping; left the compression trigger unset");
+    return;
+  }
+  if ("<<" in doc) {
+    console.log('→ warning: YAML merge key "<<" at the top of config.yaml; left the compression trigger unset (set it by hand)');
+    return;
+  }
+  const compression = doc.compression ?? {};
+  if (!isMapping(compression) || "<<" in compression) {
+    const why = isMapping(compression) ? 'YAML merge key "<<" under compression; set them by hand' : "compression is not a mapping";
+    console.log(`→ warning: ${why}; left ${ratioPath} and ${capPath} unset`);
+    return;
+  }
+  const next: Record<string, unknown> = { ...compression };
+  const lines: string[] = [];
+
+  // 1. The trigger as a share of the pinned window.
+  const raw = compression.threshold;
+  const ratio =
+    typeof raw === "number" && Number.isFinite(raw) ? raw
+    : typeof raw === "string" && NUMERIC_STRING.test(raw.trim()) ? Number(raw.trim())
+    : Number.NaN;
+  if (ratio >= COMPRESSION_THRESHOLD && ratio <= 1) {
+    const how = typeof raw === "string" ? ", written as a string Hermes reads as a number" : "";
+    lines.push(`→ ${ratioPath} already ${ratio}${how} (from ${COMPRESSION_THRESHOLD} to 1); left as is`);
+  } else {
+    next.threshold = COMPRESSION_THRESHOLD;
+    const range = ratio > 1 ? "above 1" : `below ${COMPRESSION_THRESHOLD}`;
+    const why =
+      raw === undefined ? "was unset"
+      : raw === null ? "was null"
+      : Number.isFinite(ratio) ? (typeof raw === "string" ? `was ${ratio} written as a string, ${range}` : `was ${ratio}, ${range}`)
+      : `was ${kindOf(raw)}, not a number`;
+    lines.push(`→ set ${ratioPath}: ${COMPRESSION_THRESHOLD} (${why}; Hermes compacts at 75% of model.context_length, the control plane's pin)`);
+  }
+
+  // 2. No absolute token cap on the trigger.
+  const cap = compression.threshold_tokens;
+  if (cap === null) {
+    lines.push(`→ ${capPath} already null (no token cap; the trigger follows the pin); left as is`);
+  } else {
+    next.threshold_tokens = null;
+    const why =
+      cap === undefined ? "was unset, Hermes's default cap 256,000"
+      : typeof cap === "number" && Number.isFinite(cap) ? `was ${cap}`
+      : `was ${kindOf(cap)}`;
+    lines.push(`→ set ${capPath}: null (${why}; a token cap stops the trigger following the pin)`);
+  }
+
+  if (next.threshold !== compression.threshold || !("threshold_tokens" in compression) || next.threshold_tokens !== cap) {
+    doc.compression = next;
+    writeConfig(doc);
+  }
+  for (const line of lines) console.log(line);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */

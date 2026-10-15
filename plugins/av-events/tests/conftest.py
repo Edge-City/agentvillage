@@ -74,6 +74,10 @@ AV_ENV_VARS = (
     # ASK-VILLAGE: the `ask_village` tool.
     "AV_ASK_VILLAGE",
     "EDGEOS_API_KEY",
+    # F1 PROMPT REFRESH: the rollout switch and the control plane's team marker.
+    "AV_PROMPT_REFRESH",
+    "AV_PROMPT_REFRESH_FILES",
+    "AV_TEAM_TENANT",
 )
 
 
