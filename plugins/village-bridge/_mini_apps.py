@@ -10,7 +10,7 @@ from pathlib import Path
 
 MINI_APPS_GATE_VERSION = 1
 # ROLODEX.PERSON (rc42, Carter's ruling, CLAIMS 7799): `rolodex.person` (a read of another resident's
-# public profile: PUBLIC + VILLAGE claims, whatYouDo, social profile links; never contact details) rides
+# public profile: PUBLIC + VILLAGE card lines and social profile links; never contact details) rides
 # the Gold Stars install like rolodex.search, appended LAST. The control-plane catalog's gold-stars entry
 # moves to this exact list only AFTER boxes run this overlay (an older overlay refuses it).
 GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]}

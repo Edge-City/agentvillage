@@ -557,6 +557,14 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(logged,['village_bridge rolodex_person_lines_dropped=2'])
   _,res,_=self.person({'found':False,'reason':'ambiguous','candidates':['Ann','Bo @bo_tg','Cy +1 555 0100'],'asOf':'2026-10-15T00:00:00Z'})
   self.assertEqual(res['data']['candidates'],['Ann'])
+ def test_recheck_m1_turkish_i_and_leading_dot_domain_stay_refused(self):
+  # OV-355 recheck M1: 02ae3e85 refused these (re.I read U+0130/U+0131 as i); 553e2060 refused the leading-dot email.
+  for text in ('telegram \u0130S probehandle','TG - p\u0131robehandle','find me on tg a\u0131 probehandle','\u0131cal.com/probe',
+               'probe@.example.com','probe@..example.com'):
+   with self.subTest(prose=text):self.assertIsNone(bridge.prose(text,160))
+  # Kept: ordinary text with the Turkish letters is not folded into a contact.
+  for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r'):
+   with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
  def test_short_fields_are_truncated_before_the_check_and_emit_the_checked_value(self):
   # The cut happens first; the cut, normalised value is what is checked and what is sent.
   role='\uff21'*119+' +1 555 0100'
@@ -642,7 +650,9 @@ class BridgeTest(unittest.TestCase):
    with self.subTest(drop=url):self.assertIsNone(bridge.person_link({'platform':'x','url':url}))
   # Query and fragment never ride along (contact details can sit there); host lowercased, trailing dot and :443 dropped.
   for url,out in (('https://x.com/p?phone=15550100&tg=@h#mailto:e@x.io','https://x.com/p'),('https://x.com/p#@t.me','https://x.com/p'),('https://X.com./p','https://x.com/p'),
-                  ('https://x.com:443/p','https://x.com/p'),('https://github.com','https://github.com/'),('https://x.com/p?u=https://t.me/x','https://x.com/p')):
+                  ('https://x.com:443/p','https://x.com/p'),('https://github.com','https://github.com/'),('https://x.com/p?u=https://t.me/x','https://x.com/p'),
+                  ('https://probe.dev/direct-to-consumer','https://probe.dev/direct-to-consumer'),('https://probe.dev/message-from-the-ceo','https://probe.dev/message-from-the-ceo'),
+                  ('https://probe.dev/addons','https://probe.dev/addons'),('https://github.com/probe/chatbot','https://github.com/probe/chatbot'),('https://bsky.app/profile/probe','https://bsky.app/profile/probe')):
    with self.subTest(keep=url):self.assertEqual(bridge.person_link({'platform':'x','url':url}),{'platform':'x','url':out})
  def test_hidden_characters_cover_tags_and_every_format_character(self):
   for ch in ['\u00ad','\u061c','\u180e','\u200b','\u200c','\u200d','\u200e','\u200f','\u202a','\u202e','\u2060','\u2064','\u2066','\u2069','\u206a','\u206f','\ufeff','\ufff9','\ufffb',
@@ -698,6 +708,9 @@ class BridgeTest(unittest.TestCase):
   ('ipv4','https://1.2.3.4/p'),('ipv4','https://0x7f.1/p'),('ipv4','https://2130706433/p'),('ipv4','https://127.1/p'),('ipv4','https://[::1]/p'),('ipv4','https://localhost/p'),
   ('contact-path','https://snapchat.com/add/p'),('contact-path','https://instagram.com/direct/t/1'),('contact-path','https://www.linkedin.com/messaging/compose/'),('contact-path','https://x.com/messages/compose'),
   ('contact-path','https://teams.microsoft.com/l/chat/0/0'),('contact-path','https://calendar.app.google/x'),('contact-path','https://calendar.google.com/calendar/appointments/x'),('contact-path','https://calendly.com/p'),('contact-path','https://github.com/p/messages'),
+  # data recheck S1 (kept at every head before): DM, chat, inbox and booking/meeting links
+  ('contact-path','https://x.com/i/chat/123'),('contact-path','https://zalo.me/probe'),('contact-path','https://www.reddit.com/chat/user/probe'),('contact-path','https://chat.reddit.com/user/probe'),
+  ('contact-path','https://warpcast.com/~/inbox'),('contact-path','https://keybase.io/probe/chat'),('contact-path','https://webex.com/meet/probe'),('contact-path','https://reclaim.ai/m/probe'),('contact-path','https://cal.notion.so/probe'),('contact-path','https://calendar.notion.so/probe'),
   ('email-or-phone-path','https://example.org/p@example.org'),('email-or-phone-path','https://example.org/+91%2098765%2043210'),('email-or-phone-path','https://example.org/555-010-0199'),
   ('scheme','mailto:p@example.org'),('scheme','tel:+15550100'),('scheme','javascript:alert(1)'),('scheme','http://x.com/p'),('scheme','data:text/html,x'),('scheme','x.com/p'),
  )
@@ -718,6 +731,10 @@ class BridgeTest(unittest.TestCase):
   _,res,_=self.person({'error':'connection_or_request_refused','status':429,'settingsUrl':'https://evil.invalid','instruction':'evil'})
   self.assertEqual(res['data'],{'error':'connection_or_request_refused','status':429,'settingsUrl':bridge.SETTINGS,'instruction':res['data']['instruction']})
   self.assertNotIn('evil',json.dumps(res))
+  # data N2: only an HTTP status (400-599) is forwarded
+  for status in (4155550100,200,600,-1):
+   _,res,_=self.person({'error':'connection_or_request_refused','status':status})
+   with self.subTest(status=status):self.assertEqual(set(res['data']),{'error','instruction'})
   _,res,_=self.person({'error':'response_too_large','status':'x'})
   self.assertEqual(set(res['data']),{'error','instruction'})
  def test_hidden_set_is_every_cf_plus_the_named_invisibles_at_every_depth(self):

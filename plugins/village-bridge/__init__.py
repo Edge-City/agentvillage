@@ -94,10 +94,14 @@ CONTACT_HOSTS = (
     "bit.ly", "t.co", "tinyurl.com", "goo.gl", "ow.ly", "is.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
     "rb.gy", "tiny.cc", "lnkd.in", "s.id", "bl.ink", "short.io", "linktr.ee", "lnk.bio", "beacons.ai", "bio.link",
     "web.archive.org", "archive.org", "translate.goog",
+    # Data recheck S1: messaging, DM and booking/meeting hosts.
+    "zalo.me", "chat.reddit.com", "cal.notion.so", "calendar.notion.so", "reclaim.ai", "webex.com",
 )
 # Messaging, DM, add-contact, booking and contact-info pages on any host (snapchat.com/add, instagram.com/direct,
 # linkedin.com/messaging, x.com/messages, Google appointment pages, linkedin .../overlay/contact-info).
-CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "message", "add", "appointments", "contact-info", "contactinfo"})
+# Data recheck S1: "chat" (x.com/i/chat, reddit.com/chat, keybase.io/<u>/chat) and "inbox" (warpcast.com/~/inbox).
+CONTACT_SEGMENTS = frozenset({"direct", "messaging", "messages", "message", "add", "appointments", "contact-info", "contactinfo",
+                              "chat", "inbox"})
 # The app's caps (app#290 person.ts): card lines 160, names 240, role/organization 120 code points;
 # at most 4 lines a card, 5 candidate names and 8 links.
 CAPS = {"line": 160, "name": 240, "role": 120, "organization": 120, "asOf": 40}
@@ -180,7 +184,7 @@ def _domain_ok(text, start):
     end = start
     while end < len(text) and (text[end] in DOMAIN_CHARS or text[end] == "."):
         end += 1
-    labels = text[start:end].split(".")
+    labels = text[start:end].lstrip(".").split(".")  # "x@.example.com" too (553e2060 stripped dots)
     if labels[0]:
         for label in labels[1:]:
             if len(label) >= 2 and label[0] in ASCII_LETTERS and label[1] in ASCII_LETTERS:
@@ -349,12 +353,18 @@ def contact_shaped(text):
     Text over PROSE_CHECK_MAX is treated as contact-shaped (dropped) without being scanned."""
     if not isinstance(text, str) or len(text) > PROSE_CHECK_MAX:
         return True
-    lowered = text.lower()
-    # Cheap bypasses closed: bracketed "at"/"dot" ("probe [at] example [dot] io").
-    for obfuscated, plain in (("[at]", "@"), ("(at)", "@"), ("{at}", "@"), ("[dot]", "."), ("(dot)", "."), ("{dot}", ".")):
-        lowered = lowered.replace(" " + obfuscated + " ", plain).replace(obfuscated, plain)
-    return (_has_phone(lowered) or _has_email_or_handle(lowered) or _names_host(lowered) or _has_messaging_label(lowered)
-            or _has_messaging_token(lowered))
+    plain_lower = text.lower()
+    # A second reading with the Turkish dotted/dotless i folded to "i": the fix-4 regexes ran re.I, which matched
+    # U+0130 and U+0131 as i, while .lower() turns U+0130 into "i" + U+0307. Both readings are checked (folding
+    # only would glue U+0131 onto a host: "\u0131cal.com" -> "ical.com").
+    for lowered in dict.fromkeys((plain_lower, plain_lower.replace("i\u0307", "i").replace("\u0131", "i"))):
+        # Cheap bypasses closed: bracketed "at"/"dot" ("probe [at] example [dot] io").
+        for obfuscated, plain in (("[at]", "@"), ("(at)", "@"), ("{at}", "@"), ("[dot]", "."), ("(dot)", "."), ("{dot}", ".")):
+            lowered = lowered.replace(" " + obfuscated + " ", plain).replace(obfuscated, plain)
+        if (_has_phone(lowered) or _has_email_or_handle(lowered) or _names_host(lowered) or _has_messaging_label(lowered)
+                or _has_messaging_token(lowered)):
+            return True
+    return False
 
 
 def normalised(value, cap):
@@ -484,7 +494,7 @@ def person_answer(result):
         # key is never a way around the filter (second security-review round).
         code = result["error"] if result["error"] in ("response_too_large", "connection_or_request_refused") else "village_unavailable"
         out = {"error": code}
-        if code == "connection_or_request_refused" and type(result.get("status")) is int:
+        if code == "connection_or_request_refused" and type(result.get("status")) is int and 400 <= result["status"] <= 599:  # data N2
             out.update(status=result["status"], settingsUrl=SETTINGS)
         out["instruction"] = "Do not describe this person from memory or guesses. Offer the Rolodex link: https://agents.edgecity.live/rolodex"
         return out
