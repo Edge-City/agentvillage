@@ -1,5 +1,5 @@
 {
-  "expected_set_version": "c14c49bf091a",
+  "expected_set_version": "d5582b542bd0",
   "overlay": [
     "av-approval",
     "av-display",
@@ -9,7 +9,8 @@
     "edgecity-village",
     "index-links",
     "recall",
-    "village-bridge"
+    "village-bridge",
+    "village-memory"
   ],
   "index": {
     "name": "index-network",
@@ -18,6 +19,7 @@
   "conditional": [
     "index-network",
     "recall",
-    "village-bridge"
+    "village-bridge",
+    "village-memory"
   ]
 }

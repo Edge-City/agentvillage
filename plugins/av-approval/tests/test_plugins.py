@@ -333,7 +333,8 @@ def box(tmp_path, clean_env, monkeypatch, gateway):
     plugins = []
     for name in mod.load_expected()["overlay"]:
         (home / "plugins" / name).mkdir(parents=True)
-        if name != "edgecity-village":
+        # village-memory (D3) is a memory provider (kind: exclusive): Hermes's general manager never loads it.
+        if name not in ("edgecity-village", "village-memory"):
             (home / "plugins" / name / "__init__.py").write_text("", encoding="utf-8")
             plugins.append(_Loaded(name, "user", home / "plugins" / name))
     (home / "plugins" / "fixture-echo").mkdir()

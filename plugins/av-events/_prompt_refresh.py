@@ -72,6 +72,18 @@ is caught at a session's first turn in a process or with the next hashed change;
 memory-triggered one also carries a newer AGENTS.md. Read every turn (`_core.env`, process env then
 `.env`), so no restart is needed.
 
+D3 / D7: with the `village-memory` memory provider active (`agent._memory_manager` holds a provider of
+that name), the cp's `knowledge/agentvillage/_profile.md` is hashed in
+the pre-filter too, in both files modes, through the provider's own safe reader
+(`profile_digest()`: no plain open, so a FIFO, symlink, directory or oversized file never blocks a
+turn; `?<reason>` for a file it refuses). The exact test renders the provider block the way Hermes
+does (`MemoryManager.build_system_prompt`, behind the same `memory_provider_tools_exposed` gate as
+`agent/system_prompt.py:515-540`): stale iff that block is not in the session's prompt, or it is
+empty now while the prompt still holds its marker lines (the cp removed the file). Reason
+`profile_md`. A profile the provider cannot read is an empty block, never "no verdict": it never
+holds back a USER.md / MEMORY.md change (a vote note). The refresh is the same rebuild + persist, so
+the provider block and the built-in snapshot move together.
+
 Fail-open: any exception in the gate, the check or the rebuild leaves the turn as today (the stored
 bytes go back into `_cached_system_prompt`) naming the exception class only. A failed check or
 rebuild is tried again for the same change at the next turn, up to 3 turns (DEBUG), then given up
@@ -120,7 +132,11 @@ ENTRY_DELIMITER = "\n§\n"
 #: The memory tool's `target` -> the digest key of the file it writes (`MemoryStore._path_for`).
 TARGET_FILES = {"memory": "memory_md", "user": "user_md"}
 #: The files the pre-filter hashes, by the reason name the log line uses.
-FILE_SOURCES = ("user_md", "memory_md", "agents_md")
+FILE_SOURCES = ("user_md", "memory_md", "agents_md", "profile_md")
+#: D3's memory provider, and the two lines its block starts with (plugins/village-memory: SEPARATOR,
+#: BLOCK_TITLE). A prompt holding them while the provider renders nothing still shows a removed profile.
+PROFILE_PROVIDER = "village-memory"
+PROFILE_BLOCK_MARK = "═" * 46 + "\nRESIDENT PROFILE (village-memory: knowledge/agentvillage/_profile.md)"
 MEMORY_SOURCES = ("user_md", "memory_md")
 #: Hermes's names: the module whose global the turn loop calls, and the seams the refresh uses.
 LOOP_MODULE = "agent.conversation_loop"
@@ -268,10 +284,28 @@ def memory_digests(agent: Any = None) -> Dict[str, str]:
     }
 
 
+def _profile_provider(agent: Any) -> Any:
+    """The agent's `village-memory` provider (D3), or None."""
+    manager = getattr(agent, "_memory_manager", None) if agent is not None else None
+    if manager is None:
+        return None
+    try:
+        providers = list(getattr(manager, "providers", None) or [])
+    except Exception:  # noqa: BLE001
+        return None
+    for provider in providers:
+        if getattr(provider, "name", None) == PROFILE_PROVIDER and callable(getattr(provider, "profile_digest", None)):
+            return provider
+    return None
+
+
 def file_digests(agent: Any) -> Dict[str, str]:
     digests = memory_digests(agent)
     if files_mode() == "all":
         digests["agents_md"] = _digest(_agents_md_path(agent))
+    provider = _profile_provider(agent)
+    if provider is not None:
+        digests["profile_md"] = str(provider.profile_digest())
     return digests
 
 
@@ -429,6 +463,23 @@ def _context_reasons(agent: Any, prompt: str) -> list:
     return reasons
 
 
+def _provider_reasons(agent: Any, prompt: str) -> list:
+    """D3: the memory provider's block as Hermes would render it now, against the session's prompt."""
+    if _profile_provider(agent) is None:
+        return []
+    try:
+        exposed = importlib.import_module("agent.memory_manager").memory_provider_tools_exposed
+    except Exception:  # noqa: BLE001 - an older Hermes: ungated, as system_prompt._memory_parts falls back
+        exposed = None
+    if exposed is not None and not exposed(agent):
+        return []
+    block = agent._memory_manager.build_system_prompt()
+    text = block.strip() if isinstance(block, str) else ""
+    if text:
+        return [] if text in prompt else ["profile_md"]
+    return ["profile_md"] if PROFILE_BLOCK_MARK in prompt else []
+
+
 class Unreadable(Exception):
     """A file the prompt is built from exists but cannot be read the way Hermes reads it. Hermes
     would render it as empty (`MemoryStore._read_file` and `prompt_builder._read_context_file` return
@@ -482,7 +533,7 @@ def stale_reasons(agent: Any, prompt: str) -> list:
     unreadable = unreadable_sources(agent)
     if unreadable:
         raise Unreadable(",".join(unreadable))
-    reasons = _memory_reasons(agent, prompt)
+    reasons = _memory_reasons(agent, prompt) + _provider_reasons(agent, prompt)
     if files_mode() == "all":
         reasons += _context_reasons(agent, prompt)
     return reasons
