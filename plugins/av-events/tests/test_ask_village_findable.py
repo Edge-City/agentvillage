@@ -12,17 +12,20 @@ CI installs only pytest and pyyaml, so without `snowballstemmer` the mirror matc
 lowercase tokens. Every query here matches with exact tokens, and Snowball maps equal tokens
 to equal stems, so each assertion holds under Hermes's stemming too.
 
-The catalog is the plugin's own tools plus `session_search`, the tool the model picked
-instead (its description and parameter names from Hermes v2026.9.24
-`tools/session_search_tool.py:651-760`, toolset `session_search`).
+The catalog is the plugin's own tools, village-bridge's `village` (whose `rolodex.search`
+looks up a person) and `session_search`, the tool the model picked instead (its description
+and parameter names from Hermes v2026.9.24 `tools/session_search_tool.py:651-760`, toolset
+`session_search`).
 """
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -72,6 +75,22 @@ INTENT_QUERIES = (
     "group discussion",
     "chat history",
 )
+
+#: People-lookup phrasings (lead refute OV-353 S2): `village` ranks first without the "rolodex" hint.
+PEOPLE_QUERIES = (
+    "who is",
+    "people search",
+    "search people",
+    "person by name",
+    "look up a person",
+    "tell me about a person",
+    "villager directory",
+    "people directory",
+    "find person",
+    "rolodex",
+)
+
+VILLAGE_BRIDGE = Path(__file__).resolve().parents[2] / "village-bridge" / "__init__.py"
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -135,9 +154,20 @@ def catalog(plugin, av) -> dict[str, list[str]]:
             params = (schema.get("parameters") or {}).get("properties") or {}
             entries[schema["name"]] = _tokenize(_search_text(schema["name"], toolset, schema.get("description", ""),
                                                              params))
+    spec = importlib.util.spec_from_file_location("askfind_village_bridge", VILLAGE_BRIDGE)
+    bridge = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = bridge
+    try:
+        spec.loader.exec_module(bridge)
+    finally:
+        sys.modules.pop(spec.name, None)
+        sys.modules.pop(f"{spec.name}._mini_apps", None)
+    vschema = bridge.SCHEMA
+    entries[vschema["name"]] = _tokenize(_search_text(vschema["name"], "village", vschema["description"],
+                                                      vschema["parameters"]["properties"]))
     entries["session_search"] = _tokenize(_search_text("session_search", "session_search",
                                                        SESSION_SEARCH_DESCRIPTION, SESSION_SEARCH_PARAMS))
-    assert "ask_village" in entries and len(entries) >= 3
+    assert {"ask_village", "village"} <= set(entries) and len(entries) >= 4
     return entries
 
 
@@ -190,3 +220,17 @@ def test_a_topic_word_no_tool_carries_gates_out_every_tool(catalog):
     # and the AGENTS.md routing line names ask_village outright for these questions.
     assert search_catalog(catalog, "group chat lunch tickets") == []
     assert search_catalog(catalog, "group chat")[0] == "ask_village"
+
+
+@pytest.mark.parametrize("query", PEOPLE_QUERIES)
+def test_tool_search_finds_village_first_for_people_lookups(catalog, query):
+    found = search_catalog(catalog, query)
+    assert found and found[0] == "village", (query, found)
+    assert set(_tokenize(query)) <= set(catalog["village"]), query
+
+
+def test_a_name_no_tool_carries_gates_out_every_tool(catalog):
+    # A person's name is in no tool's text: "who is Asha" admits nothing, as a topic word does.
+    # The AGENTS.md hint gives the model name-free queries ("rolodex", "ask_village").
+    assert search_catalog(catalog, "who is Asha") == []
+    assert search_catalog(catalog, "who is")[0] == "village"
