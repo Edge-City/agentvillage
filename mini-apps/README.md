@@ -147,7 +147,12 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   uuid that `rolodex.search` returned) or `query` (1 to 120 characters): a
   **read** (`READ_OPERATIONS`) of one other resident's public profile (PUBLIC
   and VILLAGE claims, whatYouDo, public social profile links; never email,
-  phone, Telegram handle or anything private). Appended last.
+  phone, Telegram handle or anything private). Appended last. `id` is lowercase,
+  exactly as search returns it. The app's filter is primary; the plugin also
+  keeps only the reviewed answer keys, person fields and card names, strips
+  bidi and hidden characters, and keeps only `https` links whose host is not a
+  messaging, contact or booking host and whose path is not a DM, messaging,
+  add-contact or contact-info page (verify OV-355 S1). It does not rewrite prose.
 
 The reviewed gold-stars entry carries these nine operations in this order. The
 helper and the plugin still accept the eight-operation entry (ov#350, the CP's
