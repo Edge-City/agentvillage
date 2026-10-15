@@ -11,7 +11,7 @@ and carries no Bountify logic.
 
 | File | What it is |
 |---|---|
-| `SKILL.md` | What the agent is told: absolute `workdir` and paths, no `execute_code`, what a block means, never route around one. |
+| `SKILL.md` | What the agent is told: absolute `workdir` and paths, `execute_code` ungated (rc42) but never a way around a block, what a block means, never route around one. |
 | `scripts/hermes-hook-shim.sh` | The gate: vendored from approval-md-hosted `hermes-image/hermes-hook-shim.sh` (header names the origin commit). Installed as `$HERMES_HOME/agent-hooks/hermes-hook-shim.sh`, 0700. |
 | `scripts/live_selfcheck.py` | The live half of the self-check, run with Hermes's own interpreter. It checks every gated matcher's first parsed entry is `fail_closed`, tests the signal patch by behaviour (a SIGKILLed `fail_closed` hook must block), reports how Hermes treats a `fail_closed` hook that exits 1 with no output (the exit-1 probe), checks the consent allowlist and its lock are usable, and fires one `terminal` call with no `workdir` through `agent.shell_hooks.run_once`, requiring a facade block. It also reports safe mode, managed scope and the `fail_closed` floor. Modelled on approval-md-hosted `hermes-image/selfcheck.py` item 8 and `patches/shell_hooks-signal-fail-closed.py`. |
 | `templates/APPROVAL.md` | The resident's day-one policy (the recorder). The installer does not write it: the control plane renders it with the paired ids into the daemon's store and attests it as the operator at provisioning (DATA-250); the resident re-attests in onboarding (DATA-259). |
@@ -89,7 +89,8 @@ row). In plain words, for the consent screen:
 ## How the gate works
 
 Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
-`write_file`, `patch`, `read_file`, `search_files` and `execute_code`, and for
+`write_file`, `patch`, `read_file` and `search_files` (`execute_code` left the
+list in rc42: CODE EXECUTION ON, `install/install_approval.ts`), and for
 `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage`,
 `delegate_task`, `cronjob(_manage)?` and `send_message` (which the core adapter
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
@@ -263,9 +264,12 @@ The installer's own self-check names the same states at install and in
 `manifest-missing`). `bun install/install_approval.ts --check` stays a hand
 step: nothing runs it at start; the plugin's check is what runs at start.
 
-The core adapter refuses `execute_code` outright and refuses `terminal`
-without an absolute `workdir` (and the file tools without an absolute `path`).
-The skill documents that; it does not reimplement it.
+The core adapter refuses `terminal` without an absolute `workdir` (and the file
+tools without an absolute `path`). It also refuses `execute_code` outright, but
+since rc42 (CODE EXECUTION ON) `execute_code` is not routed to the hook, so the
+adapter never sees it and it runs in Hermes's `strict` mode with no card. The
+tools a program calls back through Hermes (`terminal`, `write_file`, ...) still
+fire the hook. The skill documents that; it does not reimplement it.
 
 ## Why no setuid launcher here
 

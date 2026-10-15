@@ -1087,6 +1087,59 @@ export function setCompressionTrigger(): void {
   for (const line of lines) console.log(line);
 }
 
+/**
+ * CODE EXECUTION ON (rc42; Carter, DECISIONS 2026-10-15 05:1xZ): `execute_code`
+ * leaves the approval gate's matcher list (install_approval.ts), and the box
+ * runs it in Hermes's `strict` mode. Hermes v2026.9.24 offers two modes
+ * (hermes_cli/config_defaults.py:1937-1943; tools/code_execution_tool.py:797-813):
+ * `project` (its default: the session cwd with the active venv's python) and
+ * `strict` (an isolated temp dir with hermes-agent's own python). Its env scrub
+ * and tool whitelist apply in both; strict adds the temp dir.
+ */
+export const CODE_EXECUTION_MODE = "strict";
+
+/**
+ * Pin `code_execution.mode: strict` (see `CODE_EXECUTION_MODE`). A value Hermes
+ * already reads as strict (it lowercases and trims) is left as is; anything
+ * else (absent, `project`, an unknown word, which Hermes would read as
+ * `project`, a non-string) is set to `strict`. No other `code_execution` key is
+ * written. `code_execution` not a mapping, or a merge key at the top or under
+ * it, leaves the key unset with a warning. One `→` line; a config value is never
+ * echoed (only `strict`, `project` or a kind). Idempotent: a second run does not
+ * rewrite the file. Hermes reads the mode at each `execute_code` call.
+ */
+export function setCodeExecutionMode(): void {
+  const path = "code_execution.mode";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log(`→ warning: the top level of config.yaml is not a mapping; left ${path} unset`);
+    return;
+  }
+  if ("<<" in doc) {
+    console.log(`→ warning: YAML merge key "<<" at the top of config.yaml; left ${path} unset (set it by hand)`);
+    return;
+  }
+  const section = doc.code_execution ?? {};
+  if (!isMapping(section) || "<<" in section) {
+    const why = isMapping(section) ? 'YAML merge key "<<" under code_execution; set it by hand' : "code_execution is not a mapping";
+    console.log(`→ warning: ${why}; left ${path} unset`);
+    return;
+  }
+  const raw = section.mode;
+  if (typeof raw === "string" && raw.trim().toLowerCase() === CODE_EXECUTION_MODE) {
+    console.log(`→ ${path} already ${CODE_EXECUTION_MODE}; left as is`);
+    return;
+  }
+  const why =
+    raw === undefined ? "was unset, Hermes's default project"
+    : raw === null ? "was null, Hermes reads project"
+    : typeof raw === "string" ? (raw.trim().toLowerCase() === "project" ? "was project" : "was an unknown mode, Hermes reads project")
+    : `was ${typeof raw === "number" ? "a number" : kindOf(raw)}`;
+  doc.code_execution = { ...section, mode: CODE_EXECUTION_MODE };
+  writeConfig(doc);
+  console.log(`→ set ${path}: ${CODE_EXECUTION_MODE} (${why}; execute_code runs in an isolated temp dir, no approval card)`);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */

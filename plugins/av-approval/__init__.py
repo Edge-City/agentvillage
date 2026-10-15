@@ -138,7 +138,7 @@ GATED_MATCHERS: tuple[str, ...] = (
     "patch",
     "read_file",
     "search_files",
-    "execute_code",
+    # CODE EXECUTION ON (rc42): execute_code is not routed (install_approval.ts says why).
     "process(_manage)?",
     "web_extract",
     "browser_.*",
