@@ -37,7 +37,7 @@ What it gives the agent:
 
 Memory-provider tools come only from ``get_tool_schemas`` and are dispatched by
 the memory manager (``agent/tool_executor.py:1634-1641``), never registered in
-``tools.registry``, so ``tool_search`` never defers them
+Hermes's tool registry, so ``tool_search`` never defers them
 (``tools/tool_search.py:149-162``).
 
 Sessions (``chat_type``, ``platform`` and ``agent_context`` reach ``initialize``,
@@ -696,7 +696,7 @@ class VillageMemoryProvider(MemoryProvider):
             return _result("error", reason=f"internal_{type(exc).__name__}")
 
     def _profile_tool(self) -> str:
-        body, profile = self.render(where="tool")
+        body, profile = self.render(where="reread")
         if profile.reason == "absent":
             return _result("unavailable", reason="no profile yet: nothing has been rendered for them")
         if not body:

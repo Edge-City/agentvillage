@@ -7,3 +7,8 @@ author: Edge City
 kind: exclusive
 optional_env:
   - AV_VILLAGE_MEMORY
+# Documentation (and install/tests/plugin_tools_gated.test.ts's gate inventory): Hermes takes a
+# memory provider's tools from get_tool_schemas(), never from this list.
+provides_tools:
+  - resident_context
+  - resident_profile
