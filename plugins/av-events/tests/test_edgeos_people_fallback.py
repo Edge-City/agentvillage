@@ -46,8 +46,10 @@ def fallback() -> str:
 
 def test_section_9_has_the_fallback_in_order():
     text = fallback()
-    order = ["`village` `rolodex.search`", "`ask_village`", "`edge-india`", "a web search"]
-    at = [text.index(step) for step in order]
+    chain = text[text.index("When the directory really fails this turn"):]
+    order = ["1. `village` `rolodex.search`", "2. `ask_village`", "3. the public website copy in the `edge-india` skill",
+             "then a web search"]
+    at = [chain.index(step) for step in order]
     assert at == sorted(at), dict(zip(order, at))
     assert "when that tool is installed" in text
     assert "in the same turn" in text
