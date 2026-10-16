@@ -67,13 +67,15 @@ prompt; this live conversation begins with the owner's reply.
    note will be shared in the village Gold Stars topic. Send it?”
 4. End the turn and wait for a new owner reply confirming the exact preview.
    Then call `gold-stars.send` with its `draftId`. The native tool fetches the
-   immutable backend preview and requests **manual approval in the approval app**.
-   Show `approval_required` honestly; ask the owner to approve there, then retry
-   the same draft. A chat reply, model boolean or changed turn is not authority.
-   The daemon must grant and start the exact payload before any star is sent.
+   immutable backend preview and asks the approval gate. When the owner's
+   settings ask first, that is **a card in the Agent Approval bot**: show
+   `approval_required` (or `star_approval_required`) honestly, ask the owner to
+   approve the card there, then retry the SAME draftId; never prepare a new
+   preview to retry. A chat reply, model boolean or changed turn is not authority.
+   The daemon must authorize and start the exact payload before any star is sent.
    A no means cancel the unsent draft with `gold-stars.cancel`. Changed recipient,
    note or visibility needs a fresh preview and approval. Previews expire within
-   ten minutes or at the India-day boundary. Never claim success on a refusal.
+   an hour or at the India-day boundary. Never claim success on a refusal.
 5. Say sent only for `status: "sent"`. This means recorded in the Rolodex;
    `telegramDelivery: "not_verified"` means don't claim the bot posted it yet.
    A replayed receipt is the original star, not a new one. On an uncertain

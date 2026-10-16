@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
-from ._mini_apps import installed, authorize_send, gate_verified, READ_OPERATIONS, WRITE_OPERATIONS
+from ._mini_apps import installed, authorize_send, gate_verified, READ_OPERATIONS, WRITE_OPERATIONS, APPROVE_IN_BOT
 
 SETTINGS = "https://agents.edgecity.live/connections/village"
 SIGNIN = "https://agents.edgecity.live/signin"
@@ -602,6 +602,9 @@ def transport(config, payload):
             "star_preview_conflict": "Wait for the owner's next reply before revising the preview.",
             "star_confirmation_required": "Show the exact preview and wait for a new reply confirming it.",
             "star_cancelled": "This preview was cancelled. Do not send it.",
+            # HOT-01 (B-033): the app answers 403 when the control plane has not verified the approval
+            # for this exact preview (yet). Not a transport error: the same draft stays sendable.
+            "star_approval_required": APPROVE_IN_BOT,
         }
         try:
             raw = error.read(4097)

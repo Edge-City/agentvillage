@@ -33,6 +33,24 @@ class TransportTest(unittest.TestCase):
     real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':operation})
     self.assertEqual(opener.open.call_args.kwargs['timeout'],timeout)
 
+ def test_app_403_star_approval_required_is_named_and_points_at_the_bot(self):
+  # HOT-01 (B-033): the app's 403 when the control plane has not verified the approval was mapped
+  # to connection_or_request_refused, so the agent reported "still waiting" and the star never sent.
+  import io
+  from urllib.error import HTTPError
+  def refuse(code,status=403):
+   body=json.dumps({'code':code,'detail':'not shown'}).encode()
+   return HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool',status,'refused',{},io.BytesIO(body))
+  opener=unittest.mock.Mock()
+  with patch.object(bridge,'build_opener',return_value=opener):
+   opener.open.side_effect=refuse('star_approval_required')
+   result=real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})
+   self.assertEqual(result,{'error':'star_approval_required','instruction':mini.APPROVE_IN_BOT})
+   self.assertIn('Agent Approval bot',result['instruction']);self.assertIn('SAME draftId',result['instruction'])
+   # An unmapped code is still the generic refusal, unchanged.
+   opener.open.side_effect=refuse('something_else')
+   self.assertEqual(real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})['error'],'connection_or_request_refused')
+
 class BridgeTest(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

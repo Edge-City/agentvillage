@@ -34,6 +34,13 @@ READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quo
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel"})
 
 
+# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
+# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py).
+APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the Agent Approval bot, then retry "
+                  "gold-stars.send with this SAME draftId. Never prepare a new preview to retry. Chat consent alone "
+                  "cannot authorize sending.")
+
+
 def installed(home: Path, app_id: str, operation: str) -> bool:
     try:
         path = home / "mini-apps.json"
@@ -96,17 +103,31 @@ def authorize_send(preview: object, draft_id: str):
     ap = approval_modules()
     answer = ap.propose("marketplace.app.action", key, "Send one Gold Star: " + preview["recipientName"], held)
     task = answer.doc.get("task")
-    if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != digest or answer.doc.get("decision") != "requested":
+    decision = answer.doc.get("decision")
+    # HOT-01 (B-032): "requested" = the resident's setting for marketplace.app.action asks first (a
+    # human grant is spent); "autonomous" = the attested policy itself authorizes the send (core
+    # records the start as authorized by the policy, and refuses that for a manual or human-only
+    # class). Either way the daemon writes the start, and the control plane re-reads it from the
+    # daemon's own log before any star is sent. "supervised" and anything else are refused.
+    if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != digest or decision not in ("requested", "autonomous"):
         return None, {"error": "approval_refused"}
+    proof = {"taskId": task, "payloadHash": digest, "payload": payload}
     if answer.doc.get("state") == "executed":
         # The earlier start may have outlived an app timeout or a CP outage. Reuse
-        # only this same daemon-bound proof; the app/CP revalidate manual grant,
-        # current install binding and immutable draft before any idempotent effect.
-        return {"taskId": task, "payloadHash": digest, "payload": payload}, None
+        # only this same daemon-bound proof; the app/CP revalidate the grant or the
+        # policy start, current install binding and immutable draft before any idempotent effect.
+        return proof, None
+    if decision == "autonomous":
+        if answer.doc.get("state") is not None:
+            return None, {"error": "approval_refused"}
+        started = ap.start(task, key, held)
+        if not started.ok or started.doc.get("authorization") != "policy":
+            return None, {"error": "approval_not_started"}
+        return proof, None
     granted = ap.wait(task)
     if granted.exit_code != 0 or granted.status != "granted":
-        return None, {"error": "approval_required", "instruction": "Approve the exact Gold Star in the approval app, then retry this same draftId. Chat consent alone cannot authorize sending."}
+        return None, {"error": "approval_required", "instruction": APPROVE_IN_BOT}
     started = ap.start(task, key, held)
     if not started.ok or started.doc.get("authorization") != "grant":
         return None, {"error": "approval_not_started"}
-    return {"taskId": task, "payloadHash": digest, "payload": payload}, None
+    return proof, None
