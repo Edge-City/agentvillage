@@ -573,8 +573,11 @@ class BridgeTest(unittest.TestCase):
                'i\u0307l\u0131ne id: probe','Builder, Si\u0307s\u0131gnal: Probe_1.'):
    with self.subTest(prose=text):
     self.assertTrue(bridge.contact_shaped(text));self.assertIsNone(bridge.prose(text,160))
-  # The two earlier readings still carry their own cases (dotted capital under lower(); dotless glued to a host).
-  for text in ('telegram \u0130S probehandle','TG - p\u0131robehandle','\u0131cal.com/probe'):
+  # The two earlier readings still carry their own cases (dotted capital under lower(); dotless glued to a host),
+  # and the SECOND reading alone catches a raw "i" + U+0307 inside a word with no U+0131 beside it: the third
+  # reading keeps that combining dot, so these two fail if the second reading is ever dropped (ov#368 refute S1).
+  for text in ('telegram \u0130S probehandle','TG - p\u0131robehandle','\u0131cal.com/probe',
+               'si\u0307gnal: probe_1','probe@gmai\u0307l.com'):
    with self.subTest(earlier=text):self.assertIsNone(bridge.prose(text,160))
   for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r','Si\u0307s\u0131 builds tools'):
    with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
