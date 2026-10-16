@@ -17,7 +17,7 @@ def section(text: str, heading: str) -> str:
 
 class RolodexPersonSkillTest(unittest.TestCase):
     def test_version_bumped(self):
-        self.assertRegex(SKILL, r"(?m)^version: 1\.5\.1$")
+        self.assertRegex(SKILL, r"(?m)^version: 1\.5\.2$")
         self.assertIn("who is X with a resident's public profile", SKILL.split("---", 2)[1])
 
     def test_who_is_x_searches_first_then_person_on_the_chosen_id(self):
@@ -53,6 +53,18 @@ class RolodexPersonSkillTest(unittest.TestCase):
     def test_profile_unavailable_is_handled(self):
         who = " ".join(section(SKILL, "## Who is X").split())
         self.assertIn('`partial: "profile_unavailable"`: only the person and their own links came back, with no cards', who)
+
+    def test_add_to_rolodex_means_mark_met(self):
+        # B-037 (rc44): the Rolodex has no add; everyone is listed and "We met" is the only mark.
+        self.assertIn("adding someone to the Rolodex means marking them met", SKILL.split("---", 2)[1])
+        intro = " ".join(SKILL.split("## Who is X", 1)[0].split())
+        add = intro[intro.index("“Add Naman to my Rolodex”"):]
+        self.assertLess(intro.index("For “I met Naman”"), intro.index("“Add Naman to my Rolodex”"))
+        self.assertIn("means the same as “I met Naman”", add)
+        self.assertIn("everyone in the village is already in the Rolodex", add)
+        self.assertIn("call `rolodex.meeting` with `met: true`", add)
+        self.assertIn("Never say you cannot add people or invent an add action.", add)
+        self.assertIn("Under `mini_app_not_installed`, offer the Rolodex link", add)
 
     def test_agents_routing_already_puts_rolodex_first_and_is_unchanged_in_shape(self):
         line = next(l for l in AGENTS.splitlines() if l.startswith("- **People and the group.**"))

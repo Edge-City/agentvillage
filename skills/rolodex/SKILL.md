@@ -1,7 +1,7 @@
 ---
 name: rolodex
-description: Answer who is X with a resident's public profile, follow up on people you recommended, check whether the owner has marked them met, find Rolodex cards (also by Skylight character name), mark or undo meetings when the owner asks, and offer gratitude after a meaningful interaction. Use for meeting updates and replies to introduction or evening questions. Native reads and marks come with the installed Gold Stars mini-app and the existing paired account; writes need the owner's request. The website works for everyone.
-version: 1.5.1
+description: Answer who is X with a resident's public profile, follow up on people you recommended, check whether the owner has marked them met, find Rolodex cards (also by Skylight character name), mark or undo meetings when the owner asks (adding someone to the Rolodex means marking them met), and offer gratitude after a meaningful interaction. Use for meeting updates and replies to introduction or evening questions. Native reads and marks come with the installed Gold Stars mini-app and the existing paired account; writes need the owner's request. The website works for everyone.
+version: 1.5.2
 author: Edge City
 ---
 
@@ -30,6 +30,14 @@ ask which one, using their shared role/organization to distinguish them. Never
 choose the first result, guess an id, or infer a meeting from a match. Then
 call `rolodex.meeting` with that `attendeeId` and `met: true`. A clear request
 to undo uses `met: false`. Search again if the target is unclear.
+
+“Add Naman to my Rolodex” (or put/save them in the Rolodex, contacts or people)
+means the same as “I met Naman”: everyone in the village is already in the
+Rolodex, and **We met** is its only mark. Follow the same search, disambiguation
+and marking rules, call `rolodex.meeting` with `met: true`, then say “I've marked
+Naman as met in your Rolodex; it already lists everyone in the village.” Never
+say you cannot add people or invent an add action. Under `mini_app_not_installed`,
+offer the Rolodex link where they can mark the meeting themselves.
 
 ## Who is X
 
