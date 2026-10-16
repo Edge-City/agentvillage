@@ -186,15 +186,19 @@ older overlay refuses a longer entry and loses every Gold Stars operation.
 NEW-03 (rc44, P-013): an app whose CP catalog entry carries them may read and
 save the owner's notes in **its own** context namespace (`apps.<appId>` on the
 CP; private to the resident's agent by default). The app server dispatches
-both to the CP namespace routes for the request's appId; the CP owns the
-namespace, the claim shape and the quota.
+both to the CP namespace routes for the request's appId; the app owns the
+`arguments` shape and the CP owns the namespace and its quota.
 
 | Operation | Class | Native call | Plugin path |
 | --- | --- | --- | --- |
-| `mini-app.context.read` | read (`READ_OPERATIONS`), `marketplace.app.read` | `{"operation":"mini-app.context.read","appId":"dizko","arguments":{}}` | forwarded unchanged, like `mini-app.read`; no gate check, no grant |
-| `mini-app.context.write` | write (`WRITE_OPERATIONS`), `marketplace.app.action` (default-open, RP-28: no first-write card) | `{"operation":"mini-app.context.write","appId":"dizko","arguments":{"claims":[{"text":"..."}],"mode":"add"}}` | `rolodex.meeting`'s path: refused (`approval_unavailable`) while the approval gate is off or unverified; never the Gold Stars manual grant; then forwarded unchanged |
+| `mini-app.context.read` | read (`READ_OPERATIONS`); the gate classes `village` as `marketplace.app.read` | `{"operation":"mini-app.context.read","appId":"dizko","arguments":{}}` | forwarded unchanged, like `mini-app.read`; no gate check, no grant |
+| `mini-app.context.write` | write (`WRITE_OPERATIONS`); the approval gate classes the whole `village` tool as `marketplace.app.read`, so no `marketplace.app.action` choice applies (default-open, RP-28: no first-write card) | `{"operation":"mini-app.context.write","appId":"dizko","arguments":{"claims":["Likes late jazz sets"],"mode":"add"}}` | `rolodex.meeting`'s path: gated only by `gate_verified()` (refused, `approval_unavailable`, while the approval gate is off or unverified); never the Gold Stars manual grant; then forwarded unchanged |
 
 Both take exactly `operation`, `appId` and an object `arguments` (no `tool`).
+The **app owns the `arguments` shape** (app#349 `context.ts`): a write's
+`claims` is a list of plain strings (one line each), `mode` is `add` or
+`replace`, and a read takes `{}`; the app refuses any other key (422/400), so
+the plugin forwards `arguments` unchanged and checks only that it is an object.
 The appId is the request's own (the one `mini-apps.json` was checked for); an
 `arguments.appId` naming another app is refused, never forwarded. The agent
 saves only when the owner asks.

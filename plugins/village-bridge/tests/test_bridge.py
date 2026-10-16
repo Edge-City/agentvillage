@@ -195,7 +195,7 @@ class BridgeTest(unittest.TestCase):
          {'operation':'gold-stars.cancel','draftId':draft},{'operation':'mini-app.read','appId':'dizko','tool':'search','arguments':{}},
          {'operation':'rolodex.meeting','attendeeId':draft,'met':True},{'operation':'skylight.status'},
          {'operation':'rolodex.person','id':draft},{'operation':'rolodex.person','query':'Naman'},
-         {'operation':'mini-app.context.read','appId':'dizko','arguments':{}},{'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':[{'text':'x'}],'mode':'add'}}]
+         {'operation':'mini-app.context.read','appId':'dizko','arguments':{}},{'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['x'],'mode':'add'}}]
   Path(self.tmp.name,'mini-apps.json').unlink()
   for leftover in (True,False):
    if not leftover:Path(self.tmp.name,'village-bridge.json').unlink()
@@ -302,7 +302,7 @@ class BridgeTest(unittest.TestCase):
   self.transport.assert_called_once_with(self.config,args)
  def test_context_write_needs_the_verified_gate_and_never_the_manual_grant(self):
   self.context_home()
-  args={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':[{'text':'Likes late jazz sets'}],'mode':'add'}}
+  args={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['Likes late jazz sets'],'mode':'add'}}
   with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant for a context save')):
    for switch,codes in (('off',()),('unset',()),('on',('hook-missing:village',))):
     backstop=types.SimpleNamespace(switch=lambda s=switch:s,current_codes=lambda c=codes:c)
@@ -337,11 +337,11 @@ class BridgeTest(unittest.TestCase):
  def test_context_app_id_is_the_requests_own_and_the_shape_is_exact(self):
   self.context_home()
   backstop=types.SimpleNamespace(switch=lambda:'on',current_codes=lambda:())
-  base={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':[{'text':'x'}],'mode':'replace'}}
+  base={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['x'],'mode':'replace'}}
   with patch.object(mini.importlib,'import_module',return_value=backstop):
    for bad in [{**base,'arguments':{**base['arguments'],'appId':'gold-stars'}},{**base,'arguments':{'appId':'other'}},
                {**base,'arguments':{'appId':None}},{**base,'tool':'save'},{**base,'url':'https://evil.invalid'},{**base,'tenantId':'t'},
-               {'operation':'mini-app.context.write','appId':'dizko'},{**base,'arguments':[{'text':'x'}]},{**base,'arguments':'x'},
+               {'operation':'mini-app.context.write','appId':'dizko'},{**base,'arguments':['x']},{**base,'arguments':'x'},
                {**base,'appId':['dizko']},{'operation':'mini-app.context.read','appId':'dizko','arguments':{'appId':'other'}},
                {'operation':'mini-app.context.read','appId':'dizko','tool':'list_cities','arguments':{}}]:
     with self.subTest(bad=bad):self.assertIn('error',self.call(bad))
