@@ -102,11 +102,63 @@ class ApprovalTest(unittest.TestCase):
         self.ap.wait.assert_not_called()
         self.ap.start.assert_not_called()
 
+    # ov#370 round 1 (review-b S1): the autonomous path's matrix, each cell fail-closed.
+    def test_policy_autonomy_refuses_look_alike_authorizations_and_a_start_not_ok(self):
+        for doc in (dict(ok=True, authorization="Policy"), dict(ok=True, authorization="policy "), dict(ok=True, authorization=" policy"),
+                    dict(ok=True, authorization="policy;human"), dict(ok=True, authorization="POLICY"), dict(ok=True, authorization=1),
+                    dict(ok=True, authorization=["policy"]), dict(ok=True, authorization={"policy": True}), dict(ok=True, authorization=None),
+                    dict(ok="true", authorization="policy"), dict(ok=1, authorization="policy"), dict(authorization="policy")):
+            self.autonomous()
+            self.ap.start.return_value = answer(doc)
+            self.assertEqual([doc, mini.authorize_send(self.preview, self.draft)], [doc, (None, {"error": "approval_not_started"})])
+        # exit code not 0 with an otherwise perfect doc
+        self.autonomous()
+        self.ap.start.return_value = answer(dict(ok=True, authorization="policy"), 1)
+        self.assertEqual(mini.authorize_send(self.preview, self.draft)[1]["error"], "approval_not_started")
+        self.ap.wait.assert_not_called()
+
+    def test_policy_autonomy_start_that_raises_or_times_out_propagates(self):
+        # authorize_send never swallows a daemon failure on the autonomous path; handle() turns it into
+        # village_unavailable with no send (test_bridge.test_autonomous_start_failure_sends_nothing).
+        for error in (TimeoutError(), RuntimeError("approval_unavailable"), ValueError("transport")):
+            self.autonomous()
+            self.ap.start.side_effect = error
+            with self.assertRaises(type(error)):
+                mini.authorize_send(self.preview, self.draft)
+            self.ap.start.side_effect = None
+        self.ap.wait.assert_not_called()
+
+    def test_policy_autonomy_refuses_hash_mismatch_bad_task_and_a_refused_propose(self):
+        def answered(**doc):
+            base = dict(ok=True, task="propose:" + "a" * 32, decision="autonomous", state=None)
+            base.update(doc)
+            return lambda cls, key, summary, payload: answer({**base, **({"payload_hash": hashlib.sha256(payload.encode()).hexdigest()} if "payload_hash" not in doc else {})})
+        for side in (answered(payload_hash="wrong"), answered(payload_hash=None), answered(task="propose:123"), answered(task="propose:" + "A" * 32),
+                     answered(task=None), answered(ok=False), lambda *a: answer(dict(ok=True, decision="autonomous"), 1)):
+            self.ap.propose.side_effect = side
+            self.assertEqual(mini.authorize_send(self.preview, self.draft)[1]["error"], "approval_refused")
+        self.ap.start.assert_not_called()
+        self.ap.wait.assert_not_called()
+
+    def test_policy_autonomy_refuses_lapsed_or_withdrawn_states(self):
+        for state in ("expired", "withdrawn", "revoked", "void", "", "Executed", 0):
+            self.ap.propose.side_effect = lambda cls, key, summary, payload, state=state: answer(dict(ok=True, task="propose:" + "a" * 32, decision="autonomous", state=state, payload_hash=hashlib.sha256(payload.encode()).hexdigest()))
+            self.assertEqual([state, mini.authorize_send(self.preview, self.draft)[1]["error"]], [state, "approval_refused"])
+        self.ap.start.assert_not_called()
+        self.ap.wait.assert_not_called()
+
+    def test_look_alike_decisions_refused(self):
+        for decision in ("Autonomous", "autonomous ", " autonomous", "AUTONOMOUS", "requested ", True, 1, ["autonomous"]):
+            self.ap.propose.side_effect = lambda cls, key, summary, payload, decision=decision: answer(dict(ok=True, task="propose:" + "a" * 32, decision=decision, state=None, payload_hash=hashlib.sha256(payload.encode()).hexdigest()))
+            self.assertEqual([decision, mini.authorize_send(self.preview, self.draft)[1]["error"]], [decision, "approval_refused"])
+        self.ap.start.assert_not_called()
+        self.ap.wait.assert_not_called()
+
     def test_approval_required_points_at_the_agent_approval_bot_and_the_same_draft(self):
         self.ap.wait.return_value = answer(dict(status="requested"), 6)
         refusal = mini.authorize_send(self.preview, self.draft)[1]
         self.assertEqual(refusal, {"error": "approval_required", "instruction": mini.APPROVE_IN_BOT})
-        self.assertIn("Agent Approval bot", mini.APPROVE_IN_BOT)
+        self.assertIn("approvals bot", mini.APPROVE_IN_BOT)
         self.assertIn("SAME draftId", mini.APPROVE_IN_BOT)
 
     def test_changed_payload_hash_refused(self):

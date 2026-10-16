@@ -68,7 +68,7 @@ prompt; this live conversation begins with the owner's reply.
 4. End the turn and wait for a new owner reply confirming the exact preview.
    Then call `gold-stars.send` with its `draftId`. The native tool fetches the
    immutable backend preview and asks the approval gate. When the owner's
-   settings ask first, that is **a card in the Agent Approval bot**: show
+   settings ask first, that is **a card in the approvals bot**: show
    `approval_required` (or `star_approval_required`) honestly, ask the owner to
    approve the card there, then retry the SAME draftId; never prepare a new
    preview to retry. A chat reply, model boolean or changed turn is not authority.

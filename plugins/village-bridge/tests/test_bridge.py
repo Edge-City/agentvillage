@@ -46,7 +46,7 @@ class TransportTest(unittest.TestCase):
    opener.open.side_effect=refuse('star_approval_required')
    result=real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})
    self.assertEqual(result,{'error':'star_approval_required','instruction':mini.APPROVE_IN_BOT})
-   self.assertIn('Agent Approval bot',result['instruction']);self.assertIn('SAME draftId',result['instruction'])
+   self.assertIn('approvals bot',result['instruction']);self.assertIn('SAME draftId',result['instruction'])
    # An unmapped code is still the generic refusal, unchanged.
    opener.open.side_effect=refuse('something_else')
    self.assertEqual(real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})['error'],'connection_or_request_refused')
@@ -281,6 +281,65 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(ap.propose.call_args_list[0],ap.propose.call_args_list[1])
   ap.wait.assert_called_once_with('propose:'+'a'*32)
   ap.start.assert_called_once()
+ # ov#370 round 1 (review-b S1): handle()-level sends with a fake daemon.
+ def fake_daemon(self,decision,authorization):
+  ap=unittest.mock.Mock()
+  def propose(cls,key,summary,payload):
+   state='executed' if ap.start.called else (None if decision=='autonomous' else 'granted')
+   return types.SimpleNamespace(ok=True,doc={'task':'propose:'+'a'*32,'decision':decision,'state':state,'payload_hash':hashlib.sha256(payload.encode()).hexdigest()})
+  ap.propose.side_effect=propose
+  ap.wait.return_value=types.SimpleNamespace(exit_code=0,status='granted')
+  ap.start.return_value=types.SimpleNamespace(ok=True,doc={'authorization':authorization})
+  return ap
+ def star(self):
+  draft='550e8400-e29b-41d4-a716-446655440000'
+  return draft,{'appId':'gold-stars','draftId':draft,'attendeeId':draft,'recipientName':'Someone','note':'Exact note','visibility':'named'}
+ def test_autonomous_send_end_to_end_starts_as_policy_and_sends_the_daemon_proof(self):
+  draft,preview=self.star()
+  ap=self.fake_daemon('autonomous','policy')
+  self.transport.side_effect=[{'status':'pending','approvalPayload':preview},{'status':'sent'}]
+  with patch.object(mini,'approval_modules',return_value=ap):
+   self.assertEqual(self.call({'operation':'gold-stars.send','draftId':draft})['data']['status'],'sent')
+  requests=[c.args[1] for c in self.transport.call_args_list]
+  self.assertEqual([r['operation'] for r in requests],['gold-stars.status','gold-stars.send'])
+  held=ap.propose.call_args.args[3]
+  self.assertEqual(requests[1]['approval'],{'taskId':'propose:'+'a'*32,'payloadHash':hashlib.sha256(held.encode()).hexdigest(),'payload':json.loads(held)})
+  self.assertEqual(set(requests[1]),{'operation','draftId','turnId','approval'})
+  ap.wait.assert_not_called();ap.start.assert_called_once()
+ def test_autonomous_start_failure_sends_nothing(self):
+  draft,preview=self.star()
+  for failure in (TimeoutError(),RuntimeError('approval_unavailable')):
+   ap=self.fake_daemon('autonomous','policy');ap.start.side_effect=failure
+   self.transport.reset_mock();self.transport.side_effect=None;self.transport.return_value={'status':'pending','approvalPayload':preview}
+   with patch.object(mini,'approval_modules',return_value=ap):
+    self.assertEqual(self.call({'operation':'gold-stars.send','draftId':draft})['error'],'village_unavailable')
+   self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.status','draftId':draft})
+ def test_autonomous_look_alike_policy_start_sends_nothing(self):
+  draft,preview=self.star()
+  for authorization in ('Policy','policy ','grant',None):
+   ap=self.fake_daemon('autonomous',authorization)
+   self.transport.reset_mock();self.transport.side_effect=None;self.transport.return_value={'status':'pending','approvalPayload':preview}
+   with patch.object(mini,'approval_modules',return_value=ap):
+    self.assertEqual(self.call({'operation':'gold-stars.send','draftId':draft}),{'error':'approval_not_started'})
+   self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.status','draftId':draft})
+ def test_star_approval_required_then_same_draft_retry_sends_once_without_a_new_preview(self):
+  draft,preview=self.star()
+  ap=self.fake_daemon('requested','grant')
+  refused={'error':'star_approval_required','instruction':mini.APPROVE_IN_BOT}
+  self.transport.side_effect=[{'status':'pending','approvalPayload':preview},refused,{'status':'pending','approvalPayload':preview},{'status':'sent'}]
+  with patch.object(mini,'approval_modules',return_value=ap):
+   first=self.call({'operation':'gold-stars.send','draftId':draft})
+   self.assertEqual(self.transport.call_count,2)
+   second=self.call({'operation':'gold-stars.send','draftId':draft})
+  self.assertEqual(first['data'],refused)
+  self.assertEqual(second['data']['status'],'sent')
+  requests=[c.args[1] for c in self.transport.call_args_list]
+  # One status read and one send per call; never a prepare; the same draft and the same proof both times.
+  self.assertEqual([r['operation'] for r in requests],['gold-stars.status','gold-stars.send','gold-stars.status','gold-stars.send'])
+  self.assertTrue(all(r['draftId']==draft for r in requests))
+  self.assertEqual(requests[1]['approval'],requests[3]['approval'])
+  # The retry replays the executed proposal: one start in all.
+  ap.start.assert_called_once();ap.wait.assert_called_once()
  def test_sent_receipt_does_not_request_another_approval(self):
   self.transport.return_value={'status':'sent'}
   with patch.object(bridge,'authorize_send') as approve:

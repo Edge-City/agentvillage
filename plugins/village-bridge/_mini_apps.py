@@ -47,7 +47,7 @@ APP_OPERATIONS_ACCEPTED = (("mini-app.read", "mini-app.context.read", "mini-app.
 
 # HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
 # for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py).
-APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the Agent Approval bot, then retry "
+APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "
                   "gold-stars.send with this SAME draftId. Never prepare a new preview to retry. Chat consent alone "
                   "cannot authorize sending.")
 
