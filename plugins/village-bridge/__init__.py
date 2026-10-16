@@ -356,8 +356,10 @@ def contact_shaped(text):
     plain_lower = text.lower()
     # A second reading with the Turkish dotted/dotless i folded to "i": the fix-4 regexes ran re.I, which matched
     # U+0130 and U+0131 as i, while .lower() turns U+0130 into "i" + U+0307. Both readings are checked (folding
-    # only would glue U+0131 onto a host: "\u0131cal.com" -> "ical.com").
-    for lowered in dict.fromkeys((plain_lower, plain_lower.replace("i\u0307", "i").replace("\u0131", "i"))):
+    # only would glue U+0131 onto a host: "\u0131cal.com" -> "ical.com"). A third reading folds U+0130 and U+0131
+    # before lowering, so a raw "i" + U+0307 already in the text survives as a boundary (B-50, OV-355 recheck S1-r).
+    for lowered in dict.fromkeys((plain_lower, plain_lower.replace("i\u0307", "i").replace("\u0131", "i"),
+                                  text.replace("\u0130", "I").replace("\u0131", "i").lower())):
         # Cheap bypasses closed: bracketed "at"/"dot" ("probe [at] example [dot] io").
         for obfuscated, plain in (("[at]", "@"), ("(at)", "@"), ("{at}", "@"), ("[dot]", "."), ("(dot)", "."), ("{dot}", ".")):
             lowered = lowered.replace(" " + obfuscated + " ", plain).replace(obfuscated, plain)

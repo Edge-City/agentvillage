@@ -180,7 +180,7 @@ class BridgeTest(unittest.TestCase):
   matchers=approval.split('GATED_MATCHERS: tuple[str, ...] = (',1)[1].split('\n)',1)[0]+'\n'
   self.assertIn('\n    "village",\n',matchers);self.assertNotIn('village.',matchers)
   manifest=(Path(__file__).parents[1]/'plugin.yaml').read_text()
-  self.assertIn('version: 1.2.0\n',manifest);self.assertIn('provides_tools:\n  - village\n',manifest)
+  self.assertIn('version: 1.2.1\n',manifest);self.assertIn('provides_tools:\n  - village\n',manifest)
   with patch.object(bridge,'_REGISTERED',False):
    ctx=types.SimpleNamespace(register_tool=unittest.mock.Mock());bridge.register(ctx)
    self.assertEqual(ctx.register_tool.call_args.kwargs['name'],'village')
@@ -564,6 +564,19 @@ class BridgeTest(unittest.TestCase):
    with self.subTest(prose=text):self.assertIsNone(bridge.prose(text,160))
   # Kept: ordinary text with the Turkish letters is not folded into a contact.
   for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r'):
+   with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
+ def test_recheck_m1_third_reading_raw_combining_dot_beside_dotless_i_stays_refused(self):
+  # B-50 (OV-355 recheck S1-r): a raw "i" + U+0307 beside a label holding U+0131. The plain reading misses the
+  # label (U+0131), the second reading eats the raw U+0307 and glues the label onto the word before it; the third
+  # reading (fold U+0130/U+0131, then lower) keeps the combining dot as a boundary, so the label is seen.
+  for text in ('i\u0307s\u0131gnal: probe_1','i\u0307signal pr\u0131be_1','i\u0307tg \u0131s probehandle',
+               'i\u0307l\u0131ne id: probe','Builder, Si\u0307s\u0131gnal: Probe_1.'):
+   with self.subTest(prose=text):
+    self.assertTrue(bridge.contact_shaped(text));self.assertIsNone(bridge.prose(text,160))
+  # The two earlier readings still carry their own cases (dotted capital under lower(); dotless glued to a host).
+  for text in ('telegram \u0130S probehandle','TG - p\u0131robehandle','\u0131cal.com/probe'):
+   with self.subTest(earlier=text):self.assertIsNone(bridge.prose(text,160))
+  for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r','Si\u0307s\u0131 builds tools'):
    with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
  def test_short_fields_are_truncated_before_the_check_and_emit_the_checked_value(self):
   # The cut happens first; the cut, normalised value is what is checked and what is sent.
