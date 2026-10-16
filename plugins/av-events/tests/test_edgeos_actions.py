@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import uuid
 
@@ -84,7 +86,13 @@ def live(plugin, ctx, monkeypatch):
     return plugin
 
 
-def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av):
+def keyed(home, value):
+    """The tenant's HMAC of `value`, as `Collector.keyed_hash` computes it."""
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text().strip())
+    return hmac.new(key, value.encode(), hashlib.sha256).hexdigest()
+
+
+def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av, home):
     participant_id = rsvp(ctx, call_id="c1")
     attempted = of_type(av, live, "action.attempted")
     assert len(attempted) == 1
@@ -107,9 +115,10 @@ def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av):
     assert event["action_id"] == action_id
     assert event["tool_call_id"] == "c2"
     assert event["evidence_class"] == "provider_receipt"
-    # The receipt names the participant record the RSVP created: the thing a
-    # checker re-reads (`GET /event-participants/{id}`).
-    assert event["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": participant_id}
+    # The receipt names the participant record the RSVP created (the thing
+    # `GET /event-participants/{id}` re-reads), as its keyed hash (DATA-308).
+    assert event["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": keyed(home, participant_id)}
+    assert event["schema_version"] == 2
     assert event["payload"]["edgeos_event_id"] == EVENT
     assert event["payload"]["action_class"] == "rsvp"
     assert event["payload"]["operation"] == "edgeos.event_read"
@@ -117,8 +126,9 @@ def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av):
 
     # The read's own tool.call carries the receipt reference too.
     calls = of_type(av, live, "tool.call")
-    assert calls[-1]["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": participant_id}
+    assert calls[-1]["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": keyed(home, participant_id)}
     assert calls[-1]["payload"]["operation"] == "edgeos.event_read"
+    assert participant_id not in json.dumps(av.read_buffer(live._COLLECTOR))
 
     # Resolved: a second read receipts nothing more.
     read_event(ctx, call_id="c3")

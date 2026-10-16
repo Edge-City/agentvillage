@@ -39,6 +39,21 @@ except ImportError:  # pragma: no cover - Windows
 
 SCHEMA_VERSION = 1
 
+#: Event types sent at a later `schema_version` than `SCHEMA_VERSION`. Under
+#: contract-v1 a producer change after the contract tag is a new version of
+#: the type, registered at ingest beside the old one, so the door can tell the
+#: two producers apart and hold the new one to the new rule (the same way the
+#: control plane moved `tenant.created` / `tenant.live` to 2).
+#:
+#: DATA-308: version 2 of `tool.call` and `action.receipted` carries the
+#: EdgeOS participant record id in the receipt as its keyed hash in every
+#: capture mode, never the raw UUID (ingest refuses a UUID there at 2, and
+#: still accepts one at 1 from a sandbox on an older overlay).
+SCHEMA_VERSIONS = {
+    "tool.call": 2,
+    "action.receipted": 2,
+}
+
 #: The plugin's own version: `__init__.__version__` and `plugin.yaml` carry the
 #: same string (a test holds them together). Lives here so `_backup` can write
 #: it into a snapshot manifest without importing the package `__init__`.

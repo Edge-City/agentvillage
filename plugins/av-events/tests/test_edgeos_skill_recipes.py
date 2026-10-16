@@ -107,7 +107,8 @@ def test_a_verbatim_rsvp_recipe_waits_for_and_gets_its_receipt(plugin, ctx, monk
                                 "exit_code": 0}), status="ok")
     events = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("action.")]
     assert [e["event_type"] for e in events] == ["action.attempted", "action.receipted"]
-    assert events[1]["payload"]["receipt"]["id"] == participant["id"]
+    # The participant id leaves keyed (DATA-308).
+    assert events[1]["payload"]["receipt"]["id"] == plugin._COLLECTOR.keyed_hash(participant["id"])
 
 
 def test_a_continuation_does_not_hide_a_second_command(edgeos):

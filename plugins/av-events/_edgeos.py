@@ -10,8 +10,10 @@ So an EdgeOS operation is recognised by parsing the one `curl` in a carrier
 tool's command — its method and the path of its one URL — against the frozen
 seed `edgeos_tool_allowlist.json`. Nothing of the command, the headers or the
 response body leaves the sandbox: the only values that do are the operation
-name, the EdgeOS event id and participant id (UUIDs, validated as such), an
-occurrence timestamp, and the ids minted here.
+name, the EdgeOS event id (a UUID, validated as such; its keyed hash in
+`metadata`), the keyed hash of the participant record id (DATA-308: never the
+UUID itself, in any capture mode; the caller keys it), an occurrence
+timestamp, and the ids minted here.
 
 **The command that ran is the command that was read.** A metric counts these
 receipts as verified outcomes, so a command is classified only when the shell
