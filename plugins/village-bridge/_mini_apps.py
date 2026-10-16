@@ -30,8 +30,19 @@ GOLD_STARS_ACCEPTED = (GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS)
 # step, CLAIMS L7216) and runs only while that gate is on and verified (gate_verified). `skylight.status`
 # is a READ of the owner's own status. `rolodex.person` is a READ of one resident's public profile.
 # Star sends also need their own daemon grant (authorize_send).
-READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read"})
-WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel"})
+# NEW-03 (rc44): `mini-app.context.read` is a READ of the app's own context namespace; `mini-app.context.write`
+# is a WRITE into it and takes rolodex.meeting's path (gate_verified), never the Gold Stars manual grant.
+READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
+                             "mini-app.context.read"})
+WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write"})
+# The operations whose appId is the request's own (any other operation is the gold-stars install's).
+APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
+# NEW-03 (rc44, P-013; context's design NEW-03-APP-NAMESPACES.md section 2, CLAIMS L8997): every operations
+# list this overlay accepts for a non-Gold-Stars app, each by exact equality (newest first): the reviewed
+# public read alone, or the read plus that app's own context namespace read and write. Order fixed, no
+# duplicates and no other operation (a planted op or a reordered list refuses the whole projection). The
+# CP/app stay authoritative for the endpoint, the namespace and its quota.
+APP_OPERATIONS_ACCEPTED = (("mini-app.read", "mini-app.context.read", "mini-app.context.write"), ("mini-app.read",))
 
 
 # HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
@@ -65,7 +76,7 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
                 if not any(app == {"id": name, **entry} for entry in GOLD_STARS_ACCEPTED):
                     return False
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
-                  or app["skills"] != [name] or app["operations"] != ["mini-app.read"]):
+                  or app["skills"] != [name] or not any(app["operations"] == list(ops) for ops in APP_OPERATIONS_ACCEPTED)):
                 return False
             # CP/server remains authoritative for the endpoint, exact tool and schema.
             # A projection cannot introduce an endpoint or an unreviewed write operation.

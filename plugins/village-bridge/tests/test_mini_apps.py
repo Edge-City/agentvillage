@@ -219,6 +219,73 @@ class ProjectionTest(unittest.TestCase):
         self.assertNotIn("rolodex.person", mini.WRITE_OPERATIONS)
         self.assertFalse(mini.READ_OPERATIONS & mini.WRITE_OPERATIONS)
 
+    def test_new03_app_operations_accepted_by_exact_shape_only(self):
+        # NEW-03 (rc44): a non-Gold-Stars app carries exactly the public read, or the read plus its own
+        # context namespace read and write (newest first). Anything else refuses the whole projection.
+        read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
+        self.assertEqual(mini.APP_OPERATIONS_ACCEPTED, ((read, ctx_read, ctx_write), (read,)))
+        self.assertIn(ctx_read, mini.READ_OPERATIONS)
+        self.assertNotIn(ctx_read, mini.WRITE_OPERATIONS)
+        self.assertIn(ctx_write, mini.WRITE_OPERATIONS)
+        self.assertNotIn(ctx_write, mini.READ_OPERATIONS)
+        self.assertFalse(mini.READ_OPERATIONS & mini.WRITE_OPERATIONS)
+        everything = sorted(mini.READ_OPERATIONS | mini.WRITE_OPERATIONS)
+        gold = {"id": "gold-stars", **mini.GOLD_STARS}
+        dizko = {"id": "dizko", "version": "1.0.0", "skills": ["dizko"]}
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            path = home / "mini-apps.json"
+            for ops in mini.APP_OPERATIONS_ACCEPTED:
+                path.write_text(json.dumps({"version": 1, "apps": [gold, {**dizko, "operations": list(ops)}]}))
+                for op in everything:
+                    with self.subTest(ops=ops, op=op):
+                        self.assertEqual(mini.installed(home, "dizko", op), op in ops)
+                        # Gold Stars keeps exactly its own operations beside either shape.
+                        self.assertEqual(mini.installed(home, "gold-stars", op), op in mini.GOLD_STARS["operations"])
+            # allowed() is per app: an entry without the context ops gets none, even beside one that has them.
+            guide = {"id": "public-guide", "version": "1.0.0", "skills": ["public-guide"], "operations": [read, ctx_read, ctx_write]}
+            path.write_text(json.dumps({"version": 1, "apps": [{**dizko, "operations": [read]}, guide]}))
+            self.assertTrue(mini.installed(home, "dizko", read))
+            self.assertFalse(mini.installed(home, "dizko", ctx_read))
+            self.assertFalse(mini.installed(home, "dizko", ctx_write))
+            self.assertTrue(mini.installed(home, "public-guide", ctx_write))
+            self.assertFalse(mini.installed(home, "gold-stars", ctx_read))
+            planted = (
+                [read, ctx_read, ctx_write, "mini-app.context.delete"], [read, "mini-app.context.delete"],
+                [read, ctx_read, "mini-app.context.delete"], [read, "mini-app.admin"], [read, ctx_read, ctx_write, "mini-app.admin"],
+                [read, "gold-stars.send"], [read, ctx_read, ctx_write, "gold-stars.send"], ["gold-stars.send"],
+                [read, "rolodex.meeting"], [read, ctx_read, ctx_write, "rolodex.person"],
+                [ctx_read, read, ctx_write], [read, ctx_write, ctx_read], [ctx_write, ctx_read, read],  # reordered
+                [read, read], [read, ctx_read, ctx_read, ctx_write], [read, ctx_read, ctx_write, ctx_write],  # duplicates
+                [read, ctx_read], [read, ctx_write], [ctx_read, ctx_write], [ctx_read], [ctx_write], [],  # partial
+                [read, "Mini-App.Context.Write"], [read, ctx_read + " ", ctx_write], read, None, {read: True},
+            )
+            for operations in planted:
+                path.write_text(json.dumps({"version": 1, "apps": [gold, {**dizko, "operations": operations}]}))
+                with self.subTest(operations=operations):
+                    for op in everything:
+                        self.assertFalse(mini.installed(home, "dizko", op))
+                        self.assertFalse(mini.installed(home, "gold-stars", op))  # the whole projection is refused
+
+    def test_new03_gold_stars_entries_unchanged_and_never_carry_context_ops(self):
+        read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
+        self.assertEqual(len(mini.GOLD_STARS_ACCEPTED), 3)
+        for entry in mini.GOLD_STARS_ACCEPTED:
+            self.assertFalse({read, ctx_read, ctx_write} & set(entry["operations"]))
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            path = home / "mini-apps.json"
+            for entry in mini.GOLD_STARS_ACCEPTED:
+                app = {"id": "gold-stars", **entry}
+                path.write_text(json.dumps({"version": 1, "apps": [app]}))
+                self.assertTrue(mini.installed(home, "gold-stars", "rolodex.search"))
+                for ops in ([ctx_read, ctx_write], [ctx_read], [ctx_write], [read, ctx_read, ctx_write]):
+                    for apps in ([{**app, "operations": entry["operations"] + ops}], [{**app, "operations": ops + entry["operations"]}], [{**app, "operations": ops}]):
+                        path.write_text(json.dumps({"version": 1, "apps": apps}))
+                        with self.subTest(entry=len(entry["operations"]), apps=apps):
+                            self.assertFalse(mini.installed(home, "gold-stars", "rolodex.search"))
+                            self.assertFalse(mini.installed(home, "gold-stars", ctx_write))
+
     def test_disabled_missing_and_unverified_authority_refused(self):
         for configured, switch, codes in ((False, "on", ()), (True, "off", ()), (True, "on", ("hook-missing:village",))):
             ap = types.SimpleNamespace(configured=lambda: configured)

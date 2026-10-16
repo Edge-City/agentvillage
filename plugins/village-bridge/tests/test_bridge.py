@@ -131,7 +131,7 @@ class BridgeTest(unittest.TestCase):
   self.assertIn('skylight.status',mini.READ_OPERATIONS);self.assertNotIn('skylight.status',mini.WRITE_OPERATIONS)
   self.assertFalse(mini.READ_OPERATIONS&mini.WRITE_OPERATIONS)
   self.assertEqual(mini.READ_OPERATIONS|mini.WRITE_OPERATIONS,set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
-  self.assertEqual(mini.WRITE_OPERATIONS,{'rolodex.meeting','gold-stars.prepare','gold-stars.send','gold-stars.cancel'})
+  self.assertEqual(mini.WRITE_OPERATIONS,{'rolodex.meeting','gold-stars.prepare','gold-stars.send','gold-stars.cancel','mini-app.context.write'})
   self.assertIn('rolodex.meeting is a write',bridge.SCHEMA['description']);self.assertIn('skylight.status is a read',bridge.SCHEMA['description'])
   attendee='550e8400-e29b-41d4-a716-446655440000'
   # The gate is off, unverified or absent: the write is refused before any network call.
@@ -191,7 +191,7 @@ class BridgeTest(unittest.TestCase):
   # No new tool name: both operations go through `village`, the 36th gated tool (exact full-match matcher).
   self.assertEqual(bridge.SCHEMA['name'],'village')
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
-  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|{'mini-app.read'})
+  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write'})
   self.assertEqual(bridge.SCHEMA['parameters']['properties']['met'],{'type':'boolean','description':bridge.SCHEMA['parameters']['properties']['met']['description']})
   self.assertFalse({'humanId','tenantId','userId','ownerTelegramId','requestId','turnId'}&set(bridge.SCHEMA['parameters']['properties']))
   approval=(Path(__file__).parents[2]/'av-approval'/'__init__.py').read_text()
@@ -212,7 +212,8 @@ class BridgeTest(unittest.TestCase):
          {'operation':'gold-stars.send','draftId':draft},{'operation':'gold-stars.status','draftId':draft},
          {'operation':'gold-stars.cancel','draftId':draft},{'operation':'mini-app.read','appId':'dizko','tool':'search','arguments':{}},
          {'operation':'rolodex.meeting','attendeeId':draft,'met':True},{'operation':'skylight.status'},
-         {'operation':'rolodex.person','id':draft},{'operation':'rolodex.person','query':'Naman'}]
+         {'operation':'rolodex.person','id':draft},{'operation':'rolodex.person','query':'Naman'},
+         {'operation':'mini-app.context.read','appId':'dizko','arguments':{}},{'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['x'],'mode':'add'}}]
   Path(self.tmp.name,'mini-apps.json').unlink()
   for leftover in (True,False):
    if not leftover:Path(self.tmp.name,'village-bridge.json').unlink()
@@ -297,6 +298,74 @@ class BridgeTest(unittest.TestCase):
   args={'operation':'mini-app.read','appId':'public-guide','tool':'list_places','arguments':{}}
   self.assertIn('data',self.call(args));self.transport.assert_called_once_with(self.config,args)
   # CP/app server remains authoritative for reviewed app/tool/schema; this layer supplies no URL.
+
+ # NEW-03 (rc44): mini-app.context.read/write for a non-Gold-Stars app whose entry carries them.
+ CONTEXT_OPS=['mini-app.read','mini-app.context.read','mini-app.context.write']
+ def context_home(self,*apps):
+  Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':list(apps) or [{'id':'gold-stars',**mini.GOLD_STARS},{'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':self.CONTEXT_OPS}]}))
+ def test_context_ops_are_classified_and_listed(self):
+  self.assertIn('mini-app.context.read',mini.READ_OPERATIONS);self.assertNotIn('mini-app.context.read',mini.WRITE_OPERATIONS)
+  self.assertIn('mini-app.context.write',mini.WRITE_OPERATIONS);self.assertNotIn('mini-app.context.write',mini.READ_OPERATIONS)
+  self.assertEqual(mini.APP_SCOPED_OPERATIONS,set(self.CONTEXT_OPS))
+  enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
+  self.assertEqual(enum[-3:],self.CONTEXT_OPS);self.assertEqual(len(enum),len(set(enum)))
+  # In the appId description, not the tool description (av-events test_ask_village_findable: tool_search ranks on the latter).
+  app_id=bridge.SCHEMA['parameters']['properties']['appId']['description']
+  self.assertIn('mini-app.context.write (a write',app_id);self.assertIn('mini-app.context.read (a read)',app_id)
+ def test_context_read_forwards_unchanged_without_the_gate_or_a_grant(self):
+  self.context_home()
+  args={'operation':'mini-app.context.read','appId':'dizko','arguments':{}}
+  with patch.object(mini.importlib,'import_module',side_effect=AssertionError('reads are not gate-checked')),patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant')):
+   self.assertIn('data',self.call(args))
+  self.transport.assert_called_once_with(self.config,args)
+ def test_context_write_needs_the_verified_gate_and_never_the_manual_grant(self):
+  self.context_home()
+  args={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['Likes late jazz sets'],'mode':'add'}}
+  with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant for a context save')):
+   for switch,codes in (('off',()),('unset',()),('on',('hook-missing:village',))):
+    backstop=types.SimpleNamespace(switch=lambda s=switch:s,current_codes=lambda c=codes:c)
+    with patch.object(mini.importlib,'import_module',return_value=backstop),self.subTest(switch=switch,codes=codes):
+     refused=self.call(args);self.assertEqual(refused['error'],'approval_unavailable');self.assertIn('Do not claim',refused['instruction'])
+   with patch.object(mini.importlib,'import_module',side_effect=ImportError('no av-approval')):
+    self.assertEqual(self.call(args)['error'],'approval_unavailable')
+   self.transport.assert_not_called()
+   backstop=types.SimpleNamespace(switch=lambda:'on',current_codes=lambda:())
+   with patch.object(mini.importlib,'import_module',return_value=backstop) as imported:
+    self.assertIn('data',self.call(args))
+   self.assertEqual([c.args[0] for c in imported.call_args_list],['hermes_plugins.av_approval'])
+  # Forwarded unchanged: operation, appId and the input; no tool, requestId, actor or approval field.
+  self.transport.assert_called_once_with(self.config,args)
+ def test_context_ops_refused_for_an_app_whose_entry_lacks_them(self):
+  dizko={'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':['mini-app.read']}
+  guide={'id':'public-guide','version':'1.0.0','skills':['public-guide'],'operations':self.CONTEXT_OPS}
+  backstop=types.SimpleNamespace(switch=lambda:'on',current_codes=lambda:())
+  calls=[{'operation':'mini-app.context.read','appId':'dizko','arguments':{}},{'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':[]}},
+         {'operation':'mini-app.context.read','appId':'gold-stars','arguments':{}},{'operation':'mini-app.context.write','appId':'gold-stars','arguments':{}},
+         {'operation':'mini-app.context.write','appId':'absent','arguments':{}}]
+  with patch.object(mini.importlib,'import_module',return_value=backstop):
+   for apps in ([{'id':'gold-stars',**mini.GOLD_STARS},dizko],[dizko,guide],[dizko]):
+    self.context_home(*apps)
+    for args in calls:
+     with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+   self.transport.assert_not_called()
+   # Another app's entry carrying them reaches only that app's own namespace.
+   self.context_home(dizko,guide)
+   ok={'operation':'mini-app.context.write','appId':'public-guide','arguments':{'claims':[]}}
+   self.assertIn('data',self.call(ok));self.transport.assert_called_once_with(self.config,ok)
+ def test_context_app_id_is_the_requests_own_and_the_shape_is_exact(self):
+  self.context_home()
+  backstop=types.SimpleNamespace(switch=lambda:'on',current_codes=lambda:())
+  base={'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['x'],'mode':'replace'}}
+  with patch.object(mini.importlib,'import_module',return_value=backstop):
+   for bad in [{**base,'arguments':{**base['arguments'],'appId':'gold-stars'}},{**base,'arguments':{'appId':'other'}},
+               {**base,'arguments':{'appId':None}},{**base,'tool':'save'},{**base,'url':'https://evil.invalid'},{**base,'tenantId':'t'},
+               {'operation':'mini-app.context.write','appId':'dizko'},{**base,'arguments':['x']},{**base,'arguments':'x'},
+               {**base,'appId':['dizko']},{'operation':'mini-app.context.read','appId':'dizko','arguments':{'appId':'other'}},
+               {'operation':'mini-app.context.read','appId':'dizko','tool':'list_cities','arguments':{}}]:
+    with self.subTest(bad=bad):self.assertIn('error',self.call(bad))
+   self.transport.assert_not_called()
+   same={**base,'arguments':{**base['arguments'],'appId':'dizko'}}
+   self.assertIn('data',self.call(same));self.transport.assert_called_once_with(self.config,same)
  def test_star_fields_are_exact_and_cannot_override_confirmation_origin(self):
   base={'operation':'gold-stars.prepare','attendeeId':'550e8400-e29b-41d4-a716-446655440000','note':'Thanks','visibility':'named'}
   for args in [{**base,'turnId':'forged'},{**base,'visibility':'private'},{**base,'note':'x'*501},
@@ -582,6 +651,22 @@ class BridgeTest(unittest.TestCase):
    with self.subTest(prose=text):self.assertIsNone(bridge.prose(text,160))
   # Kept: ordinary text with the Turkish letters is not folded into a contact.
   for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r'):
+   with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
+ def test_recheck_m1_third_reading_raw_combining_dot_beside_dotless_i_stays_refused(self):
+  # B-50 (OV-355 recheck S1-r): a raw "i" + U+0307 beside a label holding U+0131. The plain reading misses the
+  # label (U+0131), the second reading eats the raw U+0307 and glues the label onto the word before it; the third
+  # reading (fold U+0130/U+0131, then lower) keeps the combining dot as a boundary, so the label is seen.
+  for text in ('i\u0307s\u0131gnal: probe_1','i\u0307signal pr\u0131be_1','i\u0307tg \u0131s probehandle',
+               'i\u0307l\u0131ne id: probe','Builder, Si\u0307s\u0131gnal: Probe_1.'):
+   with self.subTest(prose=text):
+    self.assertTrue(bridge.contact_shaped(text));self.assertIsNone(bridge.prose(text,160))
+  # The two earlier readings still carry their own cases (dotted capital under lower(); dotless glued to a host),
+  # and the SECOND reading alone catches a raw "i" + U+0307 inside a word with no U+0131 beside it: the third
+  # reading keeps that combining dot, so these two fail if the second reading is ever dropped (ov#368 refute S1).
+  for text in ('telegram \u0130S probehandle','TG - p\u0131robehandle','\u0131cal.com/probe',
+               'si\u0307gnal: probe_1','probe@gmai\u0307l.com'):
+   with self.subTest(earlier=text):self.assertIsNone(bridge.prose(text,160))
+  for text in ('Lives near \u0130stiklal street','Builds tools in Diyarbak\u0131r','Si\u0307s\u0131 builds tools'):
    with self.subTest(kept=text):self.assertEqual(bridge.prose(text,160),text)
  def test_short_fields_are_truncated_before_the_check_and_emit_the_checked_value(self):
   # The cut happens first; the cut, normalised value is what is checked and what is sent.
