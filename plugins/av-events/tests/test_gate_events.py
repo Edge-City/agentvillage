@@ -1,8 +1,9 @@
 """ov#357 refute M1 stopgap (b): `gate.unverified@1` from av-approval's `av-approval:gate.unverified`.
 
 av-approval's backstop publishes one bus event per change of its verdict (start failure, later failure,
-recovery) with code names only; this plugin rebuilds it from a closed allow-list (`_gate_events.py`) and
-emits it unless `AV_GATE_EVENTS` is set off.
+recovery) and one `recovered` at every clean start (OV-GATE-RECOVERED), with code names only; this
+plugin rebuilds it from a closed allow-list (`_gate_events.py`) and emits it unless `AV_GATE_EVENTS`
+is set off.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import pytest
 
 BUS = "av-approval:gate.unverified"
 OK = {"phase": "recheck", "codes": ["shim-changed-since-start", "shim-not-vendored"], "ts": 1760500000}
+#: OV-GATE-RECOVERED: what av-approval publishes at every clean gateway start.
+CLEAN_START = {"phase": "recovered", "codes": [], "ts": 1760500000}
 SENTINEL = "SENTINEL7f3a"
 
 
@@ -107,11 +110,24 @@ def test_refused_records_drop_whole_and_count(live, ctx, av, caplog, record, rea
     assert SENTINEL not in caplog.text
 
 
+@pytest.mark.parametrize("record", [OK, CLEAN_START], ids=["recheck", "clean_start"])
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", " OFF "])
-def test_an_off_spelling_turns_it_off(plugin, ctx, av, monkeypatch, value):
+def test_an_off_spelling_turns_it_off(plugin, ctx, av, monkeypatch, value, record):
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     monkeypatch.setenv("AV_GATE_EVENTS", value)
     plugin.register(ctx)
-    ctx.publish(BUS, **OK)
+    ctx.publish(BUS, **record)
     assert emitted(plugin, av) == []
     assert drops(plugin) == {"gate_dropped_switch_off": 1}
+
+
+def test_each_clean_start_is_its_own_row(live, ctx, av):
+    """OV-GATE-RECOVERED: one `recovered` row per clean start, each with its own id; nothing dedupes here
+    (data's rule keeps each box's latest row)."""
+    second = dict(CLEAN_START, ts=CLEAN_START["ts"] + 600)
+    ctx.publish(BUS, **CLEAN_START)
+    ctx.publish(BUS, **second)
+    rows = emitted(live, av)
+    assert [e["payload"] for e in rows] == [CLEAN_START, second]
+    assert len({e["event_id"] for e in rows}) == 2
+    assert drops(live) == {}

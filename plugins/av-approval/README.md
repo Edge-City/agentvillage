@@ -42,7 +42,16 @@ between two checks is still caught) and re-runs the rest of the check at most
 once a minute, re-parsing the config only when its sha256 changed, and a later
 failure blocks while it lasts. `plugin.yaml` declares `requires_plugins:
 av-events` so Hermes loads av-events first and the start event has a
-subscriber (ov#360 refute S2). Codes are
+subscriber (ov#360 refute S2). Gate events: each change of the verdict is
+published once on the plugin bus as `av-approval:gate.unverified` (`phase`
+start|recheck|recovered, the sorted code names, `ts`; av-events relays it as
+`gate.unverified@1` unless `AV_GATE_EVENTS` is off), and every clean gateway
+start publishes one `recovered` with no codes, so a box fixed and restarted
+clears data's `gate_unverified` alarm at once instead of by age
+(OV-GATE-RECOVERED; one row per start). That row comes from the gateway process
+only (`gateway run|start` in argv, or `_HERMES_GATEWAY=1`, as the inventory
+reads it): a TUI or standalone CLI that also loads plugins sees its own env and
+must not clear the gateway's alarm. Codes are
 listed in `skills/approval/README.md`. `register` never raises; it registers
 the callback before it logs anything.
 

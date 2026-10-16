@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import importlib
 import json
 import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -799,6 +801,176 @@ def test_a_bus_that_raises_or_is_missing_changes_no_verdict(gate):
         fresh.register(ctx)
         with pytest.raises(fresh.GateUnverified, match=r"shim-not-vendored"):
             _callback(ctx)(tool_name="terminal")
+
+
+# ---------------------------------------------------------------------------
+# OV-GATE-RECOVERED: a clean gateway start publishes `recovered`, so a fixed box clears data's alarm
+# ---------------------------------------------------------------------------
+
+#: What every clean gateway start publishes: one `recovered` row with no codes.
+CLEAN_START = ("gate.unverified", "recovered", [])
+
+
+def _as_gateway(mp, how: str) -> None:
+    """This process is the gateway, the way `_plugins.gateway_process` reads it: argv or Hermes's marker."""
+    if how == "argv":
+        mp.delenv("_HERMES_GATEWAY", raising=False)
+        mp.setattr(sys, "argv", ["/usr/bin/python3", "-m", "hermes_cli.main", "gateway", "run"])
+    else:
+        mp.setenv("_HERMES_GATEWAY", "1")
+
+
+def _not_gateway(mp) -> None:
+    mp.delenv("_HERMES_GATEWAY", raising=False)
+    mp.setattr(sys, "argv", ["hermes", "chat"])
+
+
+def _gateway_callback(ctx: FakeCtx):
+    """The backstop's one `pre_tool_call` callback (in the gateway the model observer adds `pre_api_request`)."""
+    assert len(ctx.hooks["pre_tool_call"]) == 1
+    return ctx.hooks["pre_tool_call"][0]
+
+
+def _gate_rows(ctx: EmitCtx, plugin) -> list:
+    """The gate rows only (in the gateway the inventory and the model observer may publish too)."""
+    return [(e, p["phase"], p["codes"]) for e, p in ctx.emitted if e == plugin.GATE_EVENT]
+
+
+@pytest.mark.parametrize("how", ["argv", "marker"])
+def test_a_clean_gateway_start_publishes_exactly_one_recovered_row(gate, monkeypatch, how):
+    """A box fixed and restarted says so at start, so data's gate_unverified alarm clears then and not by
+    age (48 h) or the 24 h renotify. One row; gated calls that stay clean add nothing."""
+    mp, home, plugin = gate
+    _as_gateway(mp, how)
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    before = int(time.time())
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    for _ in range(3):
+        clock[0] += 61  # past the minute, so the slow check re-runs too
+        assert _gateway_callback(ctx)(tool_name="terminal") is None
+    rows = [(e, p) for e, p in ctx.emitted if e == plugin.GATE_EVENT]
+    ((event, payload),) = rows
+    assert event == "gate.unverified"
+    assert list(payload) == ["phase", "codes", "ts"]  # the shape data's door mirrors (gate.ts), unchanged
+    assert (payload["phase"], payload["codes"]) == ("recovered", [])
+    assert type(payload["ts"]) is int and before <= payload["ts"] <= int(time.time())
+
+
+def test_every_clean_gateway_start_publishes_its_own_row(gate):
+    """Every clean start, as settled with data: each restart (a fresh process, here a fresh load) sends one."""
+    mp, home, plugin = gate
+    _as_gateway(mp, "marker")
+    rows = []
+    for _restart in range(2):
+        ctx = EmitCtx()
+        fresh = load_plugin()
+        fresh.register(ctx)
+        rows.extend(_gate_rows(ctx, fresh))
+    assert rows == [CLEAN_START, CLEAN_START]
+
+
+def test_a_clean_start_outside_the_gateway_publishes_nothing(gate):
+    """A TUI or standalone CLI that also loads plugins may see a different env from the gateway's; its
+    clean check must not clear the gateway's alarm."""
+    mp, home, plugin = gate
+    _not_gateway(mp)
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    assert plugin.current_codes() == ()
+    assert ctx.emitted == []
+
+
+def test_a_clean_start_publishes_nothing_when_the_gateway_check_raises(gate, monkeypatch):
+    """An unsure process sends no clean-start row: a false clear is worse than a late one."""
+    mp, home, plugin = gate
+    _as_gateway(mp, "marker")
+    plugins_mod = importlib.import_module(plugin.__name__ + "._plugins")
+
+    def boom():
+        raise RuntimeError("cannot tell")
+
+    monkeypatch.setattr(plugins_mod, "gateway_process", boom)
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    assert plugin.current_codes() == ()
+    assert _gate_rows(ctx, plugin) == []
+
+
+@pytest.mark.parametrize("how", ["argv", "marker"])
+def test_a_failing_gateway_start_publishes_start_and_no_recovered(gate, monkeypatch, how):
+    """The failing path is unchanged: one `start` row; the failure is sticky, so nothing recovers in-process,
+    even once the cause is fixed on disk (only a restart registers the shell hooks again)."""
+    mp, home, plugin = gate
+    _as_gateway(mp, how)
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    mp.delenv("AV_APPROVAL_URL")
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    mp.setenv("AV_APPROVAL_URL", "http://127.0.0.1:4682")
+    for _ in range(2):
+        clock[0] += 61
+        with pytest.raises(plugin.GateUnverified, match=r"url-missing"):
+            _gateway_callback(ctx)(tool_name="terminal")
+    assert _gate_rows(ctx, plugin) == [("gate.unverified", "start", ["url-missing"])]
+
+
+def test_a_clean_gateway_start_then_an_in_process_recovery_reports_each_once(gate, monkeypatch):
+    """The clean start's row, then a later failure and its in-process recovery, each once (unchanged)."""
+    mp, home, plugin = gate
+    _as_gateway(mp, "marker")
+    clock = [1000.0]
+    monkeypatch.setattr(plugin.time, "monotonic", lambda: clock[0])
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    cb = _gateway_callback(ctx)
+    shim = home / "agent-hooks" / "hermes-hook-shim.sh"
+    original = shim.read_bytes()
+    shim.write_bytes(b"#!/bin/sh\nexit 0\n")
+    for _ in range(2):
+        clock[0] += 1
+        with pytest.raises(plugin.GateUnverified, match=r"shim-"):
+            cb(tool_name="terminal")
+    shim.write_bytes(original)
+    for _ in range(2):
+        clock[0] += 1
+        assert cb(tool_name="terminal") is None
+    assert _gate_rows(ctx, plugin) == [
+        CLEAN_START,
+        ("gate.unverified", "recheck", ["shim-changed-since-start", "shim-hash-mismatch", "shim-not-vendored"]),
+        ("gate.unverified", "recovered", []),
+    ]
+
+
+@pytest.mark.parametrize("value", [None, "0"], ids=["unset", "off"])
+def test_no_backstop_publishes_no_clean_start_row(gate, value):
+    """The row belongs to the enforced-on backstop: approval unset or off sends none, healthy gate or not."""
+    mp, home, plugin = gate
+    _as_gateway(mp, "marker")
+    if value is None:
+        mp.delenv("AV_APPROVAL_ENABLED")
+    else:
+        mp.setenv("AV_APPROVAL_ENABLED", value)
+    ctx = EmitCtx()
+    plugin.register(ctx)
+    assert _gate_rows(ctx, plugin) == []
+
+
+def test_a_clean_gateway_start_with_a_bus_that_raises_or_is_missing_still_verifies(gate):
+    mp, home, plugin = gate
+    _as_gateway(mp, "marker")
+
+    class Raising(FakeCtx):
+        def emit(self, *_a, **_k):
+            raise RuntimeError("bus down")
+
+    for ctx in (Raising(), FakeCtx()):
+        fresh = load_plugin()
+        fresh.register(ctx)
+        assert fresh.current_codes() == ()
+        assert _gateway_callback(ctx)(tool_name="terminal") is None
 
 
 

@@ -49,7 +49,11 @@ check never opens the token file and never reads `AV_APPROVAL_TOKEN`).
 
 GATE EVENTS (ov#357 refute M1 stopgap b): every change of the verdict (a failure
 at start, a later failure, a recovery) is published once on the plugin bus as
-`av-approval:gate.unverified` with `phase` (start|recheck|recovered), `codes`
+`av-approval:gate.unverified`, and so is every clean GATEWAY start, as
+`recovered` with no codes (OV-GATE-RECOVERED: a box fixed and restarted clears
+the alarm then, not by age; one row per start; the gateway process only, as
+`_plugins.gateway_process` tells it, so a TUI or CLI that also loads plugins
+cannot clear it). The payload is `phase` (start|recheck|recovered), `codes`
 (the codes' names before any `:`, from `GATE_CODE_NAMES`, sorted; anything else
 is `other`) and `ts`. No path, matcher or file content is sent. av-events
 (`_gate_events.py`) turns it into the `gate.unverified` event. A ctx without
@@ -459,6 +463,17 @@ def _emit_gate(phase: str, codes: tuple[str, ...]) -> None:
         pass
 
 
+def _gateway_process() -> bool:
+    """This process is the gateway (`_plugins.gateway_process`: `gateway run|start` in argv, or Hermes's
+    `_HERMES_GATEWAY=1`). False when it cannot tell, so an unsure process sends no clean-start row."""
+    try:
+        from . import _plugins
+
+        return bool(_plugins.gateway_process())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _slow_check() -> tuple[list[str], list[str]]:
     try:
         return _slow_codes(hermes_home())
@@ -617,6 +632,11 @@ def _register_backstop(ctx: Any) -> None:
                 logger.info(VERIFIED_LINE)
             except Exception:  # noqa: BLE001
                 pass
+            # OV-GATE-RECOVERED: a clean gateway start says so, so a box fixed and restarted clears data's
+            # gate_unverified alarm now instead of by age. One row per clean start, the gateway's only:
+            # a TUI or standalone CLI with a different view of the env must not clear a gateway's alarm.
+            if _gateway_process():
+                _emit_gate("recovered", ())
     except Exception:  # noqa: BLE001 - a plugin must never break Hermes's plugin loading
         return
 

@@ -1,7 +1,9 @@
 """ov#357 refute M1 stopgap (b): `gate.unverified@1`, from av-approval's bus event.
 
 av-approval's backstop publishes `av-approval:gate.unverified` once per change of its verdict: a
-failure at start, a later failure found on a gated call, and the recovery. On an rc42+
+failure at start, a later failure found on a gated call, and the recovery; and, from
+OV-GATE-RECOVERED, one `recovered` (no codes) at every clean gateway start (the gateway process
+only), so a box fixed and restarted clears data's alarm then rather than by age. On an rc42+
 box an `execute_code` program runs as the gateway's uid and can rewrite the approval shim; the
 backstop then blocks gated calls, and this event is how anyone off the box learns of it.
 
