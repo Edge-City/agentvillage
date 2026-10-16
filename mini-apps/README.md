@@ -41,7 +41,8 @@ Use Dizko as the starting bundle for another **public read-only** service:
    code, install packages, run shell helpers, create cron jobs or bypass refusal.
 2. Add `mini-apps/<app-id>/manifest.json` following the real Dizko manifest.
    Set id, name, description, version, homepage, human-readable permissions,
-   `skills: ["<app-id>"]` and `operations: ["mini-app.read"]`. Pin a reviewed
+   `skills: ["<app-id>"]` and `operations: ["mini-app.read"]` (or the reviewed
+   context list below, only with a CP namespace review). Pin a reviewed
    HTTPS MCP URL and explicit tools with their observed JSON input schemas.
    Exclude profile/account/private-data/purchase/write tools. A service calling
    itself read-only is not sufficient: reviewers must inspect its semantics.
@@ -179,6 +180,32 @@ entry from before the restore (meeting, Skylight and person refused under it),
 so the overlay can roll out first. The order is one way only: overlay first,
 then the catalog (cp#244's drift re-stage then re-stages installed rows); an
 older overlay refuses a longer entry and loses every Gold Stars operation.
+
+### Per-app context: `mini-app.context.read` and `mini-app.context.write`
+
+NEW-03 (rc44, P-013): an app whose CP catalog entry carries them may read and
+save the owner's notes in **its own** context namespace (`apps.<appId>` on the
+CP; private to the resident's agent by default). The app server dispatches
+both to the CP namespace routes for the request's appId; the CP owns the
+namespace, the claim shape and the quota.
+
+| Operation | Class | Native call | Plugin path |
+| --- | --- | --- | --- |
+| `mini-app.context.read` | read (`READ_OPERATIONS`), `marketplace.app.read` | `{"operation":"mini-app.context.read","appId":"dizko","arguments":{}}` | forwarded unchanged, like `mini-app.read`; no gate check, no grant |
+| `mini-app.context.write` | write (`WRITE_OPERATIONS`), `marketplace.app.action` (default-open, RP-28: no first-write card) | `{"operation":"mini-app.context.write","appId":"dizko","arguments":{"claims":[{"text":"..."}],"mode":"add"}}` | `rolodex.meeting`'s path: refused (`approval_unavailable`) while the approval gate is off or unverified; never the Gold Stars manual grant; then forwarded unchanged |
+
+Both take exactly `operation`, `appId` and an object `arguments` (no `tool`).
+The appId is the request's own (the one `mini-apps.json` was checked for); an
+`arguments.appId` naming another app is refused, never forwarded. The agent
+saves only when the owner asks.
+
+The plugin (`_mini_apps.py` `APP_OPERATIONS_ACCEPTED`) and the helper accept a
+non-Gold-Stars entry whose `operations` equal exactly one of
+`["mini-app.read","mini-app.context.read","mini-app.context.write"]` or
+`["mini-app.read"]`. Order is fixed; a duplicate, a missing op, a reordered
+list or any other operation (`mini-app.context.delete`, `gold-stars.send` on
+another app) refuses the whole projection. Gold Stars entries never carry a
+context operation. Overlay first, then the CP projects the longer dizko list.
 
 ## Disk staging and lifecycle
 

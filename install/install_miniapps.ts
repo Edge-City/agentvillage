@@ -11,21 +11,28 @@ import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
  * `skylight.status`. plugins/village-bridge/_mini_apps.py GOLD_STARS carries the same list; the
  * control-plane catalog's gold-stars entry moves to it only after boxes run this overlay, so the CP's
  * projection hash matches the receipt.
+ *
+ * NEW-03 (rc44, P-013): the dizko entry also carries `mini-app.context.read` and
+ * `mini-app.context.write` (the app's own context namespace), after `mini-app.read`.
+ * plugins/village-bridge/_mini_apps.py APP_OPERATIONS_ACCEPTED carries the same lists; the CP
+ * projects them for dizko only after boxes run this overlay (BOX_DEFERRED_OPERATIONS until then).
  */
 export const REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"], skills: ["gold-stars"] },
-  { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
+  { id: "dizko", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["dizko"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
  * catalog moves (overlay first, then the catalog with a re-stage; never the reverse): the restored
  * eight-op entry (ov#350, _mini_apps.py GOLD_STARS_RESTORED; the CP's current entry, rolodex.person
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
- * Skylight or person operation). Remove each after the CP catalog serves a newer list everywhere.
+ * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
+ * projects the context operations). Remove each after the CP catalog serves a newer list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
+  { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**

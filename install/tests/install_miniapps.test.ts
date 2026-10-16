@@ -136,7 +136,9 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
   expect(restored.operations).toEqual(gold.operations.slice(0, 8));
   expect(previous.operations).toEqual(gold.operations.slice(0, 6));
-  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(2);
+  // NEW-03: the third previous entry is dizko's public read alone (asserted in its own test below).
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(3);
+  expect(PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "gold-stars").length).toBe(2);
   for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
   // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
@@ -163,6 +165,39 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   const eight = [...restored.operations], six = [...previous.operations];
   for (const operations of [["rolodex.person", ...eight], [...eight.slice(0, 6), "rolodex.person", ...eight.slice(6)], [...six, "rolodex.person"], [...gold.operations, "rolodex.person"], [...eight, "rolodex.profile"]]) {
     expect(() => validateProjection({ version: 1, apps: [{ ...gold, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+});
+
+test("NEW-03: dizko carries its context read/write after mini-app.read; the read-only entry stays stageable byte for byte", () => {
+  const dizko = REVIEWED_MINI_APPS[1];
+  const previous = PREVIOUS_REVIEWED_MINI_APPS[2];
+  const read = "mini-app.read", ctxRead = "mini-app.context.read", ctxWrite = "mini-app.context.write";
+  expect([dizko.id, dizko.version, [...dizko.skills], [...dizko.operations]]).toEqual(["dizko", "1.0.0", ["dizko"], [read, ctxRead, ctxWrite]]);
+  expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["dizko", "1.0.0", ["dizko"], [read]]);
+  // Parity: the plugin's closed allow-list for a non-Gold-Stars app is exactly these two lists, newest first.
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  const accepted = /^APP_OPERATIONS_ACCEPTED = \((.*)\)$/m.exec(plugin)![1];
+  expect(JSON.parse("[" + accepted.replace(/\(/g, "[").replace(/,\)/g, "]").replace(/\)/g, "]") + "]")).toEqual([[...dizko.operations], [...previous.operations]]);
+  for (const entry of [dizko, previous]) {
+    const projection = { version: 1, apps: [REVIEWED_MINI_APPS[0], { id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    const root = installedBox();
+    const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
+    expect(readFileSync(join(root, "mini-apps.json"), "utf8")).toBe(JSON.stringify(projection));
+    expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  }
+  expect(() => validateProjection({ version: 1, apps: [dizko, previous] })).toThrow("mini_apps_unreviewed_bundle");
+  const planted = [
+    [read, ctxRead, ctxWrite, "mini-app.context.delete"], [read, "mini-app.context.delete"], [read, "mini-app.admin"],
+    [read, "gold-stars.send"], [read, ctxRead, ctxWrite, "gold-stars.send"], [ctxRead, read, ctxWrite], [read, ctxWrite, ctxRead],
+    [read, read], [read, ctxRead, ctxRead, ctxWrite], [read, ctxRead], [read, ctxWrite], [ctxRead, ctxWrite], [],
+  ];
+  for (const operations of planted) expect(() => validateProjection({ version: 1, apps: [{ ...dizko, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+  // A gold-stars entry never carries a context operation.
+  for (const gold of [REVIEWED_MINI_APPS[0], PREVIOUS_REVIEWED_MINI_APPS[0], PREVIOUS_REVIEWED_MINI_APPS[1]]) {
+    for (const operations of [[...gold.operations, ctxRead, ctxWrite], [...gold.operations, ctxWrite], [read, ctxRead, ctxWrite]]) {
+      expect(() => validateProjection({ version: 1, apps: [{ ...gold, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+    }
   }
 });
 
