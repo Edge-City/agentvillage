@@ -229,8 +229,10 @@ card cuts a claimed line at 280 characters. The payloads quoted: an intention
 expires_at}` and a vote `{question_id, answer}` (_share_vote.py), and a Hermes
 tool call the hook gates `{tool, input}` (core's hook, APRV-445/499). ids are
 `~`. The reserved classes no tool proposes yet (treasury.*, edgeos.*.write,
-marketplace.app.*, resource.allocate, review.delegate.model, moralmod.*,
-coordinator.contact) have no entry:
+marketplace.app.install, resource.allocate, review.delegate.model, moralmod.*,
+coordinator.contact) have no entry (marketplace.app.action has one since
+HOT-01: a Gold Star send `{appId, operation, preview}`, the preview quoted
+as one line):
 their payload keys do not exist yet, so they stay technical (`undeclared`)
 until their tool writes one, and that tool's PR adds the entry.
 opportunity.accept has an entry: nothing proposes it, so its only payload is
@@ -309,6 +311,9 @@ channels:
           does: "accept or decline a connection or meeting on Index for you"
           quote: { tool: "Tool", input: "Details" }
           note: none
+        marketplace.app.action:       # asked only if the resident sets "Act through an installed app" to ask; today only a Gold Star send (village-bridge _mini_apps.py)
+          does: "send a Gold Star for you"
+          quote: { preview: "Star", appId: ~, operation: ~ }   # the star's recipient, note and visibility (one line); the app and verb are fixed
         message.send:   { quote: { tool: "Tool", input: "Details" }, note: none }   # these eight ask only if the resident sets their row to ask
         network.call:   { quote: { tool: "Tool", input: "Details" }, note: none }   # a terminal command is quoted by core itself, not by this map
         read.web:       { quote: { tool: "Tool", input: "Details" }, note: none }
@@ -332,8 +337,8 @@ classes:
   edgeos.venue.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
   # The village marketplace (reserved namespace marketplace.*) and the model reviewer: reserved, R2.
   marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
-  marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
-  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; the village tool (Rolodex search, a reviewed mini-app's public reads, Gold Star previews and status) reaches it through the hook; a star send needs its own marketplace.app.action grant; recorded
+  marketplace.app.action:        { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
+  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; the village tool (Rolodex search, a reviewed mini-app's public reads, Gold Star previews and status) reaches it through the hook; a star send is its own marketplace.app.action request; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
   opportunity.accept:            { autonomy: autonomous, agent_may_request: true }   # reserved; accepting or declining an Index opportunity (a connection or meeting) on the resident's behalf; Index's tools for it reach it through the hook; R3
@@ -417,7 +422,7 @@ tools:
   - { match: text_to_speech,                   class: network.call }
   - { match: vision_analyze,                   class: network.call }
   - { match: video_analyze,                    class: network.call }
-  # The village-bridge plugin's entry tool, exactly `village` (no wildcard). A star send also
-  # needs its own marketplace.app.action grant; an install or enable is never reached through this line.
+  # The village-bridge plugin's entry tool, exactly `village` (no wildcard). A star send is its own
+  # marketplace.app.action request; an install or enable is never reached through this line.
   - { match: village,                          class: marketplace.app.read }
 ```

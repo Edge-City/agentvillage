@@ -41,7 +41,12 @@ import { join } from "node:path";
 // mini-app's public reads, Gold Star previews and status). No class value moves. The block is
 // cp#237's byte for byte (taken at its head e46b62ca, approval's L6633 wording; template file
 // sha256 d8d3e0b4...). The previous pin was 8cb5db39 (ov#320 / rc36).
-const POLICY_BLOCK_SHA256 = "ef0d342eca47536d062f6c9d7c2e08efcc5f5092e7a867cb42c1b8b403b093df";
+// HOT-01 (ruling RO, Carter 16 Oct): marketplace.app.action on its own by default and its say entry,
+// copied byte for byte from the control plane's pair PR (release-hot01-template), which moves its pin to
+// the same digest. The previous pin was ef0d342eca47536d062f6c9d7c2e08efcc5f5092e7a867cb42c1b8b403b093df.
+// Its fix round 1 (review-a CP-278 N2: the marketplace.app.read row and `village` matcher comments no
+// longer say a star send needs a grant) moved it from d30a8a2a22942c89ecc9dc67c5331b416afe5bbf5941f09d77a26c81ca9de954.
+const POLICY_BLOCK_SHA256 = "f9179aa923adee43393c5a612669afd9722c7a3737be04feee91e405a93e65ae";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {
