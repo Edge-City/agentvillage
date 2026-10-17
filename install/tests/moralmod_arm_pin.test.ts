@@ -530,6 +530,44 @@ describe("ov#282 M1: a plugin reinstall on an activated box keeps the receipt va
   );
 });
 
+describe("L9870 roll: a box activated with the rc44 loader (the bare startup catch) takes the diagnostic loader on its next keyed ON run", () => {
+  test.skipIf(!havePlugin)(
+    "the legacy loader and its receipt on disk, a keyed run handed the pinned release (what an overlay roll runs): the legacy loader is taken out with the usual warning and the diagnostic loader activated; active.json records it; a --skip-index run instead withholds (release_unpinned) as for any loader that is not the pin's",
+    () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const runtime = join(home, "plugins", INDEX_PLUGIN, "runtime", "dist", "negotiator.js");
+      const state = join(home, "index", "moralmod", "active.json");
+      const loader = managedLoaderSource(home, join(home, "index", "moralmod", pin));
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      // What rc44 and earlier wrote: the same loader but for the bare catch, and its receipt.
+      const legacy = loader.slice(0, loader.indexOf("} catch")) +
+        "} catch { console.error(JSON.stringify({level:'warn',event:'moralmod_startup_unready'}));process.exit(1); }\n";
+      const plantLegacy = () => {
+        writeFileSync(runtime, legacy);
+        const receipt = JSON.parse(readFileSync(state, "utf8"));
+        writeFileSync(state, JSON.stringify({ ...receipt, entry_sha256: sha256(legacy) }) + "\n");
+      };
+      plantLegacy();
+      const rolled = step(recorder().run, true, pin);
+      expect(rolled).toMatchObject({ state: "pinned", failed: null });
+      expect(rolled.lines).toContain("  warning: index-network plugin: a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; managed loader replaced by the plugin's own negotiator.js; MoralMod files cleaned up: index/negotiator.ts, morning.py");
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ release_digest: pin, entry_sha256: sha256(loader), installed: true });
+      expect(readFileSync(negotiatorPath(home), "utf8")).toBe("// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n");
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+
+      plantLegacy();
+      const skipped = step(recorder().run, true, pin, [...ARGV, "--skip-index"]);
+      expect(skipped).toMatchObject({ state: "failed", failed: "release_unpinned" });
+      expect(readFileSync(runtime, "utf8")).not.toBe(legacy);
+    },
+    60_000,
+  );
+});
+
 describe("automatic managed reinstalls validate the runtime before replacing the plugin", () => {
   for (const receipt of [true, false]) {
     for (const customization of ["modified upstream", "replacement runtime"] as const) {
