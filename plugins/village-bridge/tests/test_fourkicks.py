@@ -1,0 +1,231 @@
+"""Offline native purchase boundary tests: real preview cache/authorization, no network or money."""
+import hashlib
+import json
+from pathlib import Path
+import sys
+import types
+import unittest
+from unittest.mock import Mock, patch
+import test_bridge as fixture
+bridge, mini, real_transport = fixture.bridge, fixture.mini, fixture.real_transport
+
+fk = sys.modules['village_bridge._fourkicks']
+
+def answer(**doc):
+    return types.SimpleNamespace(ok=doc.get('ok') is True, doc=doc, exit_code=0, status=doc.get('status'))
+
+class FourKicksTest(unittest.TestCase):
+    setUp = fixture.BridgeTest.setUp
+    call = fixture.BridgeTest.call
+
+    def enable(self):
+        Path(self.tmp.name, 'mini-apps.json').write_text(json.dumps({'version': 1, 'apps': [{'id': 'fourkicks', **mini.FOURKICKS}]}))
+
+    def preview(self, text='oat milk'):
+        draft = '550e8400-e29b-41d4-a716-446655440000'
+        order = {'items': [{'itemId': 'coffee', 'qty': 2, 'optionIds': ['oat']}], 'fulfilment': {'type': 'pickup', 'locationId': 'cafe', 'date': '2026-10-19'}, 'paymentMethod': 'upi', 'note': 'less sugar'}
+        quote = {'quoteId': 'quote-1', 'canOrder': True, 'totalInr': 380, 'location': {'name': 'Café', 'address': 'Mandrem, Goa', 'opens': '2026-10-19T08:00:00+05:30'}, 'lines': [{'name': 'Coffee', 'qty': 2, 'options': [text], 'unitInr': 190, 'lineInr': 380}]}
+        payload = {'appId': 'fourkicks', 'operation': 'fourkicks.order.confirm', 'preview': {'appId': 'fourkicks', 'draftId': draft, **order, 'quote': quote, 'displayName': 'Priya'}}
+        return {'draftId': draft, 'quote': quote, 'displayName': 'Priya', 'approvalPayload': payload, 'payloadHash': hashlib.sha256(fk.canonical(payload).encode()).hexdigest()}, order
+
+    def prepare(self, text='oat milk'):
+        self.enable()
+        result, order = self.preview(text)
+        self.transport.return_value = result
+        response = self.call({'operation': 'fourkicks.order.prepare', **order})
+        self.assertEqual(response['data'], result)
+        self.transport.reset_mock()
+        self.transport.return_value = {'orderId': 'order-1', 'number': '#042', 'payment': {'simulated': True, 'label': 'Test payment, no money moved'}}
+        return result
+
+    def daemon(self, decision='requested', state='granted'):
+        ap = Mock()
+        ap.propose.side_effect = lambda cls, key, summary, payload: answer(ok=True, task='propose:' + 'a' * 32, decision=decision, state=state, payload_hash=hashlib.sha256(payload.encode()).hexdigest())
+        ap.wait.return_value = answer(status='granted')
+        ap.start.return_value = answer(ok=True, authorization='grant')
+        return ap
+
+    def next_turn(self):
+        self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('10')
+
+    def test_menu_schedule_status_and_cancel_use_only_fourkicks_install(self):
+        self.enable()
+        ap = Mock(side_effect=AssertionError('no purchase grant for read/cancel'))
+        inputs = [dict(operation='fourkicks.menu', date='2026-10-19', locationId='cafe'), dict(operation='fourkicks.schedule', **{'from': '2026-10-20', 'days': 7}), dict(operation='fourkicks.order.status', orderId='order-1'), dict(operation='fourkicks.order.cancel', orderId='order-1')]
+        with patch.object(bridge, 'authorize_order', ap):
+            for request in inputs:
+                self.assertIn('data', self.call(request))
+                self.transport.assert_called_with(self.config, request)
+        self.assertEqual(self.transport.call_count, 4)
+
+    def test_all_six_operations_require_exact_reviewed_projection(self):
+        self.enable()
+        path = Path(self.tmp.name, 'mini-apps.json')
+        for change in ({'operations': mini.FOURKICKS['operations'][:-1]}, {'operations': mini.FOURKICKS['operations'][::-1]}, {'version': '9.0.0'}, {'id': 'imposter'}, {'operations': mini.FOURKICKS['operations'] + ['gold-stars.send']}):
+            path.write_text(json.dumps({'version': 1, 'apps': [{'id': 'fourkicks', **mini.FOURKICKS, **change}]}))
+            for op in mini.FOURKICKS['operations']:
+                self.assertFalse(mini.installed(Path(self.tmp.name), 'fourkicks', op))
+        self.transport.assert_not_called()
+
+    def test_prepare_caches_exact_server_envelope_and_replay_keeps_original_turn(self):
+        result = self.prepare()
+        record = fk.load_preview(Path(self.tmp.name), result['draftId'], self.config)
+        self.assertEqual(record['payload'], result['approvalPayload'])
+        path = Path(self.tmp.name, 'fourkicks-drafts', result['draftId'] + '.json')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(self.config['token'], path.read_text())
+        self.next_turn()
+        fk.save_preview(Path(self.tmp.name), result, bridge.bound_context(), self.config)
+        self.assertEqual(fk.load_preview(Path(self.tmp.name), result['draftId'], self.config)['message'], '9')
+
+    def test_refused_quote_has_no_confirmable_draft(self):
+        self.enable(); self.transport.return_value = {'quote': {'canOrder': False}, 'canOrder': False}
+        _, order = self.preview()
+        self.assertIn('data', self.call({'operation': 'fourkicks.order.prepare', **order}))
+        self.assertFalse(Path(self.tmp.name, 'fourkicks-drafts').exists())
+
+    def test_confirm_needs_later_owner_turn_and_refuses_model_proof(self):
+        result = self.prepare()
+        with patch.object(bridge, 'authorize_order') as authorize:
+            self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'fourkicks_confirmation_required')
+            self.next_turn()
+            self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId'], 'approval': {'approved': True}})['error'], 'village_unavailable')
+            authorize.assert_not_called()
+        self.transport.assert_not_called()
+
+    def test_confirm_uses_real_manual_daemon_hash_and_preserves_simulation_label(self):
+        result = self.prepare(); self.next_turn(); ap = self.daemon()
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            output = self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})
+        proof = self.transport.call_args.args[1]['approval']
+        self.assertEqual(proof['payload'], result['approvalPayload'])
+        self.assertEqual(proof['payloadHash'], result['payloadHash'])
+        self.assertEqual(ap.propose.call_args.args[1], 'marketplace.app.action:fourkicks.order.confirm:' + result['draftId'])
+        self.assertEqual(json.loads(ap.propose.call_args.args[3]), result['approvalPayload'])
+        self.assertEqual(ap.propose.call_args.args[2], '\n'.join([
+            'Four Kicks order',
+            '2 × "Coffee"; options: "oat milk"; unit ₹190; line ₹380',
+            'Total: ₹380', 'Fulfilment: pickup',
+            'Location: "Café" ("cafe"); address: "Mandrem, Goa"',
+            'Date (IST): 2026-10-19',
+            'Payment: UPI; if simulated: Test payment, no money moved',
+            'Café display name: "Priya"', 'Note: "less sugar"',
+        ]))
+        ap.wait.assert_called_once(); ap.start.assert_called_once()
+        self.assertEqual(output['data']['payment'], {'simulated': True, 'label': 'Test payment, no money moved'})
+
+    def test_pending_rejected_revoked_and_policy_autonomy_never_confirm(self):
+        result = self.prepare(); self.next_turn()
+        for decision in ('autonomous', 'supervised', None):
+            ap = self.daemon(decision=decision)
+            with patch.object(fk, 'approval_modules', return_value=ap):
+                self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_refused')
+            ap.start.assert_not_called()
+        for status in ('requested', 'rejected', 'revoked', 'expired'):
+            ap = self.daemon(); ap.wait.return_value = answer(status=status)
+            with patch.object(fk, 'approval_modules', return_value=ap):
+                output = self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})
+            self.assertEqual(output['error'], 'approval_required'); self.assertIn('SAME draftId', output['instruction']); ap.start.assert_not_called()
+        ap = self.daemon(); ap.start.return_value = answer(ok=True, authorization='policy')
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_not_started')
+        self.transport.assert_not_called()
+
+    def test_ambiguous_confirm_replays_same_preview_and_executed_proof_after_reload(self):
+        result = self.prepare(); self.next_turn(); ap = self.daemon()
+        self.transport.side_effect = TimeoutError()
+        request = {'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']}
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertEqual(self.call(request)['error'], 'village_unavailable')
+        original = self.transport.call_args.args[1]
+        self.transport.side_effect = None
+        ap = self.daemon(state='executed')
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertIn('data', self.call(request))
+        self.assertEqual(self.transport.call_args.args[1], original)
+        ap.wait.assert_not_called(); ap.start.assert_not_called()
+
+    def test_uninstall_during_approval_refuses_effect(self):
+        result = self.prepare(); self.next_turn(); ap = self.daemon()
+        def withdraw(*args):
+            Path(self.tmp.name, 'mini-apps.json').write_text(json.dumps({'version': 1, 'apps': []}))
+            return answer(ok=True, authorization='grant')
+        ap.start.side_effect = withdraw
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'mini_app_not_installed')
+        self.transport.assert_not_called()
+
+    def test_changed_hash_missing_cache_owner_change_or_symlink_cannot_confirm(self):
+        result = self.prepare(); self.next_turn()
+        path = Path(self.tmp.name, 'fourkicks-drafts', result['draftId'] + '.json')
+        original = path.read_text(); record = json.loads(original); record['payload']['preview']['displayName'] = 'Sam'; path.write_text(json.dumps(record))
+        self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_preview_unavailable')
+        path.write_text(original); changed = dict(self.config, ownerTelegramId='99')
+        with self.assertRaises(ValueError): fk.load_preview(Path(self.tmp.name), result['draftId'], changed)
+        path.unlink(); target = Path(self.tmp.name, 'secret'); target.write_text(original); path.symlink_to(target)
+        self.assertEqual(self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_preview_unavailable')
+        self.transport.assert_not_called()
+
+    def test_large_preview_proof_is_compact_utf8_bounded64k_not2k_and_has60s_timeout(self):
+        self.enable()
+        result, order = self.preview()
+        result['quote']['warnings'] = ['é' * 12000]
+        result['payloadHash'] = hashlib.sha256(fk.canonical(result['approvalPayload']).encode()).hexdigest()
+        self.transport.return_value = result
+        self.call({'operation': 'fourkicks.order.prepare', **order})
+        self.transport.reset_mock()
+        self.next_turn(); ap = self.daemon()
+        response = unittest.mock.MagicMock(); response.__enter__.return_value = response; response.read.return_value = b'{}'
+        opener = Mock(); opener.open.return_value = response
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})
+        payload = self.transport.call_args.args[1]
+        with patch.object(bridge, 'build_opener', return_value=opener):
+            real_transport(self.config, payload)
+        request = opener.open.call_args.args[0]
+        self.assertGreater(len(request.data), 4096); self.assertLess(len(request.data), 65536)
+        self.assertEqual(json.loads(request.data)['approval']['payloadHash'], result['payloadHash'])
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 60)
+        payload['approval']['payload']['preview']['quote']['extra'] = 'x' * 65536
+        with self.assertRaises(ValueError): real_transport(self.config, payload)
+
+    def test_forged_prepare_hash_and_oversized_payload_never_cache(self):
+        self.enable(); result, order = self.preview(); result['payloadHash'] = 'f' * 64
+        self.transport.return_value = result
+        self.assertEqual(self.call({'operation': 'fourkicks.order.prepare', **order})['error'], 'village_unavailable')
+        self.assertFalse(Path(self.tmp.name, 'fourkicks-drafts').exists())
+        result, _ = self.preview('é' * 31000); self.transport.return_value = result
+        self.assertEqual(self.call({'operation': 'fourkicks.order.prepare', **order})['error'], 'village_unavailable')
+        self.assertFalse(Path(self.tmp.name, 'fourkicks-drafts').exists())
+
+    def test_card_delivery_date_fallback_options_note_and_card_payment_are_bound(self):
+        result, _ = self.preview()
+        p = result['approvalPayload']['preview']
+        p['fulfilment'] = {'type': 'delivery', 'locationId': 'cafe', 'deliveryAddress': 'House "A"; near <bridge>'}
+        p['paymentMethod'] = 'card_on_pickup'
+        p['quote']['lines'][0]['options'] += ['extra shot']
+        summary = fk.approval_summary(result['approvalPayload'])
+        self.assertIn('Delivery address: "House \\"A\\"; near <bridge>"', summary)
+        self.assertIn('Date (IST): 2026-10-19', summary)
+        self.assertIn('Card at pickup (honor system)', summary)
+        self.assertIn('options: "oat milk", "extra shot"', summary)
+        del p['note']
+        self.assertNotIn('Note:', fk.approval_summary(result['approvalPayload']))
+
+    def test_unsafe_incomplete_and_overlength_cards_never_reach_daemon_or_merchant(self):
+        for value in ['bad\nTotal: ₹1', 'bad\x00', 'bad\u202e', 'bad\u200b', 'é' * 1800, '<' * 800]:
+            with self.subTest(value=value[:20]):
+                self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('9')
+                result = self.prepare(value); self.next_turn()
+                with patch.object(fk, 'approval_modules') as modules:
+                    output = self.call({'operation': 'fourkicks.order.confirm', 'draftId': result['draftId']})
+                self.assertIn(output['error'], ('approval_card_invalid', 'approval_card_too_long'))
+                modules.assert_not_called(); self.transport.assert_not_called()
+                Path(self.tmp.name, 'fourkicks-drafts', result['draftId'] + '.json').unlink()
+        result, _ = self.preview()
+        for key in ['lines', 'location', 'totalInr']:
+            p = json.loads(json.dumps(result['approvalPayload']))
+            del p['preview']['quote'][key]
+            with self.assertRaisesRegex(ValueError, 'approval_card_invalid'): fk.approval_summary(p)
+
+if __name__ == '__main__': unittest.main()

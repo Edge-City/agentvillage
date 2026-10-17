@@ -14,6 +14,7 @@ Two complete starters are maintained with their real native skills:
 | --- | --- | --- | --- |
 | Public read-only MCP | [Dizko](dizko/manifest.json) | [SKILL.md](../skills/dizko/SKILL.md) | Seven reviewed public tools, exact input schemas and fixed HTTPS endpoint |
 | Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, manual approval, send/status/cancel; also carries the owner's Rolodex meeting mark/undo and Skylight status read |
+| Approved café order | [Four Kicks](fourkicks/manifest.json) | [SKILL.md](../skills/fourkicks/SKILL.md) | Live menu/schedule; immutable prepare → exact resident approval → confirm; validated payment links, own-order status/cancel |
 
 ### Give your builder agent this prompt
 
@@ -180,6 +181,45 @@ entry from before the restore (meeting, Skylight and person refused under it),
 so the overlay can roll out first. The order is one way only: overlay first,
 then the catalog (cp#244's drift re-stage then re-stages installed rows); an
 older overlay refuses a longer entry and loses every Gold Stars operation.
+
+### Four Kicks: exact manual purchase approval
+
+The first-party `fourkicks` 1.0.0 bundle carries only `fourkicks.menu`,
+`fourkicks.schedule`, `fourkicks.order.prepare`, `fourkicks.order.confirm`,
+`fourkicks.order.status`, `fourkicks.order.cancel`, in that order, and skill
+`["fourkicks"]`. It has no MCP endpoint or credit. Installer, native plugin and
+CP catalog must agree on this projection; a partial/reordered/planted operation
+list is refused. It is optional, never baseline-installed.
+
+Menu/schedule and own-order status are reads. Prepare obtains a server quote,
+not an order. The native plugin saves the successful server-returned full
+`approvalPayload` and `payloadHash` in owner-private
+`$HERMES_HOME/fourkicks-drafts/<draftId>.json` (0600 files, 0700 directory),
+with origin, owner and original conversation turn; it never reconstructs a
+preview from model-provided input. A refused quote creates no confirmable draft.
+The cache is recovery data, not authority: the app rechecks its immutable draft
+and the CP re-reads the daemon's grant. Keep this cache for uncertain-order
+recovery; removing it prevents native confirmation of that draft. Uninstall
+revokes permission, not the resident's saved order previews.
+
+Show every item/option, total, pickup place/time, payment method and the display
+name shared with the café, then wait for a later owner reply. Native confirm
+takes only `draftId`; a model-supplied `approval` is refused. The daemon must
+propose `marketplace.app.action:fourkicks.order.confirm:<draftId>` over the
+unaltered envelope, wait for a direct resident grant, and start that exact
+payload with `authorization: grant`. Policy autonomy never purchases coffee.
+An already-executed proposal reuses the exact proof for same-draft idempotent
+recovery; it does not create a new draft or spend again. Permission is rechecked
+after the daemon round trips. Cancel uses the returned `orderId`, not a draft.
+
+Canonical payloads are capped at 60,000 UTF-8 bytes and native HTTP requests
+at 64 KiB, including the complete proof. Confirm has a 60-second transport
+timeout for the app's CP approval check. The bridge credential file's 2 KiB
+limit does not apply to request bodies. Payment links/payee/amount are checked
+by the app, never invented by the model. A simulated receipt preserves
+`simulated: true` and the exact `Test payment, no money moved` label; never
+claim mock funds arrived. Later test-paid notifications use CP's distinct
+`fourkicks.paid_test` template.
 
 ### Per-app context: `mini-app.context.read` and `mini-app.context.write`
 

@@ -17,11 +17,13 @@ Today, capabilities come from **Index Network** (discovery + intent negotiation)
 - **Audits token usage quietly** with a deterministic local script. It only wakes the agent when meaningful spend has a clear actionable driver, such as scheduled background work dominating the last day.
 
 Hosted residents can opt into **curated mini-apps**: Gold Stars (exact-preview,
-manual approval before gratitude is sent) and Dizko (public event, artist and
-venue discovery). Installing one grants its permission; Dizko's skill arrives
-only then, while the Gold Stars skill text ships to every box and stays inert
-until installed. The control plane owns reviewed versions and install intent;
-staging files is not proof the runtime loaded them. [Build a reviewed mini-app](mini-apps/README.md).
+manual approval before gratitude is sent), Dizko (public event, artist and
+venue discovery), and Four Kicks (live café menu/schedule and exact-approved
+coffee orders). Installing one grants its permission; Dizko and Four Kicks
+skills arrive only then, while the Gold Stars skill text ships to every box
+and stays inert until installed. The control plane owns reviewed versions
+and install intent; staging files is not proof the runtime loaded them.
+[Build a reviewed mini-app](mini-apps/README.md).
 
 AgentVillage never names the plumbing in chat. You see AgentVillage and (when relevant) your community.
 
