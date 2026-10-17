@@ -9,8 +9,9 @@
  *
  * The app redirects `/intents[?...]` to the mapped V2 URL only when V2 can show that card or intent, so a
  * link emitted in the V2 form must be one V2 can show. A producer that may link something V2 does not show
- * (an introducer or community-ask card, a card on an archived intent, an archived or another person's
- * intent) stays on the `/intents` form, and the redirect takes the viewer to V2 whenever V2 can show it.
+ * (an archived or another person's intent) stays on the `/intents` form, and the redirect takes the viewer
+ * to V2 whenever V2 can show it. CD-03 C (rc44): V2 shows every opportunity card, one the feed lists nowhere
+ * included (the app's by-id read), so the pending alert's card link is `/intents-v2?opportunity=<id>`.
  *
  * Every V1 page link left in the overlay is listed in KEPT_ON_V1 with its reason; any other one fails.
  * Scanned: every Markdown file under skills/ and workspace/ (what the agent reads), every script under
@@ -33,11 +34,6 @@ const KEPT_ON_V1: Array<{ path: string; needle: string; reason: string }> = [
     path: "plugins/index-links/__init__.py",
     needle: "/intents?intent=",
     reason: "rewrites any Index /i/<id> in any Index tool result: archived intents and other people's intents too",
-  },
-  {
-    path: "skills/index-network/scripts/proactive.ts",
-    needle: "/intents?opportunity=",
-    reason: "the pending alert's card link: introducer cards and cards on archived intents are not in V2",
   },
   {
     path: "workspace/SOUL.md",
@@ -108,8 +104,9 @@ describe("INTENTS-RELINK: links to the Intents page", () => {
     expect(read("skills/index-network/scripts/proactive.ts")).toContain("`${PORTAL_WEB}/intents-v2/${lastSegment(u)}`");
   });
 
-  test("the pending card's app link stays on the V1 form the app redirects when V2 can show the card", () => {
-    expect(appOpportunityLink("o1")).toBe("https://agents.edgecity.live/intents?opportunity=o1#opportunity-o1");
+  test("CD-03 C: the pending card's app link is the V2 card, no V1 page and no anchor", () => {
+    expect(appOpportunityLink("o1")).toBe("https://agents.edgecity.live/intents-v2?opportunity=o1");
+    expect(read("skills/index-network/scripts/proactive.ts")).not.toContain("#opportunity-");
   });
 
   test("the pattern sees a V1 page link and passes V2 links and API paths", () => {

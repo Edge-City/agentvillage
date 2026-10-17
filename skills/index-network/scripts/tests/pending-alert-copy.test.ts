@@ -49,9 +49,9 @@ describe("prompts/pending-alert.md", () => {
 });
 
 describe("the Script Output the line is written from", () => {
-  test("appUrl: the app's Intents page scrolled to that one card, `https://agents.edgecity.live/intents?opportunity=<id>#opportunity-<id>`", () => {
+  test("appUrl: that one card on Intents V2 (CD-03 C), `https://agents.edgecity.live/intents-v2?opportunity=<id>`: no V1 page, no anchor", () => {
     expect(appOpportunityLink("bbbbbbbb-0000-4000-8000-000000000001")).toBe(
-      "https://agents.edgecity.live/intents?opportunity=bbbbbbbb-0000-4000-8000-000000000001#opportunity-bbbbbbbb-0000-4000-8000-000000000001",
+      "https://agents.edgecity.live/intents-v2?opportunity=bbbbbbbb-0000-4000-8000-000000000001",
     );
     for (const bad of ["", "a/b", "a?b", "a b", "x".repeat(129), null, 7]) expect(appOpportunityLink(bad)).toBeNull();
   });
@@ -75,7 +75,7 @@ describe("the Script Output the line is written from", () => {
     expect(pendingView([due("​", "a1")], now)).toEqual({ view: null, withheld: 1 });
     const { view } = pendingView([due("​", "a1"), due("Asha", "a2")], now);
     expect((view as { cards: Array<{ name: string; appUrl: string; profileUrl: null; acceptUrl: null }> }).cards).toEqual([
-      { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents?opportunity=a2#opportunity-a2", acceptUrl: null, opportunityId: "a2", firstSeen: now.toISOString(), respondBy: null },
+      { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents-v2?opportunity=a2", acceptUrl: null, opportunityId: "a2", firstSeen: now.toISOString(), respondBy: null },
     ] as never);
   });
 });

@@ -249,7 +249,7 @@ describe("the evening note (B), the follow-up's Waiting on you rows (C) and the 
   test("D: the pending alert's entry gains only an optional match.headline; without one it is unchanged", () => {
     const now = new Date("2026-10-12T09:30:00Z");
     const due = (c: Partial<BriefOpportunity>) => ({ card: { name: "Asha", opportunityId: "a1", status: "pending", mainText: SUMMARY, ...c } as BriefOpportunity, opportunityId: "a1", firstSeen: now.toISOString() });
-    const plain = { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents?opportunity=a1#opportunity-a1", acceptUrl: null, opportunityId: "a1", firstSeen: now.toISOString(), respondBy: null };
+    const plain = { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents-v2?opportunity=a1", acceptUrl: null, opportunityId: "a1", firstSeen: now.toISOString(), respondBy: null };
     expect((pendingView([due({})], now).view as { cards: unknown[] }).cards).toEqual([plain]);
     expect((pendingView([due({ headline: "memory systems", matchedIntentText: "x" } as never)], now).view as { cards: unknown[] }).cards).toEqual([{ ...plain, match: { headline: "memory systems" } }]);
     const blocked = pendingView([due({ headline: "system prompt override" })], now);
