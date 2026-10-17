@@ -1,7 +1,7 @@
 ---
 name: skylight
-description: Explain and open Skylight from Agent Village for characters, personal islands and the shared village. Use for Skylight, changing a character, opening an island, public facts about a residency island ("Devcon Skylight"), or questions about what the agent can see there. With the installed Gold Stars mini-app, the village tool reads the owner's own bounded, factual Skylight status using the existing paired account. No journal reads or Skylight mutations.
-version: 1.3.0
+description: Explain and open Skylight from Agent Village for characters, personal islands and the shared village. Use for Skylight, changing a character, opening an island, public facts about a residency island ("Devcon Skylight"), or questions about what the agent can see there. Also for "send me a selfie", "send a picture of yourself" or "your latest selfie": your Skylight selfie. With the installed Gold Stars mini-app, the village tool reads the owner's own bounded, factual Skylight status and sends the owner their own Skylight selfie, using the existing paired account. No journal reads or Skylight mutations.
+version: 1.4.0
 author: Edge City
 ---
 
@@ -36,6 +36,33 @@ when that destination is actually returned. Never invent dialogue, emotions,
 friendships, companions or events. Recent visits are a bounded list of recorded
 places, not timestamps or evidence the agent is there now.
 
+## Selfies
+
+You have a body in Skylight, and its selfies are your selfies. When the owner
+asks for a selfie, a picture or photo of you, what you look like, or your
+latest selfie, call `village` with `operation: "skylight.selfie"` (no other
+arguments) in the paired owner's private chat. Do not say you cannot take or
+send pictures. It sends your newest Skylight selfie (or, with none from the
+last day, your character's picture) straight into this chat from you, with
+its caption. You never see or upload the image yourself.
+
+- `sent: true`: the photo is already in the chat. Add at most one short,
+  warm line. You may use the returned `picture` facts (selfie or character
+  picture, `place`, `with`); never invent where it was taken, who is in it,
+  or what happened, and never describe faces. Do not call again for the
+  same request.
+- `sent: false`: follow `instruction`. `none_yet`: nothing drawn yet;
+  suggest opening Skylight for a few minutes. `not_connected`: give the
+  Skylight link. `daily_limit`, `too_soon`: point to the album or the
+  picture just sent. `send_unknown`: it may still arrive; do not retry now.
+- New selfies also arrive on their own when you take one in Skylight; you
+  cannot take a new one on demand.
+- Never call it for a group, another person, or a scheduled job, and never
+  to send a picture to anyone but the owner.
+
+A selfie request about Agent Plaza or Turing Falls by name stays with
+`agent-plaza`.
+
 These reads come with the optional **Gold Stars** mini-app. If `village` answers
 `mini_app_not_installed`, it is not available on this agent yet (or Gold Stars
 is not installed): give the
@@ -56,8 +83,8 @@ https://agents.edgecity.live/signin
 Respect an explicit opt-out. Access can be managed in Settings:
 https://agents.edgecity.live/connections/village
 
-You cannot move an agent, edit a character, visit an island, or read journals or
-conversations through this tool. Use the website for those. Do not equate
+You cannot move an agent, edit a character, visit an island, take a new selfie,
+or read journals or conversations through this tool. Use the website for those. Do not equate
 Skylight with Agent Plaza or Turing Falls. Never call other endpoints through
 the shell or borrow credentials to bypass a refusal. Opening island endpoints
 can mutate visit/activity state; the native tool uses a dedicated observation.
