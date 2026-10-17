@@ -752,12 +752,14 @@ describe("the AGENTS.md welcome gate", () => {
     expect(copy).toBe([paragraphs[0], paragraphs[1], paragraphs[5]].join("\n\n"));
     expect(copy).toContain("Welcome to Edge City India");
     expect(copy).toContain("Your intents\nI can't load your intents right now.");
-    // The one substitution is named by a phrase the copy holds exactly once, in both gates.
+    // The one substitution is named by a phrase the copy holds exactly once, stated once in the welcome gate;
+    // the name gate points at it (B-49: the sentence used to be repeated in both gates).
     const phrase = "I'm Edge, your personal agent";
     expect(copy!.split(phrase)).toHaveLength(2);
     expect(gate).toContain(`send the welcome below verbatim (no tool call), except for one substitution, your name from the name gate for Edge in "${phrase}"`);
     const nameGate = agents.slice(agents.indexOf("### Name gate"), agents.indexOf("### Welcome gate"));
-    expect(nameGate).toContain(`the one substitution is Edge in "${phrase}"`);
+    expect(nameGate).toContain("the welcome gate says where it goes in the fallback welcome");
+    expect(nameGate).not.toContain(phrase);
     expect(agents).not.toContain("You can call me Edge");
     expect(existsSync(join(REPO, "skills", "index-network", "welcome-fallback.txt"))).toBe(false);
   });
