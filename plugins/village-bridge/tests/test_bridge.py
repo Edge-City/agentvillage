@@ -187,11 +187,41 @@ class BridgeTest(unittest.TestCase):
   for args in [{'operation':'skylight.status'},{'operation':'rolodex.meeting','attendeeId':other,'met':False}]:
    self.assertEqual(self.call(args)['error'],'private_owner_chat_required')
   self.transport.assert_not_called()
+ def test_skylight_selfie_rides_the_skylight_status_install(self):
+  # SKYLIGHT-SELFIE: a read with no arguments, allowed wherever the installed entry carries skylight.status;
+  # no accepted entry changes.
+  self.assertEqual(mini.CARRIED_BY,{'skylight.selfie':'skylight.status'})
+  self.assertIn('skylight.selfie',mini.READ_OPERATIONS);self.assertNotIn('skylight.selfie',mini.WRITE_OPERATIONS)
+  for entry in mini.GOLD_STARS_ACCEPTED:self.assertNotIn('skylight.selfie',entry['operations'])
+  # The description stays as it was (tool_search ranks `village` first for people lookups); skills/skylight routes it.
+  self.assertIn('skylight.selfie',bridge.SCHEMA['parameters']['properties']['operation']['enum'])
+  with patch.object(mini.importlib,'import_module',side_effect=AssertionError('reads are not gate-checked here')):
+   self.assertIn('data',self.call({'operation':'skylight.selfie'}))
+  self.transport.assert_called_once_with(self.config,{'operation':'skylight.selfie'})
+  self.transport.reset_mock()
+  other='550e8400-e29b-41d4-a716-446655440000'
+  for extra in [{'humanId':'other'},{'tenantId':'other'},{'ownerTelegramId':'99'},{'attendeeId':other},{'query':'Naman'},{'appId':'skylight'},{'arguments':{}}]:
+   with self.subTest(extra=extra):self.assertEqual(self.call({'operation':'skylight.selfie',**extra})['error'],'village_unavailable')
+  # Under an entry without skylight.status (or none), refused before any network call.
+  dizko={'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':['mini-app.read']}
+  for apps in ([{'id':'gold-stars',**mini.GOLD_STARS_PREVIOUS},dizko],[dizko],[]):
+   Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':apps}))
+   with self.subTest(apps=[a['id'] for a in apps]):self.assertEqual(self.call({'operation':'skylight.selfie'}),{'error':'mini_app_not_installed'})
+  Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[{'id':'gold-stars',**mini.GOLD_STARS_RESTORED}]}))
+  self.assertIn('data',self.call({'operation':'skylight.selfie'}))
+  # Never in another person's chat, a group, cron or a delegated child.
+  self.sc._VAR_MAP['HERMES_SESSION_USER_ID'].set('99');self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('99')
+  self.assertEqual(self.call({'operation':'skylight.selfie'})['error'],'private_owner_chat_required')
+  self.sc._VAR_MAP['HERMES_SESSION_USER_ID'].set('42');self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('-12')
+  self.assertEqual(self.call({'operation':'skylight.selfie'})['error'],'private_owner_chat_required')
+  self.sc._VAR_MAP['HERMES_SESSION_CHAT_ID'].set('42');self.sc._VAR_MAP['HERMES_CRON_SESSION'].set('evening')
+  self.assertEqual(self.call({'operation':'skylight.selfie'})['error'],'private_owner_chat_required')
+  self.assertEqual(self.transport.call_count,1)
  def test_restored_operations_ride_the_existing_village_gate_entry(self):
   # No new tool name: both operations go through `village`, the 36th gated tool (exact full-match matcher).
   self.assertEqual(bridge.SCHEMA['name'],'village')
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
-  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write'})
+  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write'}|set(mini.CARRIED_BY))
   self.assertEqual(bridge.SCHEMA['parameters']['properties']['met'],{'type':'boolean','description':bridge.SCHEMA['parameters']['properties']['met']['description']})
   self.assertFalse({'humanId','tenantId','userId','ownerTelegramId','requestId','turnId'}&set(bridge.SCHEMA['parameters']['properties']))
   approval=(Path(__file__).parents[2]/'av-approval'/'__init__.py').read_text()
