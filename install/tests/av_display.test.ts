@@ -13,12 +13,14 @@ import YAML from "yaml";
 import { AV_DISPLAY_PLUGIN, VILLAGE_MENU_COMMAND, configureAvDisplay, configureVillageMenu } from "../av_display";
 
 const ORIGINAL_HOME = process.env.HERMES_HOME;
+const ORIGINAL_DEFAULTS = process.env.AV_DISPLAY_DEFAULTS;
 let home: string;
 let logSpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "agentvillage-av-display-"));
   process.env.HERMES_HOME = home;
+  delete process.env.AV_DISPLAY_DEFAULTS;
   logSpy = spyOn(console, "log").mockImplementation(() => {});
 });
 
@@ -26,6 +28,8 @@ afterEach(() => {
   logSpy.mockRestore();
   if (ORIGINAL_HOME === undefined) delete process.env.HERMES_HOME;
   else process.env.HERMES_HOME = ORIGINAL_HOME;
+  if (ORIGINAL_DEFAULTS === undefined) delete process.env.AV_DISPLAY_DEFAULTS;
+  else process.env.AV_DISPLAY_DEFAULTS = ORIGINAL_DEFAULTS;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -196,6 +200,31 @@ test("rc44: an unusable shape is left alone with a warning", () => {
     expect(readFileSync(configPath(), "utf8")).toBe(text);
     expect(logged()).toBe(`→ warning: ${why}; /village left out of the Telegram menu priority`);
   }
+});
+
+test("ov#374 N4: AV_DISPLAY_DEFAULTS=0 (environment or .env) skips the menu write too; any other value writes it", () => {
+  const text = `# kept only if not rewritten\n${YAML.stringify({ platforms: { telegram: { extra: { command_menu: { priority: ["status"] } } } } })}`;
+  for (const off of ["0", "false", "no", "off", " OFF "]) {
+    writeFileSync(configPath(), text);
+    process.env.AV_DISPLAY_DEFAULTS = off;
+    logSpy.mockClear();
+    configureVillageMenu();
+    expect(readFileSync(configPath(), "utf8")).toBe(text);
+    expect(logged()).toBe("→ telegram menu: left untouched (AV_DISPLAY_DEFAULTS is off)");
+  }
+  // From $HERMES_HOME/.env, with no config.yaml: none is created.
+  delete process.env.AV_DISPLAY_DEFAULTS;
+  rmSync(configPath());
+  writeFileSync(join(home, ".env"), "AV_DISPLAY_DEFAULTS=0\n");
+  configureVillageMenu();
+  expect(existsSync(configPath())).toBe(false);
+  // Any other value: the step runs as usual.
+  writeFileSync(join(home, ".env"), "AV_DISPLAY_DEFAULTS=1\n");
+  writeFileSync(configPath(), text);
+  logSpy.mockClear();
+  configureVillageMenu();
+  expect(menuOf()).toEqual({ priority: ["status", "village"] });
+  expect(logged()).toBe("→ telegram menu: added /village to platforms.telegram.extra.command_menu.priority");
 });
 
 test("rc44: install.ts runs the menu step right after configureAvVote, as a bare statement in main()", () => {

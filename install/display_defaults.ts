@@ -126,12 +126,17 @@ function isMapping(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function overrideOff(): boolean {
+/**
+ * True when `AV_DISPLAY_DEFAULTS` is an "off" spelling (process environment first, then `.env`).
+ * Read by this step and by `configureVillageMenu` (av_display.ts; ov#374 review-b N4). A read that
+ * fails is not off; its warning ends with `fallback`, what the caller does instead.
+ */
+export function overrideOff(fallback = "applying the Telegram display settings"): boolean {
   let raw: string | undefined;
   try {
     raw = envOrDotenv(DISPLAY_DEFAULTS_ENV);
   } catch {
-    console.log(`→ warning: could not read ${DISPLAY_DEFAULTS_ENV} from $HERMES_HOME/.env; applying the Telegram display settings`);
+    console.log(`→ warning: could not read ${DISPLAY_DEFAULTS_ENV} from $HERMES_HOME/.env; ${fallback}`);
     return false;
   }
   return DISABLED_VALUES.has((raw ?? "").trim().toLowerCase());

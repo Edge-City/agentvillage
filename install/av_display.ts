@@ -1,4 +1,5 @@
 import { readConfig, writeConfig } from "./config";
+import { DISPLAY_DEFAULTS_ENV, overrideOff } from "./display_defaults";
 
 /** The plugin that makes Telegram tool-progress lines name the tool, never the command (RC28). */
 export const AV_DISPLAY_PLUGIN = "av-display";
@@ -55,9 +56,11 @@ export const VILLAGE_MENU_COMMAND = "village";
  * to a single string, which Hermes reads as a one-item list) that lacks it, and nothing when it
  * is there. `max_commands` and `priority_mode` are never touched. Left alone, with a warning,
  * when a level is not a mapping, holds a YAML merge key (`<<`), or `priority` has another type.
- * Typing `/village` works whether or not it is in the menu.
+ * Typing `/village` works whether or not it is in the menu. `AV_DISPLAY_DEFAULTS=0` skips this
+ * step too, as it does the display keys (ov#374 review-b N4).
  */
 export function configureVillageMenu(): void {
+  if (overrideOff(`adding /${VILLAGE_MENU_COMMAND} to the Telegram menu`)) return console.log(`→ telegram menu: left untouched (${DISPLAY_DEFAULTS_ENV} is off)`);
   const doc: unknown = readConfig();
   const isMapping = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   const skip = (why: string): void => console.log(`→ warning: ${why}; /${VILLAGE_MENU_COMMAND} left out of the Telegram menu priority`);

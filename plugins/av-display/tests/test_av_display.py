@@ -558,6 +558,24 @@ def test_the_first_contact_notes_name_village_not_help(plugin, fake_display, fak
         "mention that /help shows available commands", "mention that /village shows what Agent Village can do")
 
 
+def test_the_first_contact_wrap_rewrites_only_the_notes_hermes_just_appended(plugin, fake_display, fake_runner, fake_first_contact):
+    """ov#374 review-b S1: notes already in the list before the call hold the exact phrases and stay as they are."""
+    plugin.register(FakeCtx())
+    runner = fake_first_contact.GatewayRunner()
+    earlier = [INTRO_NOTE, PROFILE_NOTE, "an earlier note: mention that /help shows available commands"]
+    for note, by_keyword in ((INTRO_NOTE, False), (PROFILE_NOTE, True)):
+        fake_first_contact.GatewayTurnMixin.note = note
+        notes = list(earlier)
+        if by_keyword:
+            first_contact(runner, notes, keyword=True)
+        else:
+            first_contact(runner, notes)
+        assert notes[: len(earlier)] == earlier  # index < before: untouched, phrase and all
+        assert len(notes) == len(earlier) + 1
+        assert notes[-1] == plugin.point_at_village(note)
+        assert notes[-1] != note and "/help" not in notes[-1]
+
+
 def test_first_contact_with_history_or_other_text_is_left_as_hermes_wrote_it(plugin, fake_display, fake_runner, fake_first_contact):
     plugin.register(FakeCtx())
     runner = fake_first_contact.GatewayRunner()
