@@ -31,6 +31,8 @@ const ARM = process.env.AV_RDEON_ARM === "before" ? "before" : "after";
 
 /** The resident's two phrasings (R-DEON, CLAIMS L10388). */
 export const PHRASINGS = ["what's going on in the group chat", "ask the village"] as const;
+/** Print-only contrast (review-b L10554): a schedule question should NOT go to the group chat first (AGENTS.md routes it to edgeos). */
+export const CONTRAST = ["what's on in the village today?"] as const;
 
 type Tool = { name: string; description: string; input_schema: Record<string, unknown> };
 
@@ -135,6 +137,17 @@ describe.skipIf(!GATE)(`R-DEON proof: ${MODEL} on the box-shaped prompt (arm ${A
         // Tool call names only: never the model's text.
         console.log(`R-DEON ${ARM} "${phrasing}": ${runs.map((r) => r.join("+")).join(" | ")}`);
         if (ARM === "after") for (const names of runs) expect(names).toContain("ask_village");
+      },
+      120_000,
+    );
+  }
+  for (const phrasing of CONTRAST) {
+    test(
+      `contrast "${phrasing}" (print only, no assertion)`,
+      async () => {
+        const runs: string[][] = [];
+        for (let i = 0; i < RUNS; i += 1) runs.push(await toolCallNames(boxShapedRequest(phrasing, ARM)));
+        console.log(`R-DEON ${ARM} contrast "${phrasing}": ${runs.map((r) => r.join("+")).join(" | ")}`);
       },
       120_000,
     );
