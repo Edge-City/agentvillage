@@ -29,6 +29,7 @@ from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
 from . import _prompt_refresh
+from . import _village_visible
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
@@ -1253,6 +1254,8 @@ def _on_unload() -> None:
     _REGISTERED = False
     # F1: Hermes's own build_turn_context goes back with the hooks (the memory acknowledgement is one).
     _prompt_refresh.uninstall()
+    # R-DEON: Hermes's own tool_search core-name check goes back too.
+    _village_visible.uninstall()
     # Lane B: the approval poller stops with the plugin (its pending state is on disk).
     try:
         _approval.stop_poller()
@@ -1285,7 +1288,8 @@ def register(ctx) -> None:
     (`_share_vote.py`, lane O3); and, behind `AV_PRAY`, `pray` (`_pray.py`,
     PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
     `AV_SEARCH_VILLAGE`, `search_village` (`_search_village.py`) and `query_village`
-    (`_query_village.py`).
+    (`_query_village.py`). Those and village-bridge's `village` are kept out of Hermes's
+    `tool_search` bridge (`_village_visible.py`, R-DEON).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -1360,6 +1364,13 @@ def register(ctx) -> None:
     try:
         _prompt_refresh.install(_collector)
     except Exception:  # noqa: BLE001 - the refresh is optional; the hooks are not
+        pass
+    # R-DEON: the village tools (ask_village, search_village, query_village, village) stay in the
+    # model's tool list when Hermes's tool_search defers plugin tools (`_village_visible.py`).
+    # Behind AV_VILLAGE_TOOLS_VISIBLE (default on); a missing seam is one log line.
+    try:
+        _village_visible.install()
+    except Exception:  # noqa: BLE001 - the visibility is optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.

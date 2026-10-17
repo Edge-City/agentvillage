@@ -37,6 +37,7 @@ plugins/av-events/
   _ask_village.py  the ask_village tool, dark behind AV_ASK_VILLAGE: one question about the main group, answered by the god agents through the control plane
   _search_village.py  the search_village tool, dark behind AV_SEARCH_VILLAGE: the main group's scrubbed messages matching words, through the control plane (no model call)
   _query_village.py   the query_village tool, on the same switch: one read-only SQL SELECT the app runs over the main group's scrubbed messages (in-memory SQLite), through the control plane
+  _village_visible.py  the village tools stay out of Hermes's tool_search bridge: wraps tools.tool_search._core_tool_names (R-DEON)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -73,6 +74,7 @@ plugins/av-events/
 | `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
 | `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
 | `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` and `query_village` tools (see "Searching the village group (VILLAGE SEARCH)" and "Querying the village group with SQL (VILLAGE QUERY)"). Unset: neither is registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
+| `AV_VILLAGE_TOOLS_VISIBLE` | *(on)* | `0`, `false`, `no` or `off` lets Hermes's `tool_search` defer the village tools again. Otherwise `ask_village`, `search_village`, `query_village` and village-bridge's `village`, when registered, stay in the model's tool list (see "Village tools never deferred (R-DEON)"). Read once at plugin load. |
 | `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village`, `search_village` and `query_village` (the last three send the key only to a `CP_HOSTS` host). |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
@@ -1978,6 +1980,18 @@ app's own SQLite error (cleaned, at most 300 characters) inside its own `<villag
 `handling` preface, since it can quote the statement. Not routed through the approval gate
 (`NOT_GATED`). Never logged: the SQL, a cell, a column name, an error detail, the key or the tenant;
 one line of codes and counts per call.
+
+## Village tools never deferred (R-DEON)
+
+Hermes v2026.9.24's `tool_search` defers every plugin tool behind its bridge (`tool_search`,
+`tool_describe`, `tool_call`; `tools/tool_search.py`, `is_deferrable_tool_name`). On a resident's box
+(17 Oct) a Haiku turn asked about the group chat never searched for `ask_village` and answered that it
+was unable. Hermes's `tools.tool_search` config has no always-visible list (`defer` only adds), so
+`_village_visible.py` rebinds `tools.tool_search._core_tool_names` to Hermes's set plus `ask_village`,
+`search_village`, `query_village` (toolset `av-events`) and village-bridge's `village` (toolset
+`village`), each only while registered under that toolset. They are then listed in full and called
+directly, like a core tool; every other plugin tool still defers, and `toolsets._HERMES_CORE_TOOLS`
+is untouched. `AV_VILLAGE_TOOLS_VISIBLE=0` (read at load) skips it; unload puts Hermes's function back.
 
 ---
 

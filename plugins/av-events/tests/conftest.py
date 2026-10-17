@@ -76,6 +76,8 @@ AV_ENV_VARS = (
     "EDGEOS_API_KEY",
     # VILLAGE SEARCH: the `search_village` tool.
     "AV_SEARCH_VILLAGE",
+    # R-DEON: the village tools kept out of Hermes's tool_search bridge.
+    "AV_VILLAGE_TOOLS_VISIBLE",
     # F1 PROMPT REFRESH: the rollout switch and the control plane's team marker.
     "AV_PROMPT_REFRESH",
     "AV_PROMPT_REFRESH_FILES",
