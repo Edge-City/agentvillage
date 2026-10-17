@@ -1,0 +1,13 @@
+{
+  "id": "slopfolio",
+  "name": "Slopfolio",
+  "description": "Create and revise private portfolio drafts, then review and publish on Slopfolio.",
+  "version": "1.0.0",
+  "homepage": "https://slopfolio.com",
+  "permissions": [
+    { "kind": "read", "label": "Check draft status", "description": "Read whether your own Slopfolio draft is private, published, deleted or missing." },
+    { "kind": "action", "label": "Create and revise private drafts", "description": "Save a process summary and your edits to private drafts in your connected Slopfolio account. Publishing happens only when you approve on Slopfolio; Agent Village never publishes." }
+  ],
+  "skills": ["slopfolio"],
+  "operations": ["slopfolio.prepare", "slopfolio.status"]
+}

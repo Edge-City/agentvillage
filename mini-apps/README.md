@@ -211,6 +211,49 @@ list or any other operation (`mini-app.context.delete`, `gold-stars.send` on
 another app) refuses the whole projection. Gold Stars entries never carry a
 context operation. Overlay first, then the CP projects the longer dizko list.
 
+## Slopfolio: connected private drafts
+
+The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist
+expose exactly `slopfolio.prepare` and `slopfolio.status`, never an arbitrary
+MCP call or `publish_slopfolio_post`. Both require the installed app and the
+paired owner's private root Telegram conversation. Preparing a private draft
+and reading status do not request a manual approval tap. Publishing is solely
+the resident's action on Slopfolio at the returned `reviewUrl`.
+
+Prepare accepts only `draftId`, `paste`, `artifactUrl`, `medium` and `fixes`
+(`title`, `oneLiner`, `tools`, `iterations`, `howItWasMade`, `bestDeadEnd`,
+`promptingApproach`, `tags`). Omission preserves a draft field, explicit null
+clears it, and Markdown is passed byte-for-byte. Paste and narrative fields
+are capped at 100,000 UTF-8 bytes each; `draftId`, `medium`, `title` and
+`oneLiner` at 2,048 UTF-8 bytes each. `artifactUrl` is at most 2,048 characters.
+`tools` and `tags` each allow at most 30 strings of at most 100 characters.
+`iterations` may instead be a nonnegative integer. The complete compact
+UTF-8 prepare payload, including trusted metadata and JSON escaping, must
+not exceed 256 KiB; oversize input is refused before transport, not truncated.
+Only prepare transport adds `X-Village-Operation: slopfolio.prepare`, allowing
+the app's bounded large-body parser; status and other operations retain the
+small-body path.
+
+The overlay adds `turnId` from trusted session/message context, never model
+input. Retries in that turn retain the same identity; later turns differ.
+Status still accepts only the opaque `draftId` (at most 2,048 UTF-8 bytes).
+The app server derives operation ids, checks that existing drafts are owned
+private drafts before revision, owns OAuth and refresh, validates the upstream
+contract and performs the two reviewed MCP operations. Models cannot supply
+a turn id, token, endpoint, account id or tool name. Both operations' returned
+strings and keys pass through the bridge's recursive `scrubbed_tree`/`visible`
+sanitizer (including hidden/bidi characters and controls) and remain explicitly
+untrusted reference data, never instructions.
+
+Salman's upstream skill/manifest PR was not present when this integration was
+prepared. The manifest is included here; **there is no placeholder skill**.
+Salman must supply the real `skills/slopfolio/SKILL.md` before test installation.
+The installer validates the manifest's pinned bundle and fails closed without
+that source file, leaving existing installed bytes unchanged. Slopfolio is not
+a baseline skill and must remain tenant-restricted in the CP until the
+Salman-only test installation is ready; see the control-plane README rollout
+configuration.
+
 ## Disk staging and lifecycle
 
 The baseline installer stages the guarded native plugin and **grants no app**.
