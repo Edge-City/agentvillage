@@ -9,8 +9,8 @@ import { DISPLAY_DEFAULTS_ENV, TELEGRAM_DISPLAY_DEFAULTS, configureTelegramDispl
 
 // DATA-318: residents never see reasoning on Telegram. RC28 (Carter, Oct 9): the tool-progress
 // bubble is back (`new`; DATA-409's `off` was history) and /verbose is enabled so each resident can
-// switch it; rc29 (DATA-434) keeps a resident's `off`. Telegram-scoped keys, plus the gateway-wide
-// /verbose gate under `display`.
+// switch it; rc29 (DATA-434) keeps a resident's `off`. Telegram-scoped keys, plus two gateway-wide
+// keys under `display`: the /verbose gate and (rc44, RESIDENT-UX) `memory_notifications: off`.
 
 const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, [DISPLAY_DEFAULTS_ENV]: process.env[DISPLAY_DEFAULTS_ENV] };
 let logSpy: ReturnType<typeof spyOn>;
@@ -37,8 +37,8 @@ const APPLIED = {
   cleanup_progress: true,
 };
 
-/** The /verbose gate this step writes at the `display` level. */
-const GATE = { tool_progress_command: true };
+/** The keys this step writes at the `display` level: the /verbose gate and the self-improvement notice switch. */
+const GATE = { tool_progress_command: true, memory_notifications: "off" };
 /** Every key a first run writes, as configureTelegramDisplay returns them. */
 const ALL_KEYS = [...Object.keys(APPLIED), ...Object.keys(GATE)].sort();
 
@@ -98,7 +98,7 @@ test("no config.yaml: writes the Telegram display block and nothing else", () =>
   expect(configureTelegramDisplay().sort()).toEqual(ALL_KEYS);
 
   expect(read(path)).toEqual({ display: { platforms: { telegram: APPLIED }, ...GATE } });
-  expect(Object.keys(read(path).display as object)).toEqual(["platforms", "tool_progress_command"]);
+  expect(Object.keys(read(path).display as object)).toEqual(["platforms", "tool_progress_command", "memory_notifications"]);
 });
 
 test("Hermes defaults: Telegram gets the quiet settings; globals, other platforms and other sections untouched", () => {
@@ -114,9 +114,14 @@ test("Hermes defaults: Telegram gets the quiet settings; globals, other platform
   expect(telegramOf(path)).toEqual(APPLIED);
   const { platforms, ...globals } = doc.display as Record<string, unknown>;
   const { platforms: defaultPlatforms, ...defaultGlobals } = HERMES_DEFAULT_DISPLAY;
-  // The CLI / desktop surfaces keep Hermes's defaults; the only global key written is the /verbose gate, appended.
+  // The CLI / desktop surfaces keep Hermes's defaults; the only global keys written are the /verbose gate and
+  // memory_notifications, appended.
   expect(globals).toEqual({ ...defaultGlobals, ...GATE });
-  expect(Object.keys(doc.display as object)).toEqual([...Object.keys(HERMES_DEFAULT_DISPLAY), "tool_progress_command"]);
+  expect(Object.keys(doc.display as object)).toEqual([
+    ...Object.keys(HERMES_DEFAULT_DISPLAY),
+    "tool_progress_command",
+    "memory_notifications",
+  ]);
   const { telegram: _t, ...otherPlatforms } = platforms as Record<string, unknown>;
   const { telegram: _d, ...otherDefaultPlatforms } = defaultPlatforms;
   expect(otherPlatforms).toEqual(otherDefaultPlatforms);
@@ -144,7 +149,7 @@ test("a block the resident customised: show_reasoning is forced off, every other
     },
   });
 
-  expect(configureTelegramDisplay()).toEqual(["show_reasoning", "tool_progress_command"]);
+  expect(configureTelegramDisplay()).toEqual(["show_reasoning", "tool_progress_command", "memory_notifications"]);
 
   expect(telegramOf(path)).toEqual({
     show_reasoning: false,
@@ -162,7 +167,7 @@ test("show_reasoning is forced off whatever spelling turned it on", () => {
   for (const on of [true, "true", "on", "verbose", 1]) {
     const path = withDoc({ display: { show_reasoning: true, platforms: { telegram: { ...APPLIED, show_reasoning: on } } } });
 
-    expect(configureTelegramDisplay()).toEqual(["show_reasoning", "tool_progress_command"]);
+    expect(configureTelegramDisplay()).toEqual(["show_reasoning", "tool_progress_command", "memory_notifications"]);
 
     expect(telegramOf(path).show_reasoning).toBe(false);
   }
@@ -237,6 +242,7 @@ test("idempotent: a second run changes nothing and does not rewrite the file (co
     "      streaming: false",
     "      cleanup_progress: true",
     "  tool_progress_command: true   # /verbose on",
+    '  memory_notifications: "off"   # no self-improvement notices in chat',
     "",
   ].join("\n");
   const path2 = withText(commented);
@@ -323,14 +329,14 @@ test("RC28: tool_progress absent or null becomes new; the modes a resident can c
 test("RC28: display.tool_progress_command (the /verbose gate) is written when unset and kept otherwise", () => {
   for (const unset of [undefined, null]) {
     logSpy.mockClear();
-    const path = withDoc({ display: { show_reasoning: true, tool_progress_command: unset, platforms: { telegram: APPLIED } } });
+    const path = withDoc({ display: { ...GATE, show_reasoning: true, tool_progress_command: unset, platforms: { telegram: APPLIED } } });
     expect(configureTelegramDisplay()).toEqual(["tool_progress_command"]);
-    expect(displayOf(path)).toEqual({ show_reasoning: true, tool_progress_command: true, platforms: { telegram: APPLIED } });
+    expect(displayOf(path)).toEqual({ show_reasoning: true, ...GATE, platforms: { telegram: APPLIED } });
     expect(logged()).toBe("→ telegram display: tool_progress_command=true");
   }
   for (const chosen of [false, "yes"]) {
     logSpy.mockClear();
-    const path = withDoc({ display: { tool_progress_command: chosen, platforms: { telegram: APPLIED } } });
+    const path = withDoc({ display: { ...GATE, tool_progress_command: chosen, platforms: { telegram: APPLIED } } });
     const before = readFileSync(path, "utf8");
     expect(configureTelegramDisplay()).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe(before);
@@ -339,9 +345,9 @@ test("RC28: display.tool_progress_command (the /verbose gate) is written when un
   // Both levels in one write, one log line.
   logSpy.mockClear();
   const path = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: null } } } });
-  expect(configureTelegramDisplay()).toEqual(["tool_progress", "tool_progress_command"]);
+  expect(configureTelegramDisplay()).toEqual(["tool_progress", "tool_progress_command", "memory_notifications"]);
   expect(logSpy.mock.calls).toHaveLength(1);
-  expect(logged()).toBe("→ telegram display: tool_progress=new, tool_progress_command=true");
+  expect(logged()).toBe("→ telegram display: tool_progress=new, tool_progress_command=true, memory_notifications=off");
 });
 
 test("RC28: no value this step writes is a YAML 1.1 boolean word, so PyYAML reads back what was written", () => {
@@ -376,8 +382,9 @@ test(`${DISPLAY_DEFAULTS_ENV}=0 in the environment leaves config.yaml untouched`
     expect(configureTelegramDisplay()).toEqual([]);
 
     expect(readFileSync(path, "utf8")).toBe(text);
-    // Neither the Telegram keys nor the /verbose gate.
+    // Neither the Telegram keys nor the display-level keys.
     expect(displayOf(path).tool_progress_command).toBeUndefined();
+    expect(displayOf(path).memory_notifications).toBeUndefined();
     expect(telegramOf(path).tool_progress).toBeUndefined();
   }
   expect(logged()).toContain(`left untouched (${DISPLAY_DEFAULTS_ENV} is off)`);
@@ -443,4 +450,62 @@ test("leaves the file alone with a warning when a level is not a mapping or hold
     expect(readFileSync(path, "utf8")).toBe(text);
     expect(logged()).toContain(why);
   }
+});
+
+// rc44 (RESIDENT-UX): Hermes v2026.9.24 posts "Self-improvement review: Skill '...' patched" after a
+// reply unless `display.memory_notifications` is `off` (gateway/run_turn_runner.py:1282-1288;
+// agent/background_review.py:702-715). Global key: this release reads no per-platform form.
+test("rc44: a fresh config gets display.memory_notifications \"off\", double-quoted, which PyYAML (YAML 1.1) reads as the string", () => {
+  const path = freshHome();
+
+  expect(configureTelegramDisplay()).toContain("memory_notifications");
+
+  const text = readFileSync(path, "utf8");
+  expect(text).toContain('\n  memory_notifications: "off"\n');
+  const asHermes = YAML.parse(text, { version: "1.1" }) as { display: Record<string, unknown> };
+  expect(asHermes.display.memory_notifications).toBe("off");
+  expect(displayOf(path).memory_notifications).toBe("off");
+  // Global, not under platforms.telegram (the per-platform form is not read by this release).
+  expect(telegramOf(path).memory_notifications).toBeUndefined();
+});
+
+test("rc44: memory_notifications is forced off over any hand-set value (policy always, like show_reasoning)", () => {
+  for (const chosen of ["on", "verbose", "On", true, false, null]) {
+    logSpy.mockClear();
+    const path = withDoc({ display: { ...GATE, memory_notifications: chosen, platforms: { telegram: APPLIED } } });
+
+    expect(configureTelegramDisplay()).toEqual(["memory_notifications"]);
+
+    expect(displayOf(path).memory_notifications).toBe("off");
+    expect(logged()).toBe("→ telegram display: memory_notifications=off");
+  }
+  // Hermes's own template value, in place: overwritten where it stands, the other keys untouched.
+  const path = withDoc({ display: { ...HERMES_DEFAULT_DISPLAY, memory_notifications: "on" } });
+  configureTelegramDisplay();
+  const display = displayOf(path);
+  expect(display.memory_notifications).toBe("off");
+  expect(display.show_reasoning).toBe(true);
+  expect(Object.keys(display).indexOf("memory_notifications")).toBe(Object.keys(HERMES_DEFAULT_DISPLAY).length);
+});
+
+test("rc44: memory_notifications already off (any quoting) is not rewritten", () => {
+  for (const spelling of ['"off"', "'off'", "off"]) {
+    const text = `display:\n  tool_progress_command: true\n  memory_notifications: ${spelling}\n  platforms:\n    telegram:\n      show_reasoning: false\n      tool_progress: new\n      tool_progress_grouping: accumulate\n      interim_assistant_messages: false\n      streaming: false\n      cleanup_progress: true\n`;
+    const path = withText(text);
+
+    expect(configureTelegramDisplay()).toEqual([]);
+
+    expect(readFileSync(path, "utf8")).toBe(text);
+  }
+});
+
+test(`rc44: ${DISPLAY_DEFAULTS_ENV}=0 leaves a hand-set memory_notifications as it is`, () => {
+  process.env[DISPLAY_DEFAULTS_ENV] = "0";
+  const text = YAML.stringify({ display: { ...HERMES_DEFAULT_DISPLAY, memory_notifications: "on" } });
+  const path = withText(text);
+
+  expect(configureTelegramDisplay()).toEqual([]);
+
+  expect(readFileSync(path, "utf8")).toBe(text);
+  expect(displayOf(path).memory_notifications).toBe("on");
 });

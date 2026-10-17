@@ -396,10 +396,17 @@ export function disableTelegramLinkPreviews(): void {
 }
 
 /**
+ * rc44 (RESIDENT-UX): the overlay's own plugin commands a resident may run. `/village`
+ * (plugins/av-display `VILLAGE_COMMAND`) replies with a fixed text of what Agent Village can do.
+ */
+export const RESIDENT_PLUGIN_SLASH_COMMANDS: readonly string[] = Object.freeze(["village"]);
+
+/**
  * SEC-6: the slash commands a resident may run. Every other command, built-in or plugin, is
  * admin-only under Hermes's slash access control: `/model`, `/reasoning`, `/fast`, `/yolo`,
  * `/config`, `/plugins`, `/skills`, `/cron`, `/reload`, `/update`, `/tools` and the rest. Names are
  * Hermes canonical names (`hermes_cli/commands.py` `CommandDef`); aliases resolve to them first.
+ * The last group is the overlay's plugin commands (`RESIDENT_PLUGIN_SLASH_COMMANDS`).
  */
 export const RESIDENT_SLASH_COMMANDS: readonly string[] = Object.freeze([
   // session
@@ -411,6 +418,8 @@ export const RESIDENT_SLASH_COMMANDS: readonly string[] = Object.freeze([
   "personality", "timestamps", "verbose", "busy", "footer",
   // tools
   "memory",
+  // overlay plugins (rc44)
+  ...RESIDENT_PLUGIN_SLASH_COMMANDS,
 ]);
 
 /**

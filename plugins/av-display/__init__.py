@@ -65,14 +65,42 @@ plugin extends them once, at ``register()``:
   Hermes's own method. Compaction itself, its cooldowns and its gateway log lines
   are untouched.
 
+* A ``/village`` command (rc44, RESIDENT-UX): ``register()`` calls
+  ``ctx.register_command("village", village_command, description=...)``
+  (hermes_cli/plugins.py:658-685). The gateway runs a plugin command's handler
+  before any agent turn and sends what it returns as the reply
+  (gateway/run_inbound.py:1056-1080): a fixed text (``VILLAGE_TEXT``), no LLM
+  call, no network. No ``args_hint``, so Hermes lists it with the plugin
+  commands for Telegram's menu (hermes_cli/commands_platforms.py:89-96,
+  281-297); the 67 core commands fill the 60-slot menu first, so the installer
+  names ``village`` in ``platforms.telegram.extra.command_menu.priority``
+  (install/av_display.ts ``configureVillageMenu``). Residents may run it:
+  ``village`` is in install/config.ts ``RESIDENT_SLASH_COMMANDS``.
+
+* The first-contact note points at ``/village``, not ``/help`` (rc44). On the
+  box's very first message ever (no session yet), Hermes adds a system note to
+  that turn telling the agent to introduce itself and "mention that /help shows
+  available commands" (gateway/run_turn.py:1418-1422), or, with
+  ``onboarding.profile_build`` at its default ``ask``, the profile-build
+  directive, "(mention /help shows commands)" (agent/onboarding.py:131), both
+  through ``GatewayTurnMixin._hmwa_first_contact_notes(source, history,
+  turn_sidecar_notes)`` (run_turn.py:1410, called at :2107). This plugin wraps
+  that one method, fail-open: after Hermes's own method has run, each note it
+  appended to ``turn_sidecar_notes`` has the exact phrases in
+  ``FIRST_CONTACT_REWRITES`` replaced; any other text, a list it cannot find,
+  or any error leaves the notes as Hermes wrote them.
+
 ``web_search`` and ``web_extract`` keep their preview (the query or URL is the
 useful part). Verbose mode, which a resident can pick with ``/verbose``, still
 shows the full arguments (on Telegram as Hermes's JSON line rather than a code
-block). Only the two tables and those two display methods are touched; tool
-execution and compaction are not. A Hermes without either table, or with a
-table of an unexpected type, or without ``TurnRunner._progress_terminal_blocks``
-or ``GatewayTurnMixin._hmwa_hygiene_notify``, has that part left alone with one
-log line, and a missing module never raises. Idempotent.
+block). Only the two tables and those three methods are touched, and one command
+registered; tool execution and compaction are not. A Hermes without either
+table, or with a table of an unexpected type, or without
+``TurnRunner._progress_terminal_blocks``,
+``GatewayTurnMixin._hmwa_hygiene_notify`` or
+``GatewayTurnMixin._hmwa_first_contact_notes``, or a context without
+``register_command``, has that part left alone with one log line, and a missing
+module never raises. Idempotent.
 """
 
 from __future__ import annotations
@@ -233,12 +261,105 @@ def apply_hygiene_notices(run_turn_module: Any) -> bool:
     return True
 
 
+# ── rc44 (RESIDENT-UX): the /village command and the first-contact note ─────────────────────────────
+
+#: The command, as residents type it (Telegram menu name too: lowercase letters only).
+VILLAGE_COMMAND = "village"
+#: Its line in Telegram's command menu and in /help.
+VILLAGE_DESCRIPTION = "What Agent Village can do"
+#: The reply. Fixed text: no LLM call, no network. Names as the app nav and the skills use them.
+VILLAGE_TEXT = "\n".join((
+    "Agent Village, from here:",
+    "\u2022 Intents: tell me what you want to do or who you want to meet; I find matches and introduce you.",
+    "\u2022 Rolodex: ask me who someone is, or mark someone as met.",
+    "\u2022 Ask the village: ask what people in the group have said about a topic.",
+    "\u2022 Calendar: what's on, and your RSVPs.",
+    "\u2022 Decisions: vote on the village's questions when a vote is open.",
+    "\u2022 Gold Stars: thank someone (you approve each one first).",
+    "\u2022 Approvals: I check with you in the approval bot before I act for you.",
+    "More in the web app: https://agents.edgecity.live",
+))
+
+
+def village_command(raw_args: str = "") -> str:
+    """The ``/village`` handler: the same fixed text whatever follows the command."""
+    return VILLAGE_TEXT
+
+
+def register_village_command(ctx: Any) -> bool:
+    """Register ``/village`` on Hermes's plugin context. False when the context cannot register commands."""
+    register_command = getattr(ctx, "register_command", None)
+    if not callable(register_command):
+        logger.info("av-display: no register_command on the plugin context; /%s not registered", VILLAGE_COMMAND)
+        return False
+    register_command(VILLAGE_COMMAND, village_command, description=VILLAGE_DESCRIPTION)
+    logger.info("av-display: registered /%s", VILLAGE_COMMAND)
+    return True
+
+
+#: Exact phrases of Hermes v2026.9.24's first-contact notes, and what each becomes.
+FIRST_CONTACT_REWRITES: Dict[str, str] = {
+    # gateway/run_turn.py:1420, the plain intro note.
+    "mention that /help shows available commands": "mention that /village shows what Agent Village can do",
+    # agent/onboarding.py:131, the profile-build directive (onboarding.profile_build: ask, the default).
+    "(mention /help shows commands)": "(mention /village shows what Agent Village can do)",
+}
+
+
+def point_at_village(note: Any) -> Any:
+    """``note`` with each phrase of ``FIRST_CONTACT_REWRITES`` replaced; anything else as given."""
+    if not isinstance(note, str):
+        return note
+    for phrase, replacement in FIRST_CONTACT_REWRITES.items():
+        note = note.replace(phrase, replacement)
+    return note
+
+
+def apply_first_contact_notes(run_turn_module: Any) -> bool:
+    """Wrap ``GatewayTurnMixin._hmwa_first_contact_notes`` so its notes name /village. Fail-open."""
+    mixin = getattr(run_turn_module, "GatewayTurnMixin", None)
+    original = getattr(mixin, "_hmwa_first_contact_notes", None) if mixin is not None else None
+    if not callable(original):
+        logger.info("av-display: gateway.run_turn has no GatewayTurnMixin._hmwa_first_contact_notes; left as is")
+        return False
+    if getattr(original, _WRAPPED_MARK, False):
+        return True
+    if not inspect.iscoroutinefunction(original):
+        logger.info("av-display: GatewayTurnMixin._hmwa_first_contact_notes is not a coroutine function; left as is")
+        return False
+
+    # Hermes calls it as (source, history, turn_sidecar_notes) and awaits it (run_turn.py:2107); it appends
+    # to that list in place. Every argument passes through as given; only notes it appended are rewritten.
+    async def _hmwa_first_contact_notes(self: Any, *args: Any, **kwargs: Any) -> Any:
+        notes = kwargs.get("turn_sidecar_notes", args[2] if len(args) > 2 else None)
+        before = len(notes) if isinstance(notes, list) else None
+        result = await original(self, *args, **kwargs)
+        if before is not None:
+            try:
+                for i in range(before, len(notes)):
+                    notes[i] = point_at_village(notes[i])
+            except Exception:  # noqa: BLE001 - fail open: Hermes's notes as written
+                logger.debug("av-display: first-contact note left as is", exc_info=True)
+        return result
+
+    setattr(_hmwa_first_contact_notes, _WRAPPED_MARK, True)
+    _hmwa_first_contact_notes.__wrapped__ = original  # type: ignore[attr-defined]
+    mixin._hmwa_first_contact_notes = _hmwa_first_contact_notes
+    logger.info("av-display: gateway.run_turn GatewayTurnMixin._hmwa_first_contact_notes wrapped (first-contact note names /village)")
+    return True
+
+
 def register(ctx: Any) -> None:
-    """Hermes plugin entrypoint. No tools, no hooks: two display tables and two display methods, once."""
+    """Hermes plugin entrypoint. No tools, no hooks: two display tables, three methods and /village, once."""
+    try:
+        register_village_command(ctx)
+    except Exception:  # noqa: BLE001 - a command must never stop the gateway
+        logger.warning("av-display: could not register /%s", VILLAGE_COMMAND, exc_info=True)
     for name, patch in (
         ("agent.display", apply),
         ("gateway.run_turn_runner", apply_terminal_blocks),
         ("gateway.run_turn", apply_hygiene_notices),
+        ("gateway.run_turn", apply_first_contact_notes),
     ):
         try:
             module = importlib.import_module(name)

@@ -10,7 +10,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { configureSlashAccess, findMergeKey, RESIDENT_SLASH_COMMANDS, SLASH_ACCESS_KEYS, SLASH_NO_ADMIN, slashAccessKeys } from "../config";
+import {
+  configureSlashAccess,
+  findMergeKey,
+  RESIDENT_PLUGIN_SLASH_COMMANDS,
+  RESIDENT_SLASH_COMMANDS,
+  SLASH_ACCESS_KEYS,
+  SLASH_NO_ADMIN,
+  slashAccessKeys,
+} from "../config";
 import { installStatusPath, recordSlashAccessStatus, writeInstallStatus } from "../install_status";
 
 const HERMES_REF = "/Users/carter/dev/hermes-agent-ref-v2026.9.24";
@@ -255,10 +263,25 @@ test("the resident list holds no model, cost, tool or config command", () => {
 });
 
 test.skipIf(!existsSync(join(HERMES_REF, "hermes_cli/commands.py")))(
-  "every resident name is a canonical command in the Hermes registry",
+  "every resident name is a canonical command in the Hermes registry, or one of the overlay's plugin commands",
   () => {
     const registry = readFileSync(join(HERMES_REF, "hermes_cli/commands.py"), "utf8");
     const names = new Set([...registry.matchAll(/CommandDef\("([a-z0-9_-]+)"/g)].map((m) => m[1]));
-    expect(RESIDENT_SLASH_COMMANDS.filter((name) => !names.has(name))).toEqual([]);
+    const core = RESIDENT_SLASH_COMMANDS.filter((name) => !RESIDENT_PLUGIN_SLASH_COMMANDS.includes(name));
+    expect(core.filter((name) => !names.has(name))).toEqual([]);
+    // A plugin command never shadows a core one (Hermes refuses the registration: hermes_cli/plugins.py:670-675).
+    expect(RESIDENT_PLUGIN_SLASH_COMMANDS.filter((name) => names.has(name))).toEqual([]);
   },
 );
+
+test("rc44: /village is a resident command, and av-display registers it", () => {
+  expect(RESIDENT_PLUGIN_SLASH_COMMANDS).toEqual(["village"]);
+  expect(RESIDENT_SLASH_COMMANDS).toContain("village");
+  expect(RESIDENT_SLASH_COMMANDS.at(-1)).toBe("village");
+  expect(Object.isFrozen(RESIDENT_PLUGIN_SLASH_COMMANDS)).toBe(true);
+  expect(slashAccessKeys().user_allowed_commands).toContain("village");
+  expect(slashAccessKeys().group_user_allowed_commands).toContain("village");
+  const plugin = readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-display", "__init__.py"), "utf8");
+  expect(plugin).toContain('VILLAGE_COMMAND = "village"');
+  expect(plugin).toContain("register_command(VILLAGE_COMMAND, village_command, description=VILLAGE_DESCRIPTION)");
+});

@@ -97,7 +97,7 @@ import {
   unlistPlugins,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
-import { configureAvDisplay } from "./av_display";
+import { configureAvDisplay, configureVillageMenu } from "./av_display";
 import { configureAvVote } from "./av_vote";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
@@ -365,6 +365,8 @@ function main(): void {
   configureIndexLinks();
   configureAvDisplay();
   configureAvVote();
+  // rc44 (RESIDENT-UX): av-display's /village in Telegram's command menu (past the 60-slot cap otherwise).
+  configureVillageMenu();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
   // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.

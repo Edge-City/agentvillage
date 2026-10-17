@@ -422,3 +422,215 @@ def test_the_labels_match_hermes_pinned_source(plugin):
     # The config key we do not set, and its default.
     display_config = (HERMES_REF / "gateway" / "display_config.py").read_text(encoding="utf-8")
     assert '    "suppress_warning_notifications": False,\n' in display_config
+
+
+# ── rc44 (RESIDENT-UX): the /village command and the first-contact note ──────────────────────────────
+
+import socket
+
+#: Hermes v2026.9.24's two first-contact notes (gateway/run_turn.py:1418-1422; agent/onboarding.py:131), cut.
+INTRO_NOTE = (
+    "[System note: This is the user's very first message ever. "
+    "Briefly introduce yourself and mention that /help shows available commands. "
+    "Keep the introduction concise -- one or two sentences max.]"
+)
+PROFILE_NOTE = (
+    "\n\n[System note: This is the user's very first message ever. After a one-sentence introduction (mention /help "
+    "shows commands), OFFER — do not assume — to build a short profile of them ...]"
+)
+
+
+class FakeCtx:
+    """Hermes's PluginContext.register_command as at v2026.9.24 (hermes_cli/plugins.py:658-685)."""
+
+    def __init__(self):
+        self.commands = {}
+
+    def register_command(self, name, handler, description="", args_hint="", argument_mode=None):
+        self.commands[name] = {"handler": handler, "description": description, "args_hint": args_hint,
+                               "argument_mode": argument_mode}
+
+
+def test_village_is_registered_as_a_no_argument_command(plugin, fake_display, fake_runner, fake_run_turn):
+    ctx = FakeCtx()
+    plugin.register(ctx)
+    assert list(ctx.commands) == ["village"]
+    entry = ctx.commands["village"]
+    assert entry["description"] == "What Agent Village can do"
+    # No args_hint: Hermes's Telegram menu keeps it (commands_platforms.py _requires_argument: hint starts with "<").
+    assert entry["args_hint"] == "" and entry["argument_mode"] is None
+    assert entry["handler"]("") == plugin.VILLAGE_TEXT
+    assert entry["handler"]("anything after it") == plugin.VILLAGE_TEXT
+    # The table patches still happen alongside it.
+    assert fake_display._TOOL_VERBS["village"] == "Checking your village"
+
+
+def test_the_village_reply_needs_no_network_and_no_model(plugin, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("/village must not touch the network")
+
+    monkeypatch.setattr(socket, "socket", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    assert plugin.village_command("") == plugin.VILLAGE_TEXT
+    assert plugin.village_command() == plugin.VILLAGE_TEXT
+
+
+def test_the_village_text_names_the_features_as_the_app_does(plugin):
+    text = plugin.VILLAGE_TEXT
+    lines = text.split("\n")
+    assert lines[0] == "Agent Village, from here:"
+    assert lines[-1] == "More in the web app: https://agents.edgecity.live"
+    bullets = [line for line in lines if line.startswith("\u2022 ")]
+    assert [b[2:].split(":", 1)[0] for b in bullets] == [
+        "Intents", "Rolodex", "Ask the village", "Calendar", "Decisions", "Gold Stars", "Approvals",
+    ]
+    assert len(lines) == len(bullets) + 2
+    # Plain text: no dashes of any kind, no Markdown, ASCII but the bullets.
+    assert not any(ch in text for ch in "\u2014\u2013*_`[]")
+    assert all(ord(ch) < 128 for ch in text.replace("\u2022", ""))
+    assert len(text) < 700
+
+
+def test_a_context_without_register_command_or_a_failing_one_does_not_stop_the_rest(plugin, fake_display):
+    plugin.register(None)  # the existing suite's call
+    assert plugin.register_village_command(types.SimpleNamespace()) is False
+
+    class Broken:
+        def register_command(self, *args, **kwargs):
+            raise RuntimeError("conflict")
+
+    plugin.register(Broken())
+    assert "terminal" in fake_display._TOOL_VERBS_NO_PREVIEW
+
+
+@pytest.fixture
+def fake_first_contact(monkeypatch):
+    """gateway.run_turn with GatewayTurnMixin._hmwa_first_contact_notes as at v2026.9.24 (run_turn.py:1410-1438):
+    on a box with no session yet it appends one note to turn_sidecar_notes in place."""
+    module = types.ModuleType("gateway.run_turn")
+
+    class GatewayTurnMixin:
+        note = INTRO_NOTE
+
+        async def _hmwa_hygiene_notify(self, source, meta, message, what):
+            return None
+
+        async def _hmwa_first_contact_notes(self, source, history, turn_sidecar_notes):
+            if history:
+                return
+            turn_sidecar_notes.append(self.note)
+
+    class GatewayRunner(GatewayTurnMixin):
+        pass
+
+    module.GatewayTurnMixin = GatewayTurnMixin
+    module.GatewayRunner = GatewayRunner
+    monkeypatch.setitem(sys.modules, "gateway.run_turn", module)
+    return module
+
+
+def first_contact(runner, notes, history=(), **kwargs):
+    if kwargs:
+        return asyncio.run(runner._hmwa_first_contact_notes("source", list(history), turn_sidecar_notes=notes))
+    return asyncio.run(runner._hmwa_first_contact_notes("source", list(history), notes))
+
+
+def test_the_first_contact_notes_name_village_not_help(plugin, fake_display, fake_runner, fake_first_contact):
+    runner = fake_first_contact.GatewayRunner()
+    notes = []
+    first_contact(runner, notes)
+    assert notes == [INTRO_NOTE]  # before the plugin, Hermes's own words
+    plugin.register(FakeCtx())
+    for note, by_keyword in ((INTRO_NOTE, False), (PROFILE_NOTE, True)):
+        fake_first_contact.GatewayTurnMixin.note = note
+        notes = ["a note from earlier in the turn mentioning /help shows available commands"]
+        if by_keyword:
+            first_contact(runner, notes, keyword=True)
+        else:
+            first_contact(runner, notes)
+        assert notes[0] == "a note from earlier in the turn mentioning /help shows available commands"
+        assert len(notes) == 2
+        assert "/help" not in notes[1]
+        assert "/village shows what Agent Village can do" in notes[1]
+    # The rest of the note is Hermes's, word for word.
+    assert plugin.point_at_village(INTRO_NOTE) == INTRO_NOTE.replace(
+        "mention that /help shows available commands", "mention that /village shows what Agent Village can do")
+
+
+def test_first_contact_with_history_or_other_text_is_left_as_hermes_wrote_it(plugin, fake_display, fake_runner, fake_first_contact):
+    plugin.register(FakeCtx())
+    runner = fake_first_contact.GatewayRunner()
+    notes = []
+    first_contact(runner, notes, history=[{"role": "user"}])
+    assert notes == []
+    fake_first_contact.GatewayTurnMixin.note = "Type /help to see commands."  # a near miss: not rewritten
+    first_contact(runner, notes)
+    assert notes == ["Type /help to see commands."]
+    assert plugin.point_at_village(None) is None
+    assert plugin.point_at_village(42) == 42
+
+
+def test_the_first_contact_wrap_is_idempotent_fail_open_and_keeps_the_original(plugin, fake_display, fake_runner, fake_first_contact, monkeypatch):
+    original = fake_first_contact.GatewayTurnMixin._hmwa_first_contact_notes
+    plugin.register(FakeCtx())
+    wrapped = fake_first_contact.GatewayTurnMixin._hmwa_first_contact_notes
+    plugin.register(FakeCtx())
+    assert fake_first_contact.GatewayTurnMixin._hmwa_first_contact_notes is wrapped
+    assert wrapped.__wrapped__ is original
+    # A notes argument that is not a list: passed through, nothing rewritten, no error.
+    runner = fake_first_contact.GatewayRunner()
+
+    class Notes:
+        def __init__(self):
+            self.items = []
+
+        def append(self, item):
+            self.items.append(item)
+
+    odd = Notes()
+    asyncio.run(runner._hmwa_first_contact_notes("source", [], odd))
+    assert odd.items == [INTRO_NOTE]
+    # A rewrite that fails leaves Hermes's note.
+    monkeypatch.setattr(plugin, "point_at_village", lambda note: (_ for _ in ()).throw(RuntimeError("boom")))
+    notes = []
+    asyncio.run(runner._hmwa_first_contact_notes("source", [], notes))
+    assert notes == [INTRO_NOTE]
+
+
+def test_a_synchronous_or_missing_first_contact_method_is_left_alone(plugin, fake_display, fake_runner, monkeypatch):
+    module = types.ModuleType("gateway.run_turn")
+
+    class GatewayTurnMixin:
+        def _hmwa_first_contact_notes(self, source, history, notes):
+            notes.append(INTRO_NOTE)
+
+    module.GatewayTurnMixin = GatewayTurnMixin
+    monkeypatch.setitem(sys.modules, "gateway.run_turn", module)
+    original = GatewayTurnMixin._hmwa_first_contact_notes
+    plugin.register(FakeCtx())
+    assert GatewayTurnMixin._hmwa_first_contact_notes is original
+    assert plugin.apply_first_contact_notes(types.ModuleType("gateway.run_turn")) is False
+
+
+@pytest.mark.skipif(not (HERMES_REF / "gateway" / "run_turn.py").is_file(), reason="Hermes source not available")
+def test_the_command_and_the_note_match_hermes_pinned_source(plugin):
+    """register_command's signature and the reply path; a no-hint plugin command joins Telegram's menu list;
+    no core command is named village; and both first-contact phrases are in the pinned source as written."""
+    plugins_py = (HERMES_REF / "hermes_cli" / "plugins.py").read_text(encoding="utf-8")
+    assert ("    def register_command(\n        self, name: str, handler: Callable, description: str = \"\", "
+            "args_hint: str = \"\",\n") in plugins_py
+    inbound = (HERMES_REF / "gateway" / "run_inbound.py").read_text(encoding="utf-8")
+    assert "plugin_handler = get_plugin_command_handler(command.replace(\"_\", \"-\"))" in inbound
+    assert "return True, str(result) if result else None, command" in inbound
+    platforms = (HERMES_REF / "hermes_cli" / "commands_platforms.py").read_text(encoding="utf-8")
+    assert "    return args_hint.strip().startswith(\"<\")\n" in platforms
+    assert "if not _requires_argument(hint)]" in platforms
+    commands = (HERMES_REF / "hermes_cli" / "commands.py").read_text(encoding="utf-8")
+    assert 'CommandDef("village"' not in commands and '"village"' not in commands
+    run_turn = (HERMES_REF / "gateway" / "run_turn.py").read_text(encoding="utf-8")
+    assert "    async def _hmwa_first_contact_notes(self, source, history, turn_sidecar_notes):\n" in run_turn
+    assert "await self._hmwa_first_contact_notes(source, history, turn_sidecar_notes)" in run_turn
+    assert '"Briefly introduce yourself and mention that /help shows available commands. "' in run_turn
+    onboarding = (HERMES_REF / "agent" / "onboarding.py").read_text(encoding="utf-8")
+    assert re.search(r'\(mention /help "\n\s+"shows commands\)', onboarding)

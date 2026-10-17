@@ -37,8 +37,9 @@
  * bubble and a written `off` hides it, nothing more. (History: DATA-409, Oct 7,
  * had set `off`.) A turn over 3 minutes also shows Hermes's one
  * "⏳ Working — N min" heartbeat line, whatever `tool_progress` says. This step
- * writes Telegram-scoped keys, plus the one gateway-wide `/verbose` gate, so
- * the CLI and desktop surfaces operators use keep Hermes's display defaults:
+ * writes Telegram-scoped keys, plus two gateway-wide keys (the `/verbose` gate
+ * and `memory_notifications`), so the CLI and desktop surfaces operators use
+ * otherwise keep Hermes's display defaults:
  *
  * | key | value | written when |
  * |---|---|---|
@@ -49,6 +50,7 @@
  * | `platforms.telegram.streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
  * | `platforms.telegram.cleanup_progress` | `true` | unset |
  * | `tool_progress_command` (under `display`) | `true` | unset (absent or null); any other value is kept |
+ * | `memory_notifications` (under `display`) | `off` | always (rc44: no "Self-improvement review" notices in chat; operators read the box log) |
  *
  * rc29 (DATA-434): an `off` or a `false` in `tool_progress` is a resident's
  * `/verbose` choice and is kept; only an absent or null value gets `new`.
@@ -67,7 +69,8 @@
  * are off because each streamed or commentary message would otherwise arrive
  * as its own message before the reply.
  *
- * A value someone set by hand is kept (except `show_reasoning`). A resident who
+ * A value someone set by hand is kept (except `show_reasoning` and
+ * `memory_notifications`). A resident who
  * sets `streaming: true` by hand cannot be told from the default that was
  * written there and is reset on the next roll. `AV_DISPLAY_DEFAULTS=0` (or `false`, `no`, `off`),
  * in the process environment or `$HERMES_HOME/.env`, leaves `config.yaml`
@@ -106,9 +109,17 @@ export const TELEGRAM_DISPLAY_DEFAULTS: readonly ManagedKey[] = [
   { key: "cleanup_progress", value: true, policy: "unset" },
 ];
 
-/** The key this step owns directly under `display`: the gate on Hermes's /verbose (RC28). */
+/**
+ * The keys this step owns directly under `display`: the gate on Hermes's /verbose (RC28), and
+ * `memory_notifications: off` (rc44, RESIDENT-UX), which keeps the background review's
+ * "Self-improvement review: ..." notice out of the chat. Global, not per platform: this release
+ * reads only `display.memory_notifications` (gateway/run_turn_runner.py:1282-1288,
+ * tui_gateway/server.py:1819); `off` empties the notice list (agent/background_review.py:702-715)
+ * while the review itself still runs and logs its completion line.
+ */
 export const DISPLAY_LEVEL_DEFAULTS: readonly ManagedKey[] = [
   { key: "tool_progress_command", value: true, policy: "unset" },
+  { key: "memory_notifications", value: "off", policy: "always" },
 ];
 
 function isMapping(value: unknown): value is Record<string, unknown> {

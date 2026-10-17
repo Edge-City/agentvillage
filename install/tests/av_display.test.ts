@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { AV_DISPLAY_PLUGIN, configureAvDisplay } from "../av_display";
+import { AV_DISPLAY_PLUGIN, VILLAGE_MENU_COMMAND, configureAvDisplay, configureVillageMenu } from "../av_display";
 
 const ORIGINAL_HOME = process.env.HERMES_HOME;
 let home: string;
@@ -122,8 +122,86 @@ test("rc42: the box config enables av-display and never writes display.suppress_
   }
   const plugin = join(dir, "..", "plugins", "av-display");
   const manifest = YAML.parse(readFileSync(join(plugin, "plugin.yaml"), "utf8")) as { version: string };
-  expect(manifest.version).toBe("0.3.0");
+  expect(manifest.version).toBe("0.4.0");
   const source = readFileSync(join(plugin, "__init__.py"), "utf8");
   expect(source).toContain('("gateway.run_turn", apply_hygiene_notices)');
   expect(source).toContain('"compression-turnhold notice",');
+});
+
+/**
+ * rc44 (RESIDENT-UX): av-display registers /village. Hermes v2026.9.24 cuts Telegram's menu at 60
+ * (platforms.telegram.extra.command_menu.max_commands) after its 67 core commands, so the plugin
+ * command shows only when named in command_menu.priority (hermes_cli/commands_platforms.py:99-147, 281-297).
+ */
+const menuOf = () => read().platforms.telegram.extra.command_menu as Record<string, unknown>;
+
+test("rc44: no config.yaml, or no command_menu: priority is written as [village], other keys kept", () => {
+  configureVillageMenu();
+  expect(read()).toEqual({ platforms: { telegram: { extra: { command_menu: { priority: ["village"] } } } } });
+  expect(logged()).toBe("→ telegram menu: added /village to platforms.telegram.extra.command_menu.priority");
+  expect(VILLAGE_MENU_COMMAND).toBe("village");
+
+  writeFileSync(configPath(), YAML.stringify({
+    model: { default: "m" },
+    platforms: { telegram: { enabled: true, extra: { disable_link_previews: true, user_allowed_commands: ["new"], command_menu: null } } },
+  }));
+  configureVillageMenu();
+  expect(read()).toEqual({
+    model: { default: "m" },
+    platforms: { telegram: { enabled: true, extra: { disable_link_previews: true, user_allowed_commands: ["new"], command_menu: { priority: ["village"] } } } },
+  });
+});
+
+test("rc44: an operator's priority list, string, cap and mode are kept; village is appended once", () => {
+  writeFileSync(configPath(), YAML.stringify({ platforms: { telegram: { extra: { command_menu: { max_commands: 80, priority_mode: "append", priority: ["status", "new"] } } } } }));
+  configureVillageMenu();
+  expect(menuOf()).toEqual({ max_commands: 80, priority_mode: "append", priority: ["status", "new", "village"] });
+
+  writeFileSync(configPath(), YAML.stringify({ platforms: { telegram: { extra: { command_menu: { priority: "status" } } } } }));
+  configureVillageMenu();
+  expect(menuOf()).toEqual({ priority: ["status", "village"] });
+});
+
+test("rc44: village already there (list or string): nothing written, the file not rewritten", () => {
+  for (const priority of [["village"], ["help", "village"], "village"]) {
+    const text = `# kept only if not rewritten\n${YAML.stringify({ platforms: { telegram: { extra: { command_menu: { priority } } } } })}`;
+    writeFileSync(configPath(), text);
+    logSpy.mockClear();
+    configureVillageMenu();
+    expect(readFileSync(configPath(), "utf8")).toBe(text);
+    expect(logged()).toBe("→ telegram menu: /village already in command_menu.priority");
+  }
+  // A second run after the first write changes nothing.
+  rmSync(configPath());
+  configureVillageMenu();
+  const once = readFileSync(configPath(), "utf8");
+  configureVillageMenu();
+  expect(readFileSync(configPath(), "utf8")).toBe(once);
+});
+
+test("rc44: an unusable shape is left alone with a warning", () => {
+  const cases: Array<[string, string]> = [
+    ["- a\n- list\n", "the top level of config.yaml is not a mapping"],
+    ["platforms: nope\n", "platforms is not a mapping"],
+    ["platforms:\n  telegram: [x]\n", "platforms.telegram is not a mapping"],
+    ["platforms:\n  telegram:\n    extra: 3\n", "platforms.telegram.extra is not a mapping"],
+    ["platforms:\n  telegram:\n    extra:\n      command_menu: off\n", "platforms.telegram.extra.command_menu is not a mapping"],
+    ["platforms:\n  telegram:\n    extra:\n      command_menu:\n        priority: 7\n", "platforms.telegram.extra.command_menu.priority is not a list"],
+    ["base: &m\n  max_commands: 80\nplatforms:\n  telegram:\n    extra:\n      command_menu:\n        <<: *m\n", 'YAML merge key "<<" under platforms.telegram.extra.command_menu; set it by hand if wanted'],
+  ];
+  for (const [text, why] of cases) {
+    writeFileSync(configPath(), text);
+    logSpy.mockClear();
+    configureVillageMenu();
+    expect(readFileSync(configPath(), "utf8")).toBe(text);
+    expect(logged()).toBe(`→ warning: ${why}; /village left out of the Telegram menu priority`);
+  }
+});
+
+test("rc44: install.ts runs the menu step right after configureAvVote, as a bare statement in main()", () => {
+  const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  const main = text.slice(text.indexOf("function main(): void {"));
+  const body = main.slice(0, main.indexOf("\n}\n"));
+  expect(body.match(/^.*configureVillageMenu.*$/gm)).toEqual(["  configureVillageMenu();"]);
+  expect(body).toMatch(/^  configureAvVote\(\);\n  \/\/ rc44 .*\n  configureVillageMenu\(\);$/m);
 });
