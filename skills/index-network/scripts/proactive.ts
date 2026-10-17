@@ -447,21 +447,24 @@ const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u &
 /** INTENTS-RELINK: the resident's own live signals (archived ones are dropped upstream) open Intents V2's detail page. */
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents-v2/${lastSegment(u)}`; };
 /**
- * CD-03 C (Intents V2 is the only landing): the message link for a card Index minted a signed accept
- * link for is the app's `<portal>/intents-v2?opportunity=<id>&via=agent`, never Index's link: V2 opens
- * that card, where the resident (signed in) accepts, passes or messages the other person on Telegram;
- * `via=agent` labels the tracked open as the agent's. Index's signature never reaches the chat.
+ * INTRO-TELEGRAM: the message link for a card Index minted a signed accept link for is the app's
+ * `<portal>/intro/<id>?via=agent`, never Index's link. That route owns the sign-in return (a tap from
+ * Telegram is often signed out on a phone), and under `INTRO_LANDING=intents-v2` the app redirects a V2
+ * viewer on to the card on Intents V2 (CD-03 C), `via` carried: there the resident accepts, passes or
+ * messages the other person on Telegram. `via=agent` labels the surface. Index's signature never reaches
+ * the chat.
  */
 export const introLink = (url: unknown): string | null => {
   const a = acceptLink(url);
   const id = a?.match(/^https:\/\/[^/]+\/o\/([A-Za-z0-9_-]{1,128})\?/)?.[1];
-  return id ? `${PORTAL_WEB}/intents-v2?opportunity=${encodeURIComponent(id)}&via=agent` : null;
+  return id ? `${PORTAL_WEB}/intro/${encodeURIComponent(id)}?via=agent` : null;
 };
 const messageLink = introLink;
 /**
  * DATA-430: the app's deep link to one pending card, `<portal>/intents-v2?opportunity=<id>`: V2 lands on
  * the card's tab. CD-03 C: V2 shows every card, a card the resident's feed lists nowhere included (the
- * app's by-id read), so the link goes straight to V2. The id is encoded once (a valid id encodes to itself).
+ * app's by-id read), so the link goes straight to V2, never the V1 page. The id is encoded once (a valid
+ * id encodes to itself).
  */
 export const appOpportunityLink = (id: unknown): string | null => {
   if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;

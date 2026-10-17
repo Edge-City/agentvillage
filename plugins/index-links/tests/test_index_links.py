@@ -15,9 +15,9 @@ import pytest
 
 INDEX_TOOL = "mcp__index__list_opportunities"
 ACCEPT = "https://index.network/o/opp1?action=accept&viewer=v1&sig=s1"
-#: CD-03 C: a signed accept link becomes that opportunity's card on Intents V2, the only landing (the app
-#: accepts, passes and messages there with the resident's own session); the signature is dropped.
-ACCEPT_OUT = "https://agents.edgecity.live/intents-v2?opportunity=opp1"
+#: INTRO-TELEGRAM: a signed accept link becomes the app's /intro page for that opportunity (the app
+#: accepts with the resident's own session and opens Telegram once both accepted); the signature is dropped.
+ACCEPT_OUT = "https://agents.edgecity.live/intro/opp1"
 #: Generous so CI under load stays stable; the refute's bound was 0.5 s.
 TIME_BOUND_S = 2.0
 
@@ -29,7 +29,7 @@ def hook(plugin, result, tool=INDEX_TOOL):
 # --- 1-6: behaviour that held before the patch -----------------------------
 
 
-def test_01_json_accept_url_becomes_the_v2_card_and_keeps_key_order(plugin):
+def test_01_json_accept_url_becomes_the_intro_page_and_keeps_key_order(plugin):
     raw = json.dumps({"acceptUrl": ACCEPT, "userUrl": None, "id": "opp1"})
     out = hook(plugin, raw)
     assert out is not None
@@ -42,7 +42,7 @@ def test_02_rewrite_is_idempotent(plugin):
     once = hook(plugin, raw)
     assert once == f"[message Maya]({ACCEPT_OUT}) and also {ACCEPT_OUT}"
     assert hook(plugin, once) is None
-    assert once.count("/intents-v2?opportunity=opp1") == 2
+    assert once.count("/intro/opp1") == 2
     assert "sig=" not in once
 
 
@@ -141,7 +141,7 @@ def test_11_unicode_lookalike_host_is_left_alone_not_deleted(plugin):
 
 
 def test_12_to_is_dropped_from_an_accept_link(plugin):
-    """N2: the whole signed link becomes the V2 card link, so `to` goes with it."""
+    """N2: the whole signed link becomes the intro page, so `to` goes with it."""
     assert hook(plugin, f"{ACCEPT}&to=x") == ACCEPT_OUT
 
 
@@ -453,18 +453,18 @@ def test_own_profile_exemption_keeps_the_off_switch_and_size_cap(plugin, monkeyp
     assert hook(plugin, f"{ACCEPT} {OWN}", tool=tool) is None
 
 
-# --- INTRO-TELEGRAM, then CD-03 C (Intents V2 is the only landing) ----------
+# --- INTRO-TELEGRAM ---------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "url,out",
     [
-        ("https://index.network/o/11111111-2222-4333-8444-555555555555?action=accept&viewer=v1&sig=s1", "https://agents.edgecity.live/intents-v2?opportunity=11111111-2222-4333-8444-555555555555"),
+        ("https://index.network/o/11111111-2222-4333-8444-555555555555?action=accept&viewer=v1&sig=s1", "https://agents.edgecity.live/intro/11111111-2222-4333-8444-555555555555"),
         ("https://index.network/o/opp1/?action=accept&viewer=v1&sig=s1&surface=telegram", ACCEPT_OUT),
         ("https://app.index.network/o/opp1?sig=s1&viewer=v1&action=accept", ACCEPT_OUT),
     ],
 )
-def test_signed_accept_links_become_the_v2_card_without_the_signature(plugin, url, out):
+def test_signed_accept_links_become_the_intro_page_without_the_signature(plugin, url, out):
     result = hook(plugin, f"[message Maya]({url})")
     assert result == f"[message Maya]({out})"
     assert "sig" not in result and "viewer" not in result
@@ -473,43 +473,3 @@ def test_signed_accept_links_become_the_v2_card_without_the_signature(plugin, ur
 def test_decline_links_still_stay_on_index(plugin):
     url = "https://index.network/o/opp1?action=decline&viewer=v1&sig=s1"
     assert hook(plugin, f"[pass]({url})") is None
-
-
-# --- CD-03 C: nothing the plugin emits lands on the old intro route ----------
-
-
-def test_the_v2_link_carries_only_the_opportunity_id(plugin):
-    """No `via`, no signature, no viewer, no fragment: exactly `/intents-v2?opportunity=<id>`."""
-    assert plugin.rewrite_opportunity_link(ACCEPT) == ACCEPT_OUT
-    assert plugin.rewrite_opportunity_link(f"{ACCEPT}&surface=telegram") == ACCEPT_OUT
-    out = hook(plugin, f"<{ACCEPT}>")
-    assert out == ACCEPT_OUT
-    assert "#" not in out and "via=" not in out and "viewer" not in out and "sig" not in out
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://index.network/o/opp1?action=decline&viewer=v1&sig=s1",
-        "https://index.network/o/opp1",
-        "https://index.network/o/opp1?action=accept&viewer=v1&viewer=v2&sig=s1",
-        "https://index.network/o/opp1?action=accept&viewer=v1&sig=s1&sig=s2",
-    ],
-)
-def test_decline_plain_and_duplicate_key_links_stay_as_minted(plugin, url):
-    assert plugin.rewrite_opportunity_link(url) == url
-    assert hook(plugin, f"[x]({url})") is None
-
-
-def test_no_rendered_link_and_no_plugin_source_line_names_the_intro_route(plugin):
-    """Mutation pin: emitting `/intro` anywhere (a link or the plugin's own text) fails here."""
-    from pathlib import Path
-
-    rendered = hook(
-        plugin,
-        json.dumps({"acceptUrl": ACCEPT, "a": f"[message Maya]({ACCEPT})", "b": f"<{ACCEPT}>", "c": f"tap {ACCEPT}."}),
-    )
-    assert rendered is not None and rendered.count(ACCEPT_OUT) == 4
-    assert "/intro" not in rendered
-    source = (Path(__file__).resolve().parents[1] / "__init__.py").read_text(encoding="utf-8")
-    assert "/intro" not in source

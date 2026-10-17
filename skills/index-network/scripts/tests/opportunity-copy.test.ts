@@ -83,7 +83,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(end).toBeGreaterThan(start);
     const section = exemplars.slice(start, end);
     expect(section.match(/\[message (Adam|Paul)\]\(\{acceptUrl\}\)/g)).toHaveLength(2);
-    expect(count(section, "> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.")).toBe(1);
+    expect(count(section, "> Tapping a link opens Agent Village, where one tap accepts and lets you message them.")).toBe(1);
     expect(section).toContain("[Lena]({userUrl})");
     expect(section).not.toMatch(/\[message Lena\]/);
     expect(section).not.toMatch(/tell me and I will give you the link\./);

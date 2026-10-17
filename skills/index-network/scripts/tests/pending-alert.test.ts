@@ -113,7 +113,7 @@ describe("pendingAlert", () => {
           name: "Dina",
           profileUrl: `https://agents.edgecity.live/rolodex?person=${user(4)}`,
           appUrl: `https://agents.edgecity.live/intents-v2?opportunity=${id(4)}`,
-          acceptUrl: `https://agents.edgecity.live/intents-v2?opportunity=${id(4)}&via=agent`,
+          acceptUrl: `https://agents.edgecity.live/intro/${id(4)}?via=agent`,
           opportunityId: id(4),
           firstSeen: T1.toISOString(),
           // The recorded row carries no deadline field: never invented.

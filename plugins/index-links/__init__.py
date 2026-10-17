@@ -5,10 +5,12 @@ model sees the result. A string return replaces that result. ``None`` leaves
 it unchanged.
 
 A signed accept link (``action=accept``) becomes the Agent Village app's
-``https://agents.edgecity.live/intents-v2?opportunity=<opportunityId>`` (CD-03 C:
-Intents V2 is the only landing): V2 opens that card, where the resident, signed
-in, accepts, passes or messages the other person on Telegram. The signature is
-dropped, so the bearer link never reaches the chat. A plain ``/o/<id>`` opportunity link
+``https://agents.edgecity.live/intro/<opportunityId>`` (INTRO-TELEGRAM). That
+route owns the sign-in return (a signed-out tap from Telegram comes back to the
+card after sign-in), and under ``INTRO_LANDING=intents-v2`` the app redirects a
+V2 viewer on to that card on Intents V2 (CD-03 C), where the resident accepts,
+passes or messages the other person on Telegram. The signature is dropped, so
+the bearer link never reaches the chat. A plain ``/o/<id>`` opportunity link
 is left as Index minted it. A signed decline link is left as Index minted
 it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>``.
 A signal link becomes ``https://agents.edgecity.live/intents?intent=<intentId>``.
@@ -83,8 +85,6 @@ OWN_PROFILE_TOOLS = frozenset(prefix + name for prefix in INDEX_TOOL_PREFIXES fo
 OFF_SWITCH = "AV_INDEX_LINKS"
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
 _PORTAL_HOST = "agents.edgecity.live"
-#: CD-03 C: the card on Intents V2, the only landing (the app's older intro route stays as an alias).
-V2_OPPORTUNITY = "/intents-v2?opportunity="
 
 _REGISTERED = False
 
@@ -104,7 +104,7 @@ def _query_pairs(url: str) -> list[tuple[str, str]]:
 
 
 def rewrite_opportunity_link(url: str) -> str:
-    """A signed accept link becomes the app's ``/intents-v2?opportunity=<id>``. A plain ``/o/<id>`` stays.
+    """A signed accept link becomes the app's ``/intro/<id>``. A plain ``/o/<id>`` stays.
 
     A link that repeats ``action``, ``viewer``, ``sig``, ``surface`` or ``to``
     stays as minted: which duplicate counts is the verifier's call, not ours.
@@ -117,7 +117,7 @@ def rewrite_opportunity_link(url: str) -> str:
     query = dict(pairs)
     if query.get("action", "") == "accept" and query.get("viewer") and query.get("sig"):
         opp = _OPP_PATH.fullmatch(_url_path(url))
-        return _portal(V2_OPPORTUNITY + opp.group(1)) if opp else url
+        return _portal("/intro/" + opp.group(1)) if opp else url
     return url
 
 

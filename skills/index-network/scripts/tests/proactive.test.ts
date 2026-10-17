@@ -393,7 +393,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
   // (`/o/<id>?action=accept&viewer=..&sig=..`, 47b537c7), never a built `/o/<id>`; the third-party
   // text and foreign-host guards these tests pinned are unchanged.
   const ACCEPT = (id: string) => `https://index.network/o/${id}?action=accept&viewer=v1&sig=s1`;
-  const MSG = (id: string) => `${PORTAL_WEB}/intents-v2?opportunity=${id}&via=agent`; // what person() emits (CD-03 C): the card on Intents V2, never the signed link
+  const MSG = (id: string) => `${PORTAL_WEB}/intro/${id}?via=agent`; // what person() emits: the app's /intro alias (sign-in return; V2 viewers redirected on, CD-03 C), never the signed link
 
   test("a drop wakes with one person, the signed accept link, Index's headline and no other card text, and marks its own day", async () => {
     const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
