@@ -72,6 +72,34 @@ test("a thrown Error with code and status: error_name, a 200-char single-line me
   expect(message).not.toMatch(/[\r\n\t]/);
 });
 
+test("error_message is masked: a bearer token, a 64-hex secret, a uuid, key=/token=/credential= values, URL userinfo and a token query never reach the line; the placeholders do", () => {
+  const bearer = "eyJhbGciOiJIUzI1NiJ9.payload-part.sig_part";
+  const hex = "0123456789abcdef".repeat(4);
+  const uuid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const queryToken = "qt-" + "Q".repeat(20);
+  const password = "hunter2-" + "p".repeat(8);
+  const message =
+    `POST failed: Authorization Bearer ${bearer}\nsecret ${hex} for experiment ${uuid}; ` +
+    `retry https://admin:${password}@decision.example/v1/enroll?token=${queryToken}&experiment=${uuid} ` +
+    `api_key=${SECRET}&mode=x CREDENTIAL=${SECRET}`;
+  const run = runLoader(`const e = new Error(${JSON.stringify(message)}); e.code = "decision_http"; e.status = 401; throw e;`);
+  const line = diagnostic(run);
+  expect(line).toMatchObject({ level: "warn", event: "moralmod_startup_unready", error_name: "Error", stage: "startup", code: "decision_http", http_status: 401 });
+  for (const raw of [bearer, "payload-part", hex, uuid, queryToken, password, "admin:", SECRET]) expect(run.stderr).not.toContain(raw);
+  const masked = line.error_message as string;
+  expect(masked.length).toBeLessThanOrEqual(200);
+  expect(masked).toBe(
+    "POST failed: Authorization Bearer <redacted> secret <hex> for experiment <uuid>; retry https://<redacted>@decision.example/v1/enroll?<redacted> api_key=<redacted>&mode=x CREDENTIAL=<redacted>",
+  );
+});
+
+test("each mask on its own: secret=, password=, a bare 32-hex run and a query after a path", () => {
+  const run = runLoader(
+    `throw new Error("secret=abc&x=1 password=pw1 id ${"A".repeat(32)} at https://cp.example/v1/claims?sig=zzz done");`,
+  );
+  expect((diagnostic(run).error_message as string)).toBe("secret=<redacted>&x=1 password=<redacted> id <hex> at https://cp.example/v1/claims?<redacted> done");
+});
+
 test("a numeric code and http_status (no status) are kept; a 1,000-char name is cut to 64", () => {
   const run = runLoader(`const e = new Error("bad gateway"); e.name = "N".repeat(1000); e.code = 42; e.http_status = 502; throw e;`);
   const line = diagnostic(run);
