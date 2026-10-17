@@ -699,10 +699,13 @@ describe("the --draft trailer: one stderr line naming the branch, never text; no
 describe("the AGENTS.md welcome gate", () => {
   const agents = readFileSync(join(REPO, "workspace", "AGENTS.md"), "utf8");
   const gate = agents.slice(agents.indexOf("### Welcome gate"), agents.indexOf("## Active skills"));
+  // B-49: both gates' scripts are run from one paragraph under "## First-message gates", which states the
+  // terminal rule once for both (it was stated twice, word for word, once per gate).
+  const runs = agents.slice(agents.indexOf("## First-message gates"), agents.indexOf("### Name gate"));
 
   test("runs the script through terminal, command only, and sends its output as the reply", () => {
-    expect(gate).toContain("run `bun skills/index-network/scripts/welcome.ts`");
-    expect(gate).toContain("Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else");
+    expect(runs).toContain("then `bun skills/index-network/scripts/welcome.ts` (welcome gate)");
+    expect(runs).toContain("Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else");
     expect(gate).toContain(`If it prints \`${ALREADY_SENT}\`, do **not** send a welcome`);
     expect(gate).toContain("send it as your reply exactly as printed");
   });
@@ -711,17 +714,22 @@ describe("the AGENTS.md welcome gate", () => {
     // skills/approval/SKILL.md: a `terminal` call with no `workdir`, or a relative one, is refused.
     const approval = readFileSync(join(REPO, "skills", "approval", "SKILL.md"), "utf8").replace(/\s+/g, " ");
     expect(approval).toContain("`terminal`: always pass `workdir` as an absolute path (for example the `HERMES_HOME` directory)");
+    // B-49: one run paragraph names both gates' scripts, in order, and carries the rule once for both.
+    const flat = runs.replace(/\s+/g, " ");
+    expect(flat).toContain(
+      "once per session, before your first reply, run `bun skills/agent-profile/scripts/profile.ts` (name gate), then `bun skills/index-network/scripts/welcome.ts` (welcome gate).",
+    );
+    expect(flat).toContain(
+      "Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else; the approval gate refuses a `terminal` call without that absolute `workdir`.",
+    );
+    expect(flat).toContain("Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`");
+    expect(flat).toContain("If it returns an error about background commands, it did not run; call it once more without those arguments.");
     const nameGate = agents.slice(agents.indexOf("### Name gate"), agents.indexOf("### Welcome gate"));
-    for (const g of [nameGate, gate]) {
-      const flat = g.replace(/\s+/g, " ");
-      expect(flat).toContain(
-        "Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else; the approval gate refuses a `terminal` call without that absolute `workdir`.",
-      );
-      expect(flat).toContain("Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`");
-      expect(flat).not.toMatch(/exactly `command` and nothing else/);
-    }
+    for (const g of [runs, nameGate, gate]) expect(g.replace(/\s+/g, " ")).not.toMatch(/exactly `command` and nothing else/);
+    // Neither gate's own section runs a script of its own any more: the run paragraph is the only place.
+    for (const g of [nameGate, gate]) expect(g).not.toMatch(/run `bun /);
     // DATA-416: the first welcome's run may take up to WELCOME_BUDGET_MS (50 s) of Index calls.
-    expect(gate.replace(/\s+/g, " ")).toContain("it finishes within a minute on the first welcome and in a few seconds after that.");
+    expect(flat).toContain("the welcome script finishes within a minute on the first welcome and in a few seconds after that.");
     // The fallback's marker write is a file tool call, which the same gate refuses with a relative path.
     expect(gate.replace(/\s+/g, " ")).toContain("write `memory/welcome-state.json` under your `HERMES_HOME` (give the file tool its absolute path)");
   });
@@ -744,12 +752,14 @@ describe("the AGENTS.md welcome gate", () => {
     expect(copy).toBe([paragraphs[0], paragraphs[1], paragraphs[5]].join("\n\n"));
     expect(copy).toContain("Welcome to Edge City India");
     expect(copy).toContain("Your intents\nI can't load your intents right now.");
-    // The one substitution is named by a phrase the copy holds exactly once, in both gates.
+    // The one substitution is named by a phrase the copy holds exactly once, stated once in the welcome gate;
+    // the name gate points at it (B-49: the sentence used to be repeated in both gates).
     const phrase = "I'm Edge, your personal agent";
     expect(copy!.split(phrase)).toHaveLength(2);
     expect(gate).toContain(`send the welcome below verbatim (no tool call), except for one substitution, your name from the name gate for Edge in "${phrase}"`);
     const nameGate = agents.slice(agents.indexOf("### Name gate"), agents.indexOf("### Welcome gate"));
-    expect(nameGate).toContain(`the one substitution is Edge in "${phrase}"`);
+    expect(nameGate).toContain("the welcome gate says where it goes in the fallback welcome");
+    expect(nameGate).not.toContain(phrase);
     expect(agents).not.toContain("You can call me Edge");
     expect(existsSync(join(REPO, "skills", "index-network", "welcome-fallback.txt"))).toBe(false);
   });
@@ -759,10 +769,12 @@ describe("the AGENTS.md welcome gate", () => {
     expect(flat).toContain(
       "The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call an intent tool or record an intention as part of the welcome; later turns capture new wants as the \"Intentions\" red line says.",
     );
-    expect(flat).toContain("(on the first welcome it also seeds intents from the selections the resident made at signup and reads them again: the script does that, once per box, never you)");
+    // B-49: the read sentence points at the seed sentence below instead of restating it (the script, once per box, never you).
+    expect(flat).toContain("reads the resident's own intents from Index (on the first welcome, after seeding them as below), and records the welcome as sent.");
     expect(flat).not.toContain("it never creates or changes one");
     // The gate names no intent tool: AGENTS.md speaks of them only on its one record_intention line (av-events test_index_contract.py, test_record_intention.py).
     expect(gate).not.toMatch(/create_intent|record_intention/);
+    expect(runs).not.toMatch(/create_intent|record_intention/);
     const source = readFileSync(SCRIPT, "utf8");
     expect(source.match(/callIndexTool\(/g)).toHaveLength(2);
     expect([...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1])).toEqual(["list_intents", "pause_intent"]);
