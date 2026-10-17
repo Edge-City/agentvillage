@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-13T18:14:32.822Z
+Source updated: 2026-10-14T17:41:07.660Z
 
-Last content change indexed: 2026-10-13T18:28:19.266Z
+Last content change indexed: 2026-10-14T17:43:19.997Z
 
 ---
 
@@ -125,16 +125,6 @@ Once it's created, you can invite people by email, see who has RSVPed, edit any 
 #### **🎫** Check-in & **wristband pick-up (mandatory)**
 
 Every attendee needs to check in to collect their wristband. Please bring your ticket QR code. **PLEASE NOTE: There is a $50 USD charge for lost wristbands.** **If your wristband is too tight, needs to be cut or you need a replacement with your original one in hand, you can exchange it complimentary.**
-
-**Opening day (Oct 12)**
-
-- **Mon, Oct 12:**
-
-  - 9am–1pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
-
-  - 1pm–5pm, co-working ([The Circle.Work)](https://maps.app.goo.gl/bC2hau5M8MrRsJdm8)
-
-**From Oct 13 onward:**
 
 - **Mon–Fri:** 10am–12pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
 
@@ -316,15 +306,13 @@ We've partnered with local restaurants and businesses to offer ECI26 participant
 
 **Lunch Meal Plans**
 
-TLDR;
-
 We’ve partnered with [Om Kafe](https://share.google/uhNPlKfRJ9AzUd34Z) and [Hari Cafe](https://www.haricafe.com/) to provide fresh and healthy lunches Monday - Friday delivered to The Circle.Work from 1:00-2:00 PM!
 
 Participants must pay for a pre-purchased meal ticket [here](https://portal.edgecity.live/checkout/edge-india/lunch-tickets).
 
 ₹3,000 per week ($36) - 5 lunches, Monday - Friday.
 
-⚠️_Order deadline:_ Week 1 orders close **Oct 10 at 10am IST**. Week 2 closes **Oct 16 at 10am IST** and week 3 closes Oct 21, so the kitchens know how much to cook.
+⚠️ _Order deadline:_ Week 2 closes **Oct 16 at 10am IST** and week 3 closes Oct 21, so the kitchens know how much to cook.
 
 We have a no refund policy once you’ve purchased a meal plan for a given week: this keeps waste down and lets the restaurants plan properly.
 
@@ -354,11 +342,11 @@ All dinners are on the [calendar](https://portal.edgecity.live/portal/edge-india
 
 We will offer a shuttle service on weekdays.
 
-Shuttle runs 11am-7pm in 20 min loops with a driver break from 4-4:30 PM
+Shuttle runs 8am-10pm in 30 min loops with a driver break from 11am-12pm & 4pm-5pm.
 
 Shuttle stops include RIVA Beach Resort > The Circle Coworking > RIVA Beach Resort.
 
-Shuttle times will be approximate to traffic.\
+Shuttle times will be approximate to traffic. Tips are not required, but always appreciated!\
 Please plan accordingly so you do not miss your next session!
 
 Additionally, aligned prices for taxis are below - you can find these outside of Riva and around town.
