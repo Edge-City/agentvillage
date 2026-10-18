@@ -57,7 +57,11 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     the village marketplace, before it is installed (R2; `marketplace.*` is a
     reserved namespace).
   - marketplace.app.action: an installed app acting for the agent, before it
-    acts; the request payload names the app and the verb (R2).
+    acts; the request payload names the app and the verb (R2). The Gold Star
+    send is the one exception: its member class
+    marketplace.app.action.gold-stars.send runs on its own, confirmed by the
+    resident in chat on the exact preview and recorded by the daemon like
+    every send (B-133).
   - resource.allocate: the treasury/ODS allocation class, an allocation of
     village resources proposed for the resident, before the agent takes it up
     (R2 addendum). `odin.*` is a reserved namespace for the allocator's own
@@ -333,6 +337,7 @@ classes:
   # The village marketplace (reserved namespace marketplace.*) and the model reviewer: reserved, R2.
   marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
   marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
+  marketplace.app.action.gold-stars.send: { autonomy: autonomous, agent_may_request: true }   # Gold Stars: a star your agent sends after you confirm the exact preview in chat (B-133, Carter 18 Oct); the parent class stays manual for any other installed app
   marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; the village tool (Rolodex search, a reviewed mini-app's public reads, Gold Star previews and status) reaches it through the hook; a star send needs its own marketplace.app.action grant; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident

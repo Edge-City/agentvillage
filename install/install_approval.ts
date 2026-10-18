@@ -172,8 +172,9 @@ export const APPROVAL_PLUGIN = "av-approval";
  * village-bridge plugin's one entry tool, exact name, is the last entry. The
  * resident policy maps it to `marketplace.app.read` (read-only: the app
  * catalogue and the tenant's own installs). A Gold Star send through it also
- * needs the plugin's own manual `marketplace.app.action` grant from the daemon
- * (plugins/village-bridge/_mini_apps.py).
+ * needs the plugin's own daemon start under the member class
+ * `marketplace.app.action.gold-stars.send` (autonomous under the shipped
+ * template, B-133; plugins/village-bridge/_mini_apps.py).
  *
  * CODE EXECUTION ON (rc42; Carter, DECISIONS 2026-10-15 05:1xZ, "execute_code
  * ungated, phase-1 risk accepted"): `execute_code` is no longer routed. The
@@ -239,7 +240,7 @@ export const APPROVAL_GATED_TOOLS = [
  * Empty from rc41 (MINI-APPS re-cut of ov#312): `village-bridge` (OV-300 M1,
  * held back since ov#300) is staged again. Its one tool, `village`, is the 36th
  * entry of APPROVAL_GATED_TOOLS (the 35th since rc42), and a Gold Star send through it also needs the
- * plugin's own manual `marketplace.app.action` grant. Without the control
+ * plugin's own daemon start under `marketplace.app.action.gold-stars.send` (B-133). Without the control
  * plane's mini-apps.json on the box every operation is refused.
  */
 export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set();

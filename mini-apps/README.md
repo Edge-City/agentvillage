@@ -13,7 +13,7 @@ Two complete starters are maintained with their real native skills:
 | Starter | Manifest | Skill | Backend contract |
 | --- | --- | --- | --- |
 | Public read-only MCP | [Dizko](dizko/manifest.json) | [SKILL.md](../skills/dizko/SKILL.md) | Seven reviewed public tools, exact input schemas and fixed HTTPS endpoint |
-| Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, manual approval, send/status/cancel; also carries the owner's Rolodex meeting mark/undo and Skylight status read |
+| Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, chat confirmation of the exact preview, send/status/cancel; also carries the owner's Rolodex meeting mark/undo and Skylight status read |
 
 ### Give your builder agent this prompt
 
@@ -94,14 +94,20 @@ New write integrations require backend and approval review; they cannot use
 - `gold-stars.status` for the same draft returns `approvalPayload` containing
   exactly `appId`, `draftId`, `attendeeId`, `recipientName`, `note`, `visibility`.
 - After a later owner reply, native `gold-stars.send` fetches that server preview.
-  It proposes `marketplace.app.action` with stable key
-  `marketplace.app.action:gold-stars.send:<draftId>` and payload
+  It proposes the member class `marketplace.app.action.gold-stars.send` (B-133)
+  with stable key `marketplace.app.action.gold-stars.send:<draftId>` (the daemon
+  requires the key to start with `<class>:`) and payload
   `{appId:"gold-stars",operation:"gold-stars.send",preview:<approvalPayload>}`.
   Compact, recursively sorted UTF-8 JSON is hashed with SHA-256. The daemon's
-  registered payload hash must match. Initial execution requires
-  `decision: requested`, a fresh successful `wait` reporting `granted`, and a
-  successful `start` with `authorization: grant`. Autonomous policy, model
-  booleans, unavailable authority and chat consent alone never authorize it.
+  registered payload hash must match. The shipped resident policy sets the
+  member class autonomous, so the send runs after the owner confirms the exact
+  preview in chat, with no approval card: initial execution then requires
+  `decision: autonomous` and a successful `start` with `authorization: policy`
+  (the daemon-recorded start). A policy that still says manual for the class
+  requires `decision: requested`, a fresh successful `wait` reporting `granted`,
+  and a successful `start` with `authorization: grant`. The parent
+  `marketplace.app.action` stays manual for every other app. Model booleans and
+  unavailable authority never authorize it.
 - The native request includes `approval: {taskId,payloadHash,payload}`. `taskId`
   is the full daemon identifier matching `^propose:[a-f0-9]{32}$`, not a UUID
   or a stripped suffix. The app compares the exact saved preview and checks

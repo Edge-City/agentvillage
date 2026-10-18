@@ -41,7 +41,11 @@ import { join } from "node:path";
 // mini-app's public reads, Gold Star previews and status). No class value moves. The block is
 // cp#237's byte for byte (taken at its head e46b62ca, approval's L6633 wording; template file
 // sha256 d8d3e0b4...). The previous pin was 8cb5db39 (ov#320 / rc36).
-const POLICY_BLOCK_SHA256 = "ef0d342eca47536d062f6c9d7c2e08efcc5f5092e7a867cb42c1b8b403b093df";
+// B-133 (Gold Stars without a card, Carter 18 Oct; paired with the cp half on the same branch name
+// product/gold-stars-member-class) moved it: one row, `marketplace.app.action.gold-stars.send`
+// (autonomous, agent_may_request) directly under the unchanged manual marketplace.app.action row,
+// nothing else in the block. The previous pin was ef0d342e (rc41 MINI-APPS re-land).
+const POLICY_BLOCK_SHA256 = "8e59e8d773146c36c19b40d63d1e5fa8c3da7789a82ea66701d5d6e97c3af800";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

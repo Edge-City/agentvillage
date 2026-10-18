@@ -29,9 +29,9 @@ GOLD_STARS_ACCEPTED = (GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS)
 # `rolodex.meeting` (mark/undo) is a WRITE: it rides the `village` tool's existing gate entry (no preview
 # step, CLAIMS L7216) and runs only while that gate is on and verified (gate_verified). `skylight.status`
 # is a READ of the owner's own status. `rolodex.person` is a READ of one resident's public profile.
-# Star sends also need their own daemon grant (authorize_send).
+# Star sends also need their own daemon start (authorize_send, class SEND_CLASS).
 # NEW-03 (rc44): `mini-app.context.read` is a READ of the app's own context namespace; `mini-app.context.write`
-# is a WRITE into it and takes rolodex.meeting's path (gate_verified), never the Gold Stars manual grant.
+# is a WRITE into it and takes rolodex.meeting's path (gate_verified), never the Gold Stars send start.
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read"})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write"})
@@ -45,8 +45,21 @@ APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mi
 APP_OPERATIONS_ACCEPTED = (("mini-app.read", "mini-app.context.read", "mini-app.context.write"), ("mini-app.read",))
 
 
+# B-133 (Carter 18 Oct): a star send proposes this member class, not the parent marketplace.app.action.
+# The shipped resident policy template carries it as autonomous (the resident's chat confirmation of the
+# exact preview is the consent), while the parent stays manual for any other installed app. The daemon
+# requires the propose key to start with "<class>:", so the key is derived from it (send_key).
+SEND_CLASS = "marketplace.app.action.gold-stars.send"
+
+
+def send_key(draft_id: str) -> str:
+    return SEND_CLASS + ":" + draft_id
+
+
 # HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
-# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py).
+# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py). With the
+# member row autonomous (the shipped template, B-133) the daemon answers "autonomous" and no card is
+# shown; a policy that still says manual for the member class (an older box) keeps the card and this text.
 APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "
                   "gold-stars.send with this SAME draftId. Never prepare a new preview to retry. Chat consent alone "
                   "cannot authorize sending.")
@@ -103,23 +116,24 @@ def approval_modules():
 
 
 def authorize_send(preview: object, draft_id: str):
-    """Start a manual grant once; reconstruct its exact proof for same-draft recovery."""
+    """Start the send once (the policy's own start, or a manual grant); reconstruct its exact proof for same-draft recovery."""
     if not isinstance(preview, dict) or set(preview) != {"appId", "draftId", "attendeeId", "recipientName", "note", "visibility"} or not all(isinstance(v, str) for v in preview.values()) or preview["appId"] != "gold-stars" or preview["draftId"] != draft_id or preview["visibility"] not in ("named", "anonymous"):
         return None, {"error": "approval_preview_unavailable"}
     payload = {"appId": "gold-stars", "operation": "gold-stars.send", "preview": preview}
     # All leaf values are strings; sorted compact UTF-8 is JCS for this closed schema.
     held = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(held.encode("utf-8")).hexdigest()
-    key = "marketplace.app.action:gold-stars.send:" + draft_id
+    key = send_key(draft_id)
     ap = approval_modules()
-    answer = ap.propose("marketplace.app.action", key, "Send one Gold Star: " + preview["recipientName"], held)
+    answer = ap.propose(SEND_CLASS, key, "Send one Gold Star: " + preview["recipientName"], held)
     task = answer.doc.get("task")
     decision = answer.doc.get("decision")
-    # HOT-01 (B-032): "requested" = the resident's setting for marketplace.app.action asks first (a
-    # human grant is spent); "autonomous" = the attested policy itself authorizes the send (core
-    # records the start as authorized by the policy, and refuses that for a manual or human-only
-    # class). Either way the daemon writes the start, and the control plane re-reads it from the
-    # daemon's own log before any star is sent. "supervised" and anything else are refused.
+    # HOT-01 (B-032), B-133: "autonomous" = the attested policy's SEND_CLASS row (autonomous in the
+    # shipped template) authorizes the send; core records the start as authorized by the policy, and
+    # refuses that for a manual or human-only class. "requested" = a policy that still says manual for
+    # the class (an older box) asks first, and a human grant is spent. Either way the daemon writes the
+    # start (the audit record), and the control plane re-reads it from the daemon's own log before any
+    # star is sent. "supervised" and anything else are refused.
     if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != digest or decision not in ("requested", "autonomous"):
         return None, {"error": "approval_refused"}
     proof = {"taskId": task, "payloadHash": digest, "payload": payload}

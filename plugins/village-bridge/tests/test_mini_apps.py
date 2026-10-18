@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import tempfile
 import types
 import unittest
@@ -35,7 +36,9 @@ class ApprovalTest(unittest.TestCase):
         grant, refusal = mini.authorize_send(self.preview, self.draft)
         self.assertIsNone(refusal)
         args = self.ap.propose.call_args.args
-        self.assertEqual(args[0], "marketplace.app.action")
+        # B-133: the member class, and the key the daemon requires to start with "<class>:".
+        self.assertEqual(args[0], "marketplace.app.action.gold-stars.send")
+        self.assertEqual(args[1], "marketplace.app.action.gold-stars.send:" + self.draft)
         self.assertEqual(json.loads(args[3]), grant["payload"])
         self.assertEqual(grant["payload"]["preview"], self.preview)
         self.assertEqual(self.ap.start.call_args.args, ("propose:" + "a" * 32, args[1], args[3]))
@@ -190,6 +193,36 @@ class ApprovalTest(unittest.TestCase):
         self.assertEqual(mini.authorize_send(self.preview, self.draft)[1]["error"], "approval_refused")
         self.ap.wait.assert_not_called()
         self.ap.start.assert_not_called()
+
+    def test_send_class_and_key_are_the_member_class_on_both_paths(self):
+        # B-133: requested and autonomous both propose exactly SEND_CLASS with the key derived from it;
+        # the start reuses that same key byte for byte (same-draft recovery depends on it).
+        self.assertEqual(mini.SEND_CLASS, "marketplace.app.action.gold-stars.send")
+        self.assertEqual(mini.send_key(self.draft), "marketplace.app.action.gold-stars.send:" + self.draft)
+        for decision, authorization in (("requested", "grant"), ("autonomous", "policy")):
+            self.ap.reset_mock()
+            if decision == "autonomous":
+                self.autonomous()
+            self.ap.start.return_value = answer(dict(ok=True, authorization=authorization))
+            proof, refusal = mini.authorize_send(self.preview, self.draft)
+            self.assertIsNone(refusal)
+            cls, key, _, held = self.ap.propose.call_args.args
+            self.assertEqual((cls, key), ("marketplace.app.action.gold-stars.send", "marketplace.app.action.gold-stars.send:" + self.draft))
+            self.assertTrue(key.startswith(cls + ":"))
+            self.assertEqual(self.ap.start.call_args.args, (proof["taskId"], key, held))
+
+    def test_send_class_is_the_templates_autonomous_member_row_and_the_parent_stays_manual(self):
+        # B-133: the class this bridge proposes is a row of the shipped resident policy template, autonomous
+        # with agent_may_request (without the row the daemon refuses it as class-not-agent-requestable);
+        # the parent marketplace.app.action row stays manual for every other installed app.
+        text = (Path(__file__).parents[3] / "skills" / "approval" / "templates" / "APPROVAL.md").read_text(encoding="utf-8")
+        start = text.index("```yaml approval-policy\n")
+        block = text[start:text.index("\n```", start + 1)]
+        classes = block[block.index("\nclasses:\n"):]
+        rows = {m.group(1): m.group(2) for m in re.finditer(r"^  ([a-z][a-z0-9.*-]*):\s+(\{[^}]*\})", classes, re.M)}
+        self.assertEqual(rows[mini.SEND_CLASS], "{ autonomy: autonomous, agent_may_request: true }")
+        self.assertEqual(rows["marketplace.app.action"], "{ autonomy: manual, agent_may_request: true }")
+        self.assertFalse([name for name in rows if name != mini.SEND_CLASS and name.startswith("marketplace.app.action.")])
 
     def test_preview_from_another_draft_and_extra_model_flags_refused(self):
         for preview in ({**self.preview, "draftId": "other"}, {**self.preview, "approved": True}, None):

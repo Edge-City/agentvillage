@@ -279,6 +279,9 @@ class BridgeTest(unittest.TestCase):
   self.assertTrue(all(request['draftId']==draft for request in requests))
   self.assertEqual(requests[1],requests[3])
   self.assertEqual(ap.propose.call_args_list[0],ap.propose.call_args_list[1])
+  # B-133: both proposes carry the member class and its derived key, so the retry finds the same task.
+  self.assertEqual(ap.propose.call_args.args[:2],('marketplace.app.action.gold-stars.send','marketplace.app.action.gold-stars.send:'+draft))
+  self.assertEqual(ap.start.call_args.args[1],'marketplace.app.action.gold-stars.send:'+draft)
   ap.wait.assert_called_once_with('propose:'+'a'*32)
   ap.start.assert_called_once()
  # ov#370 round 1 (review-b S1): handle()-level sends with a fake daemon.
@@ -340,6 +343,19 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(requests[1]['approval'],requests[3]['approval'])
   # The retry replays the executed proposal: one start in all.
   ap.start.assert_called_once();ap.wait.assert_called_once()
+ def test_unconfirmed_preview_never_proposes_the_member_class(self):
+  # B-133: the chat confirmation is the app's, not the bridge's. A status answer refusing the draft
+  # (star_confirmation_required, or any other error) ends the send before authorize_send: no propose,
+  # no start, no send request.
+  draft,_=self.star()
+  ap=self.fake_daemon('autonomous','policy')
+  for status in ({'error':'star_confirmation_required','instruction':'Show the exact preview and wait for a new reply confirming it.'},{'error':'star_preview_expired'}):
+   self.transport.reset_mock();self.transport.side_effect=None;self.transport.return_value=status
+   with patch.object(mini,'approval_modules',return_value=ap),patch.object(bridge,'authorize_send',wraps=bridge.authorize_send) as approve:
+    self.assertEqual(self.call({'operation':'gold-stars.send','draftId':draft}),{'error':'approval_preview_unavailable'})
+   approve.assert_not_called()
+   self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.status','draftId':draft})
+  ap.propose.assert_not_called();ap.start.assert_not_called()
  def test_sent_receipt_does_not_request_another_approval(self):
   self.transport.return_value={'status':'sent'}
   with patch.object(bridge,'authorize_send') as approve:

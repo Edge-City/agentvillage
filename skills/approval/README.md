@@ -48,7 +48,10 @@ row). In plain words, for the consent screen:
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
   village question or their vote on the daily treasury ballot. Curated Gold Stars
-  sends now propose `marketplace.app.action`, binding the exact immutable preview.
+  sends propose the member class `marketplace.app.action.gold-stars.send`, binding
+  the exact immutable preview; the shipped template sets it autonomous (no card:
+  the resident confirms the exact preview in chat, and the daemon records the
+  policy's start), while `marketplace.app.action` itself stays manual (B-133).
   These other classes remain reserved:
   a treasury proposal the agent drafted (`treasury.propose`, from Oct 18),
   withdrawing the resident's own treasury proposal on the agent's suggestion
@@ -66,8 +69,9 @@ row). In plain words, for the consent screen:
   without a second ask. An installed app reading through `village`
   (`marketplace.app.read`: the app catalogue and the resident's own installs,
   never a credential or another resident's data) runs and is recorded; a Gold
-  Star send through it separately needs its own manual `marketplace.app.action`
-  grant (propose/wait/start). Accepting or declining an Index
+  Star send through it separately needs its own daemon start under
+  `marketplace.app.action.gold-stars.send` (propose/start; autonomous under the
+  shipped template, propose/wait/start where a policy still says manual). Accepting or declining an Index
   opportunity on the resident's behalf (`opportunity.accept`) runs and is recorded
   while the gate
   is on: only the hook judges it (autonomous is its day-one default, Carter's
