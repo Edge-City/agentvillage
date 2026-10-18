@@ -56,10 +56,15 @@ a prompt, rows, an instruction) is dropped. Else `{error, retry_after_s?,
 message}` with a fixed message: never the request, the key or the upstream
 body. The app's and cp's codes pass through (`question_invalid`,
 `window_invalid`, `store_empty`, `too_large`, `model_failed`, `busy`,
-`disabled`, `rate_limited`, `no_village_consent` (403), ...; the cp's
-`body_invalid`, `upstream_unavailable` and `upstream_timeout` read as
-`invalid_body`, `unavailable`); 404 is `not_available` (the cp route is dark),
-401 `unauthorized`.
+`disabled`, `rate_limited`, `no_village_consent` (403), `answer_withheld`
+(422), ...; the cp's `body_invalid`, `upstream_unavailable` and
+`upstream_timeout` read as `invalid_body`, `unavailable`); 404 is
+`not_available` (the cp route is dark), 401 `unauthorized`.
+`answer_withheld` (B-120) means the group's answer held a contact detail that
+cannot be passed on, and its cited sources come back as quoted content exactly
+like an answer's (`handling`, `sources`: the `<village_answer>` frame holding
+only `Sources:` and the cleaned `- topic (when)` lines, `source_count`; with
+no source, the message and `source_count: 0` alone), nothing else of that body.
 
 **Own tenant only.** The tenant comes from the box's environment, the host
 from `CONTROL_PLANE_URL` pinned to `CP_HOSTS`; the arguments are a closed
@@ -123,7 +128,10 @@ FORBIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]")
 PASSED_CODES = frozenset({
     "disabled", "unauthorized", "question_invalid", "window_invalid", "store_empty", "too_large",
     "model_failed", "busy", "rate_limited", "no_village_consent", "body_invalid", "unavailable",
+    "answer_withheld",
 })
+#: B-120 (app#401, cp#301): the group's answer held a contact detail; the body carries the cited sources.
+WITHHELD = "answer_withheld"
 #: The cp's own codes that mean the same to the agent as one of ours (release's village-ask.js CP_CODES).
 ALIASES = {"body_invalid": "invalid_body", "upstream_unavailable": "unavailable", "upstream_timeout": "unavailable"}
 DEFAULT_CODES = {400: "invalid_body", 401: "unauthorized", 403: "no_village_consent", 404: "not_available",
@@ -189,6 +197,11 @@ MESSAGES: dict[str, str] = {
     "store_empty": "The village group has no messages in that window yet.",
     "too_large": "Not answered: the request is too large. Ask a shorter question.",
     "model_failed": "The god agents could not answer that question. " + _LATER,
+    # No _LATER: asking again gets the same answer, withheld again.
+    "answer_withheld": (
+        "The group's answer held a contact detail that cannot be passed on through this tool. Tell your resident "
+        "to look in the group thread named in the sources, or to ask there."
+    ),
     "busy": "The god agents are busy. " + _LATER,
     "rate_limited": "You have asked too often. Wait before asking again; do not retry now.",
     "unavailable": "The village group cannot be read right now. " + _LATER,
@@ -395,6 +408,24 @@ def _instant(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and INSTANT.fullmatch(value) else None
 
 
+def source_lines(raw_sources: Any) -> list[str]:
+    """The sources as `- topic (when)` lines (`- topic` without a valid instant): the first
+    `MAX_SOURCES` items, each topic cleaned for the frame and clamped; anything but a topic and a when is
+    dropped. One rendering for an answer's sources and a withheld answer's (B-120)."""
+    lines: list[str] = []
+    for item in raw_sources[:MAX_SOURCES] if isinstance(raw_sources, list) else []:
+        if not isinstance(item, dict):
+            continue
+        topic, when = clean_text(item.get("topic"), TOPIC_MAX, lines=False), _instant(item.get("when"))
+        if topic is not None:
+            lines.append(f"- {topic} ({when})" if when else f"- {topic}")
+    return lines
+
+
+def _frame(inner: str) -> str:
+    return f"{OPEN_TAG}\n{inner}\n{CLOSE_TAG}"
+
+
 def project(body: dict) -> dict:
     """Only the fields the agent needs, each checked; every piece of untrusted text (the answer and the
     sources' topics) inside the one `<village_answer>` frame (refute S1). Nothing else the app or the cp
@@ -402,16 +433,9 @@ def project(body: dict) -> dict:
     text = clean_text(body.get("answer"), ANSWER_MAX)
     if text is None:
         return _error("bad_answer")
-    sources: list[str] = []
-    raw_sources = body.get("sources")
-    for item in raw_sources[:MAX_SOURCES] if isinstance(raw_sources, list) else []:
-        if not isinstance(item, dict):
-            continue
-        topic, when = clean_text(item.get("topic"), TOPIC_MAX, lines=False), _instant(item.get("when"))
-        if topic is not None:
-            sources.append(f"- {topic} ({when})" if when else f"- {topic}")
+    sources = source_lines(body.get("sources"))
     inner = text + ("\n\nSources:\n" + "\n".join(sources) if sources else "")
-    out: dict[str, Any] = {"handling": HANDLING, "answer": f"{OPEN_TAG}\n{inner}\n{CLOSE_TAG}"}
+    out: dict[str, Any] = {"handling": HANDLING, "answer": _frame(inner)}
     window = body.get("window")
     if isinstance(window, dict):
         since, until = _instant(window.get("since")), _instant(window.get("until"))
@@ -421,6 +445,19 @@ def project(body: dict) -> dict:
     out["cached"] = body.get("cached") is True
     if body.get("cut") is True:
         out["cut"] = True
+    return out
+
+
+def withheld(body: Optional[dict]) -> dict:
+    """`answer_withheld` (B-120): the fixed message, and the cited sources so the agent can point its
+    resident to the thread, framed and cleaned exactly as an answer's sources, with no answer text.
+    Without a usable source: the message and `source_count: 0` alone. Nothing else from the body."""
+    out = _error(WITHHELD)
+    lines = source_lines(body.get("sources") if body is not None else None)
+    if lines:
+        out["handling"] = HANDLING
+        out["sources"] = _frame("Sources:\n" + "\n".join(lines))
+    out["source_count"] = len(lines)
     return out
 
 
@@ -434,7 +471,8 @@ def answer(attempt: _pray.Attempt) -> dict:
             return project(body)
         sent = body.get("error") if body is not None else None
         sent = ALIASES.get(sent, sent) if isinstance(sent, str) else None
-        return _error(sent if sent is not None and sent in PASSED_CODES else "bad_answer")
+        code = sent if sent is not None and sent in PASSED_CODES else "bad_answer"
+        return withheld(body) if code == WITHHELD else _error(code)
     if is_redirect(status):
         return _error("redirect_refused")
     sent = body.get("error") if body is not None else None
@@ -442,6 +480,8 @@ def answer(attempt: _pray.Attempt) -> dict:
     code = sent if sent is not None and (sent in PASSED_CODES or sent == "invalid_body") and status != 404 else None
     if code is None:
         code = DEFAULT_CODES.get(status) or ("unavailable" if status >= 500 else f"http_{status}")
+    if code == WITHHELD:
+        return withheld(body)
     return _error(code, _retry_after(attempt) if status in (429, 503) else None)
 
 

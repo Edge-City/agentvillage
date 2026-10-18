@@ -1905,6 +1905,14 @@ is rewritten. Else `{error, retry_after_s?, message}` with a fixed message
 (a 404 is `not_available`: the route is dark). The tenant and host come from the box only; the
 arguments are a closed object.
 
+- **A withheld answer (B-120):** when the group's answer held a contact detail that cannot be passed
+  on, the app answers `422 {error: "answer_withheld", sources}` and the control plane passes it
+  through (app#401, cp#301). The tool says so (no "try again later": asking again gets the same
+  answer) and points the agent to the thread: `{error, message, handling, sources, source_count}`,
+  where `sources` is the same `<village_answer>` frame holding only `Sources:` and the same cleaned
+  `- topic (when)` lines as an answer's (at most 8, topic <= 80). Without a usable source it is
+  `{error, message, source_count: 0}`. Nothing else from that body reaches the agent.
+
 - **Who may ask:** the same fail-closed helper as `pray` (`_pray.session_kind`): the resident's
   direct chat, or the agent's own cron run that reports to the resident's Telegram DM; everything else
   is `group_session` and nothing is sent.
