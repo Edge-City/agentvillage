@@ -51,7 +51,7 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(receipt).toEqual(reconcileMiniApps(all, root));
   expect(receipt).toEqual(reconcileMiniApps(all, root, undefined, true));
   expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(all)).digest("hex"));
-  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md"]);
+  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/symbient-uncommons/SKILL.md"]);
   expect(receipt).not.toHaveProperty("active");
   writeFileSync(join(root, "skills", "gold-stars", "SKILL.md"), "tampered");
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
@@ -220,4 +220,30 @@ test("verify is read-only and refuses an absent or removed projection", () => {
   reconcileMiniApps(all, root);
   expect(() => reconcileMiniApps({ version: 1, apps: [] }, root, undefined, true)).toThrow("mini_apps_projection_mismatch");
   expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(true);
+});
+
+test("symbient-uncommons: a public read-only entry, staged and removed like dizko's read-only entry", () => {
+  const board = REVIEWED_MINI_APPS[2];
+  expect([board.id, board.version, [...board.skills], [...board.operations]]).toEqual(["symbient-uncommons", "1.0.0", ["symbient-uncommons"], ["mini-app.read"]]);
+  expect(EDGE_SKILL_NAMES).not.toContain("symbient-uncommons");
+  // the manifest and skill agree with the entry, and the manifest asks for nothing beyond the public read
+  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps", "symbient-uncommons", "manifest.json"), "utf8"));
+  expect([manifest.id, manifest.version, manifest.skills, manifest.operations]).toEqual([board.id, board.version, [...board.skills], [...board.operations]]);
+  expect(manifest.mcp.url.startsWith("https://")).toBe(true);
+  expect(manifest.mcp.tools.map((t: { name: string }) => t.name)).toEqual(["list_rooms", "list_posts", "get_thread", "search_posts"]);
+  for (const t of manifest.mcp.tools) expect(t.inputSchema.additionalProperties).toBe(false);
+  const skill = readFileSync(join(REPO, "skills", "symbient-uncommons", "SKILL.md"), "utf8");
+  expect(skill).toMatch(/^---\nname: symbient-uncommons\n[\s\S]*\nversion: 1\.0\.0\n/);
+  expect(skill).not.toContain(manifest.mcp.url); // the endpoint lives in the reviewed manifest only
+  const projection = { version: 1, apps: [{ id: board.id, version: board.version, operations: [...board.operations], skills: [...board.skills] }] };
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map((x) => x.path)).toEqual(["skills/symbient-uncommons/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "symbient-uncommons", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "symbient-uncommons", "SKILL.md")));
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  for (const operations of [["mini-app.read", "mini-app.context.read"], ["mini-app.read", "gold-stars.send"], ["mini-app.read", "mini-app.write"], []]) {
+    expect(() => validateProjection({ version: 1, apps: [{ ...board, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "symbient-uncommons", "SKILL.md"))).toBe(false);
 });
