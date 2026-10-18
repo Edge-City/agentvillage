@@ -13,14 +13,14 @@ export const INDEX_PLUGIN_REVISION = "04d833b840541fedabe78cbdad306c18853d784a";
  * as `INDEX_PLUGIN_REF` pins the plugin. `release.json` lists the sha256 of every bundle file, so
  * this one digest pins the whole bundle. A release whose `release.json` hashes to anything else is
  * refused before it is parsed (`MoralmodReleaseUnpinned`), however consistent its own hashes are.
- * Published prerelease moralmod-175573a-ce0d6a9e35f4: centralized-policy Decision Studio source
- * 175573aadcdb9a61591f149af05fe5ed00950295, built with Bun 1.4.2 for plugin 04d833b8.
+ * Published prerelease moralmod-0586c2f-ce30a04f937b: tool-recovery/attribution Decision Studio source
+ * 0586c2f435c737a0be7a7469699a8274a457acd7, built with Bun 1.4.2 for plugin 04d833b8.
  * Exact reviewed assets are available for CI; merge and resident installation remain coordinated.
- * (https://github.com/Edge-City/agentvillage/releases/tag/moralmod-175573a-ce0d6a9e35f4).
+ * (https://github.com/Edge-City/agentvillage/releases/tag/moralmod-0586c2f-ce30a04f937b).
  * Moving it is a PR that changes this constant (docs/moralmod_lifecycle.md, "The release pin"); a
  * value that is not a sha256 matches no file, so no bundle activates under it.
  */
-export const MORALMOD_RELEASE_SHA256 = "ce0d6a9e35f492096a70b1d48a73d56a02f1c5263a52595b73b7791c30e2422b";
+export const MORALMOD_RELEASE_SHA256 = "ce30a04f937b3a6f5fc067e04e510dd0be025ec2ba755f0cb4ffaea7bb24bb74";
 const FILES = ["negotiator-core.js", "negotiator-runtime.js", "INDEX-LICENSE"] as const;
 /**
  * ov#284 refute M1: every file an installed release directory (`index/moralmod/<release.json sha256>/`)
