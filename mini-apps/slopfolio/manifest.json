@@ -1,0 +1,13 @@
+{
+  "id": "slopfolio",
+  "name": "Slopfolio",
+  "description": "Turn something you built with AI into a private Slopfolio draft that you review and publish yourself.",
+  "version": "1.0.0",
+  "homepage": "https://slopfolio.com",
+  "permissions": [
+    { "kind": "read", "label": "Check your drafts", "description": "Read whether a draft your agent prepared is still a draft, was published, or was deleted, and its post link once live." },
+    { "kind": "action", "label": "Prepare private drafts", "description": "Create and revise private drafts on your Slopfolio account from what you paste. Never publishes: you approve and publish on Slopfolio." }
+  ],
+  "skills": ["slopfolio"],
+  "operations": ["slopfolio.prepare", "slopfolio.status"]
+}
