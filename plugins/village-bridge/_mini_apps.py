@@ -25,6 +25,11 @@ GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations
 # Every gold-stars entry this overlay accepts, each by exact equality (newest first).
 GOLD_STARS_ACCEPTED = (GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS)
 FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"]}
+# Kismet 1.1.0: its public read (counters, board) plus the owner's own account operations (_kismet.py). The
+# public-read entry before it (1.0.0, mini-app.read alone) stays accepted so this overlay can roll out before
+# the CP catalog moves; the kismet.* operations stay refused under it.
+KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": ["mini-app.read", "kismet.status", "kismet.signup", "kismet.decide", "kismet.delete"]}
+KISMET_PUBLIC = {"version": "1.0.0", "skills": ["kismet"], "operations": ["mini-app.read"]}
 
 # Every `village` operation, classified. A write changes the owner's account state; a read does not.
 # `rolodex.meeting` (mark/undo) is a WRITE: it rides the `village` tool's existing gate entry (no preview
@@ -38,9 +43,11 @@ FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks
 ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
 ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
-                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS})
+                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", "kismet.status", *ZZZ_READ_OPERATIONS})
+# Kismet's writes take the sibling writes' gate_verified() and the owner-turn boundary in _kismet.py (no daemon grant).
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
-                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_WRITE_OPERATIONS})
+                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare",
+                              "kismet.signup", "kismet.decide", "kismet.delete", *ZZZ_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -109,6 +116,9 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
                     return False
             elif name == "slopfolio":
                 if app != {"id": name, **SLOPFOLIO}:
+                    return False
+            elif name == "kismet":
+                if app != {"id": name, **KISMET} and app != {"id": name, **KISMET_PUBLIC}:
                     return False
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
                   or app["skills"] != [name] or not any(app["operations"] == list(ops) for ops in APP_OPERATIONS_ACCEPTED)):

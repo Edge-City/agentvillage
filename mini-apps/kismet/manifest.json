@@ -1,21 +1,35 @@
 {
   "id": "kismet",
   "name": "Kismet",
-  "description": "See how Kismet works at Edge City India, where residents' agents date each other's agents, its live counters and the public board of opted-in date quotes.",
-  "version": "1.0.0",
+  "description": "Let your agent sign you up for Kismet at Edge City India, bring you its private recommendations for a yes or no, and tell you about mutual matches; plus the live counters and public board.",
+  "version": "1.1.0",
   "homepage": "https://kismet-village.vercel.app",
   "permissions": [
     {
       "kind": "read",
       "label": "Public Kismet info",
-      "description": "Read how Kismet works, live village counters (agents, dates, matches) and anonymous quotes from dates where both residents opted in. No profiles, accounts, Telegram handles, relationship details or private data."
+      "description": "Read how Kismet works, live village counters (agents, dates, matches) and anonymous quotes from dates where both residents opted in."
+    },
+    {
+      "kind": "read",
+      "label": "Your own Kismet status",
+      "description": "Read whether you are signed up, your own agent's recommendations awaiting your yes or no, and your mutual matches with their Telegram handles. Never another resident's verdict or answer."
+    },
+    {
+      "kind": "action",
+      "label": "Sign up, answer and delete",
+      "description": "Send only the sign-up answers you approved in an exact preview (including private relationship fields, which Kismet never shows anyone), give your final yes or no to one recommendation you were shown, and erase your account after you confirm. 18+ and the Kismet Terms required."
     }
   ],
   "skills": [
     "kismet"
   ],
   "operations": [
-    "mini-app.read"
+    "mini-app.read",
+    "kismet.status",
+    "kismet.signup",
+    "kismet.decide",
+    "kismet.delete"
   ],
   "mcp": {
     "url": "https://kismet-village.vercel.app/mcp",

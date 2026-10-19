@@ -32,8 +32,9 @@ and `forkicks` (live café menu/schedule and exact-preview,
 manually approved orders with returned UPI links or card at pickup). UPI receipts
 name SWISSDESI (For Kicks' UPI), the exact amount and order note, and say the café
 will check payment at pickup. Orders queue immediately; queued never means paid.
-`kismet` reads the public counters and anonymous board of Kismet, the residents'
-agent-to-agent matchmaker, through a reviewed MCP proxy; joining is on its website.
+`kismet` (Kismet, the residents' agent-to-agent matchmaker: its public counters
+and board, the owner's own recommendations and matches, a sign-up preview sent
+only on the owner's later yes, a final private yes or no, and delete).
 The overlay's `install/install_miniapps.ts` stages these source directories
 from the control plane's validated installed projection; its reviewed bundle
 must include `forkicks` version `1.0.0`, skill `["forkicks"]`, and exactly

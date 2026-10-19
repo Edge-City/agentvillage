@@ -10,13 +10,23 @@ humans said yes is it a match, and the two see each other's Telegram handle;
 a no is never told to anyone. 18+, Terms consent required. Maintainer: Deon
 Menezes (GitHub `deonmenezes`).
 
-## This bundle: public read-only (`mini-app.read`, like Dizko)
+## This bundle (1.1.0)
 
-`skills/kismet/SKILL.md` and `manifest.json` here. Three reviewed tools on
-the fixed MCP endpoint `https://kismet-village.vercel.app/mcp`:
-`how_it_works {}`, `village_stats {}`, `public_board {limit? 1-20}`. Nothing
-here grants an account operation; the skill sends residents to the website
-to join.
+`skills/kismet/SKILL.md` and `manifest.json` here. Operations, in order:
+`mini-app.read` (three reviewed public tools, below), `kismet.status` (the
+owner's own recommendations and matches), `kismet.signup` (a staged, exactly
+previewed sign-up sent on the owner's later yes), `kismet.decide` (a final
+yes or no to one shown recommendation) and `kismet.delete`. The native
+operations live in `plugins/village-bridge/_kismet.py`; the app-server
+routes they need, and how they map to Kismet's partner API, are in
+[BACKEND.md](BACKEND.md). The 1.0.0 entry (public read only) stays
+accepted until the CP catalog serves 1.1.0.
+
+### The public read-only MCP (`mini-app.read`, like Dizko)
+
+Three reviewed tools on the fixed MCP endpoint
+`https://kismet-village.vercel.app/mcp`: `how_it_works {}`,
+`village_stats {}`, `public_board {limit? 1-20}`.
 
 - Stateless Streamable HTTP. `initialize` (returns server `instructions`),
   `notifications/initialized` (HTTP 202), `tools/list`, `tools/call`, `ping`.
@@ -43,18 +53,17 @@ to join.
 - Measured from Mumbai against production: 220-480 ms per call.
 
 Rename: the app id, skill and directory were `agent-dates` in earlier
-revisions of this pull request, which was never merged or catalogued, so
+revisions of #394, which was never merged or catalogued, so
 there is no compatibility alias (mini-apps/README.md).
 
-## Next: Kismet in chat (separate review)
+## What staff do
 
-Sign-up interview, the owner's own recommendations, a private yes or no and
-account deletion need native `village` operations, an app-server route set
-holding Kismet's partner key as a server secret, and resident approval. That
-contract is proposed separately as a follow-up pull request, with the exact
-app-server routes in `mini-apps/kismet/BACKEND.md` there. Until staff review
-and install it, this bundle stays read-only and residents use the website.
+1. Hold `VILLAGE_PARTNER_KEY` (Deon shares it privately) in the app server's
+   secret store and add the four `kismet.*` routes of BACKEND.md.
+2. Add the CP catalog entry for 1.1.0 (admins first), then cut the release.
+3. Keep `residentId` stable per resident; tell Kismet before changing it.
 
 Changes to these files start on the Kismet side (source: the Kismet
-repository, `src/lib/mcp.ts` for the MCP schemas) and reach
+repository, `src/lib/mcp.ts` for the MCP schemas and
+`src/app/api/village/[op]/route.ts` for the partner API) and reach
 `Edge-City/agentvillage` as pull requests.

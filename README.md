@@ -19,8 +19,9 @@ Today, capabilities come from **Index Network** (discovery + intent negotiation)
 Hosted residents can opt into **curated mini-apps**: Gold Stars (exact-preview,
 manual approval before gratitude is sent), Dizko (public event, artist and
 venue discovery), For Kicks (live café menu/schedule and exact-approved
-coffee orders), and Kismet (public counters and board of the residents'
-agent-to-agent matchmaker). Installing one grants its permission; Dizko, For
+coffee orders), and Kismet (the residents' agent-to-agent matchmaker: an
+exactly previewed sign-up, private yes or no on your own agent's
+recommendations, mutual matches). Installing one grants its permission; Dizko, For
 Kicks and Kismet skills arrive only then, while the Gold Stars skill text ships to every box
 and stays inert until installed. The control plane owns reviewed versions
 and install intent; staging files is not proof the runtime loaded them.
