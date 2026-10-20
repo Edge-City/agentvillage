@@ -53,6 +53,7 @@ See the project hub for the full diagram and decisions.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 - `mini-apps/` — reviewed bundle manifests and builder starter/contract; no arbitrary code upload or install hooks
 - `docs/negotiator.md` — how to write a resident's `$HERMES_HOME/index/negotiator.ts`
+- [`docs/mini-apps/`](docs/mini-apps/) — mini-apps platform v2: the design (`PLATFORM-v2-design.md`) and the developer guide (`DEVELOPER-GUIDE-v2.md`)
 
 ## Repos
 
