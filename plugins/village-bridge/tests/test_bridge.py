@@ -14,6 +14,7 @@ from unittest.mock import patch
 SPEC=importlib.util.spec_from_file_location('village_bridge',Path(__file__).parents[1]/'__init__.py')
 bridge=importlib.util.module_from_spec(SPEC);sys.modules[SPEC.name]=bridge;SPEC.loader.exec_module(bridge)
 mini=sys.modules['village_bridge._mini_apps']
+copy=sys.modules['village_bridge._install_copy']
 real_transport=bridge.transport
 SLOP_DRAFT='11111111-1111-4111-8111-111111111111'
 class TransportTest(unittest.TestCase):
@@ -144,8 +145,15 @@ class BridgeTest(unittest.TestCase):
   self.delegation=delegation
   self.patches=[patch.dict(os.environ,{'HERMES_HOME':self.tmp.name}),patch.dict(sys.modules,{'gateway':gateway,'gateway.session_context':self.sc,'agent.delegation_context':delegation}),patch.object(bridge,'transport',return_value={'ok':True})]
   for p in self.patches:p.start();self.addCleanup(p.stop)
+  os.environ.pop('AV_MINI_APPS_OFFERED',None)  # restored by the patch.dict above
   self.transport=bridge.transport
  def call(self,args=None):return json.loads(bridge.handle(args or {'operation':'gold-stars.quota'}))
+ def assertRefused(self,out):
+  # MINIAPP-INSTALL-LINK: the closed code with the untrusted framing. With no AV_MINI_APPS_OFFERED (these tests)
+  # the cp has offered nothing, so no install link and nothing installable (test_install_link.py has the links).
+  self.assertEqual(out['error'],'mini_app_not_installed');self.assertEqual(out['handling'],bridge.HANDLING)
+  self.assertNotIn('installUrl',out);self.assertNotIn('appName',out);self.assertEqual(out['installable'],[])
+  self.assertIn(out['instruction'],(copy.NOT_OFFERED,copy.STAFF_PENDING.format(name='Gold Stars'),*(copy.NOT_YET.format(name=n) for n in ('Gold Stars','Dizko','For Kicks','zzz.bot','Slopfolio'))))
  def install_slopfolio(self):
   Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[{'id':'slopfolio',**mini.SLOPFOLIO}]}))
   # The approval gate is on and verified unless a test says otherwise (slopfolio.prepare is a gated write).
@@ -335,7 +343,7 @@ class BridgeTest(unittest.TestCase):
    else:self.assertEqual(response.get('error'),'invalid_arguments');self.transport.assert_not_called()
  def test_slopfolio_install_is_exact_and_never_a_generic_mcp_grant(self):
   request={'operation':'slopfolio.prepare','paste':'summary'}
-  self.assertEqual(self.call(request),{'error':'mini_app_not_installed'})
+  self.assertRefused(self.call(request))
   app={'id':'slopfolio',**mini.SLOPFOLIO}
   for altered in [
    {**app,'operations':list(reversed(app['operations']))},
@@ -343,9 +351,9 @@ class BridgeTest(unittest.TestCase):
    {**app,'operations':['mini-app.read']},{**app,'version':'1.0.1'},
   ]:
    Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[altered]}))
-   self.assertEqual(self.call(request),{'error':'mini_app_not_installed'})
+   self.assertRefused(self.call(request))
   self.install_slopfolio()
-  self.assertEqual(self.call({'operation':'mini-app.read','appId':'slopfolio','tool':'publish_slopfolio_post','arguments':{}}),{'error':'mini_app_not_installed'})
+  self.assertRefused(self.call({'operation':'mini-app.read','appId':'slopfolio','tool':'publish_slopfolio_post','arguments':{}}))
   self.transport.assert_not_called()
  def test_slopfolio_keeps_owner_private_root_context_gate(self):
   self.install_slopfolio()
@@ -390,7 +398,7 @@ class BridgeTest(unittest.TestCase):
   for apps in ([{'id':'gold-stars',**mini.GOLD_STARS_PREVIOUS},dizko],[dizko],[]):
    Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':apps}))
    for args in native:
-    with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+    with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertRefused(self.call(args))
   Path(self.tmp.name,'mini-apps.json').unlink()
   for args in [{'operation':'gold-stars.quota'},*native]:self.assertEqual(self.call(args)['error'],'mini_app_not_installed')
   self.transport.assert_not_called()
@@ -516,7 +524,7 @@ class BridgeTest(unittest.TestCase):
    before=sorted((p.name,p.read_bytes()) for p in Path(self.tmp.name).iterdir())
    with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon call')),patch('builtins.open',side_effect=AssertionError('no file read')):
     for args in calls:
-     with self.subTest(leftover=leftover,op=args['operation']):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+     with self.subTest(leftover=leftover,op=args['operation']):self.assertRefused(self.call(args))
    self.assertEqual(sorted((p.name,p.read_bytes()) for p in Path(self.tmp.name).iterdir()),before)
   self.transport.assert_not_called()
  def test_unknown_actions_and_actor_injection_refused(self):
@@ -720,7 +728,7 @@ class BridgeTest(unittest.TestCase):
    for apps in ([{'id':'gold-stars',**mini.GOLD_STARS},dizko],[dizko,guide],[dizko]):
     self.context_home(*apps)
     for args in calls:
-     with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+     with self.subTest(apps=[a['id'] for a in apps],args=args):self.assertRefused(self.call(args))
    self.transport.assert_not_called()
    # Another app's entry carrying them reaches only that app's own namespace.
    self.context_home(dizko,guide)
@@ -794,7 +802,7 @@ class BridgeTest(unittest.TestCase):
   for entry in (mini.GOLD_STARS_RESTORED,mini.GOLD_STARS_PREVIOUS):
    Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[{'id':'gold-stars',**entry},dizko]}))
    for args in ({'operation':'rolodex.person','id':person},{'operation':'rolodex.person','query':'Naman'}):
-    with self.subTest(ops=len(entry['operations']),args=args):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+    with self.subTest(ops=len(entry['operations']),args=args):self.assertRefused(self.call(args))
    self.transport.assert_not_called()
    self.assertIn('data',self.call({'operation':'rolodex.search','query':'Naman'}))
    self.transport.reset_mock()
@@ -1268,11 +1276,11 @@ class BridgeTest(unittest.TestCase):
    for apps in ([{'id':'gold-stars',**mini.GOLD_STARS},dizko],[],[{'id':'zzzbot','version':'1.0.0','skills':['zzzbot'],'operations':['mini-app.read']}]):
     Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':apps}))
     for args in calls:
-     with self.subTest(apps=[a['id'] for a in apps],op=args['operation']):self.assertEqual(self.call(args),{'error':'mini_app_not_installed'})
+     with self.subTest(apps=[a['id'] for a in apps],op=args['operation']):self.assertRefused(self.call(args))
    # The generic public read can never reach zzzbot, whatever tool name the model supplies.
    self.zzz_home()
    for tool in ('reply','create_thread','set_thread_state','doctor'):
-    self.assertEqual(self.call({'operation':'mini-app.read','appId':'zzzbot','tool':tool,'arguments':{}}),{'error':'mini_app_not_installed'})
+    self.assertRefused(self.call({'operation':'mini-app.read','appId':'zzzbot','tool':tool,'arguments':{}}))
   self.transport.assert_not_called()
  def test_zzz_reads_forward_only_their_exact_fields_without_the_gate_or_a_turn(self):
   self.zzz_home()
@@ -1396,7 +1404,7 @@ class BridgeTest(unittest.TestCase):
    Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[]}))
    with self.subTest(op=op,installed=False),self.gate():
     self.assertIn(op,saved['parameters']['properties']['operation']['enum'])
-    self.assertEqual(self.call({'operation':op}),{'error':'mini_app_not_installed'})
+    self.assertRefused(self.call({'operation':op}))
   self.transport.assert_not_called()
   self.zzz_home()
   self.assertIn('data',self.call({'operation':'zzz.list_rooms','arguments':{}}))
@@ -1404,7 +1412,7 @@ class BridgeTest(unittest.TestCase):
   # Removed again: refused again, before any network call.
   Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':[{'id':'gold-stars',**mini.GOLD_STARS}]}))
   self.transport.reset_mock()
-  self.assertEqual(self.call({'operation':'zzz.list_rooms','arguments':{}}),{'error':'mini_app_not_installed'})
+  self.assertRefused(self.call({'operation':'zzz.list_rooms','arguments':{}}))
   self.transport.assert_not_called()
  def test_registration_idempotent(self):
   with patch.object(bridge,'_REGISTERED',False):

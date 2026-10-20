@@ -17,7 +17,7 @@ def section(text: str, heading: str) -> str:
 
 class RolodexPersonSkillTest(unittest.TestCase):
     def test_version_bumped(self):
-        self.assertRegex(SKILL, r"(?m)^version: 1\.5\.2$")
+        self.assertRegex(SKILL, r"(?m)^version: 1\.5\.3$")
         self.assertIn("who is X with a resident's public profile", SKILL.split("---", 2)[1])
 
     def test_who_is_x_searches_first_then_person_on_the_chosen_id(self):

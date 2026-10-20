@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import sys
 import unittest
 from unittest.mock import patch
@@ -86,6 +87,74 @@ class ForKicksInvalidArgumentsTest(unittest.TestCase):
                 self.assertIn('fulfilment.date', response['instruction'])
         self.transport.assert_not_called(); self.gate.assert_not_called()
         self.assertFalse(Path(self.tmp.name, 'forkicks-drafts').exists())
+
+    def test_an_impossible_or_non_calendar_date_is_invalid_arguments(self):
+        # ov#412 owner read N1: the app's z.iso.date() refuses a day that does not exist, so the box refuses it first
+        # (date.fromisoformat after the shape regex), as invalid_arguments naming "date", never village_unavailable.
+        self.enable()
+        bad = ['2026-02-30', '2026-02-29', '2100-02-29', '2026-04-31', '2026-13-01', '2026-00-10', '2026-10-00', '0000-01-01',
+               '20260219', '2026-W08-4', '2026-10-19 ', '٢٠٢٦-10-19']
+        for date in bad:
+            nested = {k: v for k, v in self.failing_call().items() if k != 'date'}
+            nested['fulfilment'] = {**nested['fulfilment'], 'date': date}
+            for where, request in (('top-level', {**self.failing_call(), 'date': date}), ('fulfilment.date', nested)):
+                with self.subTest(date=date, where=where):
+                    response = self.call(request)
+                    self.assertEqual(response['error'], 'invalid_arguments')
+                    self.assertEqual(response['fields'], ['date'])
+                    self.assertIn('fulfilment.date', response['instruction'])
+                    self.assertNotIn(date.strip() or date, json.dumps(response, ensure_ascii=False))
+        self.transport.assert_not_called(); self.gate.assert_not_called()
+        self.assertFalse(Path(self.tmp.name, 'forkicks-drafts').exists())
+        # Real days, a leap day included, still reach the app (top-level moved, or already nested).
+        for date in ('2028-02-29', '2000-02-29', '2026-12-31'):
+            for nest in (False, True):
+                with self.subTest(date=date, nested=nest):
+                    self.transport.reset_mock()
+                    shutil.rmtree(Path(self.tmp.name, 'forkicks-drafts'), ignore_errors=True)  # result_for reuses one draftId
+                    request = self.failing_call()
+                    if nest:
+                        del request['date']; request['fulfilment'] = {**request['fulfilment'], 'date': date}
+                    else:
+                        request['date'] = date
+                    sent = {k: v for k, v in request.items() if k not in ('operation', 'date')}
+                    sent['fulfilment'] = {**sent['fulfilment'], 'date': date}
+                    self.transport.return_value = self.result_for(sent)
+                    self.assertIn('data', self.call(request))
+                    self.transport.assert_called_once_with(self.config, {'operation': 'forkicks.order.prepare', **sent})
+
+    # (note, accepted): accepted only if BOTH receivers take it (review-b S2):
+    # - the app: ForKicksOrderInput.note = z.string().trim().max(140) on zod 4.6.5 (checked with bun against
+    #   node_modules/zod 4.6.5, 19 Oct): code points after String.prototype.trim, not Python's str.strip() set;
+    # - the cp's approval verify (control-plane/src/mini-apps-approval.js, `preview.note.length > 140`): UTF-16 units
+    #   of the stored, trimmed note. So an astral character counts 2 here.
+    NOTES = [
+        ('x' * 140, True), ('x' * 141, False),
+        ('\U0001F600' * 70, True), ('\U0001F600' * 71, False),   # 140 / 142 UTF-16 units
+        ('\U0001F600' * 140, False),                            # zod takes it, the cp approval never would
+        ('\U0001F600' * 70 + 'a', False),                       # 71 code points, 141 units
+        ('\U0001F600' * 69 + 'ab', True),                       # 140 units
+        ('\ud83d\ude00' * 70, True), ('\ud83d\ude00' * 71, False),  # a pair split into two Python code points
+        (' \ufeff' + 'x' * 140 + '\ufeff\u3000\u2028', True),  # JS trim strips BOM, ideographic space, LS
+        ('\x1c' + 'x' * 140, False), ('\x85' + 'x' * 140, False),  # Python's strip() would drop these; JS keeps them
+        ('\ud83d' + 'x' * 139, True), ('\ud83d' + 'x' * 140, False),  # a lone surrogate counts 1 either way
+        ('e\u0301' * 70, True), ('e\u0301' * 70 + 'x', False),        # combining marks count
+    ]
+
+    def test_the_note_is_measured_as_the_app_measures_it(self):
+        # ov#412 owner read N2 + ov#411 review-b S2: a note leaves the box only if the app AND the cp's approval
+        # verify both take it, so a prepared order is never one whose approval can never verify.
+        self.enable()
+        for note, accepted in self.NOTES:
+            with self.subTest(note=note[:3], length=len(note), accepted=accepted):
+                self.transport.reset_mock()
+                response = self.call({**self.failing_call(), 'note': note})
+                if accepted:
+                    self.assertNotEqual(response.get('error'), 'invalid_arguments')
+                    self.transport.assert_called_once()
+                else:
+                    self.assertEqual(response['error'], 'invalid_arguments'); self.assertEqual(response['fields'], ['note'])
+                    self.transport.assert_not_called()
 
     def test_unknown_keys_on_several_operations_are_invalid_arguments_with_an_instruction(self):
         draft = '550e8400-e29b-41d4-a716-446655440000'

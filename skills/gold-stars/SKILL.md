@@ -1,6 +1,6 @@
 ---
 name: gold-stars
-description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Optional curated mini-app; its install also carries the owner's meeting marks (see `rolodex`) and Skylight status (see `skylight`). Personal received-star history stays on the website.
+description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Curated mini-app that comes with every agent; it also carries the owner's meeting marks (see `rolodex`) and Skylight status (see `skylight`). Personal received-star history stays on the website.
 version: 1.1.0
 author: Edge City
 ---
@@ -28,9 +28,12 @@ The person's remaining allowance and received stars are live account data.
 For remaining allowance, call `village` with `operation: "gold-stars.quota"` in
 the paired owner's private chat. Quote the returned remaining count, day and
 reset time. This tool cannot read received stars or messages. If unavailable,
-link to the Rolodex; never assume all three remain. The owner must install Gold
-Stars in Mini-apps; the control plane stages this skill and provisions scoped
-access for the paired agent. An expired sign-in needs the usual
+link to the Rolodex; never assume all three remain. Gold Stars comes with every
+agent; the control plane stages this skill and provisions scoped access for the
+paired agent. If `village`
+answers `mini_app_not_installed`, never give an install link: say that answer's
+`instruction` words (load `mini-apps`); you cannot install it yourself, and never
+send them to the team or organisers. An expired sign-in needs the usual
 https://agents.edgecity.live/signin. Never ask for credentials in chat.
 
 ## Reflection and gratitude

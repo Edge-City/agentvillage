@@ -1,7 +1,7 @@
 ---
 name: rolodex
 description: Answer who is X with a resident's public profile, follow up on people you recommended, check whether the owner has marked them met, find Rolodex cards (also by Skylight character name), mark or undo meetings when the owner asks (adding someone to the Rolodex means marking them met), and offer gratitude after a meaningful interaction. Use for meeting updates and replies to introduction or evening questions. Native reads and marks come with the installed Gold Stars mini-app and the existing paired account; writes need the owner's request. The website works for everyone.
-version: 1.5.2
+version: 1.5.3
 author: Edge City
 ---
 
@@ -15,10 +15,12 @@ Gold Stars. These are separate actions: recording a meeting does not send a star
 When asked, give the useful link immediately:
 https://agents.edgecity.live/rolodex
 
-The native operations below come with the optional **Gold Stars** mini-app.
+The native operations below come with the **Gold Stars** mini-app, which every agent has.
 If `village` answers `mini_app_not_installed`, it is not available on this agent
-yet (or Gold Stars is not installed): acknowledge the interaction, offer the Rolodex link where they
-can mark the meeting themselves, and never claim you updated a mark.
+yet (Gold Stars has not reached it): acknowledge the interaction, offer the Rolodex link where they
+can mark the meeting themselves, and never claim you updated a mark. Gold Stars comes with every agent,
+so never give an install link for it: say that answer's `instruction` words (load `mini-apps`); you
+cannot install it yourself, and never send them to the team or organisers.
 For who is X, that or any other failure means you go on to the `edgeos` directory
 this turn (AGENTS.md order). Never call Rolodex or the directory unavailable from
 earlier in the conversation: an earlier failure is stale, so call again now.

@@ -79,46 +79,52 @@ ORDER_APPROVE_IN_BOT = ("Ask the owner to approve this exact For Kicks order on 
 
 
 def installed(home: Path, app_id: str, operation: str) -> bool:
+    apps = projection(home)
+    return apps is not None and any(app["id"] == app_id and operation in app["operations"] for app in apps)
+
+
+def projection(home: Path):
+    """The reviewed installed projection's apps, or None when the file is missing, unreadable or unreviewed."""
     try:
         path = home / "mini-apps.json"
         if any(p.is_symlink() for p in (path, *path.parents)):
-            return False
+            return None
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd) as handle:
             st = os.fstat(handle.fileno())
             if not stat.S_ISREG(st.st_mode) or st.st_size > 16384:
-                return False
+                return None
             doc = json.load(handle)
         if not isinstance(doc, dict) or set(doc) != {"version", "apps"} or type(doc["version"]) is not int or doc["version"] != 1 or not isinstance(doc["apps"], list):
-            return False
+            return None
         seen = set()
         for app in doc["apps"]:
             if not isinstance(app, dict) or set(app) != {"id", "version", "skills", "operations"} or not isinstance(app["id"], str):
-                return False
+                return None
             name = app["id"]
             if name in seen or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name):
-                return False
+                return None
             if name == "gold-stars":
                 if not any(app == {"id": name, **entry} for entry in GOLD_STARS_ACCEPTED):
-                    return False
+                    return None
             elif name == "forkicks":
                 if app != {"id": name, **FORKICKS}:
-                    return False
+                    return None
             elif name == "zzzbot":
                 if app != {"id": name, **ZZZBOT}:
-                    return False
+                    return None
             elif name == "slopfolio":
                 if app != {"id": name, **SLOPFOLIO}:
-                    return False
+                    return None
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
                   or app["skills"] != [name] or not any(app["operations"] == list(ops) for ops in APP_OPERATIONS_ACCEPTED)):
-                return False
+                return None
             # CP/server remains authoritative for the endpoint, exact tool and schema.
             # A projection cannot introduce an endpoint or an unreviewed write operation.
             seen.add(name)
-        return any(app["id"] == app_id and operation in app["operations"] for app in doc["apps"])
+        return doc["apps"]
     except Exception:
-        return False
+        return None
 
 
 def gate_verified() -> None:
