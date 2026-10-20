@@ -254,6 +254,33 @@ smaller than the block's diff, so a resident-attested box cannot take it until
 core counts a `say` change per class (the control plane's RAILWAY.md, "Rollout
 of the minimal approval card").
 
+Opaque programs on `terminal` (N6 CODE-GATE; approval.md 0.4.6, APRV-510;
+Carter's ruling, 2026-10-18: code always runs and is recorded). The top-level
+`exec:` block's `code.custody: attested` is the operator's statement that
+credential custody is in place: the overlay's custody lever
+(plugins/av-approval/_custody.py) strips the service keys from every child the
+agent's code runs in, and `$HERMES_HOME/.env` staying readable by that code is
+the accepted phase-1 risk (DECISIONS 2026-10-15). With it, core classifies
+`python3 -c`, `python -c`, `node -e`/`--eval`, `bun -e`, `deno eval`,
+`perl -e`/`-E`, `ruby -e` and an interpreter running a file that is not a skill
+script as `exec.code`, and the `exec.code` row (autonomous, no card, so no
+`say:` entry) lets it run; the record binds the program's sha256 and length,
+never its text. Shell wrappers stay outside the class whatever this file says
+(core): `bash -c`, `sh -c`, `eval`, a pipe into an interpreter, `python3 -`
+(stdin), heredocs and subshells are still refused `hook-opaque`.
+`execute_code: hooked` is NOT set (a comment line): it waits on the L1 live
+probe and Carter's fail-open call, and since rc42 the installer does not route
+`execute_code` to the hook at all (APPROVAL_GATED_TOOLS), so it would change
+nothing today. A core before 0.4.6 refuses the `exec` key and fails every
+class closed, so the block, the row and the store copy's header sentence about
+inline code each sit between `# exec.code: approval.md >= 0.4.6 only (begin)`
+and `(end)` marker lines: the control plane renders them only for a box whose
+recorded approval-md is 0.4.6 or later (deployments.approval_md_version for
+the current sandbox, or the same root step's upgrade) and removes them byte
+for byte otherwise, so a 0.4.5 box gets the bytes it has today. A
+resident-attested store is held as always and takes the class only with its
+own next change.
+
 Dogfood tenants may add `supervised-retro` with a `retro_rate` on network.call
 or message.send to exercise the review card. Residents get no review cards on
 day one. No `budgets` block: proposals carry no cost.
@@ -269,6 +296,21 @@ defaults:
   on_expiry: reject
   token_delivery: sealed
   unmapped_tool: record         # a hooked tool no tools line names is recorded (harness.tool.unmapped); ask would hold it for a tap
+  # exec.code: approval.md >= 0.4.6 only (begin)
+
+# Opaque programs on terminal (approval.md 0.4.6, APRV-510). `custody: attested` is the operator's
+# statement, under Carter's rulings of 15 Oct (code execution on) and 18 Oct (code always runs and is
+# recorded), that credential custody is in place: the custody lever (plugins/av-approval/_custody.py)
+# strips the service keys from every child process the agent's code runs in. $HERMES_HOME/.env
+# staying readable by the agent's code is the accepted phase-1 risk (DECISIONS 2026-10-15). It opens
+# the exec.code class (its row below) for the shell forms only; the record binds the program's
+# sha256 and length, never its text. A core before 0.4.6 refuses this key and fails every class
+# closed, so the control plane renders these lines only for a box whose approval-md is 0.4.6 or later.
+exec:
+  code:
+    custody: attested
+    # execute_code: hooked   # not set: waits on the L1 live probe (a tool call inside execute_code re-fires the hook) and Carter's fail-open call
+  # exec.code: approval.md >= 0.4.6 only (end)
 
 approvers:
   resident:
@@ -361,6 +403,12 @@ classes:
   message.send:                  { autonomy: autonomous }
   network.call:                  { autonomy: autonomous }
   read.web:                      { autonomy: autonomous }
+  # exec.code: approval.md >= 0.4.6 only (begin)
+  # Opaque programs on terminal (python3 -c, node -e, an interpreter running a file that is not a
+  # skill script) run and are recorded by the program's hash (approval.md 0.4.6, APRV-510); shell
+  # wrappers (bash -c, sh -c, eval, a pipe into an interpreter) stay refused by core whatever this says.
+  exec.code:                     { autonomy: autonomous }   # no card, so no say entry
+  # exec.code: approval.md >= 0.4.6 only (end)
   # Housekeeping inside the sandbox runs and is recorded.
   files.delete.scratch:          { autonomy: autonomous }
 

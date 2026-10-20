@@ -41,8 +41,13 @@ overlay sends each to the resident as a proposal and acts only on their tap.
 - Never write under `$HERMES_HOME` from code (`execute_code` included): the
   approval gate's own files live there, and a change to them can block every
   gated call until the box is reinstalled.
-- Python runs through `execute_code` only. `python` or `python3` through
-  `terminal` stays refused by the approval rules; do not retry it there.
+- A short inline program on `terminal` (`python3 -c`, `node -e` and the like)
+  runs and is recorded by its fingerprint, never its text, once the resident's
+  policy opens `exec.code` (approval.md 0.4.6 or later). `bash -c`, `sh -c`,
+  `eval` and a pipe into an interpreter stay refused whatever the policy says.
+  A refusal naming `hook-opaque` or `hook-exec-code-custody-unattested` means
+  this form is not open on this box: do that work with `execute_code`
+  instead, and do not retry it on `terminal`.
 
 When a refusal names its repair, make that repair and call again once.
 

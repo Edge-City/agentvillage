@@ -45,7 +45,13 @@ import { join } from "node:path";
 // product/gold-stars-member-class) moved it: one row, `marketplace.app.action.gold-stars.send`
 // (autonomous, agent_may_request) directly under the unchanged manual marketplace.app.action row,
 // nothing else in the block. The previous pin was ef0d342e (rc41 MINI-APPS re-land).
-const POLICY_BLOCK_SHA256 = "8e59e8d773146c36c19b40d63d1e5fa8c3da7789a82ea66701d5d6e97c3af800";
+// N6 CODE-GATE (Carter 18 Oct: code always runs and is recorded; paired with the cp half on the same
+// branch name approval/n6-exec-code-template) moved it: the top-level `exec:` block (`code.custody:
+// attested`, a commented `execute_code: hooked`) and the autonomous `exec.code` row after read.web,
+// each between `# exec.code: approval.md >= 0.4.6 only (begin)` / `(end)` marker lines (the control
+// plane renders them only for a box at approval.md 0.4.6 or later and strips them byte-exactly
+// otherwise). The previous pin was 8e59e8d7 (B-133).
+const POLICY_BLOCK_SHA256 = "066d31c60f9ccd2b15bade2731e7332f80361071f3affae0c83f801cf3e41101";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {
