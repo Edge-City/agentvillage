@@ -411,6 +411,33 @@ Overlay first: the CP must not project zzzbot to a box below the overlay roll
 that carries this entry (v2.1.3), since an older box refuses the whole
 projection, Gold Stars included. See [zzzbot/README.md](zzzbot/README.md).
 
+## Edge City Volunteers: a volunteer's own schedule
+
+The [reviewed manifest](edge-volunteers/manifest.json) and the native bundle
+allowlist (`_mini_apps.py` `EDGE_VOLUNTEERS`, exact equality, in this order)
+expose eleven named operations, each mapped by the app to one ECV volunteer MCP
+tool: nine reads (`ecv.initialize`, `ecv.guide`, `ecv.my_hours`,
+`ecv.my_shifts`, `ecv.get_shift`, `ecv.plan_view`, `ecv.open_shifts`,
+`ecv.my_requests`, `ecv.move_targets`), `ecv.propose` (ECV's check: a summary
+and a code, nothing changes) and one write, `ecv.confirm`. `mini-app.read`
+refuses `edge-volunteers`. Each resident connects their own Edge City
+Volunteers account in the Mini-apps sheet (OAuth 2.1 + PKCE against ECV's
+existing MCP server, held by the app server); staff accounts are refused.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_ecv.py` against ECV's published volunteer schemas:
+exact keys, ECV's uuid/date/time patterns and ranges, and only the seven
+volunteer actions (at most three changes under one yes). Anything else is
+`invalid_ecv_arguments` before transport. The overlay adds `turnId` (trusted
+session and message) to propose and confirm; the app refuses a confirm whose
+code it did not see proposed, or that comes in the propose's own turn, so the
+change follows a later owner reply. `ecv.confirm` also needs the verified gate
+(`gate_verified`, zzz's path), no manual grant. Results are scrubbed and framed
+as untrusted; ECV's error codes map to ECV-only text.
+
+Overlay first, then the CP catalog entry, then the app routes. The app-server
+contract is in [edge-volunteers/README.md](edge-volunteers/README.md).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist

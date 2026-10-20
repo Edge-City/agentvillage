@@ -1,0 +1,13 @@
+{
+  "id": "edge-volunteers",
+  "name": "Edge City Volunteers",
+  "description": "See your volunteer shifts, hours and plan, and ask for scheduling changes you approve in chat, through your own Edge City Volunteers sign-in.",
+  "version": "1.0.0",
+  "homepage": "https://edge-city-volunteers.vercel.app",
+  "permissions": [
+    { "kind": "read", "label": "Read your schedule and hours", "description": "Your own shifts (coming and past), this week's hours, your plan for the next days, the open shifts you could claim and your own cover requests. Never other volunteers' details beyond what the volunteer app shows you." },
+    { "kind": "action", "label": "Make scheduling changes you approve", "description": "Claim an open shift, move or open one of your shifts for cover, take a shift back, mark a rest day, plan your free hours and ranked shifts, or take extra shifts on or off. Each change is checked first and made only after you say yes to its summary in this chat." }
+  ],
+  "skills": ["edge-volunteers"],
+  "operations": ["ecv.initialize", "ecv.guide", "ecv.my_hours", "ecv.my_shifts", "ecv.get_shift", "ecv.plan_view", "ecv.open_shifts", "ecv.my_requests", "ecv.move_targets", "ecv.propose", "ecv.confirm"]
+}
