@@ -336,8 +336,8 @@ test("SEC-5 (a): the forward is one PR from bot/india-refs, never a push to main
   const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
   const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
   const lines = commands.split("\n").map((line) => line.trim());
-  // Permissions are exactly contents: write and pull-requests: write (no actions: write, no dispatch), and no job overrides them.
-  expect(commands).toMatch(/\npermissions:\n {2}contents: write\n {2}pull-requests: write\n\n/);
+  // SEC-5 (b): GITHUB_TOKEN is read-only (contents: read, nothing else), and no job overrides it; the App token writes.
+  expect(commands).toMatch(/\npermissions:\n {2}contents: read\n\n/);
   expect(commands.slice(commands.indexOf("\njobs:"))).not.toMatch(/permissions\s*:/);
   expect(commands).not.toContain("gh workflow run");
   // No write path but the bot branch: no gh api call, no gh pr merge (the merge line is text in the body only).
@@ -350,16 +350,21 @@ test("SEC-5 (a): the forward is one PR from bot/india-refs, never a push to main
   expect(commands).not.toMatch(/git pull|GITHUB_REF_NAME|HEAD:main\b|:refs\/heads\/main\b/);
   // Only a run on main forwards, and the PR targets main.
   expect(commands).toContain('if [ "$GITHUB_REF" != "refs/heads/main" ]; then');
-  // M1: only the bot's own PR (same repo, github-actions, exact head ref) is edited or closed; two of them fail the run.
-  expect(commands).toContain('gh pr list --head "$BRANCH" --base main --state open --json number,isCrossRepository,author,headRefName');
-  expect(commands).toContain('select(.isCrossRepository == false and .author.login == "app/github-actions" and .headRefName == "bot/india-refs")');
+  // M1: only the bot's own PR (same repo, opened by the mirror App as app/<its slug>, exact head ref) is edited or closed;
+  // two of them fail the run.
+  expect(commands).toContain('gh pr list --head "$BRANCH" --base main --state open --json number,isCrossRepository,author,headRefName \\\n            | jq -r --arg login "app/$APP_SLUG" \'');
+  expect(commands).toContain('select(.isCrossRepository == false and .author.is_bot == true and .author.login == $login and .headRefName == "bot/india-refs")');
+  expect(commands).not.toContain("app/github-actions");
   expect(commands).toMatch(/case "\$open" in \*" "\*\)\n\s*echo "::error::refused: more than one open bot PR[^\n]*\n\s*exit 1 ;;/);
   // M2: a branch head is kept only for the same tree over the same main; the file list comes from the pushed head.
   expect(commands).toContain(`[ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]`);
   expect(commands).toContain(`[ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ]`);
   expect(commands).not.toMatch(/grep -qF[^\n]*UPSTREAM/);
-  // N2: a kept head is the bot's own commit: author github-actions[bot], parent main, the message this run builds.
-  const own = 'git log -1 --format=\'%an <%ae>\' FETCH_HEAD)" = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" ]; then';
+  // N2: a kept head is the bot's own commit: author <slug>[bot] of the minted token, parent main, the message this run builds.
+  expect(commands).toContain('bot="${APP_SLUG}[bot] <${APP_SLUG}[bot]@users.noreply.github.com>"');
+  expect(commands).toContain('git config user.name "${APP_SLUG}[bot]"');
+  expect(commands).toContain('git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"');
+  const own = 'git log -1 --format=\'%an <%ae>\' FETCH_HEAD)" = "$bot" ]; then';
   expect(commands).toContain(own);
   // The fetched head's parent is checked before anything is read from it (the timestamp reuse sits inside this block).
   expect(commands).toContain(`if git fetch --quiet --depth=1 origin "refs/heads/$BRANCH" 2>/dev/null \\\n            && [ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ] \\\n            && [ "$(${own}`);
@@ -380,8 +385,99 @@ test("SEC-5 (a): the forward is one PR from bot/india-refs, never a push to main
   expect(commands).toContain("head ${head:0:8} [automated]");
   expect(commands).toContain('-m "References tree: $refs_tree"');
   // A refused gh pr create fails the run; there is no fallback commit to main.
-  expect(commands).toMatch(/if ! url=\$\(gh pr create --base main --head "\$BRANCH"[^\n]*\n\s*echo "::error::refused: [^\n]*Allow GitHub Actions to create and approve pull requests[^\n]*\n\s*exit 1\n\s*fi\n/);
+  expect(commands).toMatch(/if ! url=\$\(gh pr create --base main --head "\$BRANCH"[^\n]*\n\s*echo "::error::refused: GitHub would not open the pull request \(is the mirror App installed[^\n]*Never commit to main instead\."\n\s*exit 1\n\s*fi\n/);
   // S2: the body carries the sync's own check result, labelled as the workflow's self-report, not CI.
   expect(commands).toContain("- Sync self-check (this workflow's own report, not CI): passed, $SUMMARY");
   expect(commands).toContain("p2p-lanes/edge-agent-skill@$UPSTREAM");
+});
+
+test("SEC-5 (b): the push and every gh call use the mirror App's token; no secrets, no run; the token never reaches a log or a file", () => {
+  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
+  const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  const lines = commands.split("\n").map((line) => line.trim());
+  const steps = commands.slice(commands.indexOf("\n    steps:\n")).split(/\n {6}- /).slice(1);
+  const step = (name: string) => {
+    const found = steps.filter((text) => text.startsWith(`name: ${name}`));
+    expect(found.length).toBe(1);
+    return found[0];
+  };
+  const names = steps.map((text) => text.split("\n")[0]);
+  // Order: the secrets check is the first step (before any checkout or fetch), the token is minted only after the sync.
+  expect(names).toEqual([
+    "name: Require the mirror App's secrets",
+    "name: Checkout AgentVillage",
+    "name: Checkout reference source",
+    "uses: oven-sh/setup-bun@v2",
+    "name: Sync the snapshot (refuses incomplete trees)",
+    "name: Mint the mirror App's token",
+    "name: Forward the change as one pull request (never a commit to main)",
+  ]);
+  // Fail closed without the secrets: only whether each is set reaches the shell, never its value; ::error:: and exit 1.
+  const require = step("Require the mirror App's secrets");
+  expect(require).toContain("HAS_APP_ID: ${{ secrets.INDIA_MIRROR_APP_ID != '' }}");
+  expect(require).toContain("HAS_APP_KEY: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY != '' }}");
+  expect(require).toMatch(/if \[ "\$HAS_APP_ID" != "true" \] \|\| \[ "\$HAS_APP_KEY" != "true" \]; then\n\s*echo "::error::refused: [^\n]*INDIA_MIRROR_APP_ID and INDIA_MIRROR_APP_PRIVATE_KEY[^\n]*\n\s*exit 1\n\s*fi/);
+  // Fix round 1 (S2): the secrets live in the environment india-mirror (deployment branches: main only), set on the job.
+  expect(commands).toContain("\n  sync:\n    runs-on: ubuntu-latest\n    environment: india-mirror\n    timeout-minutes: 10\n");
+  expect(lines.filter((line) => /^environment\s*:/.test(line))).toEqual(["environment: india-mirror"]);
+  // N1: nothing lets a step pass on failure or skip by ref (the Require step and the mint always run, and fail the job).
+  expect(commands.slice(commands.indexOf("\njobs:"))).not.toMatch(/^\s*(if|continue-on-error)\s*:/m);
+  // The secrets appear exactly four times: the two presence checks and the token step's two inputs.
+  expect(lines.filter((line) => /\bsecrets\./.test(line))).toEqual([
+    "HAS_APP_ID: ${{ secrets.INDIA_MIRROR_APP_ID != '' }}",
+    "HAS_APP_KEY: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY != '' }}",
+    "app-id: ${{ secrets.INDIA_MIRROR_APP_ID }}",
+    "private-key: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY }}",
+  ]);
+  // The token step: the action pinned to a full commit sha (v3.2.0), this repo only, contents + pull requests write, nothing else.
+  const mint = step("Mint the mirror App's token");
+  expect(mint).toContain("id: app-token\n");
+  expect(mint).toContain("uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n");
+  expect(mint.match(/^ +uses: actions\/create-github-app-token@([0-9a-f]{40})\b/m)).not.toBeNull();
+  const inputs = mint.slice(mint.indexOf("with:\n")).split("\n").slice(1).map((line) => line.trim()).filter(Boolean);
+  expect(inputs).toEqual([
+    "app-id: ${{ secrets.INDIA_MIRROR_APP_ID }}",
+    "private-key: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY }}",
+    "owner: Edge-City",
+    "repositories: agentvillage",
+    "permission-contents: write",
+    "permission-pull-requests: write",
+  ]);
+  expect(commands).not.toMatch(/skip-token-revoke|permission-workflows|permission-administration/);
+  // The forward step's GH_TOKEN is the App token (the push uses it through git's credential helper); GITHUB_TOKEN never writes.
+  const forward = step("Forward the change as one pull request (never a commit to main)");
+  expect(forward).toContain("GH_TOKEN: ${{ steps.app-token.outputs.token }}\n");
+  expect(forward).toContain("APP_SLUG: ${{ steps.app-token.outputs.app-slug }}\n");
+  expect(lines.filter((line) => /GH_TOKEN:/.test(line))).toEqual(["GH_TOKEN: ${{ steps.app-token.outputs.token }}"]);
+  // (GITHUB_TOKEN is named only in the secrets check's error text.)
+  expect(lines.filter((line) => !line.startsWith('echo "::error::')).join("\n")).not.toMatch(/github\.token|GITHUB_TOKEN|secrets\.GITHUB/);
+  expect(lines.filter((line) => /steps\.app-token\.outputs\.token/.test(line))).toEqual(["GH_TOKEN: ${{ steps.app-token.outputs.token }}"]);
+  // No checkout persists GITHUB_TOKEN into .git/config; the App token reaches git only through a helper reading the env.
+  expect(step("Checkout AgentVillage")).toContain("with:\n          persist-credentials: false");
+  expect(step("Checkout reference source")).toContain("persist-credentials: false");
+  expect(forward).toContain("git config --local credential.helper ''\n");
+  expect(lines).toContain(`git config --local --add credential.helper '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`);
+  expect(commands).not.toMatch(/x-access-token:|extraheader|https:\/\/[^\s"]*@github\.com|insteadOf/);
+  // Fix round 1 (S1): that inline helper is the only credential helper; nothing that stores or caches the token
+  // (store, cache, a keychain, a manager), no global or system git config, no gh auth setup-git.
+  expect(lines.filter((line) => /\bcredential\b|\bgh\s+auth\b/.test(line))).toEqual([
+    "git config --local credential.helper ''",
+    `git config --local --add credential.helper '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`,
+  ]);
+  expect(commands).not.toMatch(/credential[^\n]*\b(store|cache|osxkeychain|manager|libsecret|wincred)\b|git-credential-|--global|--system|\.git-credentials|gh\s+auth/);
+  // The token never reaches a log or a file: no tracing, no echo of it, no step output/env/artifact written after it exists.
+  expect(commands).not.toMatch(/set -[a-z]*x|set -o xtrace|GIT_TRACE|GIT_CURL_VERBOSE|upload-artifact|cache@/);
+  expect(lines.filter((line) => /\$\{?GH_TOKEN\b/.test(line))).toEqual([
+    `git config --local --add credential.helper '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`,
+  ]);
+  expect(forward).not.toMatch(/GITHUB_OUTPUT|GITHUB_ENV|GITHUB_STEP_SUMMARY|GITHUB_PATH/);
+  // The bot's identity is the minted token's slug, checked for shape before any use; its PR author is app/<slug>.
+  expect(forward).toMatch(/if ! \[\[ \$APP_SLUG =~ \^\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\$ \]\]; then\n\s*echo "::error::refused: [^\n]*\n\s*exit 1\n\s*fi\n/);
+  expect(forward.indexOf("if ! [[ $APP_SLUG =~")).toBeLessThan(forward.indexOf("gh pr list"));
+  expect(forward.indexOf('if [ "$GITHUB_REF" != "refs/heads/main" ]; then')).toBeLessThan(forward.indexOf("if ! [[ $APP_SLUG =~"));
+  expect(forward).toContain('--arg login "app/$APP_SLUG"');
+  // CI now runs on the bot PR: the close-and-reopen paragraph is gone; the merge line still pins the reviewed head.
+  expect(commands).not.toMatch(/close and reopen|reopen by a person|no pull_request CI ran/);
+  expect(commands).toContain("The mirror App opens and updates this PR, so the Test workflow runs on it and again on every head the bot pushes.");
+  expect(commands).toContain("--squash --match-head-commit $head");
 });
