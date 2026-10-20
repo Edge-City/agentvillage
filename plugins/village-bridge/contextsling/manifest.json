@@ -1,0 +1,34 @@
+{
+  "id": "contextsling",
+  "name": "Contextsling",
+  "description": "Connect your own contextsling.com account and publish one small Markdown file only after exact inline manual approval. Anyone with the link can read it; copies cannot be recalled.",
+  "version": "1.0.0",
+  "homepage": "https://contextsling.com",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Read your Contextsling documents",
+      "description": "Read your own account, pinned revisions, manifests and usage through contextsling.com, the third-party recipient. No Agent Village context namespace access."
+    },
+    {
+      "kind": "action",
+      "label": "Review each public document action",
+      "description": "Explicitly stage one small Markdown file for manual publish/update/revoke. Anyone holding its document link can read it. Inline card text remains in your box approval log even when declined; connecting alone does not approve publication."
+    }
+  ],
+  "skills": [
+    "contextsling"
+  ],
+  "operations": [
+    "contextsling.list",
+    "contextsling.manifest",
+    "contextsling.read",
+    "contextsling.usage",
+    "contextsling.prepare",
+    "contextsling.publish",
+    "contextsling.update",
+    "contextsling.revoke"
+  ],
+  "contextCeiling": "agentvillage/private",
+  "listed": false
+}

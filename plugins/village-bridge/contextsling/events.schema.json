@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "CX-2 declarations only. No event flow before separately reviewed data release and existing per-tenant plugin-token/consent gating.",
+  "events": {
+    "miniapp.contextsling.list@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.manifest@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.read@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.usage@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.prepare@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.publish@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.update@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "miniapp.contextsling.revoke@1": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payloadHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ok",
+        "count"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

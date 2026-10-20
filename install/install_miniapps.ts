@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Disk-only curated reconciliation. CP owns intent, leasing, restart and applied evidence. */
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, readdirSync, rmdirSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, parse } from "node:path";
 import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
 
@@ -24,6 +24,7 @@ export const REVIEWED_MINI_APPS = [
   // P-6 ZZZ-MINIAPP: restricted zzz.bot, five named operations (plugins/village-bridge/_mini_apps.py ZZZBOT, exact).
   { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
   { id: "slopfolio", version: "1.0.0", operations: ["slopfolio.prepare", "slopfolio.status"], skills: ["slopfolio"] },
+  { id: "contextsling", version: "1.0.0", operations: ["contextsling.list", "contextsling.manifest", "contextsling.read", "contextsling.usage", "contextsling.prepare", "contextsling.publish", "contextsling.update", "contextsling.revoke"], skills: ["contextsling"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
@@ -78,6 +79,20 @@ export function validateProjection(value: unknown): Projection {
   });
   return { version: 1, apps };
 }
+/** Delete only CX-2-owned regular cache filenames on uninstall; never follow links. */
+function clearContextslingDrafts(home: string): void {
+  const folder = join(home, "contextsling-drafts");
+  safePath(folder);
+  if (!exists(folder)) return;
+  if (!lstatSync(folder).isDirectory()) throw new Error("mini_apps_non_directory");
+  for (const name of readdirSync(folder)) {
+    if (!/^[A-Za-z0-9_-]{22,100}\.(json|lock|tmp-[a-f0-9]{32})$/.test(name)) continue;
+    const path = join(folder, name);
+    regular(path);
+    unlinkSync(path);
+  }
+  if (readdirSync(folder).length === 0) rmdirSync(folder);
+}
 function atomic(path: string, bytes: string | Buffer): void {
   regular(path);
   safePath(dirname(path));
@@ -99,7 +114,7 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   // Preflight every exact owned path, never recursively remove a resident's files.
   for (const app of REVIEWED_MINI_APPS) regular(join(home, "skills", app.id, "SKILL.md"));
   // No desired apps and no mini-app state on the box (every non-cohort box): write nothing at all.
-  const stateless = () => !exists(target) && !exists(credential) &&
+  const stateless = () => !exists(target) && !exists(credential) && !exists(join(home, "contextsling-drafts")) &&
     REVIEWED_MINI_APPS.every(app => !owned(app.id) || !exists(join(home, "skills", app.id, "SKILL.md")));
   const desired = projection.apps.map(app => {
     const path = join(source, app.id, "SKILL.md");
@@ -116,6 +131,7 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   } else if (!(projection.apps.length === 0 && stateless())) {
     // Fail closed even if copying/removal is interrupted. Publish desired authority last.
     atomic(target, JSON.stringify({ version: 1, apps: [] }));
+    if (!projection.apps.some(app => app.id === "contextsling")) clearContextslingDrafts(home);
     if (projection.apps.length === 0 && exists(credential)) unlinkSync(credential);
     for (const app of REVIEWED_MINI_APPS) {
       const path = join(home, "skills", app.id, "SKILL.md");

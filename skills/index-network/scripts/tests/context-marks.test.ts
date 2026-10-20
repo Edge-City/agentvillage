@@ -374,9 +374,10 @@ describe("the golden: today's inputs give byte-identical outputs", () => {
   });
 });
 
-describe("writers are unchanged: nothing in the overlay writes a new id", () => {
-  test("only the two readers, the Private items rule in tools.md (and these tests) name an id, anywhere in the repo", () => {
-    const REPO = join(import.meta.dir, "..", "..", "..", "..");
+describe("context-mark writers are unchanged: readers and explicit connector metadata name the ids", () => {
+  const REPO = join(import.meta.dir, "..", "..", "..", "..");
+
+  test("only the two readers, reader instructions/tests and the four Contextsling ceiling declarations name an id", () => {
     const hits: string[] = [];
     // Every file git tracks or would add (OV-415 refute N6): the whole checkout, less what .gitignore drops.
     const listed = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: REPO, stdout: "pipe", stderr: "pipe" });
@@ -392,7 +393,12 @@ describe("writers are unchanged: nothing in the overlay writes a new id", () => 
       if (text.includes("agentvillage/private") || text.includes("agentvillage/edgecityindia2026")) hits.push(rel);
     }
     expect(hits.sort()).toEqual([
+      // CX-2 metadata only: the private ceiling grants no context namespace access or writeback.
+      "plugins/village-bridge/_contextsling.py",
+      "plugins/village-bridge/contextsling/README.md",
+      "plugins/village-bridge/contextsling/manifest.json",
       "scripts/tests/memory-signal-gate.test.ts",
+      "skills/contextsling/SKILL.md",
       "skills/index-network/scripts/context-tags.ts",
       "skills/index-network/scripts/memory_signal_gate.py",
       "skills/index-network/scripts/tests/context-marks-corpus.ts",
@@ -402,5 +408,19 @@ describe("writers are unchanged: nothing in the overlay writes a new id", () => 
       // VISIBILITY B3 prompt half: the agent's reader-side rule ("Private items"), which writes nothing.
       "skills/index-network/tools.md",
     ]);
+  });
+
+  test("Contextsling names its ceiling only as metadata, with no context namespace permission", () => {
+    const bridge = readFileSync(join(REPO, "plugins/village-bridge/_contextsling.py"), "utf8");
+    const declaration = /^CONTEXT_CEILING = "([^"]+)"$/m;
+    expect(declaration.exec(bridge)?.[1]).toBe(VISIBILITY_PRIVATE);
+    // A future runtime use (including writing the id into context) requires explicit review here.
+    const implementation = bridge.replace(declaration, "");
+    expect(implementation).not.toMatch(/\bCONTEXT_CEILING\b|agentvillage\/(?:private|edgecityindia2026)/);
+    const manifest = JSON.parse(readFileSync(join(REPO, "plugins/village-bridge/contextsling/manifest.json"), "utf8"));
+    expect(manifest.contextCeiling).toBe(VISIBILITY_PRIVATE);
+    expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
+    expect(manifest.permissions[0].description).toContain("No Agent Village context namespace access.");
+    expect(readFileSync(join(REPO, "skills/contextsling/SKILL.md"), "utf8")).toContain("Never read or write Agent Village context namespaces for this connector.");
   });
 });

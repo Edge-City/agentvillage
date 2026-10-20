@@ -37,10 +37,14 @@ FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks
 # zzz agent). The writes take mini-app.context.write's path (gate_verified), never a manual grant.
 ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
 ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
+CONTEXTSLING_READ_OPERATIONS = ("contextsling.list", "contextsling.manifest", "contextsling.read", "contextsling.usage")
+CONTEXTSLING_WRITE_OPERATIONS = ("contextsling.prepare", "contextsling.publish", "contextsling.update", "contextsling.revoke")
+CONTEXTSLING = {"version": "1.0.0", "skills": ["contextsling"], "operations": [*CONTEXTSLING_READ_OPERATIONS, *CONTEXTSLING_WRITE_OPERATIONS]}
+CONTEXTSLING_OPERATIONS = frozenset(CONTEXTSLING["operations"])
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
-                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS})
+                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS, *CONTEXTSLING_READ_OPERATIONS})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
-                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_WRITE_OPERATIONS})
+                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_WRITE_OPERATIONS, *CONTEXTSLING_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -103,6 +107,9 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
                     return False
             elif name == "forkicks":
                 if app != {"id": name, **FORKICKS}:
+                    return False
+            elif name == "contextsling":
+                if app != {"id": name, **CONTEXTSLING}:
                     return False
             elif name == "zzzbot":
                 if app != {"id": name, **ZZZBOT}:

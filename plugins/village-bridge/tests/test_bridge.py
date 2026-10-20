@@ -423,10 +423,11 @@ class BridgeTest(unittest.TestCase):
   self.assertFalse(mini.READ_OPERATIONS&mini.WRITE_OPERATIONS)
   # MINIAPP-PICKUP (v2.1.5): every classified operation, zzzbot's included, is in the every-box enum; installed()
   # is checked per call. For Kicks and Slopfolio operations are in it as main has them.
-  self.assertEqual(mini.READ_OPERATIONS|mini.WRITE_OPERATIONS,set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
+  # CX-2 names are installed-only; existing every-box operation bytes stay unchanged.
+  self.assertEqual((mini.READ_OPERATIONS|mini.WRITE_OPERATIONS)-mini.CONTEXTSLING_OPERATIONS,set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
   self.assertTrue(mini.ZZZ_OPERATIONS<=set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
   self.assertTrue({'forkicks.menu','forkicks.schedule','forkicks.order.prepare','forkicks.order.confirm','forkicks.order.status','forkicks.order.cancel'}<=set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
-  self.assertEqual(mini.WRITE_OPERATIONS,{'rolodex.meeting','gold-stars.prepare','gold-stars.send','gold-stars.cancel','mini-app.context.write',
+  self.assertEqual(mini.WRITE_OPERATIONS-set(mini.CONTEXTSLING_WRITE_OPERATIONS),{'rolodex.meeting','gold-stars.prepare','gold-stars.send','gold-stars.cancel','mini-app.context.write',
                                           'forkicks.order.prepare','forkicks.order.confirm','forkicks.order.cancel','slopfolio.prepare','zzz.reply','zzz.create_thread'})
   self.assertIn('rolodex.meeting is a write',bridge.SCHEMA['description']);self.assertIn('skylight.status is a read',bridge.SCHEMA['description'])
   attendee='550e8400-e29b-41d4-a716-446655440000'

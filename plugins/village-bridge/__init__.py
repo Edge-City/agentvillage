@@ -6,6 +6,7 @@ current deployment/pairing, expiry, revocation, quotas and durable receipts.
 Only the app-scoped credential is local; never a browser/fleet/shared secret.
 """
 from __future__ import annotations
+import copy
 import functools
 import ipaddress
 import json
@@ -20,8 +21,9 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHand
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
 from ._mini_apps import (installed, authorize_send, gate_verified, READ_OPERATIONS, WRITE_OPERATIONS, APP_SCOPED_OPERATIONS, APPROVE_IN_BOT,
-                         ZZZBOT, ZZZ_OPERATIONS, ZZZ_WRITE_OPERATIONS)
+                         ZZZBOT, ZZZ_OPERATIONS, ZZZ_WRITE_OPERATIONS, CONTEXTSLING, CONTEXTSLING_OPERATIONS)
 from ._forkicks import save_preview, load_preview, authorize_order, ORDER_APPROVE_IN_BOT
+from . import _contextsling as cx
 from ._forkicks_media import materialize, menu_shape, JSON_BYTES as MENU_IMAGE_JSON_BYTES
 
 SETTINGS = "https://agents.edgecity.live/connections/village"
@@ -760,14 +762,14 @@ def transport(config, payload):
         raise ValueError("request_too_large")
     headers = {"Authorization": "Bearer " + config["token"], "Content-Type": "application/json"}
     zzz = payload.get("operation") in ZZZ_OPERATIONS
-    if payload.get("operation") in (*ZZZ_WRITE_OPERATIONS, "slopfolio.prepare", "forkicks.order.confirm"):
+    if payload.get("operation") in (*ZZZ_WRITE_OPERATIONS, "slopfolio.prepare", "forkicks.order.confirm", *cx.OPERATIONS, "contextsling.prepare"):
         # The app selects a larger request budget only for these declared writes.
         headers["X-Village-Operation"] = payload["operation"]
     request = Request(config["origin"] + "/api/v1/village-bridge/tool", data=data,
                       headers=headers, method="POST")
     opener = build_opener(ProxyHandler({}), NoRedirect())
     try:
-        with opener.open(request, timeout=60 if payload.get("operation") in ("gold-stars.send", "forkicks.order.confirm") else 25) as response:
+        with opener.open(request, timeout=60 if payload.get("operation") in ("gold-stars.send", "forkicks.order.confirm", *cx.OPERATIONS) else 25) as response:
             # rolodex.person: a tighter overall byte bound (the largest legitimate answer is about 30 KB), applied
             # before any parse, and a duplicate key at any depth refuses the whole answer.
             image_request = payload.get("operation") == "forkicks.menu" and payload.get("format") == "image"
@@ -775,7 +777,7 @@ def transport(config, payload):
             data = response.read(limit + 1)
             if len(data) > limit:
                 return {"error": "response_too_large", "instruction": RESPONSE_TOO_LARGE}
-            if payload.get("operation") == "rolodex.person" or image_request:
+            if payload.get("operation") == "rolodex.person" or image_request or payload.get("operation") in CONTEXTSLING_OPERATIONS:
                 return json.loads(data, object_pairs_hook=no_duplicate_keys)
             return json.loads(data)
     except HTTPError as error:
@@ -807,6 +809,8 @@ def transport(config, payload):
             raw = error.read(4097)
             refusal = json.loads(raw, object_pairs_hook=no_duplicate_keys) if len(raw) <= 4096 else {}
             code = refusal.get("code")
+            if payload.get("operation") in CONTEXTSLING_OPERATIONS:
+                return {"error": code if isinstance(code, str) and code in cx.ERROR_CODES else "contextsling_unconfirmed"}
             detail = refusal.get("detail")
             if (error.code == 409 and payload.get("operation") == "forkicks.order.confirm" and
                     isinstance(code, str) and re.fullmatch(r"pickup_only:[A-Za-z0-9_-]{1,128}", code) and
@@ -828,6 +832,23 @@ def transport(config, payload):
         return {"error": "connection_or_request_refused", "status": error.code, "settingsUrl": SETTINGS,
                 "instruction": "Do not claim success. Recheck meeting state after uncertainty; for a star, call gold-stars.status with the SAME draftId, never prepare another to retry. For Kicks: use order.status with a returned orderId, or retry order.confirm with the SAME draftId and saved proof; never prepare another order after an uncertain confirm."}
 
+def load_bridge_config(home, context):
+    """Shared ordinary-call and owner-hook credential/origin boundary."""
+    path = home / "village-bridge.json"
+    if not path.is_file() or path.stat().st_size > 2048:
+        return None, {"error": "agent_access_pending", "settingsUrl": SETTINGS, "instruction": "This installed mini-app is awaiting verified runtime access. Retry shortly or use its website. Never provide credentials in chat."}
+    config = json.loads(path.read_text())
+    if context["USER_ID"] != config.get("ownerTelegramId"):
+        return None, {"error": "private_owner_chat_required"}
+    origin = urlsplit(config.get("origin", ""))
+    if origin.scheme != "https" or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment:
+        raise ValueError("invalid_configuration")
+    if not re.fullmatch(r"avb_[A-Za-z0-9_-]{43}", config.get("token", "")):
+        raise ValueError("invalid_configuration")
+    if datetime.fromisoformat(config["expiresAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+        return None, {"error": "sign_in_expired", "signInUrl": SIGNIN, "instruction": "Sign in to Agent Village again; the paired agent updates automatically. Never ask for codes or credentials in chat."}
+    return config, None
+
 def handle(args, **kwargs):
     try:
         context = bound_context()
@@ -841,24 +862,21 @@ def handle(args, **kwargs):
         if not isinstance(op, str) or (op not in READ_OPERATIONS and op not in WRITE_OPERATIONS):
             raise _InvalidArguments()
         app_id = (args.get("appId") if op in APP_SCOPED_OPERATIONS else "forkicks" if op.startswith("forkicks.")
-                  else "zzzbot" if op in ZZZ_OPERATIONS else "slopfolio" if op in ("slopfolio.prepare", "slopfolio.status") else "gold-stars")
+                  else "contextsling" if op in CONTEXTSLING_OPERATIONS else "zzzbot" if op in ZZZ_OPERATIONS else "slopfolio" if op in ("slopfolio.prepare", "slopfolio.status") else "gold-stars")
         if not isinstance(app_id, str) or not installed(home, app_id, op):
             return json.dumps({"error": "mini_app_not_installed"})
-        path = home / "village-bridge.json"
-        if not path.is_file() or path.stat().st_size > 2048:
-            return json.dumps({"error": "agent_access_pending", "settingsUrl": SETTINGS, "instruction": "This installed mini-app is awaiting verified runtime access. Retry shortly or use its website. Never provide credentials in chat."})
-        config = json.loads(path.read_text())
-        if context["USER_ID"] != config.get("ownerTelegramId"):
-            return json.dumps({"error": "private_owner_chat_required"})
-        origin = urlsplit(config.get("origin", ""))
-        if origin.scheme != "https" or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment:
-            raise ValueError("invalid_configuration")
-        if not re.fullmatch(r"avb_[A-Za-z0-9_-]{43}", config.get("token", "")):
-            raise ValueError("invalid_configuration")
-        if datetime.fromisoformat(config["expiresAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
-            return json.dumps({"error": "sign_in_expired", "signInUrl": SIGNIN, "instruction": "Sign in to Agent Village again; the paired agent updates automatically. Never ask for codes or credentials in chat."})
+        config, refusal = load_bridge_config(home, context)
+        if refusal:
+            return json.dumps(refusal)
         payload = {"operation": op}
-        if op == "rolodex.search" and set(args) == {"operation", "query"}:
+        cx.cleanup_expired(home, config)
+        cx.sync_declines(home, config, transport)
+        if op in CONTEXTSLING_OPERATIONS:
+            try:
+                payload = cx.request_payload(op, args)
+            except ValueError as error:
+                return json.dumps({"error": str(error) if str(error) in ("approval_card_invalid", "approval_card_too_long") else "invalid_arguments"})
+        elif op == "rolodex.search" and set(args) == {"operation", "query"}:
             query = args["query"]
             if not isinstance(query, str) or not 1 <= len(query.strip()) <= 120:
                 raise _InvalidArguments(op)
@@ -1035,6 +1053,38 @@ def handle(args, **kwargs):
                 gate_verified()
             except Exception:
                 return json.dumps({"error": "approval_unavailable", "instruction": "Saving a Slopfolio draft needs this agent's verified approval gate, which is unavailable now. Do not claim a draft was saved."})
+        if op == "contextsling.prepare":
+            try:
+                gate_verified()
+            except Exception:
+                return json.dumps({"error": "approval_unavailable"})
+        if op in cx.OPERATIONS:
+            try:
+                record = cx.load_preview(home, payload["draftId"], config)
+            except Exception:
+                return json.dumps({"error": "approval_preview_unavailable"})
+            if record["operation"] != op:
+                return json.dumps({"error": "approval_preview_unavailable"})
+            recovery = record.get("terminal") in ("contextsling_expired", "contextsling_completed")
+            if record.get("terminal") and not recovery:
+                return json.dumps({"error": record["terminal"], "retryable": False})
+            if not recovery:
+                if record.get("session") != context["SESSION_KEY"] or record.get("message") == context["MESSAGE_ID"]:
+                    return json.dumps({"error": "contextsling_confirmation_required", "instruction": "Show the exact saved preview and wait for the next owner message."})
+                authorization, refusal = cx.authorize_action(home, record, payload["draftId"])
+                if refusal:
+                    if refusal.get("error") == "contextsling_declined":
+                        cx.sync_declines(home, config, transport)
+                    return json.dumps(refusal)
+                if not installed(home, "contextsling", op):
+                    cx.terminal(home, payload["draftId"], record, "mini_app_not_installed")
+                    return json.dumps({"error": "mini_app_not_installed"})
+                if cx.expired(record):
+                    cx.expire(home, payload["draftId"], record)
+                    return json.dumps({"error": "contextsling_expired", "instruction": "No new write will be dispatched. Recover this same draft to check an earlier outcome."})
+                payload["approval"] = authorization
+            # Expired/completed tombstones carry no body/proof. The app accepts this
+            # shape only for read-only sent/confirmed recovery, never a prepared write.
         if op == "forkicks.order.prepare":
             # A WRITE (WRITE_OPERATIONS) that sends the whole order to the provider: the same gated-write path as
             # the sibling writes (no card, no manual grant; confirm keeps its own manual grant).
@@ -1091,6 +1141,10 @@ def handle(args, **kwargs):
                     "instruction": "The image could not be fetched, validated or saved; no attachment was created. " +
                     ("Use this current text menu, or retry the image only on request." if menu is not None else "Offer forkicks.menu without format for the current text menu.") +
                     " Do not claim image delivery.", "handling": HANDLING}, ensure_ascii=False)
+        if op == "contextsling.prepare":
+            cx.save_preview(home, result, context, config)
+        if op in CONTEXTSLING_OPERATIONS:
+            result = cx.response(home, op, result, record if op in cx.OPERATIONS else None, payload.get("draftId"))
         if op == "forkicks.order.prepare":
             save_preview(home, result, context, config)
         if op == "rolodex.person":
@@ -1123,15 +1177,49 @@ def handle(args, **kwargs):
         # the call. Never village_unavailable, which tells it (and the owner) the service is down.
         return json.dumps({"error": "invalid_arguments", **({"fields": error.fields} if error.fields else {}), "instruction": error.instruction})
     except Exception:
+        if isinstance(args, dict) and args.get("operation") in CONTEXTSLING_OPERATIONS:
+            return json.dumps({"error": "contextsling_unconfirmed", "instruction": "Do not claim success. Recover the SAME operation and draftId, including after expiry; recovery cannot dispatch a new write. Never prepare a new draft after uncertainty."})
         if isinstance(args, dict) and isinstance(args.get("operation"), str) and args["operation"] in ZZZ_OPERATIONS:
             return json.dumps({"error": "village_unavailable", "settingsUrl": SETTINGS, "instruction": ZZZ_UNCLEAR})
         return json.dumps({"error": "village_unavailable", "settingsUrl": SETTINGS,
                            "instruction": "Do not claim success. Recheck current meeting state after uncertainty. For a star use gold-stars.status with the same draftId; never prepare another to retry. For Kicks: use order.status with a returned orderId, or retry order.confirm with the SAME draftId and saved proof; never prepare another order after an uncertain confirm."})
+
+def cleanup_contextsling_turn(**kwargs):
+    """Expiry housekeeping on the next owner turn; never dispatch from a hook."""
+    try:
+        context = bound_context()
+        home = hermes_home()
+        try:
+            config, refusal = load_bridge_config(home, context)
+        except Exception:
+            config, refusal = None, {"error": "invalid_configuration"}
+        if refusal:
+            # Local custody cleanup needs no usable credential or daemon authority.
+            cx.cleanup_expired(home, {})
+            return
+        cx.cleanup_expired(home, config)
+        cx.sync_declines(home, config, transport)
+    except Exception:
+        pass
 
 _REGISTERED = False
 def register(ctx):
     global _REGISTERED
     if _REGISTERED:
         return
-    ctx.register_tool(name="village", toolset="village", schema=SCHEMA, handler=handle, description=SCHEMA["description"])
+    schema = SCHEMA
+    # Keep the every-box description and enum unchanged. Only supported installed boxes
+    # receive these names; the handler independently verifies exact install on every call.
+    if installed(hermes_home(), "contextsling", "contextsling.list"):
+        schema = copy.deepcopy(SCHEMA)
+        ctx.register_hook("pre_llm_call", cleanup_contextsling_turn)
+        schema["parameters"]["properties"]["operation"]["enum"] += CONTEXTSLING["operations"]
+        schema["parameters"]["properties"].update({
+            "action": {"type": "string", "enum": ["publish", "update", "revoke"]},
+            "file": {"type": "object", "properties": {"name": {"type": "string"}, "lines": {"type": "array", "items": {"type": "string"}}, "finalNewline": {"type": "boolean"}}, "required": ["name", "lines", "finalNewline"], "additionalProperties": False},
+            "target": {"type": "object", "properties": {"bundleId": {"type": "string"}, "expectedRevision": {"type": "integer"}, "title": {"type": "string"}}, "additionalProperties": False},
+            "bundleId": {"type": "string"}, "revision": {"type": "integer"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 25}, "cursor": {"type": "integer", "minimum": 0, "maximum": 1000},
+        })
+    ctx.register_tool(name="village", toolset="village", schema=schema, handler=handle, description=SCHEMA["description"])
     _REGISTERED = True
