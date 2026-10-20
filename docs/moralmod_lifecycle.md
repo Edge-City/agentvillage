@@ -61,13 +61,13 @@ A `release.json` with any other sha256 is refused before it is parsed, however c
 - nothing under the plugin is replaced, other than a managed loader taken out with the marker and the managed `morning.py` (below), and nothing is written under `index/moralmod/`;
 - the install reports `index_plugin_failed=release_unpinned`.
 
-The constant pins the reviewed tool-recovery and per-tool-attribution bundle `moralmod-0586c2f-ce30a04f937b`: `release.json` sha256 `ce30a04f937b3a6f5fc067e04e510dd0be025ec2ba755f0cb4ffaea7bb24bb74`, built with Bun 1.4.2 from Decision Studio source `0586c2f435c737a0be7a7469699a8274a457acd7` for the unchanged plugin `04d833b8`. The installed files are exactly `release.json`, `negotiator-core.js`, `negotiator-runtime.js` and `INDEX-LICENSE`. A value that is not a sha256 matches no `release.json`, so under it no bundle activates on any resident. The Control Plane must supply this matching release URL, manifest digest and source commit before residents are rewired. Installer rollback requires restoring the previous reviewed installer pin and matching profile together; the new installer does not accept the old release.
+The constant pins the prepared lean continuation bundle `moralmod-856bab3-8c8b44e578b6`: `release.json` sha256 `8c8b44e578b6347f7e6dcc877c15a52773005079256bbdd2b584453385dca077`, built with Bun 1.4.2 from Decision Studio source `856bab3a79d2c22d9af8c5bacfe3f2e45c579493` for the unchanged plugin `04d833b8`. The installed files are exactly `release.json`, `negotiator-core.js`, `negotiator-runtime.js` and `INDEX-LICENSE`. A value that is not a sha256 matches no `release.json`, so under it no bundle activates on any resident. The Control Plane must supply this matching release URL, manifest digest and source commit before residents are rewired. Installer rollback requires restoring the previous reviewed installer pin and matching profile together; the new installer does not accept the old release.
 
-The exact four assets are published as the [reviewed prerelease](https://github.com/Edge-City/agentvillage/releases/tag/moralmod-0586c2f-ce30a04f937b) for CI and coordinated review; publication does not deploy residents. Anonymous downloads of all four files were verified against the reviewed hashes. Before shipping, coordinate CP `release_url`/`release_sha256`/`source_commit`/`runtime_revision` with the service's experiment runtime revision and each resident's configuration. This release selection needs matching CP configuration, not a CP source change. Installed-revision readback and a connected resident canary remain separate rollout gates.
+The exact four assets are published as an inactive [prerelease](https://github.com/Edge-City/agentvillage/releases/tag/moralmod-856bab3-8c8b44e578b6) for CI and coordinated review. Publication does not deploy or activate this candidate. The current C4 packet records qualification, public-asset hashes and CI separately. Before shipping, coordinate CP `release_url`/`release_sha256`/`source_commit`/`runtime_revision` with the service's experiment runtime revision and each resident's configuration. This release selection needs matching CP configuration, not a CP source change. Installed-revision readback and a connected resident canary remain separate rollout gates.
 
-For the service rollout from `a018_wake_diagnostics`, deploy the compatible service on all three roles before applying `a019_central_policy`. Use an `a018` deployment manifest before migration and an `a019` manifest with a new journal afterward; every process must report the exact schema revision in its manifest. The migration changes the policy-settings constraint without resetting data or rewriting saved assessments, decisions or policy hashes. Do not activate median welfare for legacy consumers. Numerical questions remain diagnostic/off until a separately reviewed activation.
+Historical service-transition procedure (already separate from this runtime-only candidate): the coordinated service requires schema `a021_help_me_decide_views`. The current candidate has no service, migration or admission-pause step. For the original a019→a021 transition, deploy the explicitly qualified schema bridge before the additive a019→a021 migration; then deploy and verify the final service before changing CP or resident runtime. Keep admission closed and work settled throughout the schema transition. The ordinary rollout command cannot cross this schema boundary by itself. Do not deploy the new bundle against the old service: its strict command parser rejects the new lookup field.
 
-Application rollback must retain `a019` and recorded policy versions, using a qualified image that supports both revisions and the retained records, with a new manifest and journal. An old exact-`a018` image is not a valid rollback target after migration. Reverting a policy uses an audited policy-version activation for new work, without rewriting existing work bindings or downgrading the database. Preserve uncertain wakes; inspect Index/journal evidence and use existing reconciliation, never reset them blindly. Follow Decision Studio's [deployment runbook](https://github.com/Sydney-Levine-Lab/decision-studio/blob/ca406eacfd7523c84690aa601fae84cee8f59504/docs/runbooks/deployment.md) for the complete rollout and rollback checks.
+Rollback before reopening admission may use only the qualified bridge/recovery set at retained a021. After new profile jobs are admitted, preserve final compatible workers, close admission, disable HMD and restore the previous matched installer/CP profile as specified in the coordinated C4 packet. Do not downgrade the database, rewrite saved assessments or replay uncertain effects. A complete installed rollback remains a separate rollout check.
 
 The pin holds on every ON run, not only a keyed run handed a release (ov#277 refute S1). A `--skip-index` run, a run with no Index key, and a keyed run with no `MORALMOD_*` and no `active.json` never install a release, but a loader an earlier run wrote may still be in the plugin's `runtime/dist/negotiator.js`. Each of them keeps that loader only when it is exactly the loader for the pinned release and `index/moralmod/<pin>/` still holds that release (its `release.json` hashes to the pin, every file to its listed digest). Otherwise the loader is taken out as on OFF, together with the marker in `index/negotiator.ts` and the managed `morning.py` (the plugin's own negotiator.js cannot load the marker), the plugin is not enabled, its morning job is removed and the install reports `index_plugin_failed=release_unpinned`. A keyed run handed a release takes the loader out the same way, then holds that release to the pin as above. So moving the pin, or setting it to a value that is not a sha256, stops an activated release on the next install of any kind.
 
@@ -90,25 +90,44 @@ Any rebuild that changes a byte of `release.json` or of a file it lists needs a 
 
 Verification: `bun test install/tests/moralmod_release.test.ts install/tests/moralmod_host.test.ts install/tests/moralmod_arm_pin.test.ts install/tests/moralmod_activation.test.ts`. The activation fault tests use the pinned plugin checkout from `AV_INDEX_PLUGIN_TEST_DIR` and synthetic verified releases, and are skipped without it. The connected installer test consumes the sibling pinned `index-hermes-plugin` checkout and the sibling `decision-studio/custom-negotiator/dist/village` release (build with `bun run build:village`). It is explicitly skipped when those integration prerequisites are absent; it is not a substitute for installed-host acceptance. The Decision Studio `test_village_lifecycle.py` proof starts the installed executable against real local signing, HTTP and PostgreSQL boundaries with controlled Index/model fixtures.
 
-## 18 October candidate: tool correction and safe validation diagnostics
+## Current evidence queue-deadline candidate — 20 October 2026 IST
 
-Decision Studio source `0586c2f435c737a0be7a7469699a8274a457acd7` restores
-bounded Index-compatible tool correction and valid no-question policy holds.
-Bridge envelopes and scientific selection remain strict; rejected tool calls
-cannot save a selection or publish. Choices bind to each executing handler; a later refused resolution cannot contaminate an earlier brief. Brief-only batches record one accepted product, and policy questions retain their declared 2000-code-point bound. Always-on sanitized `model_response` and
-`tool_recovery` events classify correction/exhaustion with available stage/run
-UUIDs. No new debug environment flag or CP source change is required. The
-separately scoped freshness redesign is deferred.
+Candidate `moralmod-856bab3-8c8b44e578b6` is built from Decision Studio `856bab3a79d2c22d9af8c5bacfe3f2e45c579493`. Manifest `8c8b44e578b6347f7e6dcc877c15a52773005079256bbdd2b584453385dca077`; core `ddc99f8a75e0a1dbc706c58785bbf8b363725f698b05c19049b4dc462cc5a9f8`; executable `2f3891e97a4600dab39d429c840158ae8e96a543af12864662ee31362916822d`. It retains the combined HMD, continuation recovery, N1, C3 and C2 work, and adds lazy acknowledged sibling progress, removes overwritten turn-claim evidence reads, and qualifies every influencing context after assessment preparation and before each private model call (including briefing/turn corrections), as well as before validated tool publication. Index, CP and native MoralMod source are unchanged. The final service profile must explicitly configure `village_modeled_counterpart: true` with `participant-decision-v6`; attaching UI metadata does not select scientific construction policy.
+
+| Setting | Value |
+|---|---|
+| CP runtime revision; box `DECISION_RUNTIME_REVISION`; DS experiment runtime revision | `moralmod-856bab3-8c8b44e578b6` |
+| CP `release_url` (published; inactive) | `https://github.com/Edge-City/agentvillage/releases/download/moralmod-856bab3-8c8b44e578b6/` |
+| CP `release_sha256` | `8c8b44e578b6347f7e6dcc877c15a52773005079256bbdd2b584453385dca077` |
+| CP `source_commit` | `856bab3a79d2c22d9af8c5bacfe3f2e45c579493` |
+
+[Original lean evidence](../../../../docs/Redesign/implementation-20261019T175527Z/assessment.md) describes the original slice; the [prior C4 packet](../../../../docs/Triage/2026-10-20-lean-c4-authority-repair/assessment.md) remains evidence for its original bytes. The [queue-deadline follow-up packet](../../../../docs/Redesign/scale_readiness/evidence/2026-10-20-task3-release/assessment.md) owns this replacement candidate and its exact identities. Unchanged scientific/provider/service-image evidence is carried forward by source parity, not relabelled as a fresh run. Assets are published for CI but not activated. Keep existing credentials/identity/input-kind settings. Actual installed Hermes acknowledgement/use/research receipt and five-box stability remain separate gates.
+
+The intended experiment configuration explicitly supplies `assessment_budget_seconds=400` under the existing Decision Service `index_runtime.assessment` policy. The box consumes the service-owned absolute deadline; there is no new resident environment variable or independently restarted timer. Existing claims retain their original deadlines. This configuration is prepared for review, not applied by the pin change. See Decision Studio `docs/runbooks/lean-continuation-budget.md` for service-first readback and rollback.
+
+Before activation, capture the actual installed installer pin and matching service/CP configuration as the rollback set; do not assume an earlier prerelease was activated. Restore that verified set together if rollback is required. Do not rewrite outstanding deadlines or replay uncertain sends. The prior installer must be restored too; the new installer intentionally rejects old bytes under its new pin.
+
+## Historical N1 candidate: bounded Haiku continuation recovery and attribution
+
+The following sections record the earlier N1 candidate and are historical evidence. Their old pins and schema instructions must not be used for this coordinated release.
+
+
+
+Decision Studio source `c85b5918834b9aa5725d9a3a0c812cada1a1f7e2` improves initial brief instructions and returns actionable shortening feedback within Index's existing two-call brief budget. The 400-character contract remains. An otherwise valid aligned scientific choice with a non-null reason receives correction feedback; invalid scientific choices still refuse before any tool executes. Canonical unresolved choices stay held.
+
+Evidence HTTP is shared per installation: four active requests and eighty bounded waiting callers, two attempts and at most45seconds including queue/delay/command, further clamped to the original assessed-use deadline. Exact503evidence_busy retries after at least2seconds plus jitter; only otherwise-valid expired signed proof receives refresh. Generic401/409, network failures and unknown external effects are not blindly retried. Proven acknowledged own progress preserves the original science admission/deadline; substantive changes still refuse.
+
+Sanitized model/evidence diagnostics and pre-evidence continuation counts are always on. No new environment variable, debug flag, CP source change or native MoralMod release is needed. New service refusal labels preserve authentication and expose future401/409/429causes. Historical uncertain wakes still need authoritative reconciliation; this release does not replay them.
 
 Coordinate these exact existing profile/configuration values; the release URL
 requires its trailing slash:
 
 | Setting | Value |
 |---|---|
-| CP `runtime_revision`; box `DECISION_RUNTIME_REVISION`; DS experiment revision | `moralmod-0586c2f-ce30a04f937b` |
-| CP `release_url` | `https://github.com/Edge-City/agentvillage/releases/download/moralmod-0586c2f-ce30a04f937b/` |
-| CP `release_sha256` | `ce30a04f937b3a6f5fc067e04e510dd0be025ec2ba755f0cb4ffaea7bb24bb74` |
-| CP `source_commit` (Decision Studio bundle source) | `0586c2f435c737a0be7a7469699a8274a457acd7` |
+| CP `runtime_revision`; box `DECISION_RUNTIME_REVISION`; DS experiment revision | `moralmod-c85b591-180385847dc2` |
+| CP `release_url` | `https://github.com/Edge-City/agentvillage/releases/download/moralmod-c85b591-180385847dc2/` |
+| CP `release_sha256` | `180385847dc2eb61d13ce42c306718a7218c24d981323cb9bbdb7ef68d3b4d6d` |
+| CP `source_commit` (Decision Studio bundle source) | `c85b5918834b9aa5725d9a3a0c812cada1a1f7e2` |
 
 Retain existing live input kind, credentials and identities. A service revision
 change affects the experiment, so coordinate all affected boxes; do not switch
@@ -116,3 +135,42 @@ only one side. Merge, install, read-back and resident canary remain separate
 gates. Require a saved selection tied to the assessment and an Index-acknowledged
 outgoing turn before claiming recovery. Restore the previous matching release,
 profile and service label together for rollback; preserve uncertain effects.
+
+
+## Request-amplification supplement — 19 October 2026
+
+This candidate also retains qualified completed and pending wake preparation. Fifty unchanged opportunities over eight model rounds now prepare once each, with fresh source/authority checks at reuse and distinct publication permits. An aborted subscriber cannot cancel another caller; abandoned all-or-nothing preparation is cancelled. Failed/expired/held work cannot renew science or the original use deadline. There is no permission TTL cache, CP code change, scheduler or scientific-policy change.
+
+Decision Service readiness shares one cancellable probe connection. Its check wait is bounded to 1.5 seconds, with one-second connect/SQL settings and at most 100 ms of driver cancellation/drain within the existing sub-two-second HTTP contract. It refuses when the ordinary API pool is full and retains schema/privilege checks. Deployment accounting reserves one extra probe connection per API process: the example overlap peak changes from78 to81, without increasing the ordinary pool. Safe execution-claim markers attribute future zero-attempt stalls. The three historical expiries were delivered but their first blocked boundary remains unresolved; this is not a worker-recovery fix.
+
+Exact local manifest: `180385847dc2eb61d13ce42c306718a7218c24d981323cb9bbdb7ef68d3b4d6d`. Core: `3d82a683d3e048cb5c42dac5b2b2ccf5e20921816b3ac73de5c3d9ffc5acf539`. Executable: `91b182d882c3c51e4310edb9eb9e327f3b9d80e946bd4e59da570f39c343ef31`. Bun1.4.2, Index/plugin pins and environment variable names are unchanged. Use `DECISION_RUNTIME_REVISION=moralmod-c85b591-180385847dc2` only in an authorized coordinated switch. The existing executable emits safe model-response and tool-validation diagnostics by default; no new debug environment variable is needed and no private text should be logged.
+
+The older locally prepared `moralmod-8a2542c-6a281afaf009` is superseded, not overwritten or published. This branch prepares a candidate only. Publication, asset download/CI, compatible service deployment, CP configuration readback, installation, installed use and the existing five-box observation gate remain separate. Follow the existing paired installer/profile rollback; retain compatible scientific workers and a019 records, and never reset/replay uncertain effects.
+
+The late-progress follow-up qualifies source continuity within the existing bookkeeping window before saving deadline fallback or a lawful hold. Assessed prepare/begin still enforce the original use deadline. Exhausted turn fallback explicitly sends a null selection so its durable hold satisfies the existing contract. No CP change, new model budget or deadline extension is introduced. The locally prepared `moralmod-1dfe74c-7205d60f51d9` is superseded; its evidence and bytes remain preserved.
+
+### Final scoped diagnostic follow-up (19 October)
+
+This candidate additionally emits `reasoning_failed` before a fallible hold save and includes `phase=brief|turn` on `continuation_started` before evidence/admission. A failed save remains a failed save; neither a saved hold nor an outgoing effect is invented. Count brief and turn attempts separately, and deduplicate by attempt ID. Transport retries do not emit fresh start markers. Logs contain safe codes and opaque subject/runtime identifiers, not prompts or model responses. The N1 follow-up below adds bounded runner observations; private runner prose stays disabled.
+
+Decision Service must include source `c85b5918834b9aa5725d9a3a0c812cada1a1f7e2` (or a descendant with identical product source) for shielded readiness cleanup and request-correlated authentication lookup timing. This adds no environment variables, migration, model change, CP source change, or automatic uncertain-effect replay. The runtime assets remain unpublished pending independent review, authorized publication, CI, coordinated installation and the existing five-box observation gate.
+
+Historical qualification of `moralmod-9cffe6c-7d98a71d20c9` (manifest `7d98a71d20c92211cb7ec845519609132fe8b63135470955a8bf89d137762343`, source `9cffe6c1371d10fa14c0f5a78a1137a9c1c030ef`) passed 138 installer checks and 85 connected native-x86 service/PostgreSQL checks (three external skips), plus the failed hold-save regression. Its API/scientific/maintenance role images passed authored-checkpoint and restart checks on a temporary Fly environment. Those results apply to the preserved earlier bytes. The N1 candidate changes the runtime/core bytes; it requires its own exact-bundle checks and release/image gate. Neither candidate establishes installed resident use or authorizes expansion.
+
+### N1 attribution follow-up (19 October)
+
+Each validated resident start creates an opaque `boot_id`. Structured `runtime_started`, `runtime_ready`, and graceful `runtime_stopped` markers share it with existing evidence/model/continuation diagnostics. `runtime_ready` means local bootstrap finished; it does not prove a connected stream, an assessment, a research delivery or an Index effect. Invalid configuration can fail before the start marker; abrupt termination may omit the stop marker.
+
+`stream_connected` numbers successful SDK connections within that boot. Each recovery scan emits a start and a finish or sanitized failure, with elapsed time and a bounded boundary (`refresh`, `list_negotiations`, `owed_work`). Scan counts describe signals scanned and wake/turn requests; existing guards can coalesce requests. A completed scan does not acknowledge the asynchronous work it launched. Original stream timestamps, intent/opportunity IDs and private prose are withheld.
+
+Journal failures identify authorization, reconciliation reads, outbox reads, validation, delivery or delivery marking. A failing record retains its original opaque `event_id` where available. Reconciliation failures emit one aggregate per existing flush, reporting the count and the first sanitized cause. Reporting still proceeds after an individual reconciliation failure; uncertain effects remain durable. A lost reporting acknowledgement retries the same event identity, never a new Index effect. Failed diagnostic construction/writes cannot replace the original exception.
+
+There are no retry, timer, deadline, authority, source-check, science or ON/OFF policy changes. The fifteen-second journal timer, Index reconnect policy and existing concurrency limits are retained. These observations do not explain the historical event stop or synchronize fleet scheduling. The incident timeline still needs resident boot/SSE records and an authoritative DS-to-CP-to-Data join. Publication, final Linux role acceptance and installed five-box recovery remain separate gates.
+
+Current N1 evidence: [implementation packet](../../../docs/Triage/2026-10-19-n1-attribution-implementation-071058Z/assessment.md) and [fresh Refuter entrypoint](../../../docs/Triage/2026-10-19-n1-attribution-implementation-071058Z/refuter-packet.md).
+
+For this exact candidate, the local checks passed 379 negotiator fixtures (one missing image-builder prerequisite skip), 35 signed service/PostgreSQL consumer cases, the explicit failed hold-save case, and 129 installer/morning cases. The exact executable passed isolated macOS and Linux smoke checks. Two host builds and a Linux rebuild using the recorded worktree dependency layout produced identical four-file release bytes. A different dependency layout changes bundler path comments and therefore hashes; retain the prepared release bytes and rebuild/repin any replacement. These checks used controlled Index/model/native fixtures and establish no installed recovery claim.
+
+### Evidence queue-deadline follow-up
+
+This candidate supersedes inactive `moralmod-70d3315-9983dbac02ab`. Four active evidence reads and eighty waiting callers are unchanged. Queue residence and execution have a maximum400-second total envelope, shortened by any supplied earlier absolute deadline. The45-second active-operation clock starts at the first HTTP permit, includes the protected command/backoff/retry, and never restarts on retry. This transport bound does not renew a saved assessment deadline or change the300-second scientific-attempt cap. Task6/7 worker/readiness edits are excluded; no new service image is needed for this runtime-only change. Installed R1–R5 and coordinated activation remain separate gates.

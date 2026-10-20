@@ -28,6 +28,7 @@ from ._query_village import register_query_village_tool
 from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
+from . import _miniapp_epoch
 from . import _prompt_refresh
 from . import _village_visible
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
@@ -51,6 +52,10 @@ from . import _plugin_events
 from . import _model_events
 # ov#357 M1 stopgap (b), on its own line for the same reason.
 from . import _gate_events
+# P10-P1 code.run@1, on its own line for the same reason.
+from . import _code_run
+# MM-INFER-VIS, on its own line for the same reason.
+from . import _negotiator_llm
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -528,14 +533,19 @@ def _hook_post_tool_call(collector: Collector, **kwargs: Any) -> None:
     discards its return, `model_tools.py` at `v2026.8.31`), so nothing here can
     delay, block or rewrite the tool call.
 
-    Order: `tool.call`, then any `action.*` it implies, then any `intention.*`.
-    The three are isolated from each other: a failure in one is counted against
-    the breaker like any hook failure and does not cost the others their events.
+    Order: `tool.call`, then any `action.*` it implies, then (P10-P1) an
+    `execute_code` call's `code.run`, then any `intention.*`. They are isolated
+    from each other: a failure in one is counted against the breaker like any
+    hook failure and does not cost the others their events. `code.run` alone is
+    isolated *uncounted* (`_quiet`): it is an optional add-on, and no failure of
+    it may trip the session breaker that would silence `tool.call`.
     """
     _session(collector, kwargs)
     if not collector.config.active:
         return
     _isolated(collector, kwargs, _emit_tool_call, collector, kwargs)
+    if kwargs.get("tool_name") == _code_run.TOOL_NAME:
+        _quiet(collector, CODE_RUN_FAILED, _emit_code_run, collector, kwargs)
     if classify_tool(kwargs.get("tool_name")) is not None:
         _isolated(collector, kwargs, _capture_intentions, collector, kwargs)
 
@@ -548,6 +558,25 @@ def _isolated(collector: Collector, kwargs: dict, fn, *args: Any) -> None:
     except BaseException as exc:  # noqa: BLE001 - same contract as `guarded`
         session_id = kwargs.get("session_id") or kwargs.get("parent_session_id")
         collector.record_failure("post_tool_call", exc, str(session_id) if session_id else None)
+
+
+#: P10-P1: the counter a failed `code.run` bumps instead of the breaker.
+CODE_RUN_FAILED = "code_run_failed"
+
+
+def _quiet(collector: Collector, counter: str, fn, *args: Any) -> None:
+    """`_isolated` without the breaker: a failure bumps `counter` (logged once per
+    process as a name and a count, never the exception's text) and is otherwise
+    dropped. For an optional event that must never cost the others theirs."""
+    try:
+        fn(*args)
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001 - counted, never re-raised
+        try:
+            collector.count(counter)
+        except Exception:  # noqa: BLE001 - a counter must not raise either
+            pass
 
 
 def _emit_tool_call(collector: Collector, kwargs: dict) -> None:
@@ -602,6 +631,40 @@ def _emit_tool_call(collector: Collector, kwargs: dict) -> None:
             collector.save_edgeos_ledger()
 
 
+def _emit_code_run(collector: Collector, kwargs: dict) -> None:
+    """P10-P1 `code.run@1` for one outer `execute_code` call (`_code_run`).
+
+    Off unless `AV_EVENTS_CODE_RUN` is on: off, nothing is built. The envelope
+    carries the ids `tool.call` carries for the same call and no other, and a
+    window computed the same way (`_call_window`).
+    Observe-only: it runs after the tool returned, and anything it raises is
+    `_quiet`'s (a counter, never the session breaker), never the tool call's
+    or `tool.call`'s.
+    """
+    if not _code_run.flag_on():
+        return
+    payload = _code_run.code_run_payload(
+        kwargs.get("args"),
+        kwargs.get("result"),
+        kwargs.get("status"),
+        kwargs.get("error_type"),
+        collector.config.capture,
+        collector.keyed_hash,
+        _code_run.scope(),
+        _code_run.gated_hosts(),
+    )
+    occurred_at, earliest = _call_window(kwargs)
+    collector.emit(
+        _code_run.TYPE,
+        payload,
+        tool_call_id=_tool_call_id(kwargs),
+        occurred_at=occurred_at,
+        occurred_at_earliest=earliest,
+        occurred_at_latest=occurred_at,
+        **_refs(kwargs),
+    )
+
+
 def _tool_call_id(kwargs: dict) -> Optional[str]:
     """Hermes supplies `tool_call_id`, not the agent: one that fails the id
     pattern is nulled and the event kept."""
@@ -645,9 +708,9 @@ def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched
     `my_rsvp_status` agrees with a waiting action is `action.receipted` on that
     action's id, with receipt `{kind: edgeos_confirming_read, id: <participant
     id>}` — the one event this plugin claims `provider_receipt` for, which
-    ingest honours only because the receipt is checkable (§2.1). In
-    `metadata` the EdgeOS event id and the receipt's participant id are
-    replaced by their HMACs under the tenant key.
+    ingest would honour if the receipt were checkable (§2.1). The receipt's
+    participant id is replaced by its HMAC under the tenant key in every
+    capture mode (DATA-308), and in `metadata` the EdgeOS event id is too.
     """
     op, params, call = matched
     status = normalise_status(kwargs.get("status"))
@@ -656,16 +719,22 @@ def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched
         op, params, call, ok=status_ok(status), status=status, exit_code=exit_code, body=body,
         ledger=collector.edgeos_ledger(), mint=uuid7,
     )
-    if collector.config.capture == "metadata":
-        # EdgeOS ids are the attendee's footprint across the popup; `metadata`
-        # keeps them in the sandbox. The receipt then cannot be checked, which
-        # is the price of the mode.
-        for item in planned:
+    for item in planned:
+        # DATA-308, every mode: a participant record is one person's RSVP, and
+        # EdgeOS resolves its id to that person (`GET /event-participants/{id}`).
+        # Whoever reads the event downstream does not hold that mapping, so the
+        # id leaves only as its keyed hash, the same value `metadata` always
+        # sent (null without a key). The receipt then cannot be checked
+        # outside the sandbox in any mode (README divergence 31).
+        receipt = item.payload.get("receipt")
+        if isinstance(receipt, dict) and isinstance(receipt.get("id"), str):
+            receipt["id"] = collector.keyed_hash(receipt["id"])
+        if collector.config.capture == "metadata":
+            # An EdgeOS event id names an event, not who went; but the set of
+            # them is the attendee's footprint across the popup, and
+            # `metadata` keeps that in the sandbox.
             item.payload["edgeos_event_id"] = collector.keyed_hash(item.payload["edgeos_event_id"])
-            receipt = item.payload.get("receipt")
-            if isinstance(receipt, dict) and isinstance(receipt.get("id"), str):
-                receipt["id"] = collector.keyed_hash(receipt["id"])
-    # After the metadata step, so the tool.call never carries a clear id the
+    # After the keying step, so the tool.call never carries a clear id the
     # action event does not.
     receipts = [item.payload["receipt"] for item in planned if item.event_type == "action.receipted"]
     if len(receipts) == 1:
@@ -1254,8 +1323,11 @@ def _on_unload() -> None:
     _REGISTERED = False
     # F1: Hermes's own build_turn_context goes back with the hooks (the memory acknowledgement is one).
     _prompt_refresh.uninstall()
+    _miniapp_epoch.unregister()
     # R-DEON: Hermes's own tool_search core-name check goes back too.
     _village_visible.uninstall()
+    # MM-INFER-VIS: the Index plugin's speaker._main_agent and the bridge client's create go back too.
+    _negotiator_llm.stop()
     # Lane B: the approval poller stops with the plugin (its pending state is on disk).
     try:
         _approval.stop_poller()
@@ -1365,12 +1437,28 @@ def register(ctx) -> None:
         _prompt_refresh.install(_collector)
     except Exception:  # noqa: BLE001 - the refresh is optional; the hooks are not
         pass
+    # MINIAPP-PICKUP (v2.1.5): the installed-apps stamp each new prompt carries (`_miniapp_epoch.py`),
+    # which the same wrapper checks so an open chat picks up an install or removal without /new.
+    # Behind AV_MINIAPP_REFRESH (default on); a Hermes without plugin prompt sections is one log line.
+    try:
+        _miniapp_epoch.register_section(ctx)
+    except Exception:  # noqa: BLE001 - optional; the hooks are not
+        pass
     # R-DEON: the village tools (ask_village, search_village, query_village, village) stay in the
     # model's tool list when Hermes's tool_search defers plugin tools (`_village_visible.py`).
     # Behind AV_VILLAGE_TOOLS_VISIBLE (default on); a missing seam is one log line.
     try:
         _village_visible.install()
     except Exception:  # noqa: BLE001 - the visibility is optional; the hooks are not
+        pass
+    # MM-INFER-VIS: the MoralMod negotiator's model steps (the Index plugin's loopback bridge calls
+    # the model on its own client, outside Hermes's API hooks) as llm.call, behind
+    # AV_EVENTS_NEGOTIATOR_LLM (default off), and the MoralMod key for that bridge client only, behind
+    # AV_MORALMOD_OWN_KEY (default off). `_negotiator_llm.py`; a missing seam is a counted no-op, a
+    # failure is `_quiet`'s counter.
+    try:
+        _negotiator_llm.start(_collector, __name__, _quiet)
+    except Exception:  # noqa: BLE001 - the observer is optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.

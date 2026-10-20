@@ -29,7 +29,10 @@
  * read leaves out too, and an app build before agentvillage-app#117 wrote a
  * chat guess as plain `(chat)` (OV-278 S1, S2). Never the `Summary:` line
  * (the app's reading), and never anything under `Removed by you:`, nor a
- * group item that matches one.
+ * group item that matches one. VISIBILITY B3 (CLAIMS L14097): in an entry
+ * that carries marks, never a line whose mark reads Private (`private` or
+ * `agentvillage/private`), nor an unmarked line (the note's rule: no mark is
+ * private); an entry with no marks at all reads exactly as before.
  *
  * The read is defensive and quiet: a missing, unreadable or oversized file,
  * or a file without the entry, is "no tags" (null), and the jobs then behave
@@ -71,6 +74,12 @@ export type ContextMarker = "setup" | "you" | "telegram" | "chat" | "guess";
 export interface ContextItem {
   text: string;
   marker: ContextMarker;
+  /**
+   * VISIBILITY B3: only in an entry that carries marks (any item line with a mark, old or new), every
+   * item's visibility (parseContextLine's: an unmarked line, a guess or a chat line is Private). Absent
+   * in an entry with no marks at all, so that entry reads exactly as before.
+   */
+  visibility?: Visibility;
 }
 export interface ContextTags {
   groups: Record<ContextGroup, ContextItem[]>;
@@ -78,10 +87,95 @@ export interface ContextTags {
 }
 
 /**
+ * The visibility vocabulary agentvillage.visibility/1 (agentvillage-app src/lib/visibility/
+ * visibility-vocab.v1.json, byte-identical in agentvillage-controlplane control-plane/src/visibility/;
+ * context-marks.test.ts pins its sha256): where a resident's line may go. Two ids, network-scoped.
+ */
+export const VISIBILITY_VOCAB = "agentvillage.visibility/1";
+export const VISIBILITY_PRIVATE = "agentvillage/private";
+export const VISIBILITY_EDGE_CITY_INDIA_2026 = "agentvillage/edgecityindia2026";
+export const VISIBILITY_IDS = Object.freeze([VISIBILITY_PRIVATE, VISIBILITY_EDGE_CITY_INDIA_2026] as const);
+export type Visibility = (typeof VISIBILITY_IDS)[number];
+
+/**
+ * VISIBILITY MARKS: every mark a card line may carry, and the visibility it names. The old marks (the
+ * e3 wire today) map exactly as the vocab's `mapping.mark` has them: `public` and `village` are Edge
+ * City India 2026, `private` is Private. The vocab's two ids (the wire a later release switches to,
+ * CLAIMS L13696) each name themselves. Nothing else is a mark. Writers (the app, the control plane)
+ * still write only the old marks; this reader takes both, so the switch needs no reader change.
+ */
+export const MARK_VISIBILITY: Readonly<Record<string, Visibility>> = Object.freeze({
+  public: VISIBILITY_EDGE_CITY_INDIA_2026,
+  village: VISIBILITY_EDGE_CITY_INDIA_2026,
+  private: VISIBILITY_PRIVATE,
+  [VISIBILITY_EDGE_CITY_INDIA_2026]: VISIBILITY_EDGE_CITY_INDIA_2026,
+  [VISIBILITY_PRIVATE]: VISIBILITY_PRIVATE,
+});
+
+/**
  * One item line: `- text (marker)`, `- text (telegram, intros chat <12 hex>)`, `- text (chat, guess)`
  * (a chat item the person did not say outright: read as a guess), or `- text` (read as telegram).
+ * P-5 (the app's grammar e3, agentvillage-app#441 render.ts LINE; the control plane prints it while its
+ * CONTEXT_SECTIONS is on, cp#306): a mark may follow the marker, one of MARK_VISIBILITY's keys
+ * (`, public`, `, village`, `, private`, `, agentvillage/edgecityindia2026` or `, agentvillage/private`:
+ * "- A seed library (guess, private)"); it is read past, so the words, the marker and a guess are what
+ * they are without it, and parseContextLine names its visibility. Any other token after the marker
+ * leaves the whole parenthesis part of the words, as an unknown marker does. The section note the app
+ * prints after the header is not an item line (it stands before any heading) and is skipped.
+ * memory_signal_gate.py ITEM_LINE is the same expression (context-marks.test.ts holds the two to it).
  */
-const LINE = /^- (.+?)(?:\s+\((setup|telegram|you|guess|chat)(?:,\s*intros chat\s+([0-9a-f]{12})|,\s*(guess))?\))?$/i;
+const LINE =
+  /^- (.+?)(?:\s+\((setup|telegram|you|guess|chat)(?:,\s*intros chat\s+([0-9a-f]{12})|,\s*(guess))?(?:,\s*(public|village|private|agentvillage\/edgecityindia2026|agentvillage\/private))?\))?$/i;
+
+/** LINE's source, for the cross-language test (memory_signal_gate.py ITEM_LINE must be the same pattern). */
+export const ITEM_LINE_SOURCE = LINE.source;
+
+/**
+ * The visibility a card line's mark names (the vocab's visibilityOfMark): a guess is Private whatever
+ * its mark (the vocab's guess rule), and so is a line not known to be no guess (`guess` anything but false);
+ * no mark, and anything that is not a mark, are Private (`fail_closed`). A mark is read without case,
+ * as LINE reads it. Never wider than the vocab says; the only narrowing beyond it is the caller's
+ * (parseContextLine counts a plain `(chat)` line, and a guess suffix on another marker, as not known
+ * to be no guess). Pure.
+ */
+export function markVisibility(mark: string | null | undefined, guess: boolean): Visibility {
+  if (guess !== false) return VISIBILITY_PRIVATE;
+  const key = typeof mark === "string" ? mark.toLowerCase() : "";
+  return Object.prototype.hasOwnProperty.call(MARK_VISIBILITY, key) ? MARK_VISIBILITY[key]! : VISIBILITY_PRIVATE;
+}
+
+export interface ContextLine extends ContextItem {
+  /** The mark as written, lower-cased (`public`, `agentvillage/private`, ...), or null for none. */
+  mark: string | null;
+  /** What the mark names, old or new alike (markVisibility). */
+  visibility: Visibility;
+}
+
+/** The five markers, and the only characters a parenthesis read for its visibility may hold. */
+const ITEM_MARKERS: readonly string[] = ["setup", "telegram", "you", "guess", "chat"];
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * One item line read: the words, the marker (a `(chat, guess)` is `guess`; no marker is `telegram`),
+ * the mark and its visibility; null for a line that is no item (no `- `, or no words). A `guess`, a
+ * plain `chat` line (the agent's reading, never the resident's words: OV-278) and a line with a guess
+ * suffix on another marker (`(you, guess, public)`: read as `you`, but not known to be no guess) are
+ * Private whatever their mark. So is a line whose parenthesis holds anything but printable ASCII, or
+ * whose marker is not one of the five (a lookalike or an invisible the two languages' `i` flag and `\s`
+ * read differently: OV-415 refute N1; memory_signal_gate.py parse_item_line fails closed the same way).
+ * parseContextTags keeps only the words and the marker. Pure.
+ */
+export function parseContextLine(line: string): ContextLine | null {
+  const match = LINE.exec(line);
+  const text = match?.[1]?.trim();
+  if (!text) return null;
+  const marker = (match![2]?.toLowerCase() ?? "telegram") as ContextMarker;
+  const read: ContextMarker = marker === "chat" && match![4] ? "guess" : marker;
+  const mark = match![5]?.toLowerCase() ?? null;
+  const plain = PRINTABLE_ASCII.test(line.slice(2 + match![1]!.length)) && (match![2] === undefined || ITEM_MARKERS.includes(match![2].toLowerCase()));
+  const guess = !plain || read === "guess" || read === "chat" || match![4] !== undefined;
+  return { text, marker: read, mark, visibility: markVisibility(mark, guess) };
+}
 
 /** The interest groups the morning brief takes when av-profile.json states no interests, in this order. */
 export const INTEREST_GROUPS: readonly ContextGroup[] = ["here", "curious", "work", "meet"];
@@ -95,10 +189,15 @@ function emptyGroups(): Record<ContextGroup, ContextItem[]> {
   return { here: [], work: [], meet: [], offer: [], curious: [], prefs: [], fun: [], about: [] };
 }
 
-/** The entry's groups and removals. Lines it does not know (the header, `Summary:`, notes) are skipped. Pure. */
+/**
+ * The entry's groups and removals. Lines it does not know (the header, `Summary:`, notes) are skipped.
+ * VISIBILITY B3: when any item line carries a mark, every item carries its visibility. Pure.
+ */
 export function parseContextTags(entry: string): ContextTags {
   const groups = emptyGroups();
   const removed: ContextItem[] = [];
+  const seen: [ContextItem, Visibility][] = [];
+  let marked = false;
   let group: ContextGroup | "removed" | null = null;
   for (const raw of entry.split("\n")) {
     const line = raw.trim();
@@ -109,14 +208,15 @@ export function parseContextTags(entry: string): ContextTags {
       continue;
     }
     if (!group || !line.startsWith("- ")) continue;
-    const match = LINE.exec(line);
-    const text = match?.[1]?.trim();
-    if (!text) continue;
-    const marker = (match![2]?.toLowerCase() ?? "telegram") as ContextMarker;
-    const item: ContextItem = { text, marker: marker === "chat" && match![4] ? "guess" : marker };
+    const read = parseContextLine(line);
+    if (!read) continue;
+    const item: ContextItem = { text: read.text, marker: read.marker };
+    if (read.mark !== null) marked = true;
+    seen.push([item, read.visibility]);
     if (group === "removed") removed.push(item);
     else groups[group].push(item);
   }
+  if (marked) for (const [item, visibility] of seen) item.visibility = visibility;
   return { groups, removed };
 }
 
@@ -163,15 +263,18 @@ function itemKey(text: string): string {
 
 /**
  * A group's items the resident stated, in the entry's order: no `(guess)`, no
- * `(chat)` (the agent's reading, never the resident's words), and none the
- * resident removed. The app keeps a removal cut to 80 characters with
- * an ellipsis, so an item that starts with a cut removal counts as removed too.
- * Pure.
+ * `(chat)` (the agent's reading, never the resident's words), none the
+ * resident removed, and (VISIBILITY B3) in an entry with marks only those whose
+ * visibility is Edge City India 2026 (an allowlist: a `private` /
+ * `agentvillage/private` line, an unmarked one and anything else are skipped). The app keeps a removal cut to 80 characters with an ellipsis, so an
+ * item that starts with a cut removal counts as removed too. Pure.
  */
 export function statedItems(tags: ContextTags, group: ContextGroup): string[] {
   const removed = removedBy(tags);
   return tags.groups[group]
     .filter((item) => item.marker !== "guess" && item.marker !== "chat")
+    // An allowlist, failing closed: no visibility (an entry with no marks: as on main) or Edge City India 2026 only.
+    .filter((item) => item.visibility === undefined || item.visibility === VISIBILITY_EDGE_CITY_INDIA_2026)
     .map((item) => item.text)
     .filter((text) => !removed(itemKey(text)));
 }

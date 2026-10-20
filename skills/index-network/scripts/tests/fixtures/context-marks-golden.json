@@ -1,0 +1,193 @@
+{
+ "note": "VISIBILITY MARKS golden: the sha256 of what origin/main's readers gave for each of todayEntries() (context-marks-corpus.ts): ts = tsOutputs (context-tags.ts parseContextTags, statedItems, contextInterests, contextPreferences, contextHolds), py = the gate's context_tags + stated_goals (memory_signal_gate.py). Generated with the readers of the commit below; never regenerate from a branch that changes them.",
+ "generated_at": "fe243b06ff70519b739bbe7872982f7a4df6ed53",
+ "corpus_sha256": "e79cc46277afade9253d67fe79afdc91bdb37d1c88a1e6dfc8814b7d275e8be8",
+ "entries": [
+  {
+   "name": "no mark",
+   "entry_sha256": "8af388eacca083ebbc43d8d74638476f9e99d9d5a7efac709950f0f7f409ca09",
+   "ts_sha256": "82559af5b940597fc6aea070daa5c890f437757f47deb273cd82d743175e9b15",
+   "py_sha256": "510a5536d92d421cdd03e00fd85ed0171f5e1de9420716528396d82333dfc15c"
+  },
+  {
+   "name": "old mark public",
+   "entry_sha256": "2da9f1762fc7c96a604fb5fe53c1f0bfe8e50bff24faa56bac8851809ec08914",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "old mark village",
+   "entry_sha256": "4bb81b39f59de1b7f81f473a565cf043fc734a3fa8eab990e75fe07f9a8be47c",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "old mark private",
+   "entry_sha256": "e1c2ea321ad3d48b23463be4b0b029a9b7d15e665dea30bdcf67959e681ee944",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "old mark PUBLIC",
+   "entry_sha256": "9ea176561422fb739a31afe53a98b4f21b5a086c9425ad3fc3fa5b29eaf670dc",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "old mark Village",
+   "entry_sha256": "96a8c2c4e1a67a43fe326763dd9f66aa3b625b021c0740fa82f97df1293acf88",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "old mark pRiVaTe",
+   "entry_sha256": "a4fa604a0ab51a3a65356c0013918798daaab8e246d040fce8d8989771df5149",
+   "ts_sha256": "9befb8a8e008b3780a730293dbcd30b3e8108f401d50c12facdecb71a671bcc1",
+   "py_sha256": "2ae847036b50262b42129aad3b1c7e4c87c873e614ddd56321fdd49ebe6fe756"
+  },
+  {
+   "name": "not a mark \"everyone\"",
+   "entry_sha256": "1dca720e187c98f9a08577b94865390db1717aa9a2a02fb4543eb9ecb9ca5632",
+   "ts_sha256": "e3c2adebc63bac0208f91fd1233fbeb4482a892ed72fc9303f6da014fc180194",
+   "py_sha256": "bdef1d13bba533c029f14a2d68589803c4bc5abb863c5ab330103b6b83e924de"
+  },
+  {
+   "name": "not a mark \"edgecityindia2026\"",
+   "entry_sha256": "258810fdf84a441cc828916ed5e9dbe12a9e8ae98c1588721bc8073631659825",
+   "ts_sha256": "3e6bef205526e795040fc614d98fd1a66bac496da4585fa1f5dd4dc2d0e9170c",
+   "py_sha256": "77f2bea99fcc968fa318deabb69a645009598a75d9cd0a900d47b245ce0fb73c"
+  },
+  {
+   "name": "not a mark \"agentvillage/public\"",
+   "entry_sha256": "55d7eb45835b1fdec1ec636ebb14e3a47ca1d476d8bb83796660b2b5aa0549ae",
+   "ts_sha256": "f86b65642eb058e067e9901e78e60a70614766a0a02936dd0147c03fa0dd2d15",
+   "py_sha256": "a1003c3af131d33966813fdfb0470629b9733430303e31b53aa26fb1b52f7726"
+  },
+  {
+   "name": "not a mark \"agentvillage/village\"",
+   "entry_sha256": "d0ae22ab572c6ff9ed8d41d673a52f42caaea684271cb156d0b55426dd3879ad",
+   "ts_sha256": "91b5624ab5c10b4a12564436bf566c05da87dcb8949740b911e47c12c8a41dea",
+   "py_sha256": "49cebc791d9c1b1066db0daad0840a3cfc0eded7936ddad132af35abe113f6eb"
+  },
+  {
+   "name": "not a mark \"agentvillage/edgecityindia2027\"",
+   "entry_sha256": "f315a6ee2c0c4cb83a937e005116181c1a23a6d3038022d4dffd675ed485c1ac",
+   "ts_sha256": "5d81dda9f4e3cfa84d7ae076c3d6463c1ec655a800abd857fe7a92f52822657b",
+   "py_sha256": "c195155c0f8b7407aeed806e2e4d8088dec1e0ddecd4475063a787f8841f8cc0"
+  },
+  {
+   "name": "not a mark \"agentvillage/edgecityindia\"",
+   "entry_sha256": "8d789852ebbf38ea26e6d05e5df12ba605781f5b4c6cc5b02a65d035fab8f8b2",
+   "ts_sha256": "e3e9b9ce51e9777f43e3f229aad623a29a5af5f3f7d20170cbdb19280cb16b89",
+   "py_sha256": "1d1568d82772a64058af1524f905d712e9c9b6800b2a2838e86cd57c5ce20a45"
+  },
+  {
+   "name": "not a mark \"agentvillage/\"",
+   "entry_sha256": "e09f79e78bbf2d6a8167ab15e860f7f03c58b691e1ca4f9f0ad058f0e7feed0c",
+   "ts_sha256": "bfc49403603338e437f98dc1acd75d31a5f8471af2844c458d8fe9c92c5a4672",
+   "py_sha256": "da7f1d5cfff311ef933edec9a7c1335fa621b3953c928e6401abfa4625b1e5c7"
+  },
+  {
+   "name": "not a mark \"agentvillage\"",
+   "entry_sha256": "40900fa588789a383646172b591a326e5665e7fb0970a706151fb39b2df182fe",
+   "ts_sha256": "39196231f590df9957d0dd562f10676f756e48f7947015322914ac43098b5270",
+   "py_sha256": "2efc1fe76790a526c743109095d6bc432b693a42e19a3f22c64af7cb5835f08b"
+  },
+  {
+   "name": "not a mark \"agentvillage/private/x\"",
+   "entry_sha256": "d29b8f48abec4e449d9f52c6b67daba3281daf378e2d41135d57a1edf16157c7",
+   "ts_sha256": "f977a27d92964a2e0d9e1513ab6fd31d5f742d42391d69f3589d042eb766849e",
+   "py_sha256": "1afc892d376a74e5ea12318b0348ebcfb9194e93c06c8a5d79e597c9c339f4e8"
+  },
+  {
+   "name": "not a mark \"agentvillage/privat\"",
+   "entry_sha256": "011cc9faf33423912ad159b2804a90de3db04b09f38627ed041ed674c98daa95",
+   "ts_sha256": "f35269937269fb3038d0d0ca3d87d596dd4c366eeb97e0ff21796a38005af5eb",
+   "py_sha256": "fd7afffc930562dd155c6486b66c3711e36d2d6cbbded4e72c7fb16f541153fa"
+  },
+  {
+   "name": "not a mark \"agentvillage//private\"",
+   "entry_sha256": "aae34a0afe149302d096097f828dc34ff2723d5a2e189c0d360aab427d853d7f",
+   "ts_sha256": "97950f25c6936bc5f7b34524a50ff25ae6beba952dba9429541203fda21ad5d5",
+   "py_sha256": "f3d2cc9739a4a0b9eb6a340ae1e492968e9137b4d5a7d96030e435a23d658238"
+  },
+  {
+   "name": "not a mark \"agentvillage\\\\private\"",
+   "entry_sha256": "6eac83ea0c93be1e22f028323805ccbed8e5850f4ea830f55e1d8a0cbecdfa2c",
+   "ts_sha256": "451a0df63675dc9316a1a9bb1d7454b07f48926aee789577bc0b0b29a93cd84e",
+   "py_sha256": "b198bbf7d27f29f0814a0cef45bbc7a67dc8cab8731f3652f6addca7eed1b932"
+  },
+  {
+   "name": "not a mark \"agentvillage.visibility/1\"",
+   "entry_sha256": "b41ca7fcc23da694ab70791d02d6a0e52263d4c1e1759a786fee88ab4c3d32ce",
+   "ts_sha256": "d985a51b230ab449e55c6ac9a6a5a431b1953a5ce13014e620010d80d1f66175",
+   "py_sha256": "950cac62589ca52fb8b891342007e2cc9a830bd847981a2dc7a7f14431a3dca9"
+  },
+  {
+   "name": "not a mark \"agentvillage /private\"",
+   "entry_sha256": "77020291f06cee02ae2bd9272bed9601d5280728c4246956257c6d5fa364636d",
+   "ts_sha256": "41d4eace2250e58d152fa9c34d505617697b5587327fde9faac4974895f7a76a",
+   "py_sha256": "d17729056c44fac88f81a4d734b40007e0f36795dc7ca7dfe12b200b8432297e"
+  },
+  {
+   "name": "not a mark \"agentvillage/ private\"",
+   "entry_sha256": "96e43d46c33a7e0bc8b63243a42649556ccc96c19a9c158ef410830ed400b1e7",
+   "ts_sha256": "31efe5421fe697ae34ddf335f29a842b14aba8f613fa5643c2da8af8ec8f6fd5",
+   "py_sha256": "79fe25f011d10b124c1473b73c6c4ac03df41d607f96d647fb5b23b08fbb82c7"
+  },
+  {
+   "name": "not a mark \"agentvillage/private \"",
+   "entry_sha256": "2e0305a0d6bf107038535a78e0c8523c2c71902e5a4bb69c6a5cf982a26d0743",
+   "ts_sha256": "ed799983c1e9d9cca9d4f11e99cd56dd913deb62a6cf97e54da5308f4ed77269",
+   "py_sha256": "12611d1d3816cdf6d2de004d386062f89a47e86b9c822aaf8ad4bb3fe45c3f9b"
+  },
+  {
+   "name": "not a mark \"public, private\"",
+   "entry_sha256": "f814460087d61410dc302afd7acf9abbc8fb7de10856f81594ab22b71be315d3",
+   "ts_sha256": "a0019ee5b8e513b232dfe4026486f9fc883b07ba699467179c74980045640cb6",
+   "py_sha256": "f7db2396ec1048890a8f8d843d166fa313f80e0ec5297f7ffdac410e52d28d91"
+  },
+  {
+   "name": "not a mark \"private, agentvillage/private\"",
+   "entry_sha256": "6dd92e95434ca5cd91e74de67e226cea08512ceea53ba48e4c583fc101962385",
+   "ts_sha256": "4812f6c92b5a4c75605bcdae0b8886ba56d627e65fcb4a32f903b1798aec2cc2",
+   "py_sha256": "f2dedb89fb59bb51ea79603258f7286dbbafaf58379cc1fc50788c515438e10f"
+  },
+  {
+   "name": "not a mark \"agentvillage/private, private\"",
+   "entry_sha256": "210e11e98a7011f4fded9b584b25d0a8606c24646f4a0893e725966c47c244bb",
+   "ts_sha256": "b2bc4c7ed1ab1da4d3f1a5959a5c5635233836b46aedbac59892d503417fb315",
+   "py_sha256": "d2025a7119607347a26fe84f535ed94c71d195a15805c1ea9114174ce9f53007"
+  },
+  {
+   "name": "not a mark \"publicly\"",
+   "entry_sha256": "444e13608f3be95339d4f9f864c7adb2a592b506bc3313b0b6edf08b24420f25",
+   "ts_sha256": "920f3a12f3cba8574ef4d8ea10358a4f6f768af63259f8adeb50ab5de8a5e58a",
+   "py_sha256": "17ef8fcdf8ae40a866ab1ebf175e39c68f4f156d1d4369f31ab28325f6cb69f7"
+  },
+  {
+   "name": "not a mark \"constructor\"",
+   "entry_sha256": "ffc427e7d246d332dd2f119bd53403f1169d21819b37e0d70230b5b4aed9dc5d",
+   "ts_sha256": "d1e5a0e48f14ec877c756597920c71b88a29ebe14640e9ccec52c2d530454018",
+   "py_sha256": "a623a358e00d8110d2a1ed4a50533e573a7553638aad485aee5b309cc0857b03"
+  },
+  {
+   "name": "not a mark \"__proto__\"",
+   "entry_sha256": "b42ec1aa466b49a41f2569ae360586f931100dafe50f198c9d8599ec4faa05ee",
+   "ts_sha256": "f51309913e8053e3b159fc698a2ac93b8d0222aee07b917f737972165bdcbe40",
+   "py_sha256": "018980f0e8f4bdb6d62117e63aaf14dc5a839c7cd7ba8b78556a4e25394cbae0"
+  },
+  {
+   "name": "not a mark \"\"",
+   "entry_sha256": "02c207db9eff062c9fad6a8fdf0858495b2ffc049460d97894d1d5f6989b691e",
+   "ts_sha256": "50d9f24cac9761737f73a1ad95bc0aee1da714c1f0057491676c4acd4802ab4d",
+   "py_sha256": "0f296008ef0b6d32b9ae2ae5dfa5c5c3ccb8dca9f712fe43b7fc6f9c925368f7"
+  },
+  {
+   "name": "mixed old marks",
+   "entry_sha256": "32a1aa1245b36ec5117fcc1505bb47830a3dda8d722aa275e6811af06c1b30ea",
+   "ts_sha256": "6acd1a7e12b1669363d9feda9c56afbdabffb2d5769780a08e52c13538ddaacd",
+   "py_sha256": "31fdd06ce57fd2f4594cef65e0204c2ad04baa49d62b7c65a289c089c83409ac"
+  }
+ ]
+}

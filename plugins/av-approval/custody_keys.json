@@ -1,6 +1,6 @@
 {
   "version": "av_custody_keys_v1",
-  "about": "Every credential-shaped name (a name holding KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, PASSWD, AUTH, DSN, WEBHOOK, CREDS, BEARER or APIKEY, the substrings Hermes's execute_code scrub treats as secret) that the overlay reads, or that the control plane puts on a village sandbox, with the decision taken for it. 'strip': av-approval removes it from every agent-run child (the five in _custody.FLOOR are stripped whatever this file says, since the agent's user can write it) (foreground and background terminal, execute_code, cron and other scripts Hermes spawns); the code that needs it reads $HERMES_HOME/.env itself or runs inside the gateway. 'hermes': Hermes v2026.9.24 (0.21.5) already removes it from terminal and execute_code children (measured against the real builders). 'agent_readable': left in the agent's environment on purpose, for the reason given. 'not_secret': the name has the shape but holds no credential. tests/test_custody.py fails when the overlay starts reading a credential-shaped name that has no entry here, so a new key cannot arrive without a decision.",
+  "about": "Every credential-shaped name (a name holding KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, PASSWD, AUTH, DSN, WEBHOOK, CREDS, BEARER or APIKEY, the substrings Hermes's execute_code scrub treats as secret) that the overlay reads, or that the control plane puts on a village sandbox, with the decision taken for it. 'strip': av-approval removes it from every agent-run child (the six in _custody.FLOOR are stripped whatever this file says, since the agent's user can write it) (foreground and background terminal, execute_code, cron and other scripts Hermes spawns); the code that needs it reads $HERMES_HOME/.env itself or runs inside the gateway. 'hermes': Hermes v2026.9.24 (0.21.5) already removes it from terminal and execute_code children (measured against the real builders). 'agent_readable': left in the agent's environment on purpose, for the reason given. 'not_secret': the name has the shape but holds no credential. tests/test_custody.py fails when the overlay starts reading a credential-shaped name that has no entry here, so a new key cannot arrive without a decision.",
   "names": {
     "INDEX_API_KEY": {
       "decision": "strip",
@@ -21,6 +21,10 @@
     "ADMIN_TOKEN": {
       "decision": "strip",
       "reason": "A control-plane admin credential (agent-commons search_forum.py, the daily brief's announcements). It is not on any village sandbox today and must never be; if a box ever carries it, agent code does not see it and those two readers report it missing."
+    },
+    "MORALMOD_LLM_API_KEY": {
+      "decision": "strip",
+      "reason": "The MoralMod OpenRouter key the control plane writes; Agent Village pays for it, not the tenant. Only av-events, inside the gateway, reads it (_negotiator_llm.py: process environment, then $HERMES_HOME/.env, at plugin load and on each Index bridge step behind AV_MORALMOD_OWN_KEY) to give the Index bridge's own agent a client on it. No agent-run code, skill recipe or sidecar child needs it (the MoralMod sidecar's env is an allowlist without it). Hermes does not strip it from terminal children (not on its provider blocklist), so the overlay must; with it agent code could spend the MoralMod credit or carry the key out."
     },
     "TURING_FALLS_CLAIM_TOKEN": {
       "decision": "agent_readable",
@@ -65,6 +69,14 @@
     "APPROVAL_HOOK_TOKEN_ENV": {
       "decision": "not_secret",
       "reason": "Names the variable the shim reads its token from (AV_APPROVAL_TOKEN); holds a name, not a token."
+    },
+    "AV_MORALMOD_OWN_KEY": {
+      "decision": "not_secret",
+      "reason": "av-events' on/off switch for the MoralMod key (1|true|yes|on); holds a boolean, not a key."
+    },
+    "OWN_KEY_ENV": {
+      "decision": "not_secret",
+      "reason": "A constant in av-events' _negotiator_llm.py (and its __all__) that holds the variable name MORALMOD_LLM_API_KEY, not a key; the scan's second net sees the quoted name on a line that says ENV."
     },
     "HERMES_MAX_TOKENS": {
       "decision": "not_secret",

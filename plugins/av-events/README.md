@@ -23,6 +23,8 @@ plugins/av-events/
   _core.py         env, uuid v7/v5, canonical hashing, secret sanitiser, buffer, HTTP, read-only SQLite
   _intentions.py   which tool calls record an intention, and which one (pure)
   _tools.py        tool.call payload and the tool-name allowlist (pure)
+  _code_run.py     code.run payload for an execute_code call: keyed hash, counts, closed risk tags (pure; P10-P1, dark behind AV_EVENTS_CODE_RUN)
+  _negotiator_llm.py  llm.call (caller moralmod_negotiator) for each model step the Index plugin's bridge makes: wraps that bridge's own client only (MM-INFER-VIS, dark behind AV_EVENTS_NEGOTIATOR_LLM)
   _messages.py     message.in/out payloads and the punctuation flags (pure)
   _edgeos.py       the curl parser, EdgeOS operations, the action ledger and planner
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
@@ -31,6 +33,7 @@ plugins/av-events/
   _approvals_reminder.py  one Connect-approvals reminder per Telegram DM session while the welcome's button is unstarted (DATA-444)
   _clock.py        the Now line on every turn, cron runs and subagents included: `Now: <Wkd YYYY-MM-DD HH:MM> IST (<h:mm AM/PM>)` (CLOCK-1)
   _prompt_refresh.py  a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md / skills: wraps Hermes's build_turn_context (F1)
+  _miniapp_epoch.py   an open chat picks up a mini-app install or removal at its next turn: the installed-apps stamp and check (MINIAPP-PICKUP)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
@@ -55,13 +58,20 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Twelve names are not hooks: `memory_recalled` (the bus subscription), `memory_snapshot` (the memory backup upload, `_backup.run_once`), `plugin_events` (SEC-3's two av-approval bus subscriptions), `model_events` (SEC-6's two av-approval model-observer subscriptions), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass), `headline_flagged` (the DATA-487 pass; the trigger then writes no hand-off file), `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop), `clock_line` (the CLOCK-1 Now line on every turn, which `AV_EVENTS_ENABLED=0` does not stop either), `prompt_refresh` (F1's system-prompt refresh, which `AV_EVENTS_ENABLED=0` does not stop either) and `inference_run` (the memory signal sync's `intention.inference_run` event; its run record is still completed). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Fourteen names are not hooks: `memory_recalled` (the bus subscription), `memory_snapshot` (the memory backup upload, `_backup.run_once`), `plugin_events` (SEC-3's two av-approval bus subscriptions), `model_events` (SEC-6's two av-approval model-observer subscriptions), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass), `headline_flagged` (the DATA-487 pass; the trigger then writes no hand-off file), `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop), `clock_line` (the CLOCK-1 Now line on every turn, which `AV_EVENTS_ENABLED=0` does not stop either), `prompt_refresh` (F1's system-prompt refresh, which `AV_EVENTS_ENABLED=0` does not stop either), `miniapp_refresh` (MINIAPP-PICKUP's installed-apps stamp and check, which `AV_EVENTS_ENABLED=0` does not stop either), `inference_run` (the memory signal sync's `intention.inference_run` event; its run record is still completed) and `negotiator_llm` (MM-INFER-VIS's negotiator `llm.call`; the step itself is unchanged). |
 | `AV_INFERENCE_RUN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `intention.inference_run@1` for every run of the memory signal sync (see "The memory signal sync (DATA-470)"). **Off until the data release that registers the type is live**: ingest quarantines an unknown type. Read like the other switches (process environment, then `.env`), at every run's report. |
 | `AV_PLUGIN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `plugin.inventory@1` and `plugin.unknown@1` from av-approval's plugin inventory (SEC-3; see "Events from other plugins"). **Off until the data release that registers both types is live**; while off each delivery is counted `plugin_dropped_switch_off` (a counter only: unlike the other drop reasons it never logs a line) and nothing is emitted. Read like the other switches (process environment, then `.env`), on every delivery. |
 | `AV_MODEL_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `model.observed@1` and `model.offlist@1` from av-approval's model observer (SEC-6 half 2; see "Events from other plugins"). A switch of its own, separate from `AV_PLUGIN_EVENTS`. **Off until agentvillage-data's DATA-477 release that registers both types is live**; while off each delivery is counted `model_dropped_switch_off` (a counter only, never a log line) and nothing is emitted. Rollback is this switch off. Read like the other switches (process environment, then `.env`), on every delivery. |
+| `AV_EVENTS_CODE_RUN` | *(off)* | `1`, `true`, `yes` or `on` emits `code.run@1` for every `execute_code` call (see "Code runs (P10-P1)"). Unset, blank, `0` or any other value is off, and then nothing is built. **Off until agentvillage-data registers `code.run@1`**: ingest quarantines an unknown type. Read like the other switches (process environment, then `.env`), on every `execute_code` call. |
+| `AV_EVENTS_CODE_RUN_SCOPE` | `all` | Unset or blank: `all` (the lead's default). Exactly `all` or `research_consented` (surrounding whitespace ignored): itself. **Any other value that is set** (a typo, `research`, another case, a homoglyph) **fails narrow to `research_consented`**, with one WARNING per process that names the variable and a count, never the value. Sent as the event's `consent_scope`; agentvillage-data decides what it keeps from it (see "Code runs (P10-P1)"). It changes nothing on the box. |
+| `AV_EVENTS_NEGOTIATOR_LLM` | *(off)* | `1`, `true`, `yes` or `on` emits one `llm.call` with `caller: "moralmod_negotiator"` for every model step the Index plugin's loopback bridge makes for the MoralMod negotiator (see "The MoralMod negotiator's model steps (MM-INFER-VIS)"). Read like the other switches (process environment, then `.env`): **at plugin load**, which installs the wrap (off then: nothing is wrapped and no thread starts, so turning it on takes a gateway restart), and **on every step**, so turning it off stops the events at once. A valid `llm.call@1` today: nothing quarantines. |
+| `AV_EVENTS_NEGOTIATOR_LLM_SCOPE` | `all` | `AV_EVENTS_CODE_RUN_SCOPE`'s semantics on a sibling variable: unset or blank `all`; exactly `all` or `research_consented` itself; any other set value fails narrow to `research_consented`, with one WARNING per process naming the variable and a count, never the value. Sent as the event's `consent_scope`; agentvillage-data decides what it keeps from it. |
+| `AV_MORALMOD_OWN_KEY` | *(off)* | `1`, `true`, `yes` or `on`: the Index plugin bridge's dedicated client (the MoralMod negotiator's model steps only) runs on `MORALMOD_LLM_API_KEY` instead of the tenant's key, **or the step fails** (key missing, malformed or not applicable): never the tenant's key (see "The MoralMod key"). Read on every step; the seam itself is installed only when this switch or `AV_EVENTS_NEGOTIATOR_LLM` is on at plugin load, so a switch armed later does nothing until the gateway restarts (the control plane must restart the gateway when it writes the key). Off: the tenant's key, as today. Never touches the resident's chat client. |
+| `MORALMOD_LLM_API_KEY` | *(unset)* | The MoralMod OpenRouter key (`sk-or-` and 16 to 256 of `[A-Za-z0-9_-]`, as long as the sanitiser's `openrouter_key` pattern needs; anything else counts as missing), written by the control plane. Read like the other variables (process environment, then `.env`); registered with the sanitiser at plugin load whatever the switches say; never logged or sent. |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_EDGEOS_CURL_GUARD` | `1` | Any of `0`, `false`, `no`, `off` turns off the refusal of hand-written calls to EdgeOS's directory and `/humans/me` (see "Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)"). **Process environment only**, read on every `pre_tool_call`. Independent of every telemetry switch. |
-| `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset or blank): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. |
+| `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset or blank): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. **From v2.1.5** off here no longer removes the `build_turn_context` wrapper while `AV_MINIAPP_REFRESH` is on (it then runs the mini-app check only); to take the wrapper out entirely, turn both off (`AV_PROMPT_REFRESH=0` and `AV_MINIAPP_REFRESH=0`, or `prompt_refresh,miniapp_refresh` in `AV_HOOKS_DISABLED`). |
+| `AV_MINIAPP_REFRESH` | on | MINIAPP-PICKUP (see "Mini-app pick-up"). Unset, blank, `1`, `true`, `yes` or `on`: on, for every resident (independent of `AV_PROMPT_REFRESH`). `0`, `false`, `no` or `off`: off, which also stops the stamp (new prompts are today's bytes). Any other value: off, with one WARNING per process. `miniapp_refresh` in `AV_HOOKS_DISABLED` wins. Read at every turn start and every prompt build, no restart. Off here does not stop F1 (`AV_PROMPT_REFRESH`); both off removes the wrapper. **Cost:** a `miniapps` rebuild is a full F1 rebuild (memory reloaded, so it also carries current USER.md / MEMORY.md / AGENTS.md, the skills index and the date line; the conversation, tools[] pin and `on_session_start` are untouched). At the v2.1.5 roll every chat on a box with an app rebuilds once: one full-context cache write for each chat active across the roll (idle chats are cold after a roll anyway). |
 | `AV_PROMPT_REFRESH_FILES` | `memory` | Which files trigger F1's refresh. `memory` (also unset, blank or unknown): USER.md and MEMORY.md only. `all`: AGENTS.md too, and the exact test also compares the skills index. The skills index is not hashed, so a skills change on its own is caught only at a session's first turn in a process (a restart, an rc roll) or together with the next change to a hashed file. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
@@ -140,6 +150,7 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 | `tools_hash`, `system_prompt_hash` | yes | yes | yes |
 | Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run`, `message.out.silent` | yes | yes | yes |
 | `action.*` `edgeos_event_id` | keyed hash | the id | the id |
+| Receipt id (EdgeOS participant record) on `action.receipted` and `tool.call` (DATA-308) | keyed hash | keyed hash | keyed hash |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
 | Intention `text_hash`, `summary_hash` (plain SHA-256) | yes | yes | yes |
 | Profile `user_md_hash` (keyed) | yes | yes | yes |
@@ -173,8 +184,8 @@ is irrelevant; any change to a tool's schema changes the hash. Text is encoded a
 exactly as plain UTF-8.
 
 **Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`,
-`profile.updated` `user_md_hash`, and in
-`metadata` the EdgeOS event and participant ids on `action.*`, are HMAC-SHA256 under a per-tenant
+`profile.updated` `user_md_hash`, the EdgeOS participant record id in a receipt (every mode,
+DATA-308), and in `metadata` the EdgeOS event id on `action.*`, are HMAC-SHA256 under a per-tenant
 random key at `$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600). The key never leaves
 the sandbox, so these digests count and join within a tenant and are useless to anyone else.
 **A key, once written, never rotates** (`load_or_create_key`): a missing file is created by linking a
@@ -218,7 +229,15 @@ server's tool names never reach ingest. A missing or malformed seed lists nothin
 
 All carry `evidence_class: agent_report` — this plugin observes the agent, not the world, and ingest
 downgrades anything stronger in any case (spec scenario 4) — **except `action.receipted`**, which
-claims `provider_receipt` because it carries a checkable receipt (see "EdgeOS actions").
+claims `provider_receipt` because it carries a receipt (see "EdgeOS actions"; since DATA-308 the
+receipt's id is keyed in every mode, so ingest stores the claim at `agent_report`, divergence 31).
+
+`schema_version` is 1 for every type but `tool.call` and `action.receipted`, which are 2 since
+DATA-308 (`_core.SCHEMA_VERSIONS`): version 2 is version 1 with the receipt's participant id always
+its keyed hash. Under contract-v1 a producer change after the tag is a new version beside the old
+one, so ingest can hold version 2 to the keyed form and still take a raw UUID at version 1 from a
+sandbox on an older overlay. Ingest must register version 2 before this overlay reaches a sandbox;
+until then those events quarantine as an unknown version (replayable).
 `event_id` is a uuid v7 (RFC 9562 §5.7, implemented here because the 3.11 stdlib has none) with a
 monotonic counter in `rand_a`, so ids sort in emission order — **except `cron.run`**, whose id is
 §4.3's derived uuid v5, or without a tenant id a v7 derived from the execution (see "Cron capture").
@@ -235,8 +254,9 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `message.in` | `pre_llm_call` (`user_message`) | `channel`, `length`, `content_hash`, `flags` {`is_ask`, `is_recommendation`, `sentiment`}, `flags_rule`, `cron_job_id`, `silent` — see "Messages" |
 | `message.out` | `post_llm_call` (`assistant_response`) | as above; `silent` is set on a cron run's reply |
 | `tool.call` | `post_tool_call` | `tool_name`, `tool_category`, `args_hash`, `result_hash`, `ok`, `status`, `latency_ms`, `receipt`, `error_type`, `operation`, `target_system`, `category_version`, plus `args_length` / `result_length` above `metadata` — see "Tool calls" |
+| `code.run` | `post_tool_call` on `execute_code`, after its `tool.call`, behind `AV_EVENTS_CODE_RUN` (default off) | closed, every key required, in this order, no text: `consent_scope`, `code_hmac`, `code_bytes`, `status`, `error_type`, `tool_calls_made`, `unavailable_tool_refusals`, `unavailable_tools`, `risk_tags`, `scan_truncated`, `rules_version`, `category_version`; the envelope ids of the call's `tool.call` — see "Code runs (P10-P1)" |
 | `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `supersedes_action_id`, `operation`, `edgeos_event_id`, `occurrence_start`, `allowlist_version` — see "EdgeOS actions" |
-| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
+| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: the participant id's keyed hash} |
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
 | `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`), `intention_reason` (null, or `not_linked` \| `ambiguous` \| `not_recorded`; `not_recorded` today); envelope `outcome_id`, `opportunity_id`, `intention_id` (null today) — see "The evening outcome ask" |
 | `opportunity.headline_flagged` | the flusher, from the proactive trigger's hand-off files (`av-events/proactive/headline-flagged/`), one per Index headline the trigger's cleaner, scanner or shape check withheld or flagged | closed, every key required, no text: `opportunity_id` (the Index opportunity id, a UUID, either case: data's door admits UUID only), `counterpart_index_user_id` (the card's other party's Index user id, a UUID), `reason_code` (`cleaner_withheld` \| `scanner_flagged` \| `shape_withheld` \| `length_capped`; `length_capped` is reserved and not emitted: a cut headline was checked whole before the cut), `stage` (`cleaner` \| `scanner` \| `shape`), `headline_length` (int 0..2000); envelope `opportunity_id`, actor `system`; a record or file not exactly that shape is dropped and counted (`flag_dropped_<reason>` in the log line and the counters), every file is consumed once, nothing raises; the ids cannot be verified on the box (same user as the agent), so the event is agent-asserted (`_headline_flagged.py`, DATA-487) |
@@ -244,6 +264,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
+| `llm.call` (`caller: "moralmod_negotiator"`) | the Index plugin bridge's own `chat.completions.create`, behind `AV_EVENTS_NEGOTIATOR_LLM` (default off) | closed, every key always present, in this order: `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash` and `system_prompt_hash` (always null), `api_mode`, `response_model`, `tool_count`, `message_count`, `cost_usd`, `generation_id`, `error_type`, `status_code`, `caller`, `key_source` (`moralmod` \| `tenant`), `consent_scope`, plus `assistant_content_chars` / `assistant_tool_call_count` above `metadata`; no session, turn or run id — see "The MoralMod negotiator's model steps (MM-INFER-VIS)" |
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
@@ -309,8 +330,9 @@ caps several of these types at `platform_record` while scenario 4 requires inges
 class a plugin token claims. The two disagree; this code follows scenario 4, which is the
 enforceable one. `action.receipted` claims `provider_receipt` because §4.1's row says "provider_receipt
 with receipt" and §2.1 honours it only for a checkable receipt (`action.*` type,
-`receipt.kind = edgeos_confirming_read`, a non-empty string `receipt.id`) — which is exactly what the
-event carries. `core.actions` still does not treat a plugin's own receipt as corroboration.
+`receipt.kind = edgeos_confirming_read`, and a `receipt.id` someone could look up). Since DATA-308
+the id is a keyed hash in every mode, so ingest stores the claim at `agent_report` (divergence 31).
+`core.actions` never treated a plugin's own receipt as corroboration in any case.
 
 ### Events from other plugins
 
@@ -1114,9 +1136,195 @@ tool, before any `action.*` or `intention.*` the same call implies.
 - **Refs.** `tool_call_id` is Hermes's, nulled if it fails the id pattern; `run_id` as for
   `llm.call`; `occurred_at` is when the call returned and `occurred_at_earliest` that minus
   `duration_ms`.
-- **Isolation.** The `tool.call`, the EdgeOS path and intention capture are isolated from one
-  another inside the hook: an exception in one is counted against the breaker like any hook
-  failure and does not cost the others their events.
+- **Isolation.** The `tool.call`, the EdgeOS path, `code.run` and intention capture are isolated
+  from one another inside the hook: an exception in one does not cost the others their events. It
+  is counted against the breaker like any hook failure, except in `code.run`, which only bumps the
+  `code_run_failed` counter (see "Code runs (P10-P1)").
+
+## Code runs (P10-P1)
+
+Since rc42 `execute_code` runs outside the approval hook, and its `tool.call` says only that a
+program ran, how long its arguments were and its status. `code.run@1` adds one closed record per
+`execute_code` call of what the program could reach for (CODE-RUN-GATE research, P1). It is
+**observe-only**: it is built in `post_tool_call`, after the tool has returned, and Hermes discards
+that hook's return. It adds no refusal, no card, no wait and changes nothing the tool returns.
+`pre_tool_call`, av-approval, the shim, the hook and the policy templates are untouched.
+
+**The switch.** `AV_EVENTS_CODE_RUN` (`1|true|yes|on`, `_core.env_flag_on`), default off. Off,
+`_emit_code_run` returns before anything is built. It needs the plugin's own gates as every event
+does: no `AV_EVENTS_TOKEN`, or `AV_EVENTS_ENABLED=0`, or `post_tool_call` in `AV_HOOKS_DISABLED`,
+and nothing is sent.
+
+**What is sent** (`_code_run.code_run_payload`; contract `tests/vectors/code_run_contract.json`):
+
+| Key | Value |
+|---|---|
+| `consent_scope` | `all` \| `research_consented`, from `AV_EVENTS_CODE_RUN_SCOPE` (an unrecognised set value is `research_consented`) |
+| `code_hmac` | the keyed hash (HMAC-SHA256 under the tenant key, see "Keyed hashes") of the program text `args.code`; null in `metadata`, without a key, or with no string `code` |
+| `code_bytes` | the program's UTF-8 byte length; null as `code_hmac` (except without a key) |
+| `status`, `error_type` | the same closed values `tool.call` sends |
+| `tool_calls_made` | the int 0..10000 in Hermes's result, else null |
+| `unavailable_tool_refusals` | how many `Tool '<x>' is not available in execute_code` refusals (Hermes's kernel RPC allowlist) the result's `output` and `error` hold (the whole result when it is not JSON), capped at 10000 |
+| `unavailable_tools` | the distinct `<x>`, sorted, at most 16: a name only when `tool_categories.json` lists it, any other name as `other` |
+| `risk_tags` | sorted, from the closed set below |
+| `scan_truncated` | true when the tags or the refusal count read only the first 262144 characters of the program or of a result text (`SCAN_LIMIT`: the scans run synchronously in the hook); `code_hmac` and `code_bytes` always cover the whole program |
+| `rules_version` | `code_run_tags_v1`, bumped whenever a tag rule changes |
+| `category_version` | the `tool_categories` version the names were checked against |
+
+The envelope carries the same `session_id`, `turn_id`, `run_id` and `tool_call_id` as the call's
+`tool.call`, a fresh event id, actor `agent`, `evidence_class: agent_report`.
+
+**Risk tags.** Computed on the box from the program text by plain regex checks, never sent as
+text, in time linear in the scanned text: every rule starts with a literal (word-boundary checks
+come after it), and the three rules that relate two places (an `open(` and its write mode within
+512 characters on its line, an `import` and a module within 200, a `from os import` and a name
+within 200) and `/proc/…environ` (within 64) use a linear two-place check. A test holds the tags to
+the round-1 regexes over every case and a seeded fuzz corpus, and review-b's dense shapes at the
+cap take under 30 ms. A tag says the text *could* do the thing, not that it did: the checks are static, they
+over-fire on a comment or a co-occurrence (a one-letter file name such as `'x'` reads as a write
+mode), and string building evades them.
+
+| Tag | Fires on |
+|---|---|
+| `dotenv_path` | `.env` as a path segment, or the `dotenv` package (not `os.environ`, `self.env`, `.venv`) |
+| `proc_environ` | `/proc/<…>/environ`, `'/proc'` with `'environ'`, or psutil's `.environ()` |
+| `os_environ` | `os.environ`, `os.environb`, `getenv(`, `from os import environ` |
+| `subprocess` | `subprocess`, `os.system/popen/exec*/spawn*/posix_spawn/fork`, `pty.spawn`, `asyncio.create_subprocess_*` |
+| `socket_or_http_client` | importing or using `socket`, `ssl`, `urllib`, `urllib3`, `http`, `requests`, `httpx`, `aiohttp`, `websocket(s)`, `ftplib`, `smtplib`, `telnetlib`, `pycurl`, `xmlrpc`, or `asyncio.open_connection` |
+| `hermes_home_write` | a write (an `open` with a `w`/`a`/`x`/`+` mode, `write_text`, `shutil` copy or move, `os` rename, remove, mkdir or chmod, `O_WRONLY`-style flags, a shell `>` to an absolute path) anywhere in a program that names `HERMES_HOME` or `.hermes` |
+| `scripts_dir_write` | a write, in a program that names `scripts/` |
+| `cron_write` | a write, in a program that names `cron/`, `jobs.json`, `crontab` or `/etc/cron` |
+| `gated_host` | a host the plugin already holds, as a whole host or a subdomain: `index.network`, `edgeos.world` and the EdgeOS seed hosts, the control plane's `CP_HOSTS`, `api.telegram.org`, `openrouter.ai`, and the hosts of `INDEX_API_URL`/`INDEX_MCP_URL` (as `record_intention` reads them), `EDGEOS_API_BASE` (process environment) and `CONTROL_PLANE_URL` |
+| `base64_or_eval` | `base64`, a `b64decode`-style decoder, a bare `eval(`, `exec(` or `compile(`, `__import__(`, `marshal.loads` (not `ast.literal_eval`, `re.compile`) |
+
+**Shapes.** Every value the contract checks by pattern (`code_hmac`, `error_type`,
+`rules_version`, `category_version`, a listed tool name) is checked here with `re.fullmatch`, never
+a bare `$` (which in Python also accepts a trailing newline that data's door refuses); a value off
+its shape is null. `tool.call`'s own `error_type` check in `_tools.py` is unchanged.
+
+**What is never sent.** The program, its output, its error text, a path, a host, an env name or
+value, a refused tool's name unless the allowlist lists it, and any id `tool.call` does not
+already carry. Nothing reads `.env` but the switch reader every av-events switch uses, and
+nothing opens a file or touches the network.
+
+**Scope and consent.** The plugin sends the same event in either scope; `consent_scope` tells
+agentvillage-data how to keep it. `all` is ops security monitoring for every tenant: the type is to
+be on data's ops allowlist and kept without research consent **only when `consent_scope` is
+`all`**, the way `cron.run` is kept only for an installer job. `research_consented` keeps it on the
+research path with `tool.call`: dropped by the worker for a tenant without research consent. Until
+data registers `code.run@1` (`src/schemas/`) and lists it (`src/worker/consent.ts`), ingest
+quarantines it, which is why the switch is off.
+
+**The limit.** The plugin runs as `hermes`, the uid the program runs as. A program can switch it
+off, edit it or forge its rows, so `code.run` ranks as `agent_report` evidence and is never proof
+that a program did or did not do something. The witnesses the agent cannot reach are the control
+plane's root integrity sweep (P2) and the cross-witness alarms (P5) of the CODE-RUN-GATE research;
+`code.run` is what they compare against.
+
+**Never at the cost of `tool.call`.** `code.run` runs after the call's `tool.call` and is isolated
+*uncounted* (`_quiet` in `__init__.py`): a failure bumps the `code_run_failed` counter (one log line
+per process, a name and a count) and never reaches the session breaker, so no `code.run` failure can
+silence `tool.call` or any other event.
+
+## The MoralMod negotiator's model steps (MM-INFER-VIS)
+
+**Why.** For an ON resident the MoralMod runtime (the Index plugin's Bun negotiator) asks the
+resident's own model for every negotiation step by POSTing to the Index plugin's loopback bridge.
+At the pinned `INDEX_PLUGIN_REF` (04d833b8) that bridge runs inside the Hermes gateway process
+(`sidecar.py:159-167`), routes to `speaker.complete` (`bridge.py:11/49`), and `speaker.complete`
+calls `agent.client.chat.completions.create(**kwargs)` itself (`speaker.py:173-203`) on one
+dedicated `AIAgent` that `speaker._main_agent()` builds from the gateway's runtime kwargs and
+caches (`:138-170`). Hermes's `pre_api_request` / `post_api_request` / `api_request_error` fire
+inside `AIAgent`'s own request path, not on a raw client call, so none of those steps was an
+`llm.call`, and their spend (the resident's key) showed only in the key's total.
+
+**How** (`_negotiator_llm.py`). Behind `AV_EVENTS_NEGOTIATOR_LLM`, read at plugin load. Hermes
+loads plugins in directory order, so the Index plugin loads after av-events: `register()` tries
+once and a daemon poller (every 2 s for five minutes, then every 30 s) looks the speaker up in
+`sys.modules` as Hermes names it: `hermes_plugins.index_network.speaker`, bare for whichever home
+claims the slug first and `__home_<digest>` for any other (`plugins_loader.py:605-614`), so the name
+does not say whose it is. Only a speaker whose plugin directory sits beside this av-events (the
+same `<home>/plugins`, where install.ts and `hermes plugins install` put both) is wrapped; any other,
+or one without a `__file__`, is counted `negotiator_llm_foreign_home` and left alone. `$HERMES_HOME`
+is not the test: in a multi-home gateway it is one value for every home. It never imports it. It rebinds
+`speaker._main_agent` (one module attribute, as `_village_visible` rebinds `_core_tool_names`); the
+wrapper calls the plugin's own function, returns its agent unchanged, lets anything it raises
+through unchanged, and wraps that agent's `client.chat.completions.create` once (a marker on the
+wrapper; a reloaded av-events re-wraps the SDK's method, not its predecessor's wrapper).
+`speaker.complete` reads `_main_agent` through its module global on every call; `complete` itself
+is not the seam because `bridge.py` binds it at import.
+
+**Only the bridge's client.** Hermes builds a new `openai.OpenAI` for every `AIAgent`
+(`create_openai_client`, `agent/agent_runtime_helpers.py:1805` at v2026.9.24; only the httpx
+connection pool is shared), the SDK caches `client.chat.completions` per client, and the wrapper
+is an instance attribute on that one object. The resident's chat agents have other clients and are
+never touched (held by a test). A client that is not an `openai` SDK client (a MoA facade, a
+provider-supplied client) is not wrapped and counted `negotiator_llm_client_unsupported`.
+
+**What is sent.** One `llm.call@1` per step, with `caller: "moralmod_negotiator"` (data already
+types `caller` on `llm.call@1`, DATA-506; every other plugin `llm.call` sends none, and null means
+Hermes's own request path, so nothing is backfilled) and `consent_scope`. The five token buckets
+come from Hermes's own `normalize_usage`, so they add up exactly like the agent's; `cost_usd` is the
+provider's `usage.cost` when the response carries one (OpenRouter), else null (the request is never
+changed to ask for it); `generation_id` is OpenRouter's `gen-…` id when the response carries one.
+`finish_reason` and `error_type` are closed lists (anything else is `other`), `status_code` an HTTP
+status or null. `tools_hash` and `system_prompt_hash` are always null and nothing is registered:
+the negotiator's system message embeds the resident's intent, and `llm.call`'s hashes are unkeyed.
+Never a message, a tool, the completion or any id of the resident's; the only lengths are the
+ones `llm.call` sends above `metadata` (the completion's characters and tool calls) and the counts
+of messages and tools. Contract: `tests/vectors/negotiator_llm_contract.json`.
+
+**No session.** The bridge has no Hermes session, so `session_id`, `turn_id` and `run_id` are null.
+Downstream that keeps the row out of `core.sessions` (`session_id is not null`), `core.runs` and
+`core.trajectories` (`coalesce(run_id, session_id) is not null`) and the cron and latency marts: it
+can never be read as part of the resident's chat. It counts by tenant and day
+(`core.cost_facts`, `core.ops_cost_by_tenant_day`, `core.agent_model_by_tenant_day`).
+
+**Scope and consent.** As `code.run`: the plugin sends the same event in either scope and
+agentvillage-data decides. Today the worker keeps a plugin `llm.call` for a research-consented
+tenant and drops it for the rest; for `all` to mean ops spend for every tenant, data adds a rule
+keeping `llm.call` without research consent only when `caller` is `moralmod_negotiator` and
+`consent_scope` is `all` (`src/worker/consent.ts`).
+
+**Never at the cost of the step.** The wrapped `create` calls the original with the same
+arguments and returns its result (or re-raises its exception) unchanged; before it runs there is
+only a clock read. Everything after it is `_quiet`: a failure bumps `negotiator_llm_failed`, never
+the session breaker, and the step's result is the same object. The emit is the same local buffered
+append as every av-events event (no network; the flusher sends). The flag and `AV_EVENTS_ENABLED`,
+`AV_HOOKS_DISABLED=negotiator_llm` and the process breaker are re-read on every step. A speaker
+without `_main_agent` and `complete` (the plugin revision moved) is a counted no-op
+(`negotiator_llm_no_seam`). Unload puts the plugin's function and the client's method back. No
+file of the Index plugin, the MoralMod runtime or its pin is changed: the wrap is in memory, and
+the installer's checks (`SIDECAR_ANCHOR_PIN` on `sidecar.py`, `MORALMOD_RELEASE_SHA256` on the
+release, Hermes's install metadata) read files.
+
+**The MoralMod key** (Carter, CLAIMS L12977: a significant new cost must not land on the tenant).
+Behind `AV_MORALMOD_OWN_KEY` (default off), with `MORALMOD_LLM_API_KEY` an OpenRouter key, the same
+seam gives the bridge's dedicated agent a client from Hermes's own factory
+(`agent._create_openai_client`, the path every primary client takes) on a copy of that agent's
+client kwargs with only `api_key` replaced: same base URL, attribution headers, timeout, retries,
+model and provider. It is built once per key under a lock (a sha256 fingerprint on the client, never
+the key), wrapped for metering before any step can see it, and the agent's stored kwargs and the
+tenant's client object are left as they are; switching off puts the tenant's client back on the
+next step. **With the switch on, the step runs on the MoralMod key or fails, never on the tenant's
+key** (Carter, CLAIMS L13060):
+- the key **missing or off its shape**: `MoralmodKeyUnavailable` from `_main_agent`, counted
+  `moralmod_key_missing`;
+- the switch **cannot apply it** (the base URL is not OpenRouter over https, a custom
+  `Authorization` / `X-Api-Key` header would beat it, no Hermes factory, the factory raising or
+  returning another key): the same error, counted `moralmod_key_failed` (and
+  `moralmod_key_unsupported` for the shapes refused here);
+- the key **invalid or out of credit**: the SDK's error, with no retry on the tenant's key. Its
+  `llm.call` carries `key_source: moralmod`, `finish_reason: error` and the HTTP status (401/402).
+
+`MoralmodKeyUnavailable` is raised inside `speaker.complete`, as the plugin's own "Hermes has no
+gateway model configured." is, so the bridge answers its 502 to the runtime; its text names no key
+and nothing is chained onto it. A present key is registered with the sanitiser at plugin load. On
+av-events unload the bridge agent keeps its MoralMod client while the switch is on (a reloaded
+av-events adopts it) and gets the tenant's back only when the switch is off. The seam is pinned to
+the real `speaker.py` at `INDEX_PLUGIN_REF` by a CI parity test (`test_negotiator_llm.py`, the
+pytest job's own checkout of the plugin): a bump that changes `_main_agent` or `complete` fails CI
+until the seam is re-reviewed.
 
 ## Foreground `terminal` calls (DATA-312)
 
@@ -1388,10 +1596,10 @@ waiting action: `registered` or `checked_in` confirms an RSVP; `cancelled` confi
 and a null status confirms one only when the plugin saw the RSVP it reverses (otherwise "not
 registered" may simply mean "never was"). Anything else, or an object without the key, confirms
 nothing and the action keeps waiting. The `action.receipted` event reuses the action's id, carries
-`receipt: {kind: "edgeos_confirming_read", id: <participant id>}` — the record the RSVP or
-cancellation created, which a checker re-reads with `GET /event-participants/{id}` — and claims
-`provider_receipt`. The read's own `tool.call` carries the same `receipt` when it confirmed exactly
-one action.
+`receipt: {kind: "edgeos_confirming_read", id: <keyed hash of the participant id>}` — the record the
+RSVP or cancellation created, which only the sandbox can re-read with `GET /event-participants/{id}`
+(DATA-308, below) — and claims `provider_receipt`. The read's own `tool.call` carries the same
+`receipt` when it confirmed exactly one action.
 
 **Ledger.** `$HERMES_HOME/av-events/edgeos_actions.json`, 0600: the waiting actions and, per
 occurrence, the last action of each class that landed. It is changed and written only **after** the
@@ -1407,12 +1615,20 @@ are always set explicitly. A cancellation of an RSVP the plugin never saw is sti
 with `reverses_action_id: null`.
 
 Actions are emitted in every capture mode: they carry ids and fixed labels, nothing a participant
-wrote. In `metadata`, `edgeos_event_id` and the receipt's participant id (on `action.receipted` and
-on the read's `tool.call`) are replaced by their keyed hashes: joins within a tenant still work, but
-**the receipt is not checkable in `metadata`** — nobody outside the sandbox can re-read a hashed id.
-`sanitized` and `full` keep both ids in clear. The event still claims `provider_receipt`, but ingest
-stores a receipt whose id is a keyed hash at `agent_report`, not `provider_receipt`: a `metadata`
-tenant's RSVPs are recorded as receipted actions without receipt-grade evidence (divergence 31).
+wrote. **The receipt's participant id** (on `action.receipted` and on the read's `tool.call`) is
+replaced by its keyed hash **in every mode** (DATA-308), the same HMAC under the tenant's `hash.key`
+that `metadata` has always sent, or null without a key. A participant record is one person's RSVP
+and EdgeOS resolves its id to that person; the rule (Carter, 2026-10-04) is to hash an identifier
+wherever the artefact can be read by someone who does not already hold the mapping, and nobody
+downstream of ingest holds the EdgeOS one. **`edgeos_event_id`** keeps the capture distinction: an
+event id names an event, not who went to it, so `sanitized` and `full` send it in clear and only
+`metadata` keys it (the set of a resident's events is still their footprint). Joins within a tenant
+still work, but **the receipt is not checkable outside the sandbox in any mode** — nobody else can
+re-read a hashed id. The event still claims `provider_receipt`, but ingest stores a receipt whose id
+is a keyed hash at `agent_report`, not `provider_receipt`, flagged `_receipt_unverifiable`: every
+tenant's plugin-reported RSVPs are receipted actions without receipt-grade evidence (divergence
+31). The funnel's verified stage never read the plugin's own receipt anyway: it takes only a
+receipt from a non-plugin producer.
 
 ## Cron capture
 
@@ -2125,7 +2341,7 @@ with compaction's memory reload in front: `_invalidate_system_prompt()`, `_build
 INFO line per refresh, never content:
 
 ```
-av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills> session=<sha256(session id)[:8]>
+av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills|profile_md|miniapps> session=<sha256(session id)[:8]>
 ```
 
 (several reasons are joined with commas). A persist that did not land (read back from the row)
@@ -2170,6 +2386,60 @@ and `AV_PROMPT_REFRESH_FILES` to `memory`; `all` adds AGENTS.md and skills once 
 After about 24 hours of team logs (refreshes per tenant per day, no warnings) the release seat sets
 `AV_PROMPT_REFRESH=1` for the fleet. Rollback: `AV_PROMPT_REFRESH=0` or `prompt_refresh` in
 `AV_HOOKS_DISABLED`, both read at the next turn, no restart.
+
+### Mini-app pick-up (MINIAPP-PICKUP, v2.1.5)
+
+**Why.** Installing or removing a mini-app stages `$HERMES_HOME/mini-apps.json` and the app's
+`skills/<app>/SKILL.md` (`install/install_miniapps.ts`, run by the control plane's reconcile) and
+restarts the gateway. A continuing chat still replays its stored prompt, skills index included
+(`agent/conversation_loop.py:703-731`), so until v2.1.5 the agent learned a new app only after the
+resident sent `/new`.
+
+**How** (`_miniapp_epoch.py`, checked by the F1 wrapper above). The same shape as Hermes's Bot Chat
+capability epoch (`tools/bot_mode_probe.py:319-431`, checked at `conversation_loop.py:704-728`):
+
+- **The stamp.** av-events registers a Hermes plugin prompt section, `av-events.mini-apps-epoch`
+  (`hermes_cli/plugins.py:936-960`), whose text is `Mini-apps epoch: <12 hex>`. Hermes renders it at
+  each new prompt build and freezes it in the persisted prompt, in its plugin-sections frame right
+  before the timestamp line (`agent/system_prompt.py:113-162, 779-780`). With no app installed, or the
+  switch off, it renders empty and Hermes leaves it out (`hermes_cli/plugins_dispatch.py:577-579`): a
+  box without mini-apps gets no new prompt bytes.
+- **The fingerprint.** sha256 over the installed apps sorted by id, each as its whole `mini-apps.json`
+  entry (id, version, skills, operations; the Gold Stars entries share version 1.1.0 and differ only in
+  operations) plus the sha256 of each of its `skills/<skill>/SKILL.md`, cut to 12 hex. Read from the
+  file village-bridge's `installed()` reads, with its guards (no symlink in the path, `O_NOFOLLOW`, a
+  regular file of at most 16 KiB). Catalog data only: no resident file takes part, and the stamp
+  shows no id, version or operation. Absent file or no app: no stamp. A file that exists but cannot
+  be read: no verdict (nothing rebuilt).
+- **The check.** Every turn of a resident session (the F1 gate: not cron, a subagent or a fork) adds
+  the fingerprint to the pre-filter. When it moved since the session was last verified in this
+  process, or at the session's first turn after a restart, the stamp in the session's prompt is
+  compared with the apps on disk. Different: the F1 refresh, with the Bot Chat branch's skills-cache
+  clear in front (`clear_skills_system_prompt_cache(clear_snapshot=True)`,
+  `agent/prompt_builder.py:1129-1137`), reason `miniapps`. The rebuilt prompt carries the new stamp,
+  so the next turn matches: once per change, never per turn. With F1 off (every resident today) only
+  this check runs; it is still held back by an unreadable USER.md, MEMORY.md or AGENTS.md, since the
+  rebuild re-renders them. With F1 on, one rebuild carries both (`reason=user_md,miniapps`).
+- **A removal** moves the fingerprint too: the next turn rebuilds once, and the removed app's skill
+  (unlinked by the stage helper) leaves the skills index. When the last app goes, the rebuilt prompt
+  has no stamp, which matches "no app". The removed app's `village` operations are refused per call
+  (`mini_app_not_installed`) from the moment the projection drops it.
+- **Prompts from before v2.1.5** carry no stamp. On a box with an app installed each open chat is
+  rebuilt once at its first turn after the roll (one cold prefix per open chat; it also catches a
+  resident who installed earlier and never sent `/new`). On a box with no app, nothing changes.
+- **Guard.** A rebuild whose prompt lacks the current stamp (a section render error, Hermes's section
+  budget) turns the check off for the process with one WARNING (`the rebuilt prompt has no current
+  av-events.mini-apps-epoch section; check off until restart`), so a missing stamp never rebuilds every
+  turn. A Hermes without `register_system_prompt_section` gets one INFO line and no check.
+
+**Tools.** The stamp refreshes the system prompt, not a chat's pinned tools[] (Hermes keeps a
+continuing chat's saved tool bytes, `tools/mcp_tool_agent.py:194-215`). village-bridge's `village`
+enum is therefore the same on every box, zzzbot's operations included (v2.1.5); permission is
+`installed()` per call.
+
+**Rollback.** `AV_MINIAPP_REFRESH=0` or `miniapp_refresh` in `AV_HOOKS_DISABLED`: no check, and new
+prompts carry no stamp; read at the next turn, no restart. Stamped prompts already persisted keep
+their one inert line until their next rebuild.
 
 ## Fail-open contract
 
@@ -2597,13 +2867,14 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     and the "navigate the event" measure will have to key on `operation`, not `tool_name`. An agent
     that reaches EdgeOS by `execute_code` or `web_extract` is not seen.
 19. **`action.receipted` claims `provider_receipt`.** Every other event is `agent_report`. §4.1's
-    action row asks for it and §2.1 honours it only for a checkable receipt, which this is.
+    action row asks for it and §2.1 honours it only for a checkable receipt, which this was in
+    `sanitized` and `full` until DATA-308 keyed the id (divergence 31).
 20. **The receipt id is the participant id.** EdgeOS's live OpenAPI (`api.edgeos.world/openapi.json`,
     read 2026-09-22) documents `POST …/register/{event_id}` and `…/cancel-registration/{event_id}` as
     returning an `EventParticipantPublic` with its own `id`, which contradicts the Sept 18 finding
     "no documented response body". That record is the positive evidence an action landed, and its
-    `id` is the receipt id (`GET /event-participants/{id}` re-reads it). The receipt is still
-    attached at the confirming read, as the plan says.
+    `id` is the receipt id (`GET /event-participants/{id}` re-reads it), sent as its keyed hash
+    since DATA-308. The receipt is still attached at the confirming read, as the plan says.
 21. **Cost is per session, not per `llm.call`.** `post_api_request` carries no cost (Hermes prices
     after the hook). Cost goes on `session.ended` from `state.db`, as §4.1 lists it there. In practice
     Hermes fills `estimated_cost_usd` (a pricing-table estimate) and rarely `actual_cost_usd`; the
@@ -2636,10 +2907,12 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `kind`.
 30. **`cron.run.delivery_outcome` is null at the pinned tag**: the ledger column arrives in a later
     Hermes.
-31. **`metadata` receipts cannot be checked.** The participant id is hashed there. The plugin's
-    claim is unchanged (`provider_receipt`); ingest stores a receipt with a hashed id at
-    `agent_report`, not `provider_receipt`, so in `metadata` an RSVP is a receipted action without
-    receipt-grade evidence.
+31. **Receipts cannot be checked outside the sandbox.** The participant id is hashed in every
+    capture mode since DATA-308 (in `metadata` only before it). The plugin's claim is unchanged
+    (`provider_receipt`); ingest stores a receipt with a hashed id at `agent_report`, not
+    `provider_receipt`, so a plugin-reported RSVP is a receipted action without receipt-grade
+    evidence. Rows from an older overlay (`schema_version` 1, `sanitized` or `full`) still carry
+    the raw id and keep the class they were stored at.
 
 ---
 

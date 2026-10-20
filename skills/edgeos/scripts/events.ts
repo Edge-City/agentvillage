@@ -9,7 +9,8 @@
  * It works out the local calendar days (the village zone is `$HERMES_TIMEZONE`, else Asia/Kolkata),
  * turns their local midnights into the UTC window EdgeOS wants, calls the events list once with the
  * popup id and `event_status=published`, and prints one line per event grouped by local day: local
- * start and end with the zone label, the title, the venue, the person's RSVP status and the event id.
+ * start and end with the zone label, the title, the venue, the person's RSVP status and the event id,
+ * then `link <url>`, the event's portal page (B-138; portal-link.ts), when `AV_PORTAL_URL` is the portal's.
  * The output opens with `Today is <Wkd YYYY-MM-DD> (<zone>)` (DATE-1), `Now: <Wkd YYYY-MM-DD HH:MM> <zone> (<h:mm AM/PM>)`
  * and `Listing: <the days asked for>` (DATE-1). For today it leaves out the events that already ended (their end
  * time is at or before now) and says how many; an event in progress, or one without an end time, stays (EVENTS-NOW:
@@ -30,6 +31,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { eventLink, portalBase } from "./portal-link";
+
 /** EdgeOS hosts the key may be sent to; equals plugins/av-events/edgeos_tool_allowlist.json `hosts`. */
 export const EDGEOS_HOSTS = ["api.edgeos.world"] as const;
 export const DEFAULT_BASE = "https://api.edgeos.world/api/v1";
@@ -47,6 +50,8 @@ export interface EdgeEvent {
   custom_location_name?: string | null;
   my_rsvp_status?: string | null;
   highlighted?: boolean;
+  /** Set on an occurrence expanded from a recurring series (whose `id` is the series'). */
+  occurrence_id?: string | null;
 }
 
 export interface Args {
@@ -243,8 +248,8 @@ export function dayHeading(date: string): string {
     .format(new Date(`${date}T00:00:00Z`));
 }
 
-/** One line for one event, in local time. */
-export function eventLine(event: EdgeEvent, tz: string): string {
+/** One line for one event, in local time; it ends with `link <url>` when `portal` (a checked portalBase) is given. */
+export function eventLine(event: EdgeEvent, tz: string, portal: string | null = null): string {
   const start = event.start_time ? clock(event.start_time, tz) : "?";
   const end = event.end_time ? `–${clock(event.end_time, tz)}` : "";
   const label = event.start_time ? ` ${zoneLabel(tz, new Date(event.start_time))}` : "";
@@ -255,6 +260,8 @@ export function eventLine(event: EdgeEvent, tz: string): string {
   bits.push(`RSVP: ${event.my_rsvp_status ?? "none"}`);
   if (event.id) bits.push(`id ${event.id}`);
   if (event.start_time) bits.push(`start ${event.start_time}`); // a recurring event's occurrence_start for an RSVP
+  const link = eventLink(event, portal);
+  if (link) bits.push(`link ${link}`);
   return bits.join(" · ");
 }
 
@@ -325,6 +332,7 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
     return { code: 0, out: `${JSON.stringify({ today: todayLine, now: clockLine, listing: listingLine, time_zone: tz, start_after: startIso, start_before: endIso, ended_earlier_today: ended, results: events })}\n`, err: "" };
   }
   const lines: string[] = [todayLine, clockLine, listingLine];
+  const portal = portalBase(setting("AV_PORTAL_URL", env));
   const filtered = Boolean(parsed.search || parsed.rsvped);
   for (const day of wanted) {
     const todays = events.filter((e) => localDate(new Date(e.start_time!), tz) === day);
@@ -335,7 +343,7 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
       if (gone > 0) lines.push(filtered ? "  nothing more matching today" : "  nothing more today");
       else lines.push(filtered ? "  nothing matching" : "  no published events");
     }
-    for (const event of todays) lines.push(`  ${eventLine(event, tz)}`);
+    for (const event of todays) lines.push(`  ${eventLine(event, tz, portal)}`);
   }
   return { code: 0, out: `${lines.join("\n")}\n`, err: "" };
 }

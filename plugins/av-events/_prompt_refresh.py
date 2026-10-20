@@ -43,7 +43,7 @@ user turn (:36 import, :1489 call), before the tool loop. The wrapper:
    restored, `_restore_pinned_tools`) and `on_session_start` (not re-fired) are untouched. Unlike Bot
    Chat it does not clear the skills index cache (or its disk snapshot): step 3 rendered the index
    through that same cache, so the rebuild carries what the test saw. One INFO line:
-   `av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills> session=<sha8>`. A persist
+   `av-events: prompt_refresh reason=<user_md|memory_md|agents_md|skills|profile_md|miniapps> session=<sha8>`. A persist
    that did not land (read back from the row) marks the session unpersisted: it is not recorded,
    it skips the pre-filter, and a later turn whose check finds nothing stale (the cached agent
    already holds the rebuilt prompt) writes the prompt to the row again and reads it back. Only a
@@ -84,6 +84,14 @@ empty now while the prompt still holds its marker lines (the cp removed the file
 holds back a USER.md / MEMORY.md change (a vote note). The refresh is the same rebuild + persist, so
 the provider block and the built-in snapshot move together.
 
+MINIAPP-PICKUP (v2.1.5, `_miniapp_epoch.py`): the same wrapper also runs for every resident while
+`AV_MINIAPP_REFRESH` is on (the default; independent of `AV_PROMPT_REFRESH`). The pre-filter adds the
+installed-apps fingerprint (`miniapps`); the exact test compares the `Mini-apps epoch` stamp frozen in
+the session's prompt with the apps on disk (Hermes's Bot Chat capability epoch, `conversation_loop.py:
+704-728`, for mini-apps). Stale: the same refresh, with the Bot Chat branch's skills-cache clear in
+front, reason `miniapps`. With F1 off only that check runs (no memory reason), still held back by an
+unreadable memory file or AGENTS.md, since the rebuild re-renders them.
+
 Fail-open: any exception in the gate, the check or the rebuild leaves the turn as today (the stored
 bytes go back into `_cached_system_prompt`) naming the exception class only. A failed check or
 rebuild is tried again for the same change at the next turn, up to 3 turns (DEBUG), then given up
@@ -109,6 +117,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import _miniapp_epoch
 from ._core import env
 
 logger = logging.getLogger("av-events")
@@ -133,6 +142,8 @@ ENTRY_DELIMITER = "\n§\n"
 TARGET_FILES = {"memory": "memory_md", "user": "user_md"}
 #: The files the pre-filter hashes, by the reason name the log line uses.
 FILE_SOURCES = ("user_md", "memory_md", "agents_md", "profile_md")
+#: MINIAPP-PICKUP: the installed-apps fingerprint's key in the pre-filter and its reason name.
+MINIAPPS = "miniapps"
 #: D3's memory provider, and the two lines its block starts with (plugins/village-memory: SEPARATOR,
 #: BLOCK_TITLE). A prompt holding them while the provider renders nothing still shows a removed profile.
 PROFILE_PROVIDER = "village-memory"
@@ -553,8 +564,21 @@ def _put_back(agent: Any, prompt: str, system_message: Any) -> None:
         pass
 
 
-def refresh(agent: Any, loop: Any, system_message: Any, history: Any) -> bool:
-    """The Bot Chat branch (conversation_loop.py:716-727), memory reloaded first. True when persisted."""
+def _clear_skills_cache() -> None:
+    """The Bot Chat branch's skills-index cache clear (conversation_loop.py:712-718): the in-process
+    LRU and the disk snapshot (`prompt_builder.clear_skills_system_prompt_cache`, :1129-1137), so an
+    installed or removed app's skill is read from disk. Best effort, as there."""
+    try:
+        importlib.import_module("agent.prompt_builder").clear_skills_system_prompt_cache(clear_snapshot=True)
+    except Exception:  # noqa: BLE001 - the snapshot is manifest-checked; the rebuild still runs
+        pass
+
+
+def refresh(agent: Any, loop: Any, system_message: Any, history: Any, *, clear_skills: bool = False) -> bool:
+    """The Bot Chat branch (conversation_loop.py:716-727), memory reloaded first. True when persisted.
+    `clear_skills` (a mini-app change): the skills-index cache is cleared first, as that branch does."""
+    if clear_skills:
+        _clear_skills_cache()
     agent._invalidate_system_prompt()
     rebuilt = agent._build_system_prompt(system_message)
     if not isinstance(rebuilt, str) or not rebuilt.strip():
@@ -606,13 +630,31 @@ def _failed(session_id: str, digests: Dict[str, str], what: str, exc: BaseExcept
     _record(session_id, digests)
 
 
-def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, digests: Dict[str, str]) -> None:
+def _reasons(agent: Any, prompt: str, *, memory: bool, apps: bool) -> list:
+    """`stale_reasons` when the memory refresh is on, plus `miniapps` when the installed-apps stamp
+    in the prompt differs from disk (`_miniapp_epoch.stale`). A mini-app rebuild re-renders memory
+    too, so it is held back by an unreadable memory file or AGENTS.md exactly as a memory one is."""
+    reasons = stale_reasons(agent, prompt) if memory else []
+    if apps and _miniapp_epoch.stale(prompt):
+        if not memory:
+            unreadable = unreadable_sources(agent)
+            if unreadable:
+                raise Unreadable(",".join(unreadable))
+        reasons.append(MINIAPPS)
+    return reasons
+
+
+def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, digests: Dict[str, str], *,
+                      memory: bool = True, apps: bool = False) -> None:
+    """The exact test and, when stale, the refresh. `memory`: USER.md / MEMORY.md (and with `all`,
+    AGENTS.md and skills; with D3 the profile), the F1 switch. `apps`: the installed mini-apps
+    (MINIAPP-PICKUP, its own switch)."""
     prompt = getattr(agent, "_cached_system_prompt", None)
     session_id = getattr(agent, "session_id", None)
     if not isinstance(prompt, str) or not prompt or not isinstance(session_id, str) or not session_id:
         return
     try:
-        reasons = stale_reasons(agent, prompt)
+        reasons = _reasons(agent, prompt, memory=memory, apps=apps)
     except Unreadable as exc:
         # No verdict: today's prompt, nothing recorded (so the next turn checks again and a fixed
         # file refreshes normally), nothing refreshed. Reason names only, never content.
@@ -642,13 +684,23 @@ def check_and_refresh(agent: Any, loop: Any, system_message: Any, history: Any, 
         _record(session_id, digests)
         return
     try:
-        persisted = refresh(agent, loop, system_message, history)
+        apps_before = _miniapp_epoch.fingerprint() if MINIAPPS in reasons else None
+    except Exception:  # noqa: BLE001 - never fails the turn (fold round 1, S1)
+        apps_before = None
+    try:
+        persisted = refresh(agent, loop, system_message, history, clear_skills=MINIAPPS in reasons)
     except BaseException as exc:  # noqa: BLE001
         _put_back(agent, prompt, system_message)
         if isinstance(exc, _INTERRUPTS):
             raise
         _failed(session_id, digests, "rebuild", exc)
         return
+    if MINIAPPS in reasons:
+        # The rebuilt prompt must carry the current stamp, or the next turn would rebuild again.
+        try:
+            _miniapp_epoch.confirm_rebuilt(agent._cached_system_prompt, apps_before)
+        except Exception as exc:  # noqa: BLE001 - the rebuild landed; never fail the turn (fold round 1, S1)
+            _warn("miniapps confirm", exc)
     _mark_unpersisted(session_id, not persisted)
     if persisted:
         _record(session_id, digests)
@@ -691,14 +743,21 @@ def _turn_agent(bound: Any) -> Optional[Any]:
 
 def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector_ref: Callable[[], Any]) -> Callable:
     def _plan(args: tuple, kwargs: dict) -> Optional[tuple]:
-        """(bound arguments, agent, digests) when this turn needs the exact test, else None."""
-        if not enabled(collector_ref()):
+        """(bound arguments, agent, digests, memory, apps) when this turn needs the exact test, else
+        None. `memory`: the F1 switch (`enabled`); `apps`: MINIAPP-PICKUP's (`_miniapp_epoch.active`),
+        on for every resident by default. Either one runs the wrapper."""
+        collector = collector_ref()
+        memory = enabled(collector)
+        apps = _miniapp_epoch.active(collector)
+        if not memory and not apps:
             return None
         bound = signature.bind(*args, **kwargs)
         agent = _turn_agent(bound)
         if agent is None:
             return None
-        digests = file_digests(agent)
+        digests = file_digests(agent) if memory else {}
+        if apps:
+            digests[MINIAPPS] = _miniapp_epoch.digest()
         if not bound.arguments.get("conversation_history"):
             # A session's first turn: Hermes builds the prompt from these files in a moment. Record
             # them, so an own memory write in this turn is acknowledged rather than refreshed next turn.
@@ -707,7 +766,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
             return None
         if _recorded(agent.session_id) == digests and not _unpersisted(agent.session_id):
             return None
-        return bound, agent, digests
+        return bound, agent, digests, memory, apps
 
     def build_turn_context(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -720,7 +779,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
         if plan is None:
             return original(*args, **kwargs)
 
-        bound, agent, digests = plan
+        bound, agent, digests, memory, apps = plan
         hermes_restore = bound.arguments["restore_or_build_system_prompt"]
         cached = getattr(agent, "_cached_system_prompt", None)
         held = cached if isinstance(cached, str) and cached else None
@@ -733,7 +792,7 @@ def _wrap(original: Callable, signature: inspect.Signature, loop: Any, collector
                 agent_._cached_system_prompt = held  # a cached agent: exactly the bytes it had
             else:
                 hermes_restore(agent_, system_message, conversation_history)
-            check_and_refresh(agent_, loop, system_message, conversation_history, digests)
+            check_and_refresh(agent_, loop, system_message, conversation_history, digests, memory=memory, apps=apps)
 
         if held is not None:
             agent._cached_system_prompt = None  # so build_turn_context calls the restore slot (:1085)

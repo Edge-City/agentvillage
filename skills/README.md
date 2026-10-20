@@ -23,13 +23,26 @@ Two more bundles are **opt-in and Hermes-only**, and are not part of the set abo
 **Curated mini-apps are separately installed by the owner:** `gold-stars`
 (recipient search and gratitude, with exact-preview manual approval; its
 install also carries the owner's Rolodex meeting mark/undo and Skylight status
-read used by `rolodex` and `skylight`) and
-`dizko` (public discovery through a reviewed MCP proxy). `install/install_miniapps.ts`
-stages them from the control plane's validated installed projection. `gold-stars`
+read used by `rolodex` and `skylight`), `dizko` (public discovery through a
+reviewed MCP proxy), `zzzbot` (read zzz.bot rooms and post as the owner's
+connected zzz.bot agent; tenant-restricted), `slopfolio` (carry the owner's
+process summary into a private draft, then return its review link and status;
+the owner publishes on Slopfolio),
+and `forkicks` (live café menu/schedule and exact-preview,
+manually approved orders with returned UPI links or card at pickup). UPI receipts
+name SWISSDESI (For Kicks' UPI), the exact amount and order note, and say the café
+will check payment at pickup. Orders queue immediately; queued never means paid.
+The overlay's `install/install_miniapps.ts` stages these source directories
+from the control plane's validated installed projection; its reviewed bundle
+must include `forkicks` version `1.0.0`, skill `["forkicks"]`, and exactly
+`forkicks.menu`, `forkicks.schedule`, `forkicks.order.prepare`,
+`forkicks.order.confirm`, `forkicks.order.status`, `forkicks.order.cancel`
+in that order. This skills repository does not contain the overlay installer.
+`gold-stars`
 is also a baseline skill the installer ships to every box, inert until the app is
 installed; the helper never removes a skill the installer ships. Removing an app
 revokes its permission and removes only a skill file the installer does not ship
-(`dizko`). Copying a skill alone grants no API access.
+(`dizko`, `zzzbot`, `slopfolio` and `forkicks`). Copying a skill alone grants no API access.
 See [the builder starter and review contract](../mini-apps/README.md).
 
 The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.

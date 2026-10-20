@@ -1,0 +1,306 @@
+{
+  "about": [
+    "MM-INFER-VIS: the MoralMod negotiator's model steps as llm.call@1 with caller moralmod_negotiator. av-events (producer) -> agentvillage-data ingest (consumer). Observe-only, default OFF.",
+    "One event per chat.completions.create the Index plugin's loopback bridge makes (speaker.complete at indexnetwork/hermes-plugin 04d833b8), observed by wrapping the bridge's dedicated client only; Hermes's own pre_api_request / post_api_request never fire for these calls.",
+    "A valid llm.call@1 today (llm.call is open, additionalProperties true; caller is already typed by DATA-506's LLM_CALL_COST_PROPERTIES, ^[a-z][a-z0-9_]{0,63}$). Every other plugin llm.call sends no caller: null = Hermes's own request path (the agent's chat, cron, subagents). No backfill.",
+    "Closed: every key always present, in this order (the two above_metadata keys only above metadata capture); no message, tool, completion or prompt text, and no hash of any (tools_hash and system_prompt_hash are always null, prompt.registered is never sent).",
+    "key_source says whose OpenRouter key paid for the step: moralmod (AV_MORALMOD_OWN_KEY on and MORALMOD_LLM_API_KEY present: the bridge's dedicated client only) or tenant (today). Data can split the ledger on it.",
+    "Envelope: session_id, turn_id and run_id are always null (the bridge has no Hermes session); model_id = payload.model; actor agent; evidence_class agent_report; event_id a fresh uuid v7. A null session_id keeps the row out of core.sessions, core.runs and core.trajectories; it joins by tenant and day only.",
+    "consent_scope says how data should keep it: all = ops spend visibility for every tenant (to be kept without research consent only when caller is moralmod_negotiator and consent_scope is all, as code.run@1 is proposed); research_consented = research consent only, like every other llm.call. Until data adds that rule, the worker keeps it for research-consented tenants and drops it for the rest, as it does every plugin llm.call; nothing quarantines.",
+    "Held to plugins/av-events/_negotiator_llm.py by tests/test_negotiator_llm.py; agentvillage-data mirrors it in src/schemas/llm-call.ts and src/worker/consent.ts when it takes the ops rule."
+  ],
+  "patterns": "every regex below is applied with fullmatch (Python re.fullmatch, TypeScript ^...$ without the m flag): a trailing newline never passes",
+  "type": "llm.call",
+  "version": 1,
+  "caller": "moralmod_negotiator",
+  "actor": "agent",
+  "evidence_class": "agent_report",
+  "envelope_ids_always_null": [
+    "session_id",
+    "turn_id",
+    "run_id",
+    "tool_call_id"
+  ],
+  "switch": {
+    "env": "AV_EVENTS_NEGOTIATOR_LLM",
+    "on": [
+      "1",
+      "true",
+      "yes",
+      "on"
+    ],
+    "default": "off",
+    "read": "at plugin load (installs the wrap) and on every step (emits)"
+  },
+  "scope_switch": {
+    "env": "AV_EVENTS_NEGOTIATOR_LLM_SCOPE",
+    "values": [
+      "all",
+      "research_consented"
+    ],
+    "default": "all",
+    "blank": "all",
+    "unknown": "research_consented",
+    "unknown_log": "one WARNING per process naming the variable, never the value",
+    "semantics": "AV_EVENTS_CODE_RUN_SCOPE's, on a sibling variable"
+  },
+  "hooks_disabled_name": "negotiator_llm",
+  "keys": [
+    "model",
+    "provider",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "latency_ms",
+    "finish_reason",
+    "tools_hash",
+    "system_prompt_hash",
+    "api_mode",
+    "response_model",
+    "tool_count",
+    "message_count",
+    "cost_usd",
+    "generation_id",
+    "error_type",
+    "status_code",
+    "caller",
+    "key_source",
+    "consent_scope"
+  ],
+  "above_metadata": [
+    "assistant_content_chars",
+    "assistant_tool_call_count"
+  ],
+  "fields": {
+    "model": {
+      "kind": "regex",
+      "regex": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$",
+      "nullable": true,
+      "source": "the create call's model (the resident's gateway model)"
+    },
+    "provider": {
+      "kind": "regex",
+      "regex": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "nullable": true,
+      "source": "the bridge agent's provider"
+    },
+    "input_tokens": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false,
+      "source": "Hermes normalize_usage(response.usage), as post_api_request; 0 on error"
+    },
+    "output_tokens": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false
+    },
+    "cache_read_tokens": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false
+    },
+    "cache_write_tokens": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false
+    },
+    "reasoning_tokens": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false
+    },
+    "latency_ms": {
+      "kind": "int",
+      "range": [
+        0,
+        9007199254740991
+      ],
+      "nullable": false
+    },
+    "finish_reason": {
+      "kind": "enum",
+      "enum": [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "function_call",
+        "other",
+        "error"
+      ],
+      "nullable": true
+    },
+    "tools_hash": {
+      "kind": "null"
+    },
+    "system_prompt_hash": {
+      "kind": "null"
+    },
+    "api_mode": {
+      "kind": "regex",
+      "regex": "^[a-z][a-z0-9_]{0,63}$",
+      "nullable": true
+    },
+    "response_model": {
+      "kind": "regex",
+      "regex": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$",
+      "nullable": true,
+      "null_when": "error"
+    },
+    "tool_count": {
+      "kind": "int",
+      "range": [
+        0,
+        2147483647
+      ],
+      "nullable": true,
+      "source": "len(tools), 0 without tools"
+    },
+    "message_count": {
+      "kind": "int",
+      "range": [
+        0,
+        2147483647
+      ],
+      "nullable": true,
+      "source": "len(messages)"
+    },
+    "cost_usd": {
+      "kind": "number",
+      "range": [
+        0,
+        100
+      ],
+      "nullable": true,
+      "source": "response.usage.cost when the provider carries it (OpenRouter), else null; the request is never changed to ask for it"
+    },
+    "generation_id": {
+      "kind": "regex",
+      "regex": "^gen-[0-9A-Za-z-]{1,124}$",
+      "nullable": true,
+      "source": "response.id when it is OpenRouter's generation id"
+    },
+    "error_type": {
+      "kind": "enum",
+      "enum": [
+        "APIError",
+        "APIStatusError",
+        "APIConnectionError",
+        "APITimeoutError",
+        "APIResponseValidationError",
+        "BadRequestError",
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "NotFoundError",
+        "ConflictError",
+        "UnprocessableEntityError",
+        "RateLimitError",
+        "InternalServerError",
+        "LengthFinishReasonError",
+        "ContentFilterFinishReasonError",
+        "TimeoutError",
+        "ConnectionError",
+        "OSError",
+        "RuntimeError",
+        "ValueError",
+        "TypeError",
+        "other"
+      ],
+      "nullable": true,
+      "null_when": "the call returned"
+    },
+    "status_code": {
+      "kind": "int",
+      "range": [
+        100,
+        599
+      ],
+      "nullable": true,
+      "null_when": "the call returned, or the exception carries no HTTP status"
+    },
+    "caller": {
+      "kind": "enum",
+      "enum": [
+        "moralmod_negotiator"
+      ],
+      "nullable": false
+    },
+    "key_source": {
+      "kind": "enum",
+      "enum": [
+        "moralmod",
+        "tenant"
+      ],
+      "nullable": false,
+      "source": "moralmod when the bridge's client was built with MORALMOD_LLM_API_KEY (AV_MORALMOD_OWN_KEY on), else tenant (the switch off: the tenant's own OpenRouter key, today's behaviour)"
+    },
+    "consent_scope": {
+      "kind": "enum",
+      "enum": [
+        "all",
+        "research_consented"
+      ],
+      "nullable": false
+    },
+    "assistant_content_chars": {
+      "kind": "int",
+      "range": [
+        0,
+        2147483647
+      ],
+      "nullable": false,
+      "only_above_metadata": true
+    },
+    "assistant_tool_call_count": {
+      "kind": "int",
+      "range": [
+        0,
+        2147483647
+      ],
+      "nullable": false,
+      "only_above_metadata": true
+    }
+  },
+  "data_files": [
+    "src/worker/consent.ts",
+    "src/schemas/llm-call.ts",
+    "dbt/models/staging/stg_llm_call.sql",
+    "dbt/models/core/ops_cost_by_tenant_day.sql"
+  ],
+  "own_key_switch": {
+    "env": "AV_MORALMOD_OWN_KEY",
+    "on": [
+      "1",
+      "true",
+      "yes",
+      "on"
+    ],
+    "default": "off",
+    "key_env": "MORALMOD_LLM_API_KEY",
+    "key_shape": "^sk-or-[A-Za-z0-9_-]{16,256}$",
+    "read": "on every step (the bridge's _main_agent call); the seam is installed only when this switch or AV_EVENTS_NEGOTIATOR_LLM is on at plugin load (armed later: a gateway restart)",
+    "missing_key": "the step fails (MoralmodKeyUnavailable from _main_agent, the bridge's 502), counted moralmod_key_missing; never the tenant's key (CLAIMS L13060)",
+    "invalid_or_out_of_credit": "the step fails as a failed step fails today (the SDK error, the bridge's 502); never retried on the tenant's key; key_source moralmod with the HTTP status",
+    "not_applicable": "not OpenRouter over https, a custom Authorization or X-Api-Key header, no Hermes factory, the factory raising or returning another key: the step fails, counted moralmod_key_failed (and moralmod_key_unsupported for the shapes refused); never the tenant's key",
+    "sanitiser": "a present key is registered as a literal secret at plugin load, whatever the switches",
+    "unload": "with the switch on the bridge agent keeps its MoralMod client; with it off the tenant client goes back"
+  }
+}

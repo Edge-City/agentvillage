@@ -24,6 +24,7 @@ GOLD_STARS_RESTORED = {"version": "1.1.0", "skills": ["gold-stars"], "operations
 GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
 # Every gold-stars entry this overlay accepts, each by exact equality (newest first).
 GOLD_STARS_ACCEPTED = (GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS)
+FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"]}
 
 # Every `village` operation, classified. A write changes the owner's account state; a read does not.
 # `rolodex.meeting` (mark/undo) is a WRITE: it rides the `village` tool's existing gate entry (no preview
@@ -32,11 +33,21 @@ GOLD_STARS_ACCEPTED = (GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS)
 # Star sends also need their own daemon start (authorize_send, class SEND_CLASS).
 # NEW-03 (rc44): `mini-app.context.read` is a READ of the app's own context namespace; `mini-app.context.write`
 # is a WRITE into it and takes rolodex.meeting's path (gate_verified), never the Gold Stars send start.
+# P-6 ZZZ-MINIAPP: zzz.bot's named reads and its two writes (public posts on zzz.bot as the owner's connected
+# zzz agent). The writes take mini-app.context.write's path (gate_verified), never a manual grant.
+ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
+ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
-                             "mini-app.context.read"})
-WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write"})
-# The operations whose appId is the request's own (any other operation is the gold-stars install's).
+                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS})
+WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
+                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_WRITE_OPERATIONS})
+# Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
+# The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
+# list in this order. Its operations name their app; a caller never supplies an appId for them.
+ZZZBOT = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS]}
+ZZZ_OPERATIONS = frozenset(ZZZBOT["operations"])
+SLOPFOLIO = {"version": "1.0.0", "skills": ["slopfolio"], "operations": ["slopfolio.prepare", "slopfolio.status"]}
 # NEW-03 (rc44, P-013; context's design NEW-03-APP-NAMESPACES.md section 2, CLAIMS L8997): every operations
 # list this overlay accepts for a non-Gold-Stars app, each by exact equality (newest first): the reviewed
 # public read alone, or the read plus that app's own context namespace read and write. Order fixed, no
@@ -63,6 +74,8 @@ def send_key(draft_id: str) -> str:
 APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "
                   "gold-stars.send with this SAME draftId. Never prepare a new preview to retry. Chat consent alone "
                   "cannot authorize sending.")
+ORDER_APPROVE_IN_BOT = ("Ask the owner to approve this exact For Kicks order on its card in the approvals bot, then retry "
+                        "forkicks.order.confirm with this SAME draftId. Never prepare another order to retry an uncertain confirm.")
 
 
 def installed(home: Path, app_id: str, operation: str) -> bool:
@@ -87,6 +100,15 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
                 return False
             if name == "gold-stars":
                 if not any(app == {"id": name, **entry} for entry in GOLD_STARS_ACCEPTED):
+                    return False
+            elif name == "forkicks":
+                if app != {"id": name, **FORKICKS}:
+                    return False
+            elif name == "zzzbot":
+                if app != {"id": name, **ZZZBOT}:
+                    return False
+            elif name == "slopfolio":
+                if app != {"id": name, **SLOPFOLIO}:
                     return False
             elif (not isinstance(app["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", app["version"])
                   or app["skills"] != [name] or not any(app["operations"] == list(ops) for ops in APP_OPERATIONS_ACCEPTED)):

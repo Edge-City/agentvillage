@@ -403,8 +403,10 @@ describe("pinned, never updated", () => {
   test("refute N5: the pins move together: moralmod_release's INDEX_PLUGIN_REVISION and CI's plugin checkout are INDEX_PLUGIN_REF", () => {
     expect(INDEX_PLUGIN_REVISION).toBe(INDEX_PLUGIN_REF);
     const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "test.yml"), "utf8");
-    const checkout = workflow.match(/repository: indexnetwork\/hermes-plugin\n\s+ref: ([0-9a-f]+)\n/);
-    expect(checkout?.[1]).toBe(INDEX_PLUGIN_REF);
+    // Every checkout of the plugin: the bun suites' and the pytest job's (MM-INFER-VIS seam parity).
+    const checkouts = [...workflow.matchAll(/repository: indexnetwork\/hermes-plugin\n\s+ref: ([0-9a-f]+)\n/g)].map((m) => m[1]);
+    expect(checkouts.length).toBe(2);
+    for (const ref of checkouts) expect(ref).toBe(INDEX_PLUGIN_REF);
   });
 });
 

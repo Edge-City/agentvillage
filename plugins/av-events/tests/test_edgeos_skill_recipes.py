@@ -107,7 +107,8 @@ def test_a_verbatim_rsvp_recipe_waits_for_and_gets_its_receipt(plugin, ctx, monk
                                 "exit_code": 0}), status="ok")
     events = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("action.")]
     assert [e["event_type"] for e in events] == ["action.attempted", "action.receipted"]
-    assert events[1]["payload"]["receipt"]["id"] == participant["id"]
+    # The participant id leaves keyed (DATA-308).
+    assert events[1]["payload"]["receipt"]["id"] == plugin._COLLECTOR.keyed_hash(participant["id"])
 
 
 def test_a_continuation_does_not_hide_a_second_command(edgeos):
@@ -205,6 +206,49 @@ def test_every_recipe_in_the_skill_is_classified(edgeos, monkeypatch, base, head
     assert not call.piped, heading
     if op.role == "action":
         assert params["event_id"] == EVENT
+
+
+# --------------------------------------------------------------------------
+# EDGEOS-BLOCK (20 Oct): the recipes pass their URL with `--url`, because
+# approval.md core 0.4.6 holds a curl whose URL word starts with `$` as
+# human-only (`fetch-output-unknown`). The observer must read the `--url`
+# form as the same operation the old positional form was.
+# --------------------------------------------------------------------------
+
+URL_FLAG = '--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/'
+POSITIONAL = '"${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/'
+
+
+def test_every_recipe_passes_its_url_with_the_url_flag():
+    recipes = every_recipe()
+    assert len(recipes) == len(RECIPE_OPERATIONS) == 11
+    for heading, command in recipes:
+        assert command.count(URL_FLAG) == 1, heading
+
+
+@pytest.mark.parametrize("base", [None, "https://api.edgeos.world/api/v1"])
+@pytest.mark.parametrize("heading,command", every_recipe())
+def test_the_url_flag_form_reads_as_the_positional_form(edgeos, monkeypatch, base, heading, command):
+    if base is None:
+        monkeypatch.delenv("EDGEOS_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("EDGEOS_API_BASE", base)
+    positional = command.replace(URL_FLAG, POSITIONAL)
+    assert positional != command
+    flag_call, flag_op, flag_params = recognise(edgeos, command)
+    pos_call, pos_op, pos_params = recognise(edgeos, positional)
+    assert (flag_call.method, flag_call.path, flag_op.operation, flag_op.role, flag_op.action_class) == (
+        pos_call.method, pos_call.path, pos_op.operation, pos_op.role, pos_op.action_class), heading
+    assert flag_params == pos_params, heading
+    assert flag_op.operation == RECIPE_OPERATIONS[heading], heading
+
+
+def test_a_second_url_flag_is_two_urls_and_not_a_request(edgeos):
+    """curl fetches every `--url`; the observer reads one URL only, so a doubled
+    `--url` stays unrecognised (README: "the same URL twice is two")."""
+    command = recipe("Fetch a single event")
+    url = command[command.index(URL_FLAG):].split()[1]
+    assert edgeos.http_call("terminal", {"command": f"{command} --url {url}"}) is None
 
 
 # --------------------------------------------------------------------------

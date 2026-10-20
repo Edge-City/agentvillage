@@ -445,7 +445,7 @@ describe("Index unreachable: the welcome still goes, without the list, and promi
 
   test("readIntents never throws and says unreachable", async () => {
     const read: IntentsRead = await readIntents({ apiKey: FAKE_API_KEY, mcpUrl: "https://index-mcp.fake.test/mcp", fetch: () => Promise.reject(new Error("boom")) });
-    expect(read).toEqual({ kind: "unreachable" });
+    expect(read).toEqual({ kind: "unreachable", reason: "list_failed" });
   });
 });
 

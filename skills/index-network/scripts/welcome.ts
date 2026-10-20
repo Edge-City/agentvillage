@@ -83,6 +83,20 @@
  * paused) and `seed_failed` the lines it meant to seed and could not (both 0
  * when nothing was attempted). It never carries text. It always exits 0.
  *
+ * Two switches add keys after these five, each off by default (unset: the
+ * line is exactly the one above), because the data door refuses a
+ * welcome.sent with a key it does not know and an older control plane refuses
+ * the whole line with an extra key: each goes on only after the data release
+ * and the control plane's pass-through. `AV_SEED_TRAILER_V2=1` (seedTrailerV2)
+ * adds `seed_codes` and `seed_recovery_kinds` when the seed left any.
+ * `AV_WELCOME_REASON=1` (welcomeReasonOn, U-1a; environment, else
+ * `$HERMES_HOME/.env`; the control plane sets it per tenant) adds, last and
+ * only when `fallback` is `unreachable`, `"reason":"no_key|list_failed|bad_answer"`
+ * (UnreachableReason: why the list could not be read; codes only). A run that
+ * threw and printed the unreachable text has no reason (the control plane's
+ * own `script_failed` covers a script that failed; this script never prints
+ * that code).
+ *
  * SEED-REVISION (routing (c), 12 Oct 2026): a line whose create Index answers
  * non-2xx with its `intent_needs_revision` refusal (index-mcp.ts
  * intentRefusal; since the direct create, 13 Oct 2026, the only refusal kept:
@@ -299,9 +313,35 @@ export type SeedMode = "publish" | "paused";
  */
 export type IntentsRead =
   | { kind: "listed"; titles: string[]; seeded?: SeedMode }
-  | { kind: "unreachable" };
+  | { kind: "unreachable"; reason?: UnreachableReason };
 
 const UNREACHABLE: IntentsRead = { kind: "unreachable" };
+
+/**
+ * U-1a: why a read is `unreachable`, a closed set of codes (never text, never
+ * ids). `no_key`: no Index key, so no call; `list_failed`: the `list_intents`
+ * call failed (a transport failure or timeout, an HTTP status other than 200,
+ * a JSON-RPC error, or Index flagging the tool call failed); `bad_answer`:
+ * Index answered but the answer could not be read (no result, a result that
+ * is not complete, no text, or a text with no intents list: parse).
+ */
+export const UNREACHABLE_REASONS = ["no_key", "list_failed", "bad_answer"] as const;
+export type UnreachableReason = (typeof UNREACHABLE_REASONS)[number];
+
+/** The IndexMcpError codes of an answer Index sent but this script could not read (unreachableReason). */
+const BAD_ANSWER_CODES: readonly string[] = ["mcp-bad-response", "mcp-result-type", "mcp-unparsed"];
+
+/**
+ * The reason a `list_intents` call that threw `err` is unreachable: an
+ * IndexMcpError whose code says the answer could not be read, or anything
+ * thrown that is not an IndexMcpError (reading the answer), is `bad_answer`;
+ * every other IndexMcpError (`mcp-unreachable`, `mcp-http-*`,
+ * `mcp-rpc-error*`, `mcp-tool-error`) is `list_failed`. Pure.
+ */
+export function unreachableReason(err: unknown): UnreachableReason {
+  if (!(err instanceof IndexMcpError)) return "bad_answer";
+  return BAD_ANSWER_CODES.includes(err.code) ? "bad_answer" : "list_failed";
+}
 
 /** What a run's seed did: intents it created (and, paused mode, paused), and lines it meant to and could not. */
 /**
@@ -313,8 +353,8 @@ const UNREACHABLE: IntentsRead = { kind: "unreachable" };
 export type SeedCounts = { intents_seeded: number; seed_failed: number; seed_codes?: string[]; seed_recovery_kinds?: RecoveryQuestion["kind"][] };
 const NO_SEED: SeedCounts = { intents_seeded: 0, seed_failed: 0 };
 
-/** The branch a welcome took, as `--draft` reports it on stderr. */
-export type WelcomeBranch = { fallback: "none" | "questions" | "context" | "unreachable"; intents_listed: number } & SeedCounts;
+/** The branch a welcome took, as `--draft` reports it on stderr; `reason` only on `unreachable`, from its read (U-1a). */
+export type WelcomeBranch = { fallback: "none" | "questions" | "context" | "unreachable"; intents_listed: number; reason?: UnreachableReason } & SeedCounts;
 
 /**
  * The branch welcomeText takes for `read`, how many intents it lists, and
@@ -328,7 +368,7 @@ export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED, con
     ...(seed.seed_codes?.length ? { seed_codes: seed.seed_codes } : {}),
     ...(seed.seed_recovery_kinds?.length ? { seed_recovery_kinds: seed.seed_recovery_kinds } : {}),
   };
-  if (read.kind === "unreachable") return { fallback: "unreachable", intents_listed: 0, ...counts };
+  if (read.kind === "unreachable") return { fallback: "unreachable", intents_listed: 0, ...counts, ...(read.reason ? { reason: read.reason } : {}) };
   if (read.titles.length === 0) return { fallback: context ? "context" : "questions", intents_listed: 0, ...counts };
   return { fallback: "none", intents_listed: Math.min(read.titles.length, MAX_LISTED), ...counts };
 }
@@ -336,9 +376,11 @@ export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED, con
 /**
  * The `--draft` stderr line for `branch`, without its newline: these five keys
  * in this order, always; with `v2` (seedTrailerV2), then `seed_codes` and
- * `seed_recovery_kinds` when the seed left any, and nothing else, ever.
+ * `seed_recovery_kinds` when the seed left any; with `withReason`
+ * (welcomeReasonOn), last, `reason` when the branch is `unreachable` and
+ * carries one of UNREACHABLE_REASONS; and nothing else, ever.
  */
-export function draftTrailer(branch: WelcomeBranch, v2 = false): string {
+export function draftTrailer(branch: WelcomeBranch, v2 = false, withReason = false): string {
   return JSON.stringify({
     welcome: 1,
     fallback: branch.fallback,
@@ -348,6 +390,10 @@ export function draftTrailer(branch: WelcomeBranch, v2 = false): string {
     // SEED-REJECT part 3b, behind AV_SEED_TRAILER_V2 (seedTrailerV2): codes only, each key only when non-empty.
     ...(v2 && branch.seed_codes?.length ? { seed_codes: branch.seed_codes.slice(0, SEED_CODES_MAX) } : {}),
     ...(v2 && branch.seed_recovery_kinds?.length ? { seed_recovery_kinds: branch.seed_recovery_kinds.slice(0, SEED_RECOVERY_KINDS_MAX) } : {}),
+    // U-1a, behind AV_WELCOME_REASON (welcomeReasonOn): a code only, on the unreachable branch only, last.
+    ...(withReason && branch.fallback === "unreachable" && branch.reason !== undefined && (UNREACHABLE_REASONS as readonly string[]).includes(branch.reason)
+      ? { reason: branch.reason }
+      : {}),
   });
 }
 
@@ -360,6 +406,18 @@ export function draftTrailer(branch: WelcomeBranch, v2 = false): string {
  */
 export function seedTrailerV2(home: string): boolean {
   return envOrDotenv("AV_SEED_TRAILER_V2", home).trim() === "1";
+}
+
+/**
+ * U-1a: `AV_WELCOME_REASON` (environment, else `$HERMES_HOME/.env`) is `1`:
+ * the `--draft` trailer of an unreachable welcome carries `reason`
+ * (UnreachableReason). Off by default for the same reasons as
+ * AV_SEED_TRAILER_V2: it goes on, per tenant from the control plane, only
+ * after data registers `reason` on welcome.sent@1 and the control plane
+ * passes it through.
+ */
+export function welcomeReasonOn(home: string): boolean {
+  return envOrDotenv("AV_WELCOME_REASON", home).trim() === "1";
 }
 
 function homeFrom(argv: string[]): string {
@@ -398,7 +456,7 @@ export function intentTitles(text: string): string[] {
   return titles;
 }
 
-/** One `list_intents` call; any failure, or no key, is `unreachable`. Never throws. */
+/** One `list_intents` call; any failure, or no key, is `unreachable` (with its reason, U-1a). Never throws. */
 export async function readIntents(options: {
   apiKey: string;
   mcpUrl: string;
@@ -436,14 +494,18 @@ export function intentRows(text: string): IntentRow[] {
 
 type Listed = { read: IntentsRead; rows: IntentRow[] | null };
 
-/** One `list_intents` call through `target`: the read and its rows; any failure, or no key, is `unreachable`. Never throws. */
+/**
+ * One `list_intents` call through `target`: the read and its rows; any
+ * failure, or no key, is `unreachable`, with its reason (U-1a: `no_key`, else
+ * unreachableReason). Never throws.
+ */
 async function listIntents(target: IndexMcpTarget): Promise<Listed> {
-  if (!target.apiKey) return { read: UNREACHABLE, rows: null };
+  if (!target.apiKey) return { read: { kind: "unreachable", reason: "no_key" }, rows: null };
   try {
     const text = await callIndexTool(target, "list_intents", { limit: 20 });
     return { read: { kind: "listed", titles: intentTitles(text) }, rows: intentRows(text) };
-  } catch {
-    return { read: UNREACHABLE, rows: null };
+  } catch (err) {
+    return { read: { kind: "unreachable", reason: unreachableReason(err) }, rows: null };
   }
 }
 
@@ -1509,7 +1571,10 @@ export async function main(
   // `--reseed` (SEED-REJECT 3b) prints nothing for the resident, and its trailer, both extra keys included, for the operator.
   const reseed = argv.includes(RESEED_FLAG) || argv.includes(DRY_RUN_FLAG);
   if (!reseed) io.stdout(`${out.text}\n`);
-  if ((reseed || argv.includes("--draft")) && out.branch) io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(homeFrom(argv)))}\n`);
+  if ((reseed || argv.includes("--draft")) && out.branch) {
+    const home = homeFrom(argv);
+    io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(home), welcomeReasonOn(home))}\n`);
+  }
 }
 
 if (import.meta.main) {

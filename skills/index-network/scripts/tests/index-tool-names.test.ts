@@ -11,7 +11,9 @@ import { join, relative } from "node:path";
 import { INDEX_TOOLS, PROTOCOL } from "./index-mcp-fake";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
-const ALLOWED = new Set([...INDEX_TOOLS, "record_intention"]);
+/** Tool-shaped words that are not tool names: the welcome trailer's U-1a reason code (welcome.ts UNREACHABLE_REASONS). */
+const NOT_TOOLS = ["list_failed"];
+const ALLOWED = new Set([...INDEX_TOOLS, "record_intention", ...NOT_TOOLS]);
 
 /** Tool-shaped snake_case names: a verb Index or its predecessors used, then more words. */
 const TOOL_SHAPED =

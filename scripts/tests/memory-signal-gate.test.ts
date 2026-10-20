@@ -270,6 +270,33 @@ describe("evidence: the model wakes only on the resident's new material", () => 
     expect(lastRun(dir).stated_goals).toBe(2);
   });
 
+  test("P-5 (grammar e3): the same goals with their sections and the note are no change; a marked guess or chat line is never a stated goal", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)\nWants to meet:\n- Soil scientists (setup)");
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { goalsChanged: true } });
+    expect(lastRun(dir).stated_goals).toBe(2);
+    complete(dir);
+    const NOTE = "Card items marked public may be shown to people; marked village may reach other residents' agents; marked private are for you alone. An item with no mark: treat it as private. Gift lines are offers the person chose to share.";
+    writeTags(dir, `${NOTE}\nHere to:\n- Finding a hardware cofounder (you, public)\n- Something the app guessed (guess, public)\n- A chat reading (chat, guess, village)\nWants to meet:\n- Soil scientists (setup, village)`);
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+    expect(lastRun(dir).stated_goals).toBe(2);
+  });
+
+  test("VISIBILITY B3: a goal marked private, or unmarked in a marked entry, is no stated goal; an all-unmarked entry is as before", () => {
+    const dir = home();
+    const NOTE = "Card items marked public may be shown to people; marked village may reach other residents' agents; marked private are for you alone. An item with no mark: treat it as private.";
+    writeTags(dir, `${NOTE}\nHere to:\n- Finding a hardware cofounder (you, private)\n- PRIVATE-GOAL-NEW-ID (setup, agentvillage/private)\n- UNMARKED-GOAL-IN-MARKED-ENTRY\nWants to meet:\n- Soil scientists (setup, village)\nWorking on:\n- A tool library (you, agentvillage/edgecityindia2026)`);
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { goalsChanged: true } });
+    expect(lastRun(dir).stated_goals).toBe(2);
+    for (const gone of ["hardware cofounder", "PRIVATE-GOAL-NEW-ID", "UNMARKED-GOAL-IN-MARKED-ENTRY"]) expect(inputs(dir)).not.toContain(gone);
+    for (const kept of ["Soil scientists", "A tool library"]) expect(inputs(dir)).toContain(kept);
+    complete(dir);
+    // The same lines with no marks at all: every one is a stated goal, as on main.
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)\n- PRIVATE-GOAL-NEW-ID (setup)\n- UNMARKED-GOAL-IN-MARKED-ENTRY\nWants to meet:\n- Soil scientists (setup)\nWorking on:\n- A tool library (you)");
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { goalsChanged: true } });
+    expect(lastRun(dir).stated_goals).toBe(5);
+  });
+
   test("the agent's housekeeping (names, tool notes, GitHub auth) and the profile entries never wake it; a changed want in memory does", () => {
     const dir = home();
     const want = "User is raising a seed round for the seed library.";

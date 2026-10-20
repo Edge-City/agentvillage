@@ -26,6 +26,7 @@ import {
   setting,
   type Args,
 } from "../events";
+import { PORTAL_HOSTS, eventLink, portalBase } from "../portal-link";
 
 const KEY = "example-not-a-key";
 const POPUP = "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d";
@@ -413,5 +414,119 @@ describe("the Now line, and today's ended events left out (EVENTS-NOW)", () => {
     const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
     expect(section).toContain("Check the Now line before offering a session; never offer one that has ended.");
     expect(section).toContain("the second, `Now: <Wkd YYYY-MM-DD HH:MM> IST`, is the village clock");
+  });
+});
+
+describe("each line ends with the event's portal link (B-138 EVENT-LINKS)", () => {
+  const PORTAL = "https://portal.edgecity.live/portal/edge-india/events";
+  const ONE_OFF = {
+    id: "5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a",
+    title: "Morning swim",
+    start_time: "2026-10-14T01:30:00Z",
+    end_time: "2026-10-14T02:30:00Z",
+    venue_title: "Mandrem beach",
+    my_rsvp_status: "registered",
+    occurrence_id: null,
+  };
+  // An occurrence expanded from a series: `id` is the series', `occurrence_id` is `{master}_{yyyymmddTHHMMSS}`.
+  const OCCURRENCE = {
+    id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    title: "Yoga",
+    start_time: "2026-10-14T03:00:00Z",
+    end_time: "2026-10-14T04:00:00Z",
+    my_rsvp_status: null,
+    occurrence_id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d_20261014T030000",
+  };
+  const env = (portal?: string) => ({
+    HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]),
+    ...(portal === undefined ? {} : { AV_PORTAL_URL: portal }),
+  });
+  const eventLines = (out: string) => out.split("\n").filter((l) => l.startsWith("  ") && l.includes(" · "));
+
+  test("a one-off event's line ends with its portal page", async () => {
+    const r = await run(["--when", "today"], env(PORTAL), fakeFetch([ONE_OFF]).impl, DAWN);
+    expect(r.code).toBe(0);
+    expect(eventLines(r.out)).toEqual([
+      `  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id ${ONE_OFF.id} · start 2026-10-14T01:30:00Z · link ${PORTAL}/${ONE_OFF.id}`,
+    ]);
+  });
+
+  test("an occurrence links the series with ?occ=<its start>, as the portal's calendar does", async () => {
+    const r = await run(["--when", "today"], env(PORTAL), fakeFetch([OCCURRENCE]).impl, DAWN);
+    expect(eventLines(r.out)).toEqual([
+      `  8:30 AM–9:30 AM IST · Yoga · RSVP: none · id ${OCCURRENCE.id} · start 2026-10-14T03:00:00Z · link ${PORTAL}/${OCCURRENCE.id}?occ=2026-10-14T03%3A00%3A00Z`,
+    ]);
+  });
+
+  test("AV_PORTAL_URL is read from the environment, else $HERMES_HOME/.env; a trailing slash is dropped", async () => {
+    const dotenvHome = home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`, `AV_PORTAL_URL="${PORTAL}/"`]);
+    const r = await run(["--when", "today"], { HERMES_HOME: dotenvHome }, fakeFetch([ONE_OFF]).impl, DAWN);
+    expect(eventLines(r.out)[0].endsWith(` · link ${PORTAL}/${ONE_OFF.id}`)).toBe(true);
+  });
+
+  test("no link when AV_PORTAL_URL is unset, http, another host, or carries credentials, a query or a fragment", async () => {
+    for (const portal of [
+      undefined,
+      "",
+      "http://portal.edgecity.live/portal/edge-india/events",
+      "https://evil.example/portal/edge-india/events",
+      "https://portal.edgecity.live.evil.example/portal/edge-india/events",
+      "https://user:pass@portal.edgecity.live/portal/edge-india/events",
+      "https://user@portal.edgecity.live/portal/edge-india/events",
+      "https://portal.edgecity.live/portal/edge-india/events?next=https://evil.example",
+      "https://portal.edgecity.live/portal/edge-india/events#x",
+      "https://portal.edgecity.live:8443/portal/edge-india/events",
+      "not a url",
+    ]) {
+      const r = await run(["--when", "today"], env(portal), fakeFetch([ONE_OFF, OCCURRENCE]).impl, DAWN);
+      expect({ portal, code: r.code, links: r.out.includes(" · link ") }).toEqual({ portal, code: 0, links: false });
+      expect(eventLines(r.out).length).toBe(2);
+    }
+  });
+
+  test("no link for an id that is not a UUID, or no id at all", async () => {
+    const odd = [
+      { ...ONE_OFF, id: "e1" },
+      { ...ONE_OFF, id: "../../auth?redirect=x" },
+      { ...ONE_OFF, id: `${ONE_OFF.id}/x` },
+      { ...ONE_OFF, id: undefined },
+    ];
+    const r = await run(["--when", "today"], env(PORTAL), fakeFetch(odd).impl, DAWN);
+    expect(eventLines(r.out).length).toBe(4);
+    expect(r.out).not.toContain(" · link ");
+  });
+
+  test("--json is unchanged: the raw results, no link field", async () => {
+    const plain = await run(["--when", "today", "--json"], env(), fakeFetch([ONE_OFF, OCCURRENCE]).impl, DAWN);
+    const linked = await run(["--when", "today", "--json"], env(PORTAL), fakeFetch([ONE_OFF, OCCURRENCE]).impl, DAWN);
+    expect(linked.out).toBe(plain.out);
+    expect(JSON.parse(linked.out).results).toEqual([ONE_OFF, OCCURRENCE]);
+    expect(linked.out).not.toContain(PORTAL);
+  });
+
+  test("portalBase: the portal host over https only; eventLink: a UUID id from the answer only", () => {
+    expect(PORTAL_HOSTS).toEqual(["portal.edgecity.live"]);
+    expect(portalBase(PORTAL)).toBe(PORTAL);
+    expect(portalBase(` ${PORTAL}// `)).toBe(PORTAL);
+    expect(portalBase("https://PORTAL.edgecity.live/portal/edge-india/events")).toBe(PORTAL);
+    for (const bad of [undefined, "", "http://portal.edgecity.live/x", "https://agents.edgecity.live/x", "https://a:b@portal.edgecity.live/x", "https://portal.edgecity.live/x?y=1", "https://portal.edgecity.live/x#y", "nope"]) {
+      expect({ bad, base: portalBase(bad) }).toEqual({ bad, base: null });
+    }
+    expect(eventLink(ONE_OFF, PORTAL)).toBe(`${PORTAL}/${ONE_OFF.id}`);
+    expect(eventLink(OCCURRENCE, PORTAL)).toBe(`${PORTAL}/${OCCURRENCE.id}?occ=2026-10-14T03%3A00%3A00Z`);
+    expect(eventLink({ ...OCCURRENCE, start_time: undefined }, PORTAL)).toBeNull();
+    expect(eventLink(ONE_OFF, null)).toBeNull();
+    expect(eventLine(ONE_OFF, "Asia/Kolkata")).not.toContain("link");
+  });
+
+  test("the skill says to give the printed link, never build one, and the portal page when there is none", () => {
+    const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
+    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+    expect(section).toContain("Each event line ends with `link <url>`, its portal page: when asked for an event's link, give that one exactly as printed and never build one");
+    expect(section).toContain("if a line has no `link`, send them to the Edge City portal's events page");
+    expect(section).not.toContain("constitution/join");
+    const tools = readFileSync(join(import.meta.dir, "../../../index-network/tools.md"), "utf8");
+    expect(tools).toContain("You may also give an event link the edgeos schedule script printed, copied exactly as printed.");
+    expect(tools).toContain("this never covers an event whose schedule line printed a `link`");
   });
 });

@@ -1,0 +1,13 @@
+{
+  "id": "forkicks",
+  "name": "For Kicks",
+  "description": "Read the café menu and schedule, and order with an exact approved preview.",
+  "version": "1.0.0",
+  "homepage": "https://agents.edgecity.live",
+  "permissions": [
+    { "kind": "read", "label": "Read menu, schedule and your orders", "description": "Read current café availability, stops and your own order status." },
+    { "kind": "action", "label": "Order coffee and receive updates", "description": "Place only an exact manually approved order, sharing your previewed display name with the café; cancel eligible orders and receive templated status updates through your own paired bot." }
+  ],
+  "skills": ["forkicks"],
+  "operations": ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"]
+}

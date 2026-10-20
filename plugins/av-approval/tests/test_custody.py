@@ -23,7 +23,8 @@ from .conftest import PLUGIN_DIR, ExplodingCtx, FakeCtx, load_plugin, write_gate
 
 REPO = PLUGIN_DIR.parents[1]
 PH = "example-not-a-key"
-STRIP = {"INDEX_API_KEY", "INDEX_SESSION_TOKEN", "AV_EVENTS_TOKEN", "AV_BACKUP_TOKEN", "ADMIN_TOKEN"}
+STRIP = {"INDEX_API_KEY", "INDEX_SESSION_TOKEN", "AV_EVENTS_TOKEN", "AV_BACKUP_TOKEN", "ADMIN_TOKEN",
+         "MORALMOD_LLM_API_KEY"}
 
 
 def custody():
@@ -193,7 +194,7 @@ def test_install_covers_all_three_surfaces_and_strips_case_folded(caplog):
         covered = c.install(importer=importer)
     assert covered == {"provider": True, "foreground": True, "execute_code": True}
     lines = [(r.levelno, r.getMessage()) for r in caplog.records]
-    assert lines == [(logging.INFO, "av-approval: custody: 5 names withheld from agent-run code "
+    assert lines == [(logging.INFO, "av-approval: custody: 6 names withheld from agent-run code "
                                     "(provider, foreground, execute_code)")]
 
     fg = modules["tools.environments.local"]._make_run_env({"AV_BACKUP_TOKEN": PH, "EXTRA": "1"})

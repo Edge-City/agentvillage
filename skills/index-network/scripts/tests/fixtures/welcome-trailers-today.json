@@ -1,0 +1,7 @@
+{
+  "_comment": "U-1a: the --draft trailer lines as origin/main db35dc0a prints them (AV_WELCOME_REASON unset), pinned so the switch off stays byte-identical. welcome-reason.test.ts reads it.",
+  "unreachable": "{\"welcome\":1,\"fallback\":\"unreachable\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0}",
+  "two": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":2,\"intents_seeded\":0,\"seed_failed\":0}",
+  "zero": "{\"welcome\":1,\"fallback\":\"questions\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0}",
+  "context": "{\"welcome\":1,\"fallback\":\"context\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0}"
+}

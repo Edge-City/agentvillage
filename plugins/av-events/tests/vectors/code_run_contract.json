@@ -1,0 +1,34 @@
+{
+  "about": [
+    "P10-P1 code.run@1: av-events (producer) -> agentvillage-data ingest (consumer). Observe-only, default OFF.",
+    "One event per outer execute_code call, built in post_tool_call after tool.call, from the call's own args, result, status and error_type.",
+    "Closed: every key always present, in this order; no code text, output text, path, host, env name or value; no id beyond tool.call's envelope ids.",
+    "evidence_class agent_report (the plugin runs as the hermes uid, the same uid as the program it describes); actor agent; event_id a fresh uuid v7.",
+    "consent_scope says how data should keep it: all = ops security monitoring for every tenant (to be on the ops allowlist, kept without research consent only when consent_scope is all, as cron.run is kept only for installer jobs); research_consented = research consent only, like tool.call.",
+    "Held to plugins/av-events/_code_run.py by tests/test_code_run.py; agentvillage-data mirrors it when it registers the type."
+  ],
+  "patterns": "every regex below is applied with fullmatch (Python re.fullmatch, TypeScript ^...$ without the m flag): a trailing newline never passes",
+  "type": "code.run",
+  "version": 1,
+  "actor": "agent",
+  "evidence_class": "agent_report",
+  "envelope_ids": ["session_id", "turn_id", "run_id", "tool_call_id"],
+  "scan_limit_chars": 262144,
+  "switch": {"env": "AV_EVENTS_CODE_RUN", "on": ["1", "true", "yes", "on"], "default": "off", "read": "per execute_code call"},
+  "scope_switch": {"env": "AV_EVENTS_CODE_RUN_SCOPE", "values": ["all", "research_consented"], "default": "all", "blank": "all", "unknown": "research_consented", "unknown_log": "one WARNING per process naming the variable, never the value"},
+  "fields": {
+    "consent_scope": {"kind": "enum", "enum": ["all", "research_consented"], "nullable": false},
+    "code_hmac": {"kind": "regex", "regex": "^[0-9a-f]{64}$", "nullable": true, "null_when": "metadata capture, no hash key, or no string code"},
+    "code_bytes": {"kind": "int", "range": [0, 2147483647], "nullable": true, "null_when": "metadata capture or no string code"},
+    "status": {"kind": "enum", "enum": ["ok", "error", "blocked", "timeout", "cancelled", "other"], "nullable": true},
+    "error_type": {"kind": "regex", "regex": "^[A-Za-z_][A-Za-z0-9_.]{0,63}$", "nullable": true},
+    "tool_calls_made": {"kind": "int", "range": [0, 10000], "nullable": true},
+    "unavailable_tool_refusals": {"kind": "int", "range": [0, 10000], "nullable": false},
+    "unavailable_tools": {"kind": "array", "items": "a tool_categories name, or other", "max_items": 16, "sorted": true, "distinct": true, "nullable": false},
+    "risk_tags": {"kind": "array", "enum": ["base64_or_eval", "cron_write", "dotenv_path", "gated_host", "hermes_home_write", "os_environ", "proc_environ", "scripts_dir_write", "socket_or_http_client", "subprocess"], "sorted": true, "distinct": true, "nullable": false},
+    "scan_truncated": {"kind": "bool", "nullable": false, "true_when": "the tags or the refusal count read only the first 262144 characters of the program or of a result text; code_hmac and code_bytes always cover the whole program"},
+    "rules_version": {"kind": "regex", "regex": "^[a-z][a-z0-9_]{0,63}$", "nullable": false, "current": "code_run_tags_v1"},
+    "category_version": {"kind": "regex", "regex": "^[a-z][a-z0-9_]{0,63}$", "nullable": true, "current": "tool_categories_v3"}
+  },
+  "consentless_nulls_suggested": ["code_hmac", "code_bytes"]
+}

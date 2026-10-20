@@ -634,7 +634,8 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
     lines = [r.getMessage() for r in caplog.records if r.name == "av-events"]
     # DATA-212: `record_intention` logs its own one line (switch off by default); so do `pray` (PRAYER P3)
     # and `ask_village` (ASK-VILLAGE) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh
-    # and R-DEON's village_visible (no Hermes here to wrap).
+    # and R-DEON's village_visible (no Hermes here to wrap), and MINIAPP-PICKUP's stamp section (no plugin
+    # prompt sections on this ctx).
     assert lines == [
         "av-events: consent_status skipped=no_register_tool",
         "av-events: record_intention skipped=switch_off",
@@ -643,6 +644,7 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
         "av-events: search_village skipped=switch_off",
         "av-events: query_village skipped=switch_off",
         "av-events: prompt_refresh: agent.conversation_loop not importable; left as is",
+        "av-events: miniapp_refresh: Hermes has no register_system_prompt_section; left as is",
         "av-events: village_visible skipped=no_tool_search",
     ]
 

@@ -43,6 +43,20 @@ optional_env:
   - AV_PLUGIN_EVENTS
   # SEC-6 half 2: off until data's DATA-477 release registering model.observed@1 / model.offlist@1 is live
   - AV_MODEL_EVENTS
+  # P10-P1: code.run@1 for every execute_code call, off unless AV_EVENTS_CODE_RUN is
+  # 1|true|yes|on; AV_EVENTS_CODE_RUN_SCOPE is all (default) or research_consented.
+  - AV_EVENTS_CODE_RUN
+  - AV_EVENTS_CODE_RUN_SCOPE
+  # MM-INFER-VIS: llm.call (caller moralmod_negotiator) for every model step the Index plugin's
+  # bridge makes, off unless AV_EVENTS_NEGOTIATOR_LLM is 1|true|yes|on at plugin load;
+  # AV_EVENTS_NEGOTIATOR_LLM_SCOPE is all (default) or research_consented.
+  - AV_EVENTS_NEGOTIATOR_LLM
+  - AV_EVENTS_NEGOTIATOR_LLM_SCOPE
+  # MM-INFER-VIS key switch: with AV_MORALMOD_OWN_KEY 1|true|yes|on (default off), the Index bridge's
+  # own client uses MORALMOD_LLM_API_KEY (an OpenRouter key the control plane writes), never the
+  # resident's chat client.
+  - AV_MORALMOD_OWN_KEY
+  - MORALMOD_LLM_API_KEY
   # PRAYER P3: pray, registered only when AV_PRAY is 1|true|yes|on. It POSTs to
   # CONTROL_PLANE_URL (written by the control plane, as for dashboard-auth-edgecity)
   # with AV_EVENTS_TOKEN.
@@ -62,6 +76,8 @@ optional_env:
   - AV_PROMPT_REFRESH
   - AV_PROMPT_REFRESH_FILES
   - AV_TEAM_TENANT
+  # MINIAPP-PICKUP (v2.1.5): the installed-apps stamp and check, on (default) | 0.
+  - AV_MINIAPP_REFRESH
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:

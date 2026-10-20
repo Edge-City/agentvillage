@@ -165,5 +165,17 @@ jobs:
       - if: steps.scope.outputs.run == 'true'
         # python-telegram-bot at Hermes v2026.9.24's pin: av-vote's real-PTB dispatch tests (OV-358).
         run: python -m pip install --quiet pytest pyyaml python-telegram-bot==22.8
+      # MM-INFER-VIS (ov#404 refute S2): av-events' negotiator seam is pinned to the real speaker.py
+      # at INDEX_PLUGIN_REF; the parity test reads it here (parsed, never imported) and skips without it.
+      - name: Check out pinned Index plugin for the negotiator seam parity test
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: indexnetwork/hermes-plugin
+          ref: 04d833b840541fedabe78cbdad306c18853d784a
+          path: .test-deps/index-hermes-plugin
+          persist-credentials: false
       - if: steps.scope.outputs.run == 'true'
         run: python -m pytest -q
+        env:
+          AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin

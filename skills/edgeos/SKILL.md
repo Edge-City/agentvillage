@@ -22,7 +22,7 @@ metadata:
 
 # EdgeOS — Agent Skill
 
-You have access to the **EdgeOS** popup-village platform. Its base URL is `$EDGEOS_API_BASE` (default `https://api.edgeos.world/api/v1`); every recipe below writes it as `"${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}"` so the shell picks the right one. Never hardcode another host. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
+You have access to the **EdgeOS** popup-village platform. Its base URL is `$EDGEOS_API_BASE` (default `https://api.edgeos.world/api/v1`); every recipe below writes it as `--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/…"` so the shell picks the right one. Keep the `--url`: the approval gate holds a curl whose URL word starts with `$` (no `--url` in front) as human-only, and it never runs. Never hardcode another host. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
 
 **The current village's popup id is `$AV_POPUP_ID`.** The current event is **Edge City India** (Mandrem, Goa, October 11 to November 1, 2026). When `AV_POPUP_ID` is set, use its value as `{popup_id}` for every event list, venue and directory call (read it with `printenv AV_POPUP_ID` and paste the UUID in). Only when `AV_POPUP_ID` is unset or empty, tell the person the village schedule isn't connected to their agent yet and point them to the Edge City portal or the organisers. Never substitute the previous popup's id (the `edge-esmeralda` skill carries Edge Esmeralda 2026's constant) and present the results as India; use that id only when the person explicitly asks about that previous popup.
 
@@ -68,7 +68,9 @@ bun skills/edgeos/scripts/events.ts --when 2026-10-20 --days 3 --search yoga
 bun skills/edgeos/scripts/events.ts --when today --days 7 --rsvped
 ```
 
-`--when` is `today`, `tomorrow`, `weekend` or a local date `YYYY-MM-DD`; `--days N` (up to 14) extends it (for `weekend`, N-1 more days after Sunday); each line ends with the event's id and `start <ISO>`, which is the `occurrence_start` to send when RSVPing to one occurrence of a recurring event (§6); `--search WORDS` and `--rsvped` narrow it; `--json` prints the raw events instead. Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments. Exit 2 with "not set" means the schedule isn't connected to this agent (§0 above); exit 1 means EdgeOS was unreachable or refused, so say you can't reach the schedule right now. For anything the script doesn't cover (a tag, venue or track filter, a single event), use the recipes below.
+`--when` is `today`, `tomorrow`, `weekend` or a local date `YYYY-MM-DD`; `--days N` (up to 14) extends it (for `weekend`, N-1 more days after Sunday); each line carries the event's id and `start <ISO>`, which is the `occurrence_start` to send when RSVPing to one occurrence of a recurring event (§6); `--search WORDS` and `--rsvped` narrow it; `--json` prints the raw events instead. Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments. Exit 2 with "not set" means the schedule isn't connected to this agent (§0 above); exit 1 means EdgeOS was unreachable or refused, so say you can't reach the schedule right now. For anything the script doesn't cover (a tag, venue or track filter, a single event), use the recipes below.
+
+Each event line ends with `link <url>`, its portal page: when asked for an event's link, give that one exactly as printed and never build one; if a line has no `link`, send them to the Edge City portal's events page (`$AV_PORTAL_URL` when set).
 
 **Take the day from the script, never from your prompt.** For "today", "tomorrow" and "this weekend", pass the word (`--when today`, `--when tomorrow`, `--when weekend`), never a date you worked out. The script's first line, `Today is <Wkd YYYY-MM-DD> (IST)`, is today in the village, the second, `Now: <Wkd YYYY-MM-DD HH:MM> IST`, is the village clock, and the third, `Listing: ...`, names the days it listed: take the day from them and say it in your answer ("Today, Wed 14 Oct: ..."). Never take today's date from the conversation's start line in your prompt ("Conversation started: ..."): that is the day this chat began, which can be days ago.
 
@@ -83,39 +85,39 @@ All event-read recipes use `Authorization: Bearer $EDGEOS_API_KEY`.
 **List upcoming events (next 30 days):**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}&start_before={end_iso}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}&start_before={end_iso}"
 ```
 `{current_iso_timestamp}` is now and `{end_iso}` is 30 days later, both literal ISO-8601 UTC strings (e.g. `2026-10-11T00:00:00Z` and `2026-11-10T00:00:00Z`): compute them in code or via the agent's date tools, not via shell substitution. Without `start_before` the call returns every future event, however far ahead.
 
 **List events in a date range:**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={start_iso}&start_before={end_iso}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={start_iso}&start_before={end_iso}"
 ```
 
 **Search events by title:**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&search=KEYWORD&start_after={start_iso}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&search=KEYWORD&start_after={start_iso}"
 ```
 
 **Filter by tag, kind, venue, or track:**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy&start_after={start_iso}&start_before={end_iso}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy&start_after={start_iso}&start_before={end_iso}"
 ```
 `tags` matches events carrying any of the given tags. The other filters are `kind`, `venue_id` (a venue's `id` from §7; repeat `venue_ids` for several) and repeated `track_ids` (an event's `track_id`).
 
 **Only events you've RSVPed to:**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&start_after={current_iso_timestamp}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&start_after={current_iso_timestamp}"
 ```
 
 **Fetch a single event (includes caller's RSVP status):**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events/{event_id}"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events/{event_id}"
 ```
 
 For a recurring event, scope the RSVP lookup to one instance with `?occurrence_start={occurrence_iso}`.
@@ -142,7 +144,7 @@ Agents cannot create, edit, cancel, or send invitations for village events, and 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
   -d '{}'
 ```
 
@@ -150,7 +152,7 @@ curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
 ```bash
 curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
   -d '{"occurrence_start":"{occurrence_iso}"}'
 ```
 
@@ -158,14 +160,14 @@ curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
 ```bash
 curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/cancel-registration/{event_id}" \
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/cancel-registration/{event_id}" \
   -d '{}'
 ```
 
 **List who is going to one event (`event_id` is required):**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/participants?event_id={event_id}&skip=0&limit=100"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/participants?event_id={event_id}&skip=0&limit=100"
 ```
 
 This lists the participants of **one** event, the caller included if they RSVPed; it is not a list of the caller's own RSVPs, and without `event_id` it fails with `422`. Each row carries a participation `status` (a cancelled RSVP stays in the list with its status). For a recurring event, always add `&occurrence_start={occurrence_iso}` (that occurrence's `start_time`, exactly). If you leave it out, the list holds only the RSVPs not tied to any occurrence (for an event with no host, it mixes the RSVPs of every occurrence instead); RSVPs are made per occurrence, so for a recurring event that list is usually empty or short, and it does **not** mean nobody is going. For the count alone, the single-event read with `?occurrence_start=` returns `attendee_count` (§3). The event's host is not listed, and attendees who chose to hide their name on their application are left out entirely. It pages with `skip` and `limit` (default 100, at most 1000): fetch again with a larger `skip` only while `skip + results.length < paging.total`. To find the caller's own RSVPs, use the events list with `rsvped_only=true` (§3).
@@ -175,7 +177,7 @@ This lists the participants of **one** event, the caller included if they RSVPed
 **List active venues for a popup (`popup_id` is required: the UUID in `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
 ```bash
 curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-venues/portal/venues?popup_id={popup_id}&limit=100"
+  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-venues/portal/venues?popup_id={popup_id}&limit=100"
 ```
 
 Creating, editing, or deleting venues needs `venues:write`, which agents don't have (§4).

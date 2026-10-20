@@ -414,12 +414,17 @@ describe("the seed: zero active intents and selected intentions → up to three 
 
   test("Index unreachable: no create, no marker, today's unreachable text", async () => {
     writeUserMd(profileText(draftWith(3)));
-    for (const list of [() => ({ response: new Response("down", { status: 503 }) }), () => toolError("Could not list intents."), () => "no json at all"] as const) {
+    // U-1a: the branch carries why (the trailer prints it only behind AV_WELCOME_REASON).
+    for (const [list, reason] of [
+      [() => ({ response: new Response("down", { status: 503 }) }), "list_failed"],
+      [() => toolError("Could not list intents."), "list_failed"],
+      [() => "no json at all", "bad_answer"],
+    ] as const) {
       const index = fakeIndex({ list });
       const { text, names, branch } = await run(index, ["--draft"]);
       expect(names).toEqual(["list_intents"]);
       expect(text).toBe(golden.unreachable);
-      expect(branch).toEqual({ fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
+      expect(branch).toEqual({ fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0, reason });
     }
     // No key: no call at all.
     const index = fakeIndex();

@@ -57,6 +57,12 @@ def of_type(av, plugin, *types):
     return [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"] in types]
 
 
+def keyed_ids(plugin, ids):
+    """What the plugin sends for each participant id: its keyed hash in every
+    capture mode (DATA-308), over the id as the ledger holds it (lower case)."""
+    return [plugin._COLLECTOR.keyed_hash(i.lower()) for i in ids]
+
+
 def actions(av, plugin):
     return [(e["event_type"], e["evidence_class"])
             for e in of_type(av, plugin, "action.attempted", "action.failed", "action.receipted")]
@@ -131,7 +137,7 @@ def test_combined_flags_and_an_explicit_port_are_read(live, ctx, av, command):
     fire(ctx, command, terminal_result(body))
     assert actions(av, live) == [("action.attempted", "agent_report")], command
     read_event(ctx)
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [body["id"]]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [body["id"]])
 
 
 @pytest.mark.parametrize("command", [
@@ -199,11 +205,11 @@ def test_occurrences_are_kept_apart(live, ctx, av):
     first = rsvp(ctx, call_id="c1")
     second = rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c2")
     read_event(ctx, call_id="c3")
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [first]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [first])
     # The same instant at another offset, URL-encoded as a client must.
     read_event(ctx, occurrence="2026-10-20T15:30:00%2B05:30", call_id="c4")
     receipted = of_type(av, live, "action.receipted")
-    assert [e["payload"]["receipt"]["id"] for e in receipted] == [first, second]
+    assert [e["payload"]["receipt"]["id"] for e in receipted] == keyed_ids(live, [first, second])
     assert receipted[-1]["payload"]["occurrence_start"] == "2026-10-20T10:00:00.000Z"
 
 
@@ -212,7 +218,7 @@ def test_a_list_item_of_a_recurring_series_is_keyed_by_its_start(live, ctx, av):
     body = {"results": [{"id": EVENT, "recurrence_master_id": EVENT, "start_time": "2026-10-20T10:00:00Z",
                          "my_rsvp_status": "registered"}], "paging": {}}
     fire(ctx, f"curl -s '{API}/events/portal/events?rsvped_only=true'", terminal_result(body))
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [second]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [second])
 
 
 def test_a_re_rsvp_to_the_same_occurrence_supersedes_the_waiting_one(live, ctx, av):
@@ -223,7 +229,7 @@ def test_a_re_rsvp_to_the_same_occurrence_supersedes_the_waiting_one(live, ctx, 
     assert attempts[1]["payload"]["supersedes_action_id"] == attempts[0]["action_id"]
     read_event(ctx, call_id="c3")
     receipted = of_type(av, live, "action.receipted")
-    assert [(e["action_id"], e["payload"]["receipt"]["id"]) for e in receipted] == [(attempts[1]["action_id"], newer)]
+    assert [(e["action_id"], e["payload"]["receipt"]["id"]) for e in receipted] == [(attempts[1]["action_id"], keyed_ids(live, [newer])[0])]
 
 
 def test_a_null_status_never_confirms_a_cancel_of_an_unseen_rsvp(live, ctx, av):
@@ -241,7 +247,7 @@ def test_a_null_status_confirms_a_cancel_of_a_seen_rsvp(live, ctx, av):
     read_event(ctx, status=None)
     receipted = of_type(av, live, "action.receipted")
     assert receipted[-1]["payload"]["action_class"] == "cancel_rsvp"
-    assert receipted[-1]["payload"]["receipt"]["id"] == cancel_id
+    assert receipted[-1]["payload"]["receipt"]["id"] == keyed_ids(live, [cancel_id])[0]
 
 
 def test_a_registered_read_leaves_a_pending_cancel_alone(live, ctx, av):
@@ -373,15 +379,69 @@ def test_metadata_replaces_the_event_id_with_its_keyed_hash(plugin, ctx, monkeyp
 
 
 @pytest.mark.parametrize("mode", ["sanitized", "full"])
-def test_sanitized_and_full_keep_the_receipt_checkable(plugin, ctx, monkeypatch, av, mode):
+def test_sanitized_and_full_key_the_participant_id_like_metadata(plugin, ctx, monkeypatch, av, home, mode):
+    """DATA-308: the participant record id resolves to a person through
+    EdgeOS, so it leaves keyed in every mode — the same HMAC under the same
+    `hash.key` as `metadata`. The event id keeps the capture distinction."""
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     monkeypatch.setenv("AV_CAPTURE", mode)
     plugin.register(ctx)
     participant_id = rsvp(ctx)
     read_event(ctx)
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text().strip())
+    hashed_participant = hmac.new(key, participant_id.encode(), hashlib.sha256).hexdigest()
     receipted = of_type(av, plugin, "action.receipted")[0]
-    assert receipted["payload"]["receipt"]["id"] == participant_id
+    assert receipted["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": hashed_participant}
+    call = of_type(av, plugin, "tool.call")[-1]
+    assert call["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": hashed_participant}
+    # An event id names the event, not who went: in clear above `metadata`.
     assert receipted["payload"]["edgeos_event_id"] == EVENT
+    # The raw participant UUID is nowhere in what leaves, in any case.
+    blob = json.dumps(av.read_buffer(plugin._COLLECTOR))
+    assert participant_id not in blob and participant_id.upper() not in blob
+
+
+@pytest.mark.parametrize("mode", ["metadata", "sanitized", "full"])
+def test_the_receipt_id_is_the_same_value_in_every_mode(plugin, ctx, monkeypatch, av, home, mode):
+    """Same key, same input (the id as the ledger holds it, lower case), same
+    digest: a tenant moving between modes keeps one receipt id per record."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_CAPTURE", mode)
+    plugin.register(ctx)
+    body = participant()
+    body["id"] = body["id"].upper()
+    fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'", terminal_result(body))
+    read_event(ctx)
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text().strip())
+    expected = hmac.new(key, body["id"].lower().encode(), hashlib.sha256).hexdigest()
+    assert of_type(av, plugin, "action.receipted")[0]["payload"]["receipt"]["id"] == expected
+    assert of_type(av, plugin, "tool.call")[-1]["payload"]["receipt"]["id"] == expected
+
+
+@pytest.mark.parametrize("mode", ["metadata", "sanitized", "full"])
+def test_without_a_hash_key_the_receipt_id_is_null(plugin, ctx, monkeypatch, av, mode):
+    """Never the raw id in place of a digest the plugin cannot compute."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_CAPTURE", mode)
+    plugin.register(ctx)
+    participant_id = rsvp(ctx)
+    monkeypatch.setattr(plugin._COLLECTOR, "hash_key", lambda: None)
+    read_event(ctx)
+    receipted = of_type(av, plugin, "action.receipted")[0]
+    assert receipted["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": None}
+    assert of_type(av, plugin, "tool.call")[-1]["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": None}
+    assert participant_id not in json.dumps(av.read_buffer(plugin._COLLECTOR))
+
+
+def test_tool_call_and_action_receipted_are_schema_version_2(live, ctx, av):
+    """The door tells this producer from an older one by the version (contract-v1:
+    a change after the tag is a new version, the old one still registered)."""
+    rsvp(ctx)
+    read_event(ctx)
+    versions = {(e["event_type"], e["schema_version"]) for e in av.read_buffer(live._COLLECTOR)}
+    assert ("tool.call", 2) in versions and ("action.receipted", 2) in versions
+    assert ("action.attempted", 1) in versions
+    assert {v for t, v in versions if t not in ("tool.call", "action.receipted")} == {1}
 
 
 # --------------------------------------------------------------------------
@@ -416,7 +476,7 @@ def test_a_read_without_an_occurrence_confirms_the_only_waiting_occurrence(live,
     only = rsvp(ctx, occurrence="2026-10-20T10:00:00Z")
     read_event(ctx)
     receipted = of_type(av, live, "action.receipted")
-    assert [e["payload"]["receipt"]["id"] for e in receipted] == [only]
+    assert [e["payload"]["receipt"]["id"] for e in receipted] == keyed_ids(live, [only])
     assert receipted[0]["payload"]["occurrence_start"] == "2026-10-20T10:00:00.000Z"
 
 
@@ -431,14 +491,14 @@ def test_a_read_without_an_occurrence_prefers_the_one_off(live, ctx, av):
     one_off = rsvp(ctx, call_id="c1")
     rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c2")
     read_event(ctx)
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [one_off]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [one_off])
 
 
 def test_a_literal_plus_in_the_query_is_an_offset(live, ctx, av):
     second = rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c1")
     rsvp(ctx, occurrence="2026-10-27T10:00:00Z", call_id="c2")
     read_event(ctx, occurrence="2026-10-20T15:30:00+05:30", call_id="c3")
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [second]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [second])
 
 
 def test_a_read_naming_an_unparseable_occurrence_confirms_nothing(live, ctx, av):
@@ -536,7 +596,7 @@ def test_a_write_tolerates_trailing_whitespace(live, ctx, av, trailing):
     fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'" + trailing, terminal_result(body))
     assert actions(av, live) == [("action.attempted", "agent_report")]
     read_event(ctx)
-    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [body["id"]]
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == keyed_ids(live, [body["id"]])
 
 
 PROFILE_URL = f"{API}/humans/me"

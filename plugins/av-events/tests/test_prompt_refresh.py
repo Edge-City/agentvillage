@@ -131,16 +131,87 @@ def _context_files_part(agent, ctx_len, soul_loaded):
 
 
 def _skills_prompt(agent):
-    return HERMES["skills"]
+    if not HERMES.get("skills_from_disk"):
+        return HERMES["skills"]
+    # MINIAPP-PICKUP: the index read from $HERMES_HOME/skills through an in-process cache that does not
+    # watch the directory (prompt_builder.py:1113-1137, the LRU), as Hermes builds it.
+    if HERMES.get("skills_cache") is None:
+        names = sorted(path.parent.name for path in (_home() / "skills").glob("*/SKILL.md"))
+        HERMES["skills_cache"] = "## Skills\n" + "\n".join(f"- {name}: the {name} skill" for name in names)
+    return HERMES["skills_cache"]
+
+
+def clear_skills_system_prompt_cache(*, clear_snapshot=False):
+    """prompt_builder.py:1129-1137."""
+    HERMES["skills_cleared"] = HERMES.get("skills_cleared", 0) + 1
+    HERMES["skills_cache"] = None
+
+
+# Plugin system-prompt sections, as Hermes v2026.9.24 frames and freezes them: the format is
+# hermes_cli/plugins_dispatch.py:73-96 verbatim; the render skips an empty text (:577-579); the
+# snapshot is agent/system_prompt.py:113-162 (rendered once per build boundary, parsed back from a
+# restored prompt only when the frame sits right before the timestamp line, dropped by invalidate).
+SECTIONS_START = "<!-- hermes-plugin-sections:start -->"
+SECTIONS_END = "<!-- hermes-plugin-sections:end -->"
+SECTION_FRAME = re.compile(r"## Plugin Context: (?P<id>[a-z0-9][a-z0-9._-]{0,127})\n"
+                           r"<!-- hermes-plugin-section-chars:(?P<chars>\d+) -->\n\n")
+
+
+def format_system_prompt_section(section_id, content):
+    return f"## Plugin Context: {section_id}\n<!-- hermes-plugin-section-chars:{len(content)} -->\n\n{content}"
+
+
+def format_system_prompt_sections(sections):
+    if not sections:
+        return ""
+    blocks = [format_system_prompt_section(section_id, content) for section_id, content in sections]
+    return f"{SECTIONS_START}\n" + "\n\n".join(blocks) + f"\n{SECTIONS_END}"
+
+
+def render_system_prompt_sections(agent):
+    rendered = []
+    for section_id, (content, max_chars) in sorted(HERMES.get("sections", {}).items()):
+        value = content({"session_id": agent.session_id, "platform": agent.platform}) if callable(content) else content
+        text = value.strip() if isinstance(value, str) else ""
+        if text and len(text) <= max_chars:
+            rendered.append((section_id, text))
+    HERMES["section_renders"] = HERMES.get("section_renders", 0) + 1
+    return tuple(rendered)
+
+
+def parse_system_prompt_sections(prompt):
+    start = prompt.rfind(SECTIONS_START)
+    end = prompt.find(SECTIONS_END, start + len(SECTIONS_START)) if start >= 0 else -1
+    if end < 0:
+        return ()
+    after_end = end + len(SECTIONS_END)
+    if not prompt[after_end:].startswith("\n\nConversation started:"):
+        return ()
+    framed = prompt[start:after_end]
+    restored = [(m.group("id"), framed[m.end():m.end() + int(m.group("chars"))]) for m in SECTION_FRAME.finditer(framed)]
+    return tuple(restored) if format_system_prompt_sections(restored) == framed else ()
+
+
+def frozen_sections(agent):
+    if hasattr(agent, "_sections_snapshot"):
+        return agent._sections_snapshot
+    stored = agent._cached_system_prompt
+    agent._sections_snapshot = (parse_system_prompt_sections(stored) if isinstance(stored, str) and stored
+                                else render_system_prompt_sections(agent))
+    return agent._sections_snapshot
 
 
 def build_system_prompt(agent, system_message=None):
     stable = "\n\n".join(_identity_parts(agent, None)[0])
+    if HERMES.get("bot_chat"):  # tools/bot_mode_probe.py epoch_line, stamped on a Bot Chat prompt
+        stable += f"\n\nCapability epoch: {HERMES['capability']}"
     context = "\n\n".join(p for p in [system_message, *_context_files_part(agent, None, False)] if p)
     memory = [agent._memory_store.format_for_system_prompt(t) for t in ("memory", "user")]
     manager = getattr(agent, "_memory_manager", None)  # system_prompt._memory_parts: the provider block
     provider = manager.build_system_prompt() if manager is not None else ""
-    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, provider, "Conversation started: Thursday"] if p)
+    sections = format_system_prompt_sections(frozen_sections(agent))
+    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, provider, sections,
+                                         "Conversation started: Thursday"] if p)
     agent._cached_system_prompt_static = stable
     for warning in list(TRUNCATION.get() or []):
         HERMES["shown_warnings"].append(warning)
@@ -152,11 +223,14 @@ def build_system_prompt(agent, system_message=None):
 def invalidate_system_prompt(agent):
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
+    if hasattr(agent, "_sections_snapshot"):
+        del agent._sections_snapshot
     agent._memory_store.load_from_disk()
 
 
 def restore_plugin_prompt_sections(agent, prompt):
     HERMES["restored_sections"] += 1
+    agent._sections_snapshot = parse_system_prompt_sections(prompt)
 
 
 def reconstruct_static_prefix(agent, system_message=None, *, log_label="restore"):
@@ -185,6 +259,15 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     row = agent._session_db.get_session(agent.session_id) if conversation_history and agent._session_db else None
     stored = (row or {}).get("system_prompt")
     if stored:
+        epoch = re.search(r"Capability epoch: ([0-9a-z]+)", stored)
+        if HERMES.get("bot_chat") and epoch and epoch.group(1) != HERMES["capability"]:
+            # conversation_loop.py:704-728: the Bot Chat capability epoch branch, reduced.
+            HERMES["bot_chat_rebuilds"] = HERMES.get("bot_chat_rebuilds", 0) + 1
+            clear_skills_system_prompt_cache(clear_snapshot=True)
+            agent._cached_system_prompt = agent._build_system_prompt(system_message)
+            stage_surface_switch_note(agent, agent._cached_system_prompt, conversation_history)
+            _persist_system_prompt(agent, "bot chat persist failed %s: %s")
+            return
         agent._cached_system_prompt = stored
         agent.tools = json.loads(row["tool_names"])  # the tools[] pin
         stage_surface_switch_note(agent, stored, conversation_history)
@@ -281,7 +364,8 @@ def install_hermes(monkeypatch, *, loop_attrs=None):
             "agent.system_prompt", _identity_parts=_identity_parts, _context_files_part=_context_files_part,
             _skills_prompt=_skills_prompt, restore_plugin_prompt_sections=restore_plugin_prompt_sections,
             reconstruct_static_prefix=reconstruct_static_prefix),
-        "agent.prompt_builder": _module("agent.prompt_builder", _truncation_warnings=TRUNCATION),
+        "agent.prompt_builder": _module("agent.prompt_builder", _truncation_warnings=TRUNCATION,
+                                        clear_skills_system_prompt_cache=clear_skills_system_prompt_cache),
         "agent.runtime_cwd": _module("agent.runtime_cwd", resolve_context_cwd=_home),
         "tools": _module("tools", __path__=[]),
         "tools.memory_tool_store": _module("tools.memory_tool_store", MemoryStore=FakeMemoryStore,
@@ -1217,3 +1301,502 @@ def test_an_unreadable_profile_never_blocks_and_never_holds_back_user_md(hermes,
         if bad == "mode_000":
             path.chmod(0o600)
 
+
+
+# ---- MINIAPP-PICKUP (v2.1.5): an install or removal reaches an open chat at its next turn --------------
+
+FORKICKS = {"id": "forkicks", "version": "1.0.0", "skills": ["forkicks"],
+            "operations": ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm",
+                           "forkicks.order.status", "forkicks.order.cancel"]}
+ZZZBOT = {"id": "zzzbot", "version": "1.0.0", "skills": ["zzzbot"],
+          "operations": ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"]}
+#: Two Gold Stars entries the overlay accepts: the same version, different operations (_mini_apps.py).
+GOLD_RESTORED = {"id": "gold-stars", "version": "1.1.0", "skills": ["gold-stars"],
+                 "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send",
+                                "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]}
+GOLD_PERSON = {**GOLD_RESTORED, "operations": GOLD_RESTORED["operations"] + ["rolodex.person"]}
+#: The stamp exactly where Hermes freezes it: the last plugin section, right before the timestamp line.
+APPS_STAMP = re.compile(r"## Plugin Context: av-events\.mini-apps-epoch\n<!-- hermes-plugin-section-chars:29 -->\n\n"
+                        r"Mini-apps epoch: ([0-9a-f]{12})\n<!-- hermes-plugin-sections:end -->\n\nConversation started:")
+
+
+def apps_stamp(prompt):
+    found = APPS_STAMP.search(prompt)
+    return found.group(1) if found else None
+
+
+def stage_apps(*apps):
+    """What install/install_miniapps.ts stages: each app's SKILL.md, an uninstalled app's unlinked, then
+    mini-apps.json. The control plane restarts the gateway after it (`restart` below)."""
+    keep = {app["id"] for app in apps}
+    for path in (_home() / "skills").glob("*/SKILL.md"):
+        if path.parent.name not in keep and path.parent.name != "rolodex":
+            path.unlink()
+    for app in apps:
+        write(f"skills/{app['id']}/SKILL.md", f"---\nname: {app['id']}\ndescription: the {app['id']} mini-app\n---\n")
+    write("mini-apps.json", json.dumps({"version": 1, "apps": list(apps)}))
+
+
+def restart(h):
+    """A gateway restart: a new process (no in-process memo, an empty skills LRU); agents are fresh."""
+    pr(h.plugin).reset()
+    HERMES["skills_cache"] = None
+
+
+def epoch_module(plugin):
+    return sys.modules[f"{plugin.__name__}._miniapp_epoch"]
+
+
+def reasons_logged(caplog):
+    return [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)]
+
+
+@pytest.fixture()
+def apps(plugin, ctx, monkeypatch, home):
+    """A resident's box: F1 off (AV_PROMPT_REFRESH unset, not a team tenant), MINIAPP-PICKUP at its default;
+    a Hermes with plugin prompt sections and a skills index read from $HERMES_HOME/skills."""
+    # installed() and the fingerprint refuse a symlink anywhere in the path (macOS /var is one).
+    monkeypatch.setenv("HERMES_HOME", str(home.resolve()))
+    HERMES.clear()
+    HERMES.update(skills="", skills_from_disk=True, skills_cache=None, sections={}, notes=[], session_starts=[], calls=0,
+                  restored_sections=0, shown_warnings=[], ctx=ctx, capability="c1")
+    monkeypatch.delenv("HERMES_TIMEZONE", raising=False)
+    write("memories/USER.md", "Name: Test Resident")
+    write("memories/MEMORY.md", "Prefers short replies")
+    write("skills/rolodex/SKILL.md", "---\nname: rolodex\n---\n")  # a skill every box ships
+    loop = install_hermes(monkeypatch)
+
+    def register_system_prompt_section(section_id, content, *, position="after_memory", max_chars=4000):
+        HERMES["sections"][section_id] = (content, max_chars)  # hermes_cli/plugins.py:936-960, reduced
+
+    ctx.register_system_prompt_section = register_system_prompt_section
+    epoch = sys.modules.get(f"{plugin.__name__}._miniapp_epoch")
+    if epoch is not None:
+        epoch.reset()
+    plugin.register(ctx)
+    pr(plugin).reset()
+    sys.modules[f"{plugin.__name__}._clock"].reset()
+    yield types.SimpleNamespace(loop=loop, db=FakeDB(), plugin=plugin, ctx=ctx)
+    pr(plugin).uninstall()
+
+
+@pytest.mark.parametrize("restarted", [True, False], ids=["gateway-restarted", "cached-agent-no-restart"])
+def test_an_install_is_picked_up_at_the_next_turn_of_an_open_chat_once(apps, caplog, restarted):
+    """The key test: no /new. The control plane stages the app and restarts the gateway; the open chat's
+    next turn rebuilds its prompt once (skills index included), and never again for the same install."""
+    agent = started(apps)
+    before = apps.db.rows["tg-dm-1"]["system_prompt"]
+    assert "forkicks" not in before and SECTIONS_START not in before  # no app: no new prompt bytes
+    stage_apps(FORKICKS)
+    if restarted:
+        restart(apps)
+        agent = FakeAgent(apps.db)
+    builds, cleared = HERMES["build_attempts"], HERMES.get("skills_cleared", 0)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "what can you do?", HISTORY)
+    assert "- forkicks: the forkicks skill" in got["system"] and apps_stamp(got["system"])
+    assert apps.db.rows["tg-dm-1"]["system_prompt"] == got["system"]
+    assert HERMES["build_attempts"] == builds + 1 and HERMES["skills_cleared"] == cleared + 1
+    assert got["messages"] == HISTORY + [{"role": "user", "content": "what can you do?"}]
+    assert HERMES["session_starts"] == ["tg-dm-1"]  # the same session, not a new one
+    assert reasons_logged(caplog) == ["miniapps"]
+    # Only once: later turns on the cached agent, a fresh agent, and after another restart.
+    writes = apps.db.writes
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, agent, FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "and now?", HISTORY)["system"] == got["system"]
+        restart(apps)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "and now?", HISTORY)["system"] == got["system"]
+    assert HERMES["build_attempts"] == builds + 1 and apps.db.writes == writes
+    assert reasons_logged(caplog) == ["miniapps"]
+
+
+def test_no_app_change_means_no_rebuild(apps, caplog):
+    stage_apps(FORKICKS)  # installed before the chat started: its prompt is stamped at birth
+    agent = started(apps)
+    stored = apps.db.rows["tg-dm-1"]["system_prompt"]
+    assert apps_stamp(stored) == epoch_module(apps.plugin).fingerprint() and "- forkicks:" in stored
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, agent, FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "hi", HISTORY)["system"] == stored
+        stage_apps(FORKICKS)  # a re-stage of the same bytes (a reconcile retry), then the restart
+        restart(apps)
+        for turn_agent in (FakeAgent(apps.db), FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "hi", HISTORY)["system"] == stored
+    assert apps.db.writes == 1 and HERMES["build_attempts"] == 1 and not refresh_lines(caplog)
+
+
+def test_a_box_without_mini_apps_never_rebuilds_and_gets_no_new_prompt_bytes(apps, caplog):
+    agent = started(apps)
+    stored = apps.db.rows["tg-dm-1"]["system_prompt"]
+    assert SECTIONS_START not in stored and "Mini-apps epoch" not in stored
+    write("mini-apps.json", json.dumps({"version": 1, "apps": []}))  # an emptied projection reads the same
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "hi", HISTORY)["system"] == stored
+        restart(apps)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == stored
+    assert apps.db.writes == 1 and not refresh_lines(caplog)
+
+
+def test_a_removal_rebuilds_once_and_the_last_removal_drops_the_stamp(apps, caplog):
+    stage_apps(FORKICKS, ZZZBOT)
+    started(apps)
+    first = apps_stamp(apps.db.rows["tg-dm-1"]["system_prompt"])
+    stage_apps(FORKICKS)  # zzzbot removed: its SKILL.md unlinked, its entry gone
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == got["system"]
+    assert "zzzbot" not in got["system"] and "- forkicks:" in got["system"]
+    second = apps_stamp(got["system"])
+    assert second and second != first and apps.db.writes == 2
+    stage_apps()  # the last app removed
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        gone = run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)
+        for _ in range(2):
+            assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == gone["system"]
+    assert "forkicks" not in gone["system"] and SECTIONS_START not in gone["system"] and apps.db.writes == 3
+    assert reasons_logged(caplog) == ["miniapps", "miniapps"]
+
+
+def test_a_prompt_from_before_the_stamp_is_rebuilt_once_only_where_an_app_is_installed(apps, monkeypatch, caplog):
+    """v2.1.4 prompts carry no stamp (the switch off renders none, as the old overlay did). After the roll,
+    a box with an app rebuilds each open chat once (also catching an install that never got its /new);
+    a box with none rebuilds nothing."""
+    monkeypatch.setenv("AV_MINIAPP_REFRESH", "0")
+    started(apps, "tg-dm-1")
+    stage_apps(FORKICKS)  # installed while the old overlay ran: this chat never learned it
+    started(apps, "tg-dm-2")  # a chat begun after the install on the old overlay: knows it, unstamped
+    for session_id in ("tg-dm-1", "tg-dm-2"):
+        assert "Mini-apps epoch" not in apps.db.rows[session_id]["system_prompt"]
+    monkeypatch.delenv("AV_MINIAPP_REFRESH")  # v2.1.5 rolls
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for session_id in ("tg-dm-1", "tg-dm-2", "tg-dm-1", "tg-dm-2"):
+            got = run_turn(apps.loop, FakeAgent(apps.db, session_id), "hi", HISTORY)
+            assert "- forkicks:" in got["system"] and apps_stamp(got["system"])
+    assert reasons_logged(caplog) == ["miniapps", "miniapps"]
+    # No app on the box: an unstamped prompt is current.
+    stage_apps()
+    monkeypatch.setenv("AV_MINIAPP_REFRESH", "0")
+    started(apps, "tg-dm-3")
+    monkeypatch.delenv("AV_MINIAPP_REFRESH")
+    restart(apps)
+    stored = apps.db.rows["tg-dm-3"]["system_prompt"]
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(apps.loop, FakeAgent(apps.db, "tg-dm-3"), "hi", HISTORY)["system"] == stored
+    assert not refresh_lines(caplog)
+
+
+def test_the_bot_chat_epoch_behaves_as_before(apps, caplog):
+    """Hermes's own Bot Chat capability epoch (conversation_loop.py:704-728) still rebuilds once per
+    capability change; the mini-apps check adds no second rebuild beside it."""
+    HERMES["bot_chat"] = True
+    stage_apps(FORKICKS)
+    started(apps)
+    assert "Capability epoch: c1" in apps.db.rows["tg-dm-1"]["system_prompt"]
+    # A capability change alone: Hermes's branch, once; nothing from us.
+    HERMES["capability"] = "c2"
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == got["system"]
+    assert "Capability epoch: c2" in got["system"] and apps_stamp(got["system"])
+    assert HERMES["bot_chat_rebuilds"] == 1 and HERMES["build_attempts"] == 2 and HERMES["skills_cleared"] == 1
+    assert not refresh_lines(caplog)
+    # Both at once: still one rebuild, Hermes's, which renders the current stamp.
+    HERMES["capability"] = "c3"
+    stage_apps(FORKICKS, ZZZBOT)
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        both = run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == both["system"]
+    assert "Capability epoch: c3" in both["system"] and "- zzzbot:" in both["system"]
+    assert apps_stamp(both["system"]) == epoch_module(apps.plugin).fingerprint()
+    assert HERMES["bot_chat_rebuilds"] == 2 and HERMES["build_attempts"] == 3 and not refresh_lines(caplog)
+    # An app change alone on a Bot Chat session: ours, once; the capability epoch line is kept.
+    stage_apps(FORKICKS)
+    restart(apps)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        apps_only = run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == apps_only["system"]
+    assert "Capability epoch: c3" in apps_only["system"] and "zzzbot" not in apps_only["system"]
+    assert HERMES["bot_chat_rebuilds"] == 2 and HERMES["build_attempts"] == 4
+    assert reasons_logged(caplog) == ["miniapps"]
+
+
+@pytest.mark.parametrize(("mode", "hooks_disabled", "on"), [
+    (None, "", True),               # default
+    ("", "", True),                 # blank: the default
+    ("1", "", True),
+    ("ON", "", True),
+    ("0", "", False),
+    ("off", "", False),
+    (None, "miniapp_refresh", False),
+    ("1", "clock_line, miniapp_refresh", False),
+    ("disabled", "", False),        # unknown: off
+])
+def test_the_miniapp_switch(apps, monkeypatch, mode, hooks_disabled, on):
+    if mode is not None:
+        monkeypatch.setenv("AV_MINIAPP_REFRESH", mode)
+    monkeypatch.setenv("AV_HOOKS_DISABLED", hooks_disabled)
+    agent = started(apps)
+    stage_apps(FORKICKS)
+    got = run_turn(apps.loop, agent, "hi", HISTORY)
+    assert ("- forkicks:" in got["system"]) is on and (apps_stamp(got["system"]) is not None) is on
+    fresh = started(apps, "tg-dm-2")  # off: a new chat carries no stamp either (today's prompt)
+    assert (SECTIONS_START in fresh._cached_system_prompt) is on
+
+
+def test_an_unknown_switch_value_warns_once(apps, monkeypatch, caplog):
+    monkeypatch.setenv("AV_MINIAPP_REFRESH", "disabled")
+    with caplog.at_level(logging.WARNING, logger="av-events"):
+        for _ in range(3):
+            assert not epoch_module(apps.plugin).enabled(None)
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+        "av-events: miniapp_refresh: AV_MINIAPP_REFRESH has an unknown value; off (use 1 or 0)"]
+
+
+def test_with_f1_off_memory_changes_still_wait_but_an_install_does_not(apps, caplog):
+    agent = started(apps)
+    write("memories/USER.md", "Name: Test Resident\n§\nVote note: the weekly theme closes Friday")
+    stored = apps.db.rows["tg-dm-1"]["system_prompt"]
+    assert run_turn(apps.loop, agent, "hi", HISTORY)["system"] == stored  # F1 is team-only by default
+    stage_apps(FORKICKS)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "hi", HISTORY)
+    # The rebuild is the whole prompt, so it carries the USER.md change too.
+    assert "- forkicks:" in got["system"] and "Vote note" in got["system"]
+    assert reasons_logged(caplog) == ["miniapps"]
+
+
+def test_with_f1_on_one_rebuild_carries_both(apps, monkeypatch, caplog):
+    monkeypatch.setenv("AV_PROMPT_REFRESH", "1")
+    agent = started(apps)
+    write("memories/USER.md", "Name: Test Resident\n§\nVote note: the weekly theme closes Friday")
+    stage_apps(FORKICKS)
+    builds = HERMES["build_attempts"]
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "hi", HISTORY)
+        assert run_turn(apps.loop, agent, "hi", HISTORY)["system"] == got["system"]
+    assert "- forkicks:" in got["system"] and "Vote note" in got["system"] and HERMES["build_attempts"] == builds + 1
+    assert reasons_logged(caplog) == ["user_md,miniapps"]
+
+
+def test_an_unreadable_user_md_holds_back_the_app_rebuild(apps, caplog):
+    """The rebuild re-renders memory: an undecodable USER.md would render empty and drop the profile."""
+    agent = started(apps)
+    stored = apps.db.rows["tg-dm-1"]["system_prompt"]
+    (_home() / "memories" / "USER.md").write_bytes(b"Name: Test Resident \xff\xfe")
+    stage_apps(FORKICKS)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(apps.loop, agent, "hi", HISTORY)["system"] == stored
+    assert "av-events: prompt_refresh: user_md could not be read strictly; prompt left as is" in caplog.text
+    write("memories/USER.md", "Name: Test Resident")
+    got = run_turn(apps.loop, agent, "hi", HISTORY)
+    assert "- forkicks:" in got["system"] and "Name: Test Resident" in got["system"]
+
+
+@pytest.mark.parametrize("shape", ["cron", "subagent", "fork"])
+def test_cron_subagents_and_forks_are_left_alone_for_apps_too(apps, shape):
+    agent = started(apps, "cron_job_1" if shape == "cron" else "tg-dm-1")
+    stored = agent._cached_system_prompt
+    stage_apps(FORKICKS)
+    if shape == "subagent":
+        agent._delegate_depth = 1
+    elif shape == "fork":
+        agent._persist_disabled = True
+    assert run_turn(apps.loop, agent, "hi", HISTORY)["system"] == stored
+
+
+def test_a_rebuild_that_lacks_the_stamp_stops_the_check_instead_of_rebuilding_every_turn(apps, caplog):
+    agent = started(apps)
+    stage_apps(FORKICKS)
+    HERMES["sections"] = {}  # Hermes rendered no section (a render error, its section budget)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "hi", HISTORY)
+        for turn_agent in (agent, FakeAgent(apps.db), FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "hi", HISTORY)["system"] == got["system"]
+    assert "- forkicks:" in got["system"] and apps_stamp(got["system"]) is None
+    assert HERMES["build_attempts"] == 2 and reasons_logged(caplog) == ["miniapps"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["av-events: miniapp_refresh: the rebuilt prompt has no current "
+                        "av-events.mini-apps-epoch section; check off until restart"]
+
+
+def test_the_fingerprint_is_stable_and_made_of_catalog_data_only(apps):
+    epoch = epoch_module(apps.plugin)
+    assert epoch.fingerprint() == "" and epoch.section_text() == ""  # no projection
+    stage_apps(FORKICKS, ZZZBOT)
+    fp = epoch.fingerprint()
+    assert re.fullmatch(r"[0-9a-f]{12}", fp) and epoch.section_text() == f"Mini-apps epoch: {fp}"
+    # Order and formatting do not move it; resident files take no part in it.
+    write("mini-apps.json", json.dumps({"apps": [ZZZBOT, FORKICKS], "version": 1}, indent=2))
+    write("memories/USER.md", "Name: Someone Else\n§\nA private note")
+    write("memories/MEMORY.md", "Another private note")
+    write("AGENTS.md", "Other rules")
+    assert epoch.fingerprint() == fp
+    # What moves it: an app's skill text, an id, and operations at the same version (Gold Stars).
+    write("skills/zzzbot/SKILL.md", "---\nname: zzzbot\ndescription: a newer zzzbot skill\n---\n")
+    assert epoch.fingerprint() not in (fp, "", None)
+    stage_apps(FORKICKS, ZZZBOT)
+    assert epoch.fingerprint() == fp
+    stage_apps(GOLD_RESTORED)
+    restored = epoch.fingerprint()
+    stage_apps(GOLD_PERSON)
+    assert epoch.fingerprint() not in (restored, "", None)
+    # The stamp holds no id, version or operation, only the 12 hex.
+    text = epoch.section_text()
+    assert not any(word in text for word in ("gold", "rolodex", "1.1.0", "forkicks"))
+
+
+@pytest.mark.parametrize("bad", ["symlink", "oversize", "not_json", "not_a_projection", "directory"])
+def test_an_unreadable_projection_is_no_verdict(apps, caplog, bad, tmp_path_factory):
+    epoch = epoch_module(apps.plugin)
+    stage_apps(FORKICKS)
+    agent = started(apps)
+    stored = agent._cached_system_prompt
+    path = _home() / "mini-apps.json"
+    path.unlink()
+    if bad == "symlink":
+        elsewhere = tmp_path_factory.mktemp("elsewhere").resolve() / "mini-apps.json"
+        elsewhere.write_text(json.dumps({"version": 1, "apps": [FORKICKS, ZZZBOT]}))
+        path.symlink_to(elsewhere)
+    elif bad == "oversize":
+        path.write_text(json.dumps({"version": 1, "apps": [FORKICKS], "pad": "x" * 17000}))
+    elif bad == "not_json":
+        path.write_text("{not json")
+    elif bad == "not_a_projection":
+        path.write_text(json.dumps({"version": 1, "apps": [{"name": "forkicks"}]}))
+    else:
+        path.mkdir()
+    assert epoch.fingerprint() is None and epoch.section_text() == ""
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(apps.loop, agent, "hi", HISTORY)["system"] == stored
+    assert not refresh_lines(caplog)
+
+
+def test_the_stamp_is_read_only_from_hermes_frame_before_the_timestamp(apps):
+    epoch = epoch_module(apps.plugin)
+    stage_apps(FORKICKS)
+    real = started(apps)._cached_system_prompt
+    assert epoch.stamp_in(real) == epoch.fingerprint()
+    forged = format_system_prompt_sections([("av-events.mini-apps-epoch", "Mini-apps epoch: 0123456789ab")])
+    # Quoted earlier in the prompt (AGENTS.md, a skill): not the frame Hermes restores.
+    assert epoch.stamp_in(f"# Project Context\n\n{forged}\n\nmore rules\n\n{real}") == epoch.fingerprint()
+    assert epoch.stamp_in(f"# Project Context\n\n{forged}\n\nmore rules") == ""
+    # Another plugin's section beside ours, and a malformed stamp.
+    both = format_system_prompt_sections([("av-events.mini-apps-epoch", "Mini-apps epoch: 0123456789ab"),
+                                          ("other.plugin", "Mini-apps epoch: ffffffffffff")])
+    assert epoch.stamp_in(f"{both}\n\nConversation started: Thursday") == "0123456789ab"
+    bad = format_system_prompt_sections([("av-events.mini-apps-epoch", "Mini-apps epoch: XYZ")])
+    assert epoch.stamp_in(f"{bad}\n\nConversation started: Thursday") == ""
+
+
+HERMES_REF = Path(os.environ.get("HERMES_REF_DIR") or Path.home() / "dev" / "hermes-agent-ref-v2026.9.24")
+
+
+@pytest.mark.skipif(not (HERMES_REF / "hermes_cli" / "plugins_dispatch.py").exists(),
+                    reason="the Hermes v2026.9.24 reference copy is not here")
+def test_the_hermes_v2026_9_24_seams_the_stamp_relies_on(plugin):
+    """Read from the reference copy of the Hermes the fleet pins (control-plane build-checkpoint.js
+    DEFAULT_HERMES_TAG v2026.9.24): the frame, the empty-section skip, the snapshot drop on invalidate,
+    the restore's timestamp rule, the section API, the cache clear and the Bot Chat branch."""
+    epoch = epoch_module(plugin)
+    read = lambda rel: (HERMES_REF / rel).read_text(encoding="utf-8")  # noqa: E731
+    dispatch = read("hermes_cli/plugins_dispatch.py")
+    assert f'PLUGIN_SECTIONS_START = "{epoch.SECTIONS_START}"' in dispatch
+    assert f'PLUGIN_SECTIONS_END = "{epoch.SECTIONS_END}"' in dispatch
+    assert f'_SYSTEM_PROMPT_SECTION_HEADING_PREFIX = "{epoch.SECTION_HEADING}"' in dispatch
+    assert 'f"<!-- hermes-plugin-section-chars:{len(content)} -->\\n\\n{content}")' in dispatch
+    assert "text = value.strip()\n        if not text:\n            return None" in dispatch
+    assert 'SYSTEM_PROMPT_SECTION_POSITIONS = frozenset({"after_memory"})' in dispatch
+    assert re.search(r'_SYSTEM_PROMPT_SECTION_ID_RE = re\.compile\(r"\^\[a-z0-9\]\[a-z0-9\._-\]\{0,127\}\$"\)', dispatch)
+    plugins = read("hermes_cli/plugins.py")
+    assert "    def register_system_prompt_section(\n        self, id: str, content: Union[str, Callable[[Mapping[str, Any]], str]], *,\n" in plugins
+    system_prompt = read("agent/system_prompt.py")
+    assert 'if not prompt[after_end:].startswith("\\n\\nConversation started:"):' in system_prompt
+    assert "        del agent._plugin_system_prompt_sections_snapshot\n    if agent._memory_store:" in system_prompt
+    assert 'volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))\n    volatile_parts.append(_timestamp_line(agent))' in system_prompt
+    assert "def clear_skills_system_prompt_cache(*, clear_snapshot: bool = False) -> None:" in read("agent/prompt_builder.py")
+    loop = read("agent/conversation_loop.py")
+    assert "        if _bot_chat_prompt_stale(agent, stored_prompt):" in loop
+    assert "clear_skills_system_prompt_cache(clear_snapshot=True)" in loop
+    assert "if isinstance(item, dict) and same_code:\n            return item" in read("tools/mcp_tool_agent.py")
+
+
+def test_the_manifest_names_the_switch():
+    import yaml  # noqa: PLC0415 - the other manifest tests read it the same way
+
+    manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text(encoding="utf-8"))
+    assert "AV_MINIAPP_REFRESH" in manifest["optional_env"]
+
+
+# ---- fold round 1 (ov#410 review-b S1): a fingerprint failure never fails a turn or stops F1 -------
+
+
+def nested_projection():
+    """A projection nested deep enough that json raises RecursionError, still under the 16 KiB cap."""
+    depth = 7000
+    text = '{"version":1,"apps":[{"id":"a","x":' + "[" * depth + "]" * depth + "}]}"
+    assert len(text.encode()) < 16384
+    return text
+
+
+def test_a_deeply_nested_projection_is_no_verdict_and_the_turn_proceeds(apps, caplog):
+    epoch = epoch_module(apps.plugin)
+    agent = started(apps)
+    stored = agent._cached_system_prompt
+    write("mini-apps.json", nested_projection())
+    assert epoch.fingerprint() is None and epoch.digest() == "?" and epoch.stale(stored) is False
+    assert epoch.section_text() == ""
+    builds = HERMES["build_attempts"]
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, FakeAgent(apps.db)):
+            assert run_turn(apps.loop, turn_agent, "hi", HISTORY)["system"] == stored
+        restart(apps)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "hi", HISTORY)["system"] == stored
+    assert HERMES["build_attempts"] == builds and not refresh_lines(caplog)
+    assert "gate failed" not in caplog.text and not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_nested_projection_does_not_stop_f1_on_a_team_box(apps, monkeypatch, caplog):
+    monkeypatch.setenv("AV_PROMPT_REFRESH", "1")
+    agent = started(apps)
+    write("mini-apps.json", nested_projection())
+    write("memories/USER.md", "Name: Test Resident\n§\nVote note: the weekly theme closes Friday")
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "hi", HISTORY)
+    assert "Vote note" in got["system"] and reasons_logged(caplog) == ["user_md"]
+    assert "gate failed" not in caplog.text
+
+
+def test_a_failure_after_the_stale_verdict_never_fails_the_turn(apps, monkeypatch, caplog):
+    """The two calls after the verdict (the fingerprint before the rebuild, the confirm after it) sit
+    outside the refresh's own try: either one raising leaves the rebuilt turn standing."""
+    epoch = epoch_module(apps.plugin)
+    agent = started(apps)
+    stage_apps(FORKICKS)
+    monkeypatch.setattr(epoch, "confirm_rebuilt", lambda *a, **k: (_ for _ in ()).throw(RecursionError()))
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, agent, "hi", HISTORY)
+    assert "- forkicks:" in got["system"] and reasons_logged(caplog) == ["miniapps"]
+    assert "av-events: prompt_refresh miniapps confirm failed (RecursionError); left as is" in caplog.text
+    # The fingerprint raising from its third call in a turn on (the pre-filter and the verdict pass).
+    second = started(apps, "tg-dm-2")
+    stage_apps(FORKICKS, ZZZBOT)
+    real, calls = epoch._fingerprint, {"n": 0}
+
+    def flaky(home=None):
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RecursionError()
+        return real(home)
+
+    monkeypatch.setattr(epoch, "_fingerprint", flaky)
+    monkeypatch.setattr(epoch, "fingerprint", lambda home=None: flaky(home))
+    got = run_turn(apps.loop, second, "hi", HISTORY)
+    assert "- zzzbot:" in got["system"] and calls["n"] >= 3

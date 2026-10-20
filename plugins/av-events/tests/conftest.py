@@ -68,6 +68,14 @@ AV_ENV_VARS = (
     "AV_PLUGIN_EVENTS",
     # SEC-6 half 2: model.observed / model.offlist, off until data's DATA-477 release registers them.
     "AV_MODEL_EVENTS",
+    # P10-P1: code.run@1, off unless AV_EVENTS_CODE_RUN is on; its scope variable.
+    "AV_EVENTS_CODE_RUN",
+    "AV_EVENTS_CODE_RUN_SCOPE",
+    # MM-INFER-VIS: the negotiator's llm.call, off unless AV_EVENTS_NEGOTIATOR_LLM is on; its scope variable.
+    "AV_EVENTS_NEGOTIATOR_LLM",
+    "AV_EVENTS_NEGOTIATOR_LLM_SCOPE",
+    "AV_MORALMOD_OWN_KEY",
+    "MORALMOD_LLM_API_KEY",
     # PRAYER P3: the `pray` tool.
     "AV_PRAY",
     "CONTROL_PLANE_URL",
@@ -82,6 +90,8 @@ AV_ENV_VARS = (
     "AV_PROMPT_REFRESH",
     "AV_PROMPT_REFRESH_FILES",
     "AV_TEAM_TENANT",
+    # MINIAPP-PICKUP: the installed-apps stamp and check.
+    "AV_MINIAPP_REFRESH",
 )
 
 

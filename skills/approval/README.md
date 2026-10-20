@@ -317,7 +317,7 @@ script and cron script, and the terminal's session snapshot file on disk. With
 At every start, whatever `AV_APPROVAL_ENABLED` says (the config step lists the
 plugin on every tenant; with the switch unset its backstop registers no hook and
 blocks nothing), the plugin removes `INDEX_API_KEY`, `INDEX_SESSION_TOKEN`,
-`AV_EVENTS_TOKEN`, `AV_BACKUP_TOKEN` and `ADMIN_TOKEN` (a floor in the code, plus
+`AV_EVENTS_TOKEN`, `AV_BACKUP_TOKEN`, `ADMIN_TOKEN` and `MORALMOD_LLM_API_KEY` (a floor in the code, plus
 any more `plugins/av-approval/custody_keys.json` marks `strip`) from every
 agent-run child: a strip-only terminal provider for the background terminal, cron and
 other scripts and every non-terminal spawn (Hermes's `strip_env_keys`), and a
