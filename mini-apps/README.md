@@ -6,6 +6,28 @@ endpoint, package installer, shell hook, custom runtime or automatic approval
 of user-supplied MCP URLs. Submit changes for review in this repository and the
 control-plane catalog; a manifest in a checkout alone does not publish an app.
 
+## Resident data: no per-resident storage until the namespace design lands
+
+**Rule (14 Oct 2026):** no third app, and no app that stores anything per
+resident, ships until the mini-app namespace design is built. The two starters
+below fit today because they store nothing new: Dizko is stateless public
+read-only, and Gold Stars writes only to the existing Rolodex star ledger and
+emits `gratitude.*` events.
+
+When it lands, an app's data goes in one of three places, each scoped to the
+app and keyed by the control-plane tenant id:
+
+| Kind of data | Where | Rules |
+| --- | --- | --- |
+| What the app tells the agent about the person | Context store namespace `draft.apps.<appId>`, source `mini-app:<appId>` | Written only through the existing context write path, only for an installed app, only fields the manifest declares; per-namespace quota; removed on uninstall or consent withdrawal |
+| Operational state (drafts, cursors, preferences) | App table `mini_app_state(cp_tenant_id, app_id, key, value)` behind a namespace handle | No app reads another app's rows; size and row caps; deleted on uninstall or withdrawal. Quotas, ledgers and money get their own typed table instead |
+| What happened | Events `miniapp.<appId>.<verb>@1` through the data door | Ids, counts, booleans and hashes only, never text |
+
+Every manifest declares a `data` block listing the context fields, state keys
+and events the app uses. An app without one may store nothing and emit
+nothing. Ask the Agent Village team before you design anything that remembers
+a resident between calls.
+
 ## Start from a working app
 
 Two complete starters are maintained with their real native skills:
