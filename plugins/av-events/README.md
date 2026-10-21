@@ -71,9 +71,9 @@ plugins/av-events/
 | `MORALMOD_LLM_API_KEY` | *(unset)* | The MoralMod OpenRouter key (`sk-or-` and 16 to 256 of `[A-Za-z0-9_-]`, as long as the sanitiser's `openrouter_key` pattern needs; anything else counts as missing), written by the control plane. Read like the other variables (process environment, then `.env`); registered with the sanitiser at plugin load whatever the switches say; never logged or sent. |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_EDGEOS_CURL_GUARD` | `1` | Any of `0`, `false`, `no`, `off` turns off the refusal of hand-written calls to EdgeOS's directory and `/humans/me` (see "Hand-written EdgeOS directory and profile calls (EDGEOS-CURL-GUARD)"). **Process environment only**, read on every `pre_tool_call`. Independent of every telemetry switch. |
-| `AV_PROMPT_REFRESH` | `team` | F1 (see "Prompt refresh (F1)"). `team` (also unset or blank): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). `1`, `true`, `yes` or `on`: on everywhere. `0`, `false`, `no` or `off`: off. Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. **From v2.1.5** off here no longer removes the `build_turn_context` wrapper while `AV_MINIAPP_REFRESH` is on (it then runs the mini-app check only); to take the wrapper out entirely, turn both off (`AV_PROMPT_REFRESH=0` and `AV_MINIAPP_REFRESH=0`, or `prompt_refresh,miniapp_refresh` in `AV_HOOKS_DISABLED`). |
+| `AV_PROMPT_REFRESH` | `1` (from v2.1.12) | F1 (see "Prompt refresh (F1)"). `1`, `true`, `yes` or `on` (also unset or blank, from v2.1.12): on for every resident. `0`, `false`, `no` or `off`: off. `team` (the default before v2.1.12): on only where `AV_TEAM_TENANT` is exactly `1` once trimmed, the line the control plane writes into a team tenant's `$HERMES_HOME/.env` (control-plane `team-tenant-env.js`). Any other value (`disabled`, `none`, a typo): off, with one WARNING per process that names the variable, not the value, like the other av-events switches, so a mistyped off never leaves it on. `prompt_refresh` in `AV_HOOKS_DISABLED` wins over all of these. Read like the other switches (process environment, then `.env`), at every turn start. Independent of every telemetry switch. **From v2.1.5** off here no longer removes the `build_turn_context` wrapper while `AV_MINIAPP_REFRESH` is on (it then runs the mini-app check only); to take the wrapper out entirely, turn both off (`AV_PROMPT_REFRESH=0` and `AV_MINIAPP_REFRESH=0`, or `prompt_refresh,miniapp_refresh` in `AV_HOOKS_DISABLED`). |
 | `AV_MINIAPP_REFRESH` | on | MINIAPP-PICKUP (see "Mini-app pick-up"). Unset, blank, `1`, `true`, `yes` or `on`: on, for every resident (independent of `AV_PROMPT_REFRESH`). `0`, `false`, `no` or `off`: off, which also stops the stamp (new prompts are today's bytes). Any other value: off, with one WARNING per process. `miniapp_refresh` in `AV_HOOKS_DISABLED` wins. Read at every turn start and every prompt build, no restart. Off here does not stop F1 (`AV_PROMPT_REFRESH`); both off removes the wrapper. **Cost:** a `miniapps` rebuild is a full F1 rebuild (memory reloaded, so it also carries current USER.md / MEMORY.md / AGENTS.md, the skills index and the date line; the conversation, tools[] pin and `on_session_start` are untouched). At the v2.1.5 roll every chat on a box with an app rebuilds once: one full-context cache write for each chat active across the roll (idle chats are cold after a roll anyway). |
-| `AV_PROMPT_REFRESH_FILES` | `memory` | Which files trigger F1's refresh. `memory` (also unset, blank or unknown): USER.md and MEMORY.md only. `all`: AGENTS.md too, and the exact test also compares the skills index. The skills index is not hashed, so a skills change on its own is caught only at a session's first turn in a process (a restart, an rc roll) or together with the next change to a hashed file. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
+| `AV_PROMPT_REFRESH_FILES` | `all` (from v2.1.12) | Which files trigger F1's refresh. `all` (also unset or blank, from v2.1.12): USER.md, MEMORY.md and AGENTS.md, and the exact test also compares the skills index. `memory` (the default before v2.1.12): USER.md and MEMORY.md only. Any other value: `memory`, the narrower set, with one WARNING per process that names the variable, not the value. The skills index is not hashed, so a skills change on its own is caught only at a session's first turn in a process (a restart, an rc roll, an update: each one restarts the gateway) or together with the next change to a hashed file. With `all` at install (the default), the install-time seam check also requires Hermes's AGENTS.md / skills renderers and `resolve_context_cwd`; a Hermes without them leaves F1 unwrapped with one INFO line. A refresh always rebuilds the whole prompt, so a memory-triggered one carries a newer AGENTS.md as well. Read at every turn start. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
@@ -2411,12 +2411,35 @@ and `SystemExit` are never swallowed. The gate runs every turn and records nothi
 is logged once per process and later ones at DEBUG. Exceptions from
 Hermes's own code pass through unchanged, once.
 
-**Rollout.** `AV_PROMPT_REFRESH` defaults to `team`: on only for team tenants (`AV_TEAM_TENANT=1`),
-and `AV_PROMPT_REFRESH_FILES` to `memory`; `all` adds AGENTS.md and skills once their cost is measured
-(one refresh per open session per rc roll that changes them).
-After about 24 hours of team logs (refreshes per tenant per day, no warnings) the release seat sets
-`AV_PROMPT_REFRESH=1` for the fleet. Rollback: `AV_PROMPT_REFRESH=0` or `prompt_refresh` in
-`AV_HOOKS_DISABLED`, both read at the next turn, no restart.
+**Rollout.** Until v2.1.11 `AV_PROMPT_REFRESH` defaulted to `team` (on only where
+`AV_TEAM_TENANT=1`) and `AV_PROMPT_REFRESH_FILES` to `memory`. **From v2.1.12** both defaults are on
+for every resident: unset means `1` and `all` (CLAIMS L17443 (2) / L17455 (1): a resident's open chat
+picks up a skills update without `/new`). This is set in code, not by the control plane, which does
+not render either variable. The planned 24 h team soak before the fleet was skipped by that ruling.
+`AV_PROMPT_REFRESH=team` plus `AV_PROMPT_REFRESH_FILES=memory` is the exact old behaviour, box by box,
+through `$HERMES_HOME/.env` (`team` alone still runs `all` on a team box); a fleet rollback is a release
+that changes the defaults back, then a roll.
+
+**Cost (measured for v2.1.12).** Real Hermes v2026.9.24 `agent.system_prompt.build_system_prompt` with
+this overlay's `workspace/SOUL.md`, `workspace/AGENTS.md` (18,645 chars), the 20 staged skills and
+near-limit USER.md / MEMORY.md (`scripts/bench-prompt-refresh-cost.py`; medians of 30 runs on a laptop at
+load ~8-9). The system prompt is 39,922 chars (~10-11.4k tokens): the AGENTS.md tier is 18,755, the skills
+index 3,047, the memory blocks 3,536. Per turn, the pre-filter (sha256 of USER.md, MEMORY.md, AGENTS.md)
+takes 0.07 ms (0.04 ms in `memory` mode). The exact test, run only at a session's first turn in a
+process or after a digest change, takes 12.3-12.4 ms with a cold skills cache and 8.2-8.3 ms warm. One
+rebuild (memory reload + full build) takes 9.0-9.7 ms warm and 11.9-15.0 ms cold (two runs). The real cost is the provider's
+prompt cache. A rebuilt prompt differs from the stored one at the first changed block (the skills index
+sits after AGENTS.md: in the bench, a one-skill change kept the first 35,590 chars). So the next model
+call writes the cache again from that point on: the rest of the system prompt and the whole
+conversation history, instead of reading it. That is one cache write per open session per roll or
+update that changes AGENTS.md or the skills. A chat idle for longer than the cache's lifetime is cold
+anyway, so the cost lands only on chats active across the roll, as with MINIAPP-PICKUP. New for non-team
+boxes, which ran F1 off before: any other write to USER.md, MEMORY.md or the village-memory
+`_profile.md` (the control plane's, another open chat's) also rebuilds an open session on its next
+turn, once per change; the session's own `memory` write does not (`with_memory_write_ack`). Rollback:
+`AV_PROMPT_REFRESH=0` (or `prompt_refresh` in `AV_HOOKS_DISABLED`) in `$HERMES_HOME/.env` turns it
+off. `AV_PROMPT_REFRESH_FILES=memory` keeps memory-only refreshes. Both are read at the next turn, no
+restart.
 
 ### Mini-app pick-up (MINIAPP-PICKUP, v2.1.5)
 

@@ -488,12 +488,11 @@ def test_a_new_skills_index_refreshes_at_the_first_turn_after_a_restart(hermes, 
     assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["skills"]
 
 
-@pytest.mark.parametrize("files", [None, "memory", "agents", ""])
-def test_by_default_only_the_memory_files_trigger(hermes, monkeypatch, caplog, files):
-    """AV_PROMPT_REFRESH_FILES unset / memory / unknown: AGENTS.md and skills changes wait; a memory
-    change then rebuilds the whole prompt, so it carries them too."""
-    if files is not None:
-        monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
+@pytest.mark.parametrize("files", ["memory", " Memory ", "agents", "al"])
+def test_in_memory_mode_only_the_memory_files_trigger(hermes, monkeypatch, caplog, files):
+    """AV_PROMPT_REFRESH_FILES=memory (the pre-v2.1.12 default) or a mistyped value: AGENTS.md and
+    skills changes wait; a memory change then rebuilds the whole prompt, so it carries them too."""
+    monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
     agent = started(hermes)
     stored = agent._cached_system_prompt
     write("AGENTS.md", "Village rules v2")
@@ -507,6 +506,96 @@ def test_by_default_only_the_memory_files_trigger(hermes, monkeypatch, caplog, f
         got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
     assert "Changed" in got and "Village rules v2" in got and "beta" in got
     assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+# ---- V2112 defaults: on for every resident, files `all` ----------------------------------------
+
+
+def _v2112_defaults(monkeypatch):
+    """A resident box at v2.1.12: none of the switches set, not a team tenant."""
+    for name in ("AV_PROMPT_REFRESH", "AV_PROMPT_REFRESH_FILES", "AV_TEAM_TENANT", "AV_HOOKS_DISABLED"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("files", [None, "", "  ", "all", " ALL "])
+def test_by_default_agents_md_and_skills_trigger_too(hermes, monkeypatch, caplog, files):
+    """V2112 (CLAIMS L17455 (1)): AV_PROMPT_REFRESH_FILES unset or blank is `all`."""
+    _v2112_defaults(monkeypatch)
+    if files is not None:
+        monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
+    assert pr(hermes.plugin).files_mode() == "all"
+    agent = started(hermes)
+    write("AGENTS.md", "Village rules v2")
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+    assert "Village rules v2" in got and hermes.db.rows["tg-dm-1"]["system_prompt"] == got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["agents_md"]
+
+
+def test_by_default_an_old_session_picks_up_a_skills_update_at_its_first_turn_in_the_new_process(
+        hermes, plugin, ctx, monkeypatch, caplog):
+    """V2112: the resident case Carter ruled on (CLAIMS L17443 (2)). A non-team box with no switch
+    set; an update stages a new skill and restarts the gateway (new process: the plugin installs again
+    with the defaults, the memo is empty, no hashed file changed). The old session's first turn in the
+    new process rebuilds and persists, reason `skills`, with no /new; the next turn replays it."""
+    _v2112_defaults(monkeypatch)
+    started(hermes)
+    stored = hermes.db.rows["tg-dm-1"]["system_prompt"]
+    assert "edgeos" not in stored
+    HERMES["skills"] = "## Skills\n- alpha: does alpha\n- edgeos: RSVP through the EdgeOS script"
+    pr(plugin).uninstall()
+    pr(plugin).reset()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        # The new gateway process: `register` installs the wrapper (`__init__.py`, behind its once-per-process
+        # guard), with the install-time seam check in the default files mode, `all`.
+        assert pr(plugin).install(plugin._collector)
+        assert getattr(hermes.loop.build_turn_context, "__wrapped__", None) is build_turn_context
+        got = run_turn(hermes.loop, FakeAgent(hermes.db), "rsvp me to the dinner", HISTORY)
+    assert "edgeos: RSVP through the EdgeOS script" in got["system"]
+    assert hermes.db.rows["tg-dm-1"]["system_prompt"] == got["system"] and hermes.db.writes == 2
+    assert got["messages"] == HISTORY + [{"role": "user", "content": "rsvp me to the dinner"}]
+    assert HERMES["session_starts"] == ["tg-dm-1"]
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["skills"]
+    assert "av-events: prompt_refresh: agent.conversation_loop.build_turn_context wrapped (mode on)" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        again = run_turn(hermes.loop, FakeAgent(hermes.db), "thanks", HISTORY)
+    assert again["system"] == got["system"] and hermes.db.writes == 2 and not refresh_lines(caplog)
+
+
+def test_in_memory_mode_a_skills_update_waits_even_across_a_restart(hermes, plugin, ctx, monkeypatch, caplog):
+    """The explicit pre-v2.1.12 files mode still works: `memory` keeps the old prompt across the restart."""
+    _v2112_defaults(monkeypatch)
+    monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", "memory")
+    started(hermes)
+    stored = hermes.db.rows["tg-dm-1"]["system_prompt"]
+    HERMES["skills"] = "## Skills\n- alpha: does alpha\n- edgeos: RSVP through the EdgeOS script"
+    pr(plugin).uninstall()
+    pr(plugin).reset()
+    assert pr(plugin).install(plugin._collector)
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, FakeAgent(hermes.db), "hi", HISTORY)["system"] == stored
+    assert not refresh_lines(caplog) and hermes.db.writes == 1
+
+
+def test_an_unknown_files_value_is_memory_with_one_warning(plugin, monkeypatch, home, caplog):
+    """A mistyped `memory` must not widen the set; it names the variable, never the value."""
+    pr(plugin).reset()
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        for value in ("agents", "al", "everything", "agents"):
+            monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", value)
+            assert pr(plugin).files_mode() == "memory"
+        for value in ("memory", " MEMORY "):
+            monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", value)
+            assert pr(plugin).files_mode() == "memory"
+        for value in ("all", "ALL", "", "  "):
+            monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", value)
+            assert pr(plugin).files_mode() == "all"
+        monkeypatch.delenv("AV_PROMPT_REFRESH_FILES")
+        assert pr(plugin).files_mode() == "all"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["av-events: prompt_refresh: AV_PROMPT_REFRESH_FILES has an unknown value; memory (use all or memory)"]
+    assert "everything" not in caplog.text and "agents" not in caplog.text
 
 
 def test_an_emptied_user_md_drops_its_block(hermes):
@@ -969,14 +1058,20 @@ def test_a_persist_that_did_not_land_is_checked_again(hermes, caplog):
 @pytest.mark.parametrize(("mode", "team", "hooks_disabled", "refreshes"), [
     ("0", "1", "", False),
     ("off", "1", "", False),
-    (None, None, "", False),       # default `team`, not a team tenant
-    (None, "1", "", True),         # default `team` on a team tenant
-    ("team", " 1 ", "", True),
+    (None, None, "", True),        # V2112 default: on, not a team tenant
+    (None, "1", "", True),         # V2112 default: on, a team tenant too
+    (None, None, "prompt_refresh", False),  # AV_HOOKS_DISABLED still wins over the default
+    ("team", " 1 ", "", True),     # the pre-v2.1.12 default, explicit
+    ("team", None, "", False),
+    ("TEAM", "0", "", False),
     ("team", "true", "", False),   # the marker is exactly 1
     ("1", None, "", True),
     ("yes", None, "", True),
     ("1", "1", "pre_llm_call, Prompt_Refresh", False),
-    ("", "1", "", True),           # blank: the default, `team`
+    ("", "1", "", True),           # blank: the default
+    ("", None, "", True),
+    ("  ", None, "", True),
+    ("on", None, "", True),
     ("disabled", "1", "", False),  # unknown: off, not `team`
     ("O", "1", "", False),
     ("nope", None, "", False),
@@ -1000,9 +1095,16 @@ def test_an_unknown_switch_value_is_off_with_one_warning(plugin, monkeypatch, ho
         for value in ("disabled", "none", "O", "disabled"):
             monkeypatch.setenv("AV_PROMPT_REFRESH", value)
             assert pr(plugin).mode() == "off" and not pr(plugin).enabled(None)
-        for value in ("", "  ", "TEAM"):
+        for value in ("", "  ", "1", "On"):  # V2112: unset or blank is on
+            monkeypatch.setenv("AV_PROMPT_REFRESH", value)
+            assert pr(plugin).mode() == "on" and pr(plugin).enabled(None)
+        monkeypatch.delenv("AV_PROMPT_REFRESH")
+        assert pr(plugin).mode() == "on" and pr(plugin).enabled(None)
+        for value in ("team", "TEAM"):
             monkeypatch.setenv("AV_PROMPT_REFRESH", value)
             assert pr(plugin).mode() == "team" and pr(plugin).enabled(None)
+        monkeypatch.delenv("AV_TEAM_TENANT")
+        assert pr(plugin).mode() == "team" and not pr(plugin).enabled(None)
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == ["av-events: prompt_refresh: AV_PROMPT_REFRESH has an unknown value; off (use team, 1 or 0)"]
     assert "disabled" not in caplog.text
@@ -1072,12 +1174,37 @@ def test_a_missing_seam_outside_the_loop_is_one_log_line_and_nothing_else(
 
 def test_the_context_seams_are_only_required_in_all_mode(plugin, ctx, monkeypatch, home):
     loop = install_hermes(monkeypatch)
+    monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", "memory")
     monkeypatch.delattr(sys.modules["agent.runtime_cwd"], "resolve_context_cwd")
     plugin.register(ctx)
     try:
         assert loop.build_turn_context.__wrapped__ is build_turn_context
     finally:
         pr(plugin).uninstall()
+
+
+@pytest.mark.parametrize("files", [None, ""])
+@pytest.mark.parametrize(("module", "attr"), [
+    ("agent.runtime_cwd", "resolve_context_cwd"),
+    ("agent.system_prompt", "_identity_parts"),
+    ("agent.system_prompt", "_context_files_part"),
+    ("agent.system_prompt", "_skills_prompt"),
+])
+def test_by_default_the_install_seam_check_is_the_all_mode_one(plugin, ctx, monkeypatch, home, caplog, files, module, attr):
+    """V2112: files unset or blank is `all` at install too, so the renderers and the cwd are required;
+    a Hermes without one leaves the loop unwrapped with one INFO line (no half-checked refresh)."""
+    loop = install_hermes(monkeypatch)
+    for name in ("AV_PROMPT_REFRESH", "AV_PROMPT_REFRESH_FILES", "AV_TEAM_TENANT"):
+        monkeypatch.delenv(name, raising=False)
+    if files is not None:
+        monkeypatch.setenv("AV_PROMPT_REFRESH_FILES", files)
+    monkeypatch.delattr(sys.modules[module], attr)
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        plugin.register(ctx)
+    assert loop.build_turn_context is build_turn_context
+    assert [r.getMessage() for r in caplog.records if "prompt_refresh" in r.getMessage()] == [
+        f"av-events: prompt_refresh: Hermes has no {module}.{attr}; left as is"]
+    pr(plugin).uninstall()
 
 
 def test_a_gate_failure_warns_once_per_process_then_logs_debug(hermes, caplog, monkeypatch):
@@ -1353,8 +1480,13 @@ def reasons_logged(caplog):
 
 @pytest.fixture()
 def apps(plugin, ctx, monkeypatch, home):
-    """A resident's box: F1 off (AV_PROMPT_REFRESH unset, not a team tenant), MINIAPP-PICKUP at its default;
-    a Hermes with plugin prompt sections and a skills index read from $HERMES_HOME/skills."""
+    """A pre-v2.1.12 resident's box: F1 off (`AV_PROMPT_REFRESH=team`, the old default, and not a team
+    tenant), so MINIAPP-PICKUP is seen on its own, at its default; a Hermes with plugin prompt sections
+    and a skills index read from $HERMES_HOME/skills. V2112: F1 is on by default; see
+    `test_at_the_v2112_defaults_an_install_is_one_rebuild_for_both_checks`."""
+    monkeypatch.setenv("AV_PROMPT_REFRESH", "team")
+    monkeypatch.delenv("AV_TEAM_TENANT", raising=False)
+    monkeypatch.delenv("AV_PROMPT_REFRESH_FILES", raising=False)
     # installed() and the fingerprint refuse a symlink anywhere in the path (macOS /var is one).
     monkeypatch.setenv("HERMES_HOME", str(home.resolve()))
     HERMES.clear()
@@ -1378,6 +1510,22 @@ def apps(plugin, ctx, monkeypatch, home):
     sys.modules[f"{plugin.__name__}._clock"].reset()
     yield types.SimpleNamespace(loop=loop, db=FakeDB(), plugin=plugin, ctx=ctx)
     pr(plugin).uninstall()
+
+
+def test_at_the_v2112_defaults_an_install_is_one_rebuild_for_both_checks(apps, monkeypatch, caplog):
+    """V2112: F1 on and files `all` by default, so after an app install and the restart both checks see
+    it (the new skill in the index, the apps stamp); it is still one rebuild, one persist, one line."""
+    monkeypatch.delenv("AV_PROMPT_REFRESH")
+    started(apps)
+    stage_apps(FORKICKS)
+    restart(apps)
+    builds, writes = HERMES["build_attempts"], apps.db.writes
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(apps.loop, FakeAgent(apps.db), "what can you do?", HISTORY)
+        assert run_turn(apps.loop, FakeAgent(apps.db), "and now?", HISTORY)["system"] == got["system"]
+    assert "- forkicks: the forkicks skill" in got["system"] and apps_stamp(got["system"])
+    assert HERMES["build_attempts"] == builds + 1 and apps.db.writes == writes + 1
+    assert reasons_logged(caplog) == ["skills,miniapps"]
 
 
 @pytest.mark.parametrize("restarted", [True, False], ids=["gateway-restarted", "cached-agent-no-restart"])

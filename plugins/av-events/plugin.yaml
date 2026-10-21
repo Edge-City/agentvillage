@@ -72,7 +72,7 @@ optional_env:
   - AV_VILLAGE_TOOLS_VISIBLE
   # pray / ask_village: a cron run may use them only when it reports to this DM (fail closed).
   - TELEGRAM_HOME_CHANNEL
-  # F1 PROMPT REFRESH: team (default; on where AV_TEAM_TENANT=1) | 1 | 0; files: memory (default) | all.
+  # F1 PROMPT REFRESH: on (default from v2.1.12) | 0 | team (on only where AV_TEAM_TENANT=1); files: all (default from v2.1.12) | memory.
   - AV_PROMPT_REFRESH
   - AV_PROMPT_REFRESH_FILES
   - AV_TEAM_TENANT
