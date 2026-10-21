@@ -29,7 +29,9 @@ connected zzz.bot agent; tenant-restricted), `slopfolio` (carry the owner's
 process summary into a private draft, then return its review link and status;
 the owner publishes on Slopfolio), `edge-volunteers` (the owner's own
 volunteer shifts, hours and plan from Edge City Volunteers, and scheduling
-changes made only after the owner says yes to the exact summary),
+changes made only after the owner says yes to the exact summary; no sign-in:
+the app server links by the owner's Telegram account, so the owner only
+installs it after messaging the Edge City Volunteers bot once),
 and `forkicks` (live café menu/schedule and exact-preview,
 manually approved orders with returned UPI links or card at pickup). UPI receipts
 name SWISSDESI (For Kicks' UPI), the exact amount and order note, and say the café

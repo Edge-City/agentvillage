@@ -28,7 +28,7 @@ export const REVIEWED_MINI_APPS = [
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
   // Edge City Volunteers: a volunteer's own reads, ECV's propose and one gated write (_mini_apps.py EDGE_VOLUNTEERS, exact).
-  { id: "edge-volunteers", version: "1.0.0", operations: ["ecv.initialize", "ecv.guide", "ecv.my_hours", "ecv.my_shifts", "ecv.get_shift", "ecv.plan_view", "ecv.open_shifts", "ecv.my_requests", "ecv.move_targets", "ecv.propose", "ecv.confirm"], skills: ["edge-volunteers"] },
+  { id: "edge-volunteers", version: "1.0.0", operations: ["edge-volunteers.initialize", "edge-volunteers.guide", "edge-volunteers.my_hours", "edge-volunteers.my_shifts", "edge-volunteers.get_shift", "edge-volunteers.plan_view", "edge-volunteers.open_shifts", "edge-volunteers.my_requests", "edge-volunteers.move_targets", "edge-volunteers.propose", "edge-volunteers.confirm"], skills: ["edge-volunteers"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP

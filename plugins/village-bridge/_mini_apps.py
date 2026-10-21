@@ -38,11 +38,11 @@ FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks
 ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
 ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
 # Edge City Volunteers: the owner's own volunteer reads, ECV's propose (a check: nothing changes, it returns a
-# summary and a code) and its one write, ecv.confirm (makes the change the owner said yes to). The write takes
+# summary and a code) and its one write, edge-volunteers.confirm (makes the change the owner said yes to). The write takes
 # zzz's path (gate_verified), never a manual grant: ECV's own propose/confirm is the owner's explicit yes.
-ECV_READ_OPERATIONS = ("ecv.initialize", "ecv.guide", "ecv.my_hours", "ecv.my_shifts", "ecv.get_shift", "ecv.plan_view",
-                       "ecv.open_shifts", "ecv.my_requests", "ecv.move_targets", "ecv.propose")
-ECV_WRITE_OPERATIONS = ("ecv.confirm",)
+ECV_READ_OPERATIONS = ("edge-volunteers.initialize", "edge-volunteers.guide", "edge-volunteers.my_hours", "edge-volunteers.my_shifts", "edge-volunteers.get_shift", "edge-volunteers.plan_view",
+                       "edge-volunteers.open_shifts", "edge-volunteers.my_requests", "edge-volunteers.move_targets", "edge-volunteers.propose")
+ECV_WRITE_OPERATIONS = ("edge-volunteers.confirm",)
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS,
                              *ECV_READ_OPERATIONS})

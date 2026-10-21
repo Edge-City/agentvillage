@@ -1,135 +1,150 @@
 # Edge City Volunteers mini-app
 
+## What it is
+
 A volunteer's own schedule in their agent: their shifts, hours, plan, the open
 shifts they could claim and their cover requests, plus the scheduling changes a
 volunteer can already make in the Edge City Volunteers (ECV) app, each made only
 after the owner says yes to its exact summary in chat.
 
 - `skills/edge-volunteers/SKILL.md`: what the agent does and says.
-- `mini-apps/edge-volunteers/manifest.json`: what the owner installs and grants.
+- `mini-apps/edge-volunteers/manifest.json`: the v2 manifest (operations, input
+  schemas, budgets, the auth mode).
 - `plugins/village-bridge/_ecv.py`: the box-side argument checks and error text.
 
 ECV is Edge City's own volunteer scheduling service
 (https://edge-city-volunteers.vercel.app, repo `lucychen0103/Edge-City-Volunteers`).
-Its MCP server already serves volunteers through OAuth; this mini-app reuses
-that server and needs no change on ECV's side.
 
-## Why named operations, not `mini-app.read`
+## Why app-token
 
-ECV's data is per person and its MCP server answers only a signed-in volunteer,
-so the public-read path does not fit. This follows the zzz.bot pattern: the
-resident connects their own ECV account in the Mini-apps sheet, the app server
-holds the grant, and the box sends one of eleven named operations. The box
-never sees a token, endpoint, PIN or volunteer id.
+One link between Agent Village and ECV, and no second sign-in for anyone. Agent
+Village already knows each owner's Telegram user id from pairing, and Telegram
+verified it. ECV knows each volunteer's Telegram user id once they have messaged
+the Edge City Volunteers bot. So the app server holds ONE token for ECV
+(`MINI_APP_EDGE_VOLUNTEERS_TOKEN`) and names the owner on each call. The volunteer
+only installs the mini-app. There is no OAuth, no PIN and no connect step. The
+box never sees the token, the endpoint, the Telegram id or a volunteer id.
 
-## The contract Edge City's app server implements
+## The call
 
-**Connection.** OAuth 2.1 with PKCE S256 against the MCP resource
-`https://edge-city-volunteers.vercel.app/api/mcp`. Discovery starts at
-`https://edge-city-volunteers.vercel.app/.well-known/oauth-protected-resource`.
-ECV supports dynamic client registration and client ID metadata documents;
-register one client named "Edge City Agent Village". ECV's `/connect` page shows
-the client name and the return host; the resident signs in there with their
-Telegram username and PIN (or in one tap if the ECV app is already signed in on
-that browser).
+Standard MCP (streamable HTTP, JSON responses): `POST` to
+`https://edge-city-volunteers.vercel.app/api/mcp` with
 
-- Access tokens last an hour; refresh silently. Refresh works until the end of
-  the day 7 days after the event ends, capped at 60 days from sign-in.
-- A PIN reset, a withdrawal or a coordinator's revoke ends the connection at
-  once (ECV re-checks the connection on every call). A 401 from ECV, or a failed
-  refresh, is `ecv_reconnect_required`.
-- **Volunteers only.** Right after connecting, call `tools/list` once. Keep the
-  grant only if it lists `eciv_my_shifts` (a volunteer-only tool); otherwise
-  drop it and answer `ecv_volunteer_only`. A staff grant never reaches these
-  operations, and the box offers only the seven volunteer actions in any case.
+```
+Authorization: Bearer <MINI_APP_EDGE_VOLUNTEERS_TOKEN>
+X-Agent-Village-Telegram-User-Id: <the owner's numeric Telegram user id>
+```
 
-**Operations.** Each maps to exactly one ECV tool. `arguments` is forwarded
-unchanged as that tool's MCP `arguments`.
+and a `tools/call` of the operation's tool, with the box's `arguments` forwarded
+unchanged as the tool's MCP `arguments`. The Telegram id comes from the owner's
+pairing, never from the box or the model.
 
-| `village` operation | ECV MCP tool | Kind |
+## Operations
+
+| `village` operation | ECV tool | Class |
 |---|---|---|
-| `ecv.initialize` | `eciv_initialize` | read |
-| `ecv.guide` | `eciv_guide` | read |
-| `ecv.my_hours` | `eciv_my_hours` | read |
-| `ecv.my_shifts` | `eciv_my_shifts` | read |
-| `ecv.get_shift` | `eciv_get_shift` | read |
-| `ecv.plan_view` | `eciv_plan_view` | read |
-| `ecv.open_shifts` | `eciv_list_open_shifts` | read |
-| `ecv.my_requests` | `eciv_my_requests` | read |
-| `ecv.move_targets` | `eciv_move_targets` | read |
-| `ecv.propose` | `eciv_propose` | check (nothing changes; ECV writes one audit row) |
-| `ecv.confirm` | `eciv_confirm` | write |
+| `edge-volunteers.initialize` | `eciv_initialize` | read |
+| `edge-volunteers.guide` | `eciv_guide` | read |
+| `edge-volunteers.my_hours` | `eciv_my_hours` | read |
+| `edge-volunteers.my_shifts` | `eciv_my_shifts` | read |
+| `edge-volunteers.get_shift` | `eciv_get_shift` | read |
+| `edge-volunteers.plan_view` | `eciv_plan_view` | read |
+| `edge-volunteers.open_shifts` | `eciv_list_open_shifts` | read |
+| `edge-volunteers.my_requests` | `eciv_my_requests` | read |
+| `edge-volunteers.move_targets` | `eciv_move_targets` | read |
+| `edge-volunteers.propose` | `eciv_propose` | read (a check: nothing changes; ECV writes one audit row) |
+| `edge-volunteers.confirm` | `eciv_confirm` | write |
 
-Not exposed: `eciv_feedback` (it writes a note to ECV's admins), every staff
-tool, every staff action, and `brief`.
+`confirm` is `write`, not `needs-card`: each change is one the volunteer can
+undo or that the volunteer app already lets them make, and the generic approval
+card is not built. On the box it takes the verified-gate path (zzz's), no manual
+grant. Not exposed: `eciv_feedback`, every staff tool and action, and `brief`.
 
-**Input.** The box checks every call against ECV's published input schemas
-(volunteer `tools/list`, ECV 0.45.0) before sending; the app checks again with
-the same rules and refuses anything else with `ecv_invalid` (HTTP 422):
+## Input rules
+
+The box checks every call (`_ecv.py`) against ECV's published volunteer input
+schemas (ECV 0.45.0) before sending. The app should check again with each
+operation's `input` schema in the manifest and refuse anything else with
+`invalid_arguments`:
 
 - Reads: exactly the keys in the skill's table. Ids match ECV's uuid pattern,
   dates `YYYY-MM-DD`, `before` is 1–500 characters, `limit` and `days` are
-  integers in the stated ranges, `topic`/`topics` from ECV's eight topics.
-- `ecv.propose`: `{action, params, then?}`. `action` is one of `claim_shift`,
-  `set_rest_day`, `set_extra_hours`, `plan_days`, `move_shift`, `ask_cover`,
-  `cancel_cover_request`, each with exactly its params (see the skill). `then` is
-  1–2 more `{action, params}` steps (ECV allows 3 changes in all for a
-  volunteer).
-- `ecv.confirm`: `{code}`, printable ASCII, 20–50,000 characters.
+  integers in the stated ranges, `topic` or `topics` (not both) from ECV's eight
+  topics.
+- `propose`: `{action, params, then?}`, each step one of the seven volunteer
+  actions with exactly its params; `then` is 1–2 more steps (3 changes in all).
+  The manifest gives `params` as a `oneOf` per action.
+- `confirm`: `{code}`, printable ASCII, 20–50,000 characters.
 
-The box adds `turnId` to `ecv.propose` and `ecv.confirm`: a UUIDv5 of the
-trusted session key and message id, never model input.
+The box adds `turnId` (a UUIDv5 of the trusted session key and message id, never
+model input) to `propose` and `confirm`; it is for the app's confirm rule and is
+not sent to ECV. `maxRequestBytes` is 4096, except `propose` and `confirm` at
+65536 (a code can be ~50 KB); the box sends `X-Village-Operation:
+edge-volunteers.confirm` for the larger body. Every operation fits 25 seconds.
 
-**The owner's yes.** ECV's propose returns a summary to show word for word and
-a code valid for 10 minutes; ECV's confirm makes the change and is idempotent
-(the same code again returns the first result). The app makes "a later owner
-reply" a server rule:
+## ECV's refusals before MCP
 
-- When `ecv.propose` returns a code (`structuredContent.code`, null when the
-  change is blocked), store
-  `sha256(code) → {owner, grant generation, turnId, expiresAt}` for 15 minutes.
-- Refuse `ecv.confirm` with `ecv_confirmation_required` (HTTP 409) when the
-  code's record is missing, belongs to another owner or grant, has expired, or
-  carries the same `turnId` as this confirm.
+ECV checks the token and the Telegram id before any tool runs. The app maps:
+
+| ECV answers | The app answers the box |
+|---|---|
+| HTTP 401 `{"code":"not_authorized"}` | `unavailable`. A wrong token is an Agent Village config problem: never show the volunteer text for `not_authorized` |
+| HTTP 503 | `unavailable` (ECV's `MCP_ENABLED` is off, or the link is off) |
+| HTTP 403 `{"code":"not_connected"}` | `not_connected`: ECV does not know this Telegram id yet (the owner has not messaged the bot) |
+| HTTP 404 `{"code":"not_found"}` | `not_found`: no volunteer on the current event has this Telegram id |
+| HTTP 403 `{"code":"not_authorized"}` | `not_authorized`: withdrawn, or a coordinator turned Agent Village off for them |
+
+The app answers the box with HTTP 4xx/5xx and `{"code": "<code>"}`. The box
+replaces it with its own text (`_ecv.py` `ECV_ERRORS`), never upstream wording.
+The codes it knows for these operations: `not_connected`, `not_found`,
+`not_authorized`, `unavailable`, `conflict`, `invalid_arguments` (also for
+JSON-RPC `-32602`) and `rate_limited` (the app's own limit; suggest 300
+operations per owner per UTC day). Anything else is
+`connection_or_request_refused`, which tells the agent not to claim a change.
+
+## The confirm rule
+
+ECV's propose returns a summary to show word for word and a code valid for 10
+minutes; ECV's confirm makes the change and is idempotent. The app makes "a
+later owner reply" a server rule:
+
+- When `propose` returns a code (`structuredContent.code`, null when the change
+  is blocked), store `sha256(code) → {owner, turnId, expiresAt}` for 15 minutes.
+- Refuse `confirm` with `conflict` (HTTP 409) when the code's record is missing,
+  belongs to another owner, has expired, or carries the same `turnId` as this
+  confirm.
 - Never store the code itself, shift text or any ECV answer.
 
-The box sends `X-Village-Operation: ecv.confirm` so the app admits the larger
-body (a code can be ~50 KB). Both operations fit the 25-second timeout.
+## Results
 
-**Results.** Return the MCP result as
+Return the MCP result as
 `{"text": <the text content parts joined by a blank line>, "structured": <structuredContent or null>, "isError": <bool>}`.
-ECV puts a header with the event's time now on every reply, and states each
-refusal as `REFUSED (<rule>): <reason>` with `isError: true`. The box scrubs
-hidden characters at every depth and frames the result as untrusted data. The
-native response limit is 262,144 bytes; an `ecv.plan_view` of 8 busy days fits.
+ECV puts the event's time now on every reply and states each refusal as
+`REFUSED (<rule>): <reason>` with `isError: true`. The box scrubs hidden
+characters at every depth and frames the result as untrusted data. The response
+limit is 262,144 bytes; a `plan_view` of 8 busy days fits.
 
-**Errors.** Answer with HTTP 4xx/5xx and a JSON body `{"code": "<code>"}`. The box
-replaces it with its own text (`_ecv.py` `ECV_ERRORS`), never upstream wording:
+## ECV side safety
 
-| `code` | When |
-|---|---|
-| `ecv_not_connected` | No ECV grant for this owner |
-| `ecv_reconnect_required` | ECV answered 401, or refresh failed |
-| `ecv_volunteer_only` | The grant is a staff account |
-| `ecv_unavailable` | ECV answered 503 (its `MCP_ENABLED` kill switch, or `TOKEN_SECRETS` unset) or did not answer |
-| `ecv_confirmation_required` | The confirm rule above |
-| `ecv_invalid` | The arguments failed the app's check, or ECV answered JSON-RPC `-32602` |
-
-Any other failure is `connection_or_request_refused`, which tells the agent not
-to claim a change and to read `ecv.my_shifts` before proposing again.
-
-**Limits.** ECV sets no per-person limit for MCP calls. Suggest 300 operations
-per owner per UTC day at the app.
+- The token is compared in constant time; ECV can hold two tokens at once, so
+  rotation needs no downtime.
+- The token reaches only the volunteer tools above, never a staff tool.
+- Each volunteer gets an "Agent Village" connection record that coordinators see
+  and can revoke.
+- Every change is audited as made via Agent Village.
+- ECV's `MCP_ENABLED` kill switch turns it off with every other assistant
+  connection.
 
 ## Rollout
 
-1. This overlay (box side: allowlist, bridge, skill). Older boxes refuse a
-   projection that names `edge-volunteers`, Gold Stars included, so this comes
+1. This overlay roll (box side: allowlist, bridge, skill). Older boxes refuse a
+   projection that names `edge-volunteers`, Gold Stars included, so it comes
    first.
-2. The CP catalog entry, `edge-volunteers` 1.0.0 with the eleven operations in
-   this order, offered to the Edge City India tenant only.
-3. The app routes: the OAuth connection, the operation map, the confirm rule.
-4. Project it to boxes on that roll.
-
-On ECV's side nothing changes; its `MCP_ENABLED` switch turns the mini-app off
-together with every other assistant connection.
+2. The CP catalog row (`edge-volunteers` 1.0.0, the eleven operations in this
+   order, `restricted`) and the `MINI_APPS_TENANT_ALLOWLIST` entry for the
+   sandbox tenant.
+3. The app routes: the operation map, the two headers, the refusal mapping and
+   the confirm rule.
+4. ECV sets the token: Naman generates it, stores it in ECV's Vercel env and
+   gives it to Edge City staff for the Agent Village app server's
+   `MINI_APP_EDGE_VOLUNTEERS_TOKEN`. Never in a pull request.

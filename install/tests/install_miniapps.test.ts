@@ -278,18 +278,23 @@ test("zzz.bot manifest and native allowlist pin exactly its five named operation
 
 test("Edge City Volunteers manifest and native allowlist pin exactly its eleven named operations and stage the skill", () => {
   const app = REVIEWED_MINI_APPS.find(app => app.id === "edge-volunteers")!;
-  const reads = ["ecv.initialize", "ecv.guide", "ecv.my_hours", "ecv.my_shifts", "ecv.get_shift", "ecv.plan_view", "ecv.open_shifts", "ecv.my_requests", "ecv.move_targets", "ecv.propose"];
-  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps", "edge-volunteers", "manifest.json"), "utf8"));
-  expect(app).toEqual({ id: "edge-volunteers", version: "1.0.0", operations: [...reads, "ecv.confirm"], skills: ["edge-volunteers"] });
-  expect(manifest).toMatchObject({ ...app, homepage: "https://edge-city-volunteers.vercel.app" });
-  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "skills", "version"]);
+  const reads = ["edge-volunteers.initialize", "edge-volunteers.guide", "edge-volunteers.my_hours", "edge-volunteers.my_shifts", "edge-volunteers.get_shift", "edge-volunteers.plan_view", "edge-volunteers.open_shifts", "edge-volunteers.my_requests", "edge-volunteers.move_targets", "edge-volunteers.propose"];
+  const manifest = reviewedManifest("edge-volunteers");
+  expect(app).toEqual({ id: "edge-volunteers", version: "1.0.0", operations: [...reads, "edge-volunteers.confirm"], skills: ["edge-volunteers"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://edge-city-volunteers.vercel.app/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
   expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "edge-volunteers", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://edge-city-volunteers.vercel.app/api/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_EDGE_VOLUNTEERS_TOKEN" } });
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual([...reads.map(() => "read"), "write"]);
   expect(EDGE_SKILL_NAMES).not.toContain("edge-volunteers");
   const projection = { version: 1, apps: [app] };
   expect(validateProjection(projection)).toEqual(projection);
   for (const changed of [
-    { ...app, operations: [...app.operations, "ecv.log_note"] },
+    { ...app, operations: [...app.operations, "edge-volunteers.log_note"] },
     { ...app, operations: [...app.operations].reverse() },
     { ...app, operations: ["mini-app.read"] },
     { ...app, operations: reads },
@@ -297,7 +302,7 @@ test("Edge City Volunteers manifest and native allowlist pin exactly its eleven 
     { ...app, version: "1.0.1" },
   ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
-  expect(plugin).toContain('ECV_WRITE_OPERATIONS = ("ecv.confirm",)');
+  expect(plugin).toContain('ECV_WRITE_OPERATIONS = ("edge-volunteers.confirm",)');
   const root = installedBox();
   const receipt = reconcileMiniApps(projection, root);
   expect(receipt.files.map(file => file.path)).toEqual(["skills/edge-volunteers/SKILL.md"]);
