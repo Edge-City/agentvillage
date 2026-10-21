@@ -23,7 +23,7 @@ from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
 from ._mini_apps import (installed, authorize_send, gate_verified, READ_OPERATIONS, WRITE_OPERATIONS, APP_SCOPED_OPERATIONS, APPROVE_IN_BOT,
                          ZZZBOT, ZZZ_OPERATIONS, ZZZ_WRITE_OPERATIONS)
-from ._forkicks import save_preview, load_preview, authorize_order, is_flat, CARD_FALLBACK_ERRORS, ORDER_APPROVE_IN_BOT
+from ._forkicks import save_preview, load_preview, authorize_order, is_flat, card_text_unsafe, CARD_FALLBACK_ERRORS, ORDER_APPROVE_IN_BOT
 from . import _forkicks_grant
 from ._forkicks_media import materialize, menu_shape, JSON_BYTES as MENU_IMAGE_JSON_BYTES
 
@@ -1007,9 +1007,10 @@ def handle(args, **kwargs):
                 invalid.add("paymentMethod")
             # The app trims the note (JS String.prototype.trim), then allows at most 140 characters
             # (ForKicksOrderInput.note); the approval card refuses control, format and line-separator
-            # characters, so refuse them here at prepare instead of at confirm.
+            # characters (bar a same-block Indic joiner, v2.1.13: _forkicks.card_text_unsafe), so refuse them here
+            # at prepare instead of at confirm.
             if "note" in order and (not isinstance(order["note"], str) or len(order["note"].strip(_JS_TRIM)) > 140 or
-                    any(unicodedata.category(c) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for c in order["note"].strip(_JS_TRIM))):
+                    card_text_unsafe(order["note"].strip(_JS_TRIM))):
                 invalid.add("note")
             if invalid:
                 raise _InvalidArguments(op, fields=sorted({key if key in SCHEMA["parameters"]["properties"] else "(unknown field)" for key in invalid}))

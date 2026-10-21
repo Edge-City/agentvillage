@@ -2041,6 +2041,768 @@
     }
    },
    "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "an Indic joiner inside a Devanagari conjunct (KA VIRAMA ZWJ SSA) passes text -> not minimal (core marks the joiner)",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-deva",
+    "displayName": "\u0915\u094d\u200d\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-deva",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a ZWNJ after a Devanagari virama passes text -> not minimal",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwnj-deva",
+    "displayName": "\u0915\u094d\u200c\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwnj-deva",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a Malayalam chillu form with ZWJ passes text -> not minimal",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-mlym",
+    "displayName": "\u0d15\u0d28\u0d4d\u200d\u0d2e",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-mlym",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a Bengali conjunct with ZWJ after the virama, in an option, passes text -> not minimal",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-beng",
+    "displayName": "Alex",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": [
+       "opt-0-0"
+      ]
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-beng",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [
+        "\u0995\u09cd\u200d\u09b7"
+       ],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": [
+        "opt-0-0"
+       ]
+      }
+     ]
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a ZWJ between two Latin letters -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-latin",
+    "displayName": "Ab\u200dcd",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-latin",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ leading the value (an edge) -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-lead",
+    "displayName": "\u200d\u0915\u094d\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-lead",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ ending the value (an edge) -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-trail",
+    "displayName": "\u0915\u094d\u200d",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-trail",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ between Devanagari and Bengali (two blocks), in an item name -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-cross",
+    "displayName": "Alex",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-cross",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "\u0915\u094d\u200d\u09b7",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "two ZWJ in a row inside a Devanagari word -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-double",
+    "displayName": "\u0915\u094d\u200d\u200d\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-double",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "an emoji ZWJ sequence -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-emoji",
+    "displayName": "\ud83d\udc69\u200d\ud83d\udcbb",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-emoji",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bidi override (U+202E) between two Devanagari code points: only the two joiners are exempt -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-rlo",
+    "displayName": "\u0915\u094d\u202e\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-rlo",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a zero-width space (U+200B) between two Devanagari letters, in an item name -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-zwsp",
+    "displayName": "Alex",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-zwsp",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "\u0915\u200b\u0937",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ next to a Devanagari digit (U+0966, Nd: not a letter or mark) -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-deva-digit",
+    "displayName": "\u0915\u200d\u0966",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-deva-digit",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ next to an ASCII digit -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-ascii-digit",
+    "displayName": "\u0915\u200d1",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-ascii-digit",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ next to a space -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-space",
+    "displayName": "\u0915\u094d\u200d \u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-space",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ between the last Devanagari (U+097F) and the first Bengali (U+0980) code point: two blocks -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-block-edge",
+    "displayName": "\u097f\u200d\u0980",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-block-edge",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ next to U+0971 (Lm, a modifier letter: not Lo, Mn or Mc) -> invalid",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-lm",
+    "displayName": "\u0971\u200d\u0915",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-lm",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a ZWJ after a Devanagari vowel sign AA (U+093E, Mc) passes text -> not minimal (core marks the joiner)",
+   "preview": {
+    "appId": "forkicks",
+    "draftId": "d-zwj-mc",
+    "displayName": "\u0915\u093e\u200d\u0937",
+    "paymentMethod": "upi",
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "quote": {
+     "quoteId": "q-d-zwj-mc",
+     "totalInr": 100,
+     "location": {
+      "name": "For Kicks Mandrem",
+      "address": "Junasvaddo, Mandrem, North Goa",
+      "opens": "2026-10-21T08:00:00+05:30"
+     },
+     "lines": [
+      {
+       "qty": 1,
+       "name": "Latte",
+       "options": [],
+       "unitInr": 100,
+       "lineInr": 100,
+       "itemId": "item-0",
+       "optionIds": []
+      }
+     ]
+    }
+   },
+   "error": "approval_card_not_minimal"
   }
  ]
 }

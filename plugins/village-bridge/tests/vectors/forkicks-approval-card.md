@@ -96,6 +96,13 @@ direction change inside a text, so:
   controls, zero-width characters) in any order text (item and option names, location name, delivery address,
   display name, note) are refused by today's technical-card check (`approval_summary` / `forkicksSummary`) with
   `approval_card_invalid`, before any flat-card rule. No shape carries them (the legacy shape fails too, as today).
+  One exception (v2.1.13; approval RULING CLAIMS L18218): U+200C ZWNJ and U+200D ZWJ pass this check ONLY when BOTH
+  neighbouring code points are letters or marks (Lo, Mn, Mc) of the SAME one of the ten Indic blocks (Devanagari
+  U+0900-097F, Bengali U+0980-09FF, Gurmukhi U+0A00-0A7F, Gujarati U+0A80-0AFF, Oriya U+0B00-0B7F, Tamil
+  U+0B80-0BFF, Telugu U+0C00-0C7F, Kannada U+0C80-0CFF, Malayalam U+0D00-0D7F, Sinhala U+0D80-0DFF); at a value
+  edge, doubled, or next to anything else (Latin, a digit, a space, emoji, another block) they are refused as above.
+  Core marks every joiner, so such a value still fails the budget rule (`approval_card_not_minimal`): the legacy
+  shape. Vectors `d-zwj-*` / `d-zwnj-*`.
 - A character core would draw as a mark (for example `⏎` U+23CE, `«` U+00AB, a no-break space is stricter: see the
   budget) is `approval_card_not_minimal` (budget rule below).
 - Free text must not fake the Pickup row's ` · <date>` part or the Order row's ` ⏎ ` mark (security review). After

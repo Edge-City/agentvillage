@@ -41,11 +41,33 @@ CARD_MARKS_REFUSED = frozenset([0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x1810), 
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 # Product owns these words (product-confirm, L17668): how the payment method reads after the total.
 PAYMENT_WORDS = {"upi": "pay by UPI", "card_on_pickup": "card at pickup"}
+# Indic joiners (v2.1.13; approval RULING CLAIMS L18218, context L18224; the same rule as app#523 forkicks-card.ts and
+# cp#345 mini-apps-approval.js cardTextUnsafe): U+200C ZWNJ and U+200D ZWJ pass `text` ONLY when BOTH neighbouring
+# code points are letters or marks (Lo, Mn, Mc: virama, nukta, vowel signs) of the SAME block below. Refused everywhere
+# else: at a value edge, doubled, next to Latin, a digit, a space, emoji, another block or any other format character.
+# Every other Cc, Cf, Cs, Zl and Zp code point stays refused. card_value_fits is unchanged (core marks every joiner).
+TEXT_UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+INDIC_JOINERS = frozenset("\u200c\u200d")
+INDIC_BLOCKS = ((0x0900, 0x097F), (0x0980, 0x09FF), (0x0A00, 0x0A7F), (0x0A80, 0x0AFF), (0x0B00, 0x0B7F),
+                (0x0B80, 0x0BFF), (0x0C00, 0x0C7F), (0x0C80, 0x0CFF), (0x0D00, 0x0D7F), (0x0D80, 0x0DFF))
+INDIC_NEIGHBOUR_CATEGORIES = frozenset({"Lo", "Mn", "Mc"})
+
+def _indic_block(value, i):
+    """The index of the Indic block value[i] is a letter or mark of, or -1 (also past either end: a value edge)."""
+    if not 0 <= i < len(value) or unicodedata.category(value[i]) not in INDIC_NEIGHBOUR_CATEGORIES:
+        return -1
+    return next((n for n, (lo, hi) in enumerate(INDIC_BLOCKS) if lo <= ord(value[i]) <= hi), -1)
+
+def card_text_unsafe(value):
+    """Whether `text` refuses `value`: a control, format, surrogate or line separator, bar a same-block Indic joiner."""
+    return any(unicodedata.category(c) in TEXT_UNSAFE_CATEGORIES and
+               not (c in INDIC_JOINERS and _indic_block(value, i - 1) >= 0 and _indic_block(value, i - 1) == _indic_block(value, i + 1))
+               for i, c in enumerate(value))
 
 def approval_summary(payload):
     """Mirrored by CP forkicksSummary; never shorten the order the human approves."""
     def text(value, allow_empty=False):
-        if not isinstance(value, str) or (not allow_empty and not value.strip()) or any(unicodedata.category(c) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for c in value):
+        if not isinstance(value, str) or (not allow_empty and not value.strip()) or card_text_unsafe(value):
             raise ValueError("approval_card_invalid")
         return json.dumps(value, ensure_ascii=False)
 
