@@ -38,11 +38,11 @@ FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks
 ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
 ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
 # Edge City Volunteers: the owner's own volunteer reads, ECV's propose (a check: nothing changes, it returns a
-# summary and a code) and its one write, edge-volunteers.confirm (makes the change the owner said yes to). The write takes
+# summary and a code) and its one write, eci-volunteers.confirm (makes the change the owner said yes to). The write takes
 # zzz's path (gate_verified), never a manual grant: ECV's own propose/confirm is the owner's explicit yes.
-ECV_READ_OPERATIONS = ("edge-volunteers.initialize", "edge-volunteers.guide", "edge-volunteers.my_hours", "edge-volunteers.my_shifts", "edge-volunteers.get_shift", "edge-volunteers.plan_view",
-                       "edge-volunteers.open_shifts", "edge-volunteers.my_requests", "edge-volunteers.move_targets", "edge-volunteers.propose")
-ECV_WRITE_OPERATIONS = ("edge-volunteers.confirm",)
+ECV_READ_OPERATIONS = ("eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view",
+                       "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose")
+ECV_WRITE_OPERATIONS = ("eci-volunteers.confirm",)
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS,
                              *ECV_READ_OPERATIONS})
@@ -55,9 +55,9 @@ APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mi
 # list in this order. Its operations name their app; a caller never supplies an appId for them.
 ZZZBOT = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS]}
 ZZZ_OPERATIONS = frozenset(ZZZBOT["operations"])
-# The edge-volunteers install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order).
-EDGE_VOLUNTEERS = {"version": "1.0.0", "skills": ["edge-volunteers"], "operations": [*ECV_READ_OPERATIONS, *ECV_WRITE_OPERATIONS]}
-ECV_OPERATIONS = frozenset(EDGE_VOLUNTEERS["operations"])
+# The eci-volunteers install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order).
+ECI_VOLUNTEERS = {"version": "1.0.0", "skills": ["eci-volunteers"], "operations": [*ECV_READ_OPERATIONS, *ECV_WRITE_OPERATIONS]}
+ECV_OPERATIONS = frozenset(ECI_VOLUNTEERS["operations"])
 SLOPFOLIO = {"version": "1.0.0", "skills": ["slopfolio"], "operations": ["slopfolio.prepare", "slopfolio.status"]}
 # NEW-03 (rc44, P-013; context's design NEW-03-APP-NAMESPACES.md section 2, CLAIMS L8997): every operations
 # list this overlay accepts for a non-Gold-Stars app, each by exact equality (newest first): the reviewed
@@ -125,8 +125,8 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
             elif name == "zzzbot":
                 if app != {"id": name, **ZZZBOT}:
                     return False
-            elif name == "edge-volunteers":
-                if app != {"id": name, **EDGE_VOLUNTEERS}:
+            elif name == "eci-volunteers":
+                if app != {"id": name, **ECI_VOLUNTEERS}:
                     return False
             elif name == "slopfolio":
                 if app != {"id": name, **SLOPFOLIO}:

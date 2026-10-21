@@ -7,13 +7,18 @@ shifts they could claim and their cover requests, plus the scheduling changes a
 volunteer can already make in the Edge City Volunteers (ECV) app, each made only
 after the owner says yes to its exact summary in chat.
 
-- `skills/edge-volunteers/SKILL.md`: what the agent does and says.
-- `mini-apps/edge-volunteers/manifest.json`: the v2 manifest (operations, input
+- `skills/eci-volunteers/SKILL.md`: what the agent does and says.
+- `mini-apps/eci-volunteers/manifest.json`: the v2 manifest (operations, input
   schemas, budgets, the auth mode).
 - `plugins/village-bridge/_ecv.py`: the box-side argument checks and error text.
 
 ECV is Edge City's own volunteer scheduling service
 (https://edge-city-volunteers.vercel.app, repo `lucychen0103/Edge-City-Volunteers`).
+
+The id is `eci-volunteers` because the shared validator reserves the `edge-`
+family. Edge City may prefer `edge-volunteers` as a first-party app (that needs a
+FIRST_PARTY grant in the shared validator in all three repos); the rename is
+mechanical.
 
 ## Why app-token
 
@@ -21,7 +26,7 @@ One link between Agent Village and ECV, and no second sign-in for anyone. Agent
 Village already knows each owner's Telegram user id from pairing, and Telegram
 verified it. ECV knows each volunteer's Telegram user id once they have messaged
 the Edge City Volunteers bot. So the app server holds ONE token for ECV
-(`MINI_APP_EDGE_VOLUNTEERS_TOKEN`) and names the owner on each call. The volunteer
+(`MINI_APP_ECI_VOLUNTEERS_TOKEN`) and names the owner on each call. The volunteer
 only installs the mini-app. There is no OAuth, no PIN and no connect step. The
 box never sees the token, the endpoint, the Telegram id or a volunteer id.
 
@@ -31,29 +36,42 @@ Standard MCP (streamable HTTP, JSON responses): `POST` to
 `https://edge-city-volunteers.vercel.app/api/mcp` with
 
 ```
-Authorization: Bearer <MINI_APP_EDGE_VOLUNTEERS_TOKEN>
+Authorization: Bearer <MINI_APP_ECI_VOLUNTEERS_TOKEN>
 X-Agent-Village-Telegram-User-Id: <the owner's numeric Telegram user id>
+X-Agent-Village-Telegram-Username: <the owner's current username, no @>   (optional, recommended)
+Accept: application/json, text/event-stream
+Content-Type: application/json
 ```
 
-and a `tools/call` of the operation's tool, with the box's `arguments` forwarded
-unchanged as the tool's MCP `arguments`. The Telegram id comes from the owner's
-pairing, never from the box or the model.
+then `initialize` (protocol `2025-06-18`), `notifications/initialized` and a
+`tools/call` of the operation's tool, with the box's `arguments` forwarded
+unchanged as the tool's MCP `arguments`. Carry `Mcp-Session-Id` if ECV returns
+one (it is stateless and may not). The Telegram id and username come from the
+owner's pairing, never from the box or the model.
+
+The username header is optional but recommended: send it whenever Agent Village
+knows the username. When it is sent, ECV refuses unless it matches
+(case-insensitive) the username ECV's bot recorded for that Telegram user id.
+A Telegram username can be given up and taken by someone else; the pair of id
+and current username stops a stale record from mapping one person to another
+volunteer. A mismatch is `403 {"code":"not_connected"}`: the owner sends any
+message to the Edge City Volunteers bot once, which refreshes ECV's record.
 
 ## Operations
 
 | `village` operation | ECV tool | Class |
 |---|---|---|
-| `edge-volunteers.initialize` | `eciv_initialize` | read |
-| `edge-volunteers.guide` | `eciv_guide` | read |
-| `edge-volunteers.my_hours` | `eciv_my_hours` | read |
-| `edge-volunteers.my_shifts` | `eciv_my_shifts` | read |
-| `edge-volunteers.get_shift` | `eciv_get_shift` | read |
-| `edge-volunteers.plan_view` | `eciv_plan_view` | read |
-| `edge-volunteers.open_shifts` | `eciv_list_open_shifts` | read |
-| `edge-volunteers.my_requests` | `eciv_my_requests` | read |
-| `edge-volunteers.move_targets` | `eciv_move_targets` | read |
-| `edge-volunteers.propose` | `eciv_propose` | read (a check: nothing changes; ECV writes one audit row) |
-| `edge-volunteers.confirm` | `eciv_confirm` | write |
+| `eci-volunteers.initialize` | `eciv_initialize` | read |
+| `eci-volunteers.guide` | `eciv_guide` | read |
+| `eci-volunteers.my_hours` | `eciv_my_hours` | read |
+| `eci-volunteers.my_shifts` | `eciv_my_shifts` | read |
+| `eci-volunteers.get_shift` | `eciv_get_shift` | read |
+| `eci-volunteers.plan_view` | `eciv_plan_view` | read |
+| `eci-volunteers.open_shifts` | `eciv_list_open_shifts` | read |
+| `eci-volunteers.my_requests` | `eciv_my_requests` | read |
+| `eci-volunteers.move_targets` | `eciv_move_targets` | read |
+| `eci-volunteers.propose` | `eciv_propose` | read (a check: nothing changes; ECV writes one audit row) |
+| `eci-volunteers.confirm` | `eciv_confirm` | write |
 
 `confirm` is `write`, not `needs-card`: each change is one the volunteer can
 undo or that the volunteer app already lets them make, and the generic approval
@@ -80,7 +98,7 @@ The box adds `turnId` (a UUIDv5 of the trusted session key and message id, never
 model input) to `propose` and `confirm`; it is for the app's confirm rule and is
 not sent to ECV. `maxRequestBytes` is 4096, except `propose` and `confirm` at
 65536 (a code can be ~50 KB); the box sends `X-Village-Operation:
-edge-volunteers.confirm` for the larger body. Every operation fits 25 seconds.
+eci-volunteers.confirm` for the larger body. Every operation fits 25 seconds.
 
 ## ECV's refusals before MCP
 
@@ -89,8 +107,8 @@ ECV checks the token and the Telegram id before any tool runs. The app maps:
 | ECV answers | The app answers the box |
 |---|---|
 | HTTP 401 `{"code":"not_authorized"}` | `unavailable`. A wrong token is an Agent Village config problem: never show the volunteer text for `not_authorized` |
-| HTTP 503 | `unavailable` (ECV's `MCP_ENABLED` is off, or the link is off) |
-| HTTP 403 `{"code":"not_connected"}` | `not_connected`: ECV does not know this Telegram id yet (the owner has not messaged the bot) |
+| HTTP 503 `{"code":"unavailable","detail":...}` | `unavailable` (ECV's MCP server is switched off, or the link is off) |
+| HTTP 403 `{"code":"not_connected"}` | `not_connected`: ECV does not know this Telegram id yet (the owner has not messaged the bot), or the username header does not match ECV's record |
 | HTTP 404 `{"code":"not_found"}` | `not_found`: no volunteer on the current event has this Telegram id |
 | HTTP 403 `{"code":"not_authorized"}` | `not_authorized`: withdrawn, or a coordinator turned Agent Village off for them |
 
@@ -132,19 +150,33 @@ limit is 262,144 bytes; a `plan_view` of 8 busy days fits.
 - Each volunteer gets an "Agent Village" connection record that coordinators see
   and can revoke.
 - Every change is audited as made via Agent Village.
+- A coordinator's revoke ends the Agent Village link for that volunteer and
+  can't be undone yet. A PIN reset does not end the link.
+- A proposal made before a volunteer's PIN reset can't be confirmed after it:
+  propose again.
 - ECV's `MCP_ENABLED` kill switch turns it off with every other assistant
   connection.
+- A call costs ECV about 5 database queries.
 
 ## Rollout
 
 1. This overlay roll (box side: allowlist, bridge, skill). Older boxes refuse a
-   projection that names `edge-volunteers`, Gold Stars included, so it comes
+   projection that names `eci-volunteers`, Gold Stars included, so it comes
    first.
-2. The CP catalog row (`edge-volunteers` 1.0.0, the eleven operations in this
+2. The CP catalog row (`eci-volunteers` 1.0.0, the eleven operations in this
    order, `restricted`) and the `MINI_APPS_TENANT_ALLOWLIST` entry for the
    sandbox tenant.
-3. The app routes: the operation map, the two headers, the refusal mapping and
-   the confirm rule.
+3. The app routes: the operation map, the headers, the refusal mapping and
+   the confirm rule (see the reference implementation).
 4. ECV sets the token: Naman generates it, stores it in ECV's Vercel env and
    gives it to Edge City staff for the Agent Village app server's
-   `MINI_APP_EDGE_VOLUNTEERS_TOKEN`. Never in a pull request.
+   `MINI_APP_ECI_VOLUNTEERS_TOKEN`. Never in a pull request.
+
+## Reference implementation
+
+[`docs/reference/eci-volunteers/app-server.ts`](../../docs/reference/eci-volunteers/app-server.ts)
+is reference code for Edge City's app server: the operation map, the input
+check against this manifest, the MCP call, the refusal mapping, the confirm rule
+and the budgets, with tests (`app-server.test.ts`, a fake fetch, no network). It
+is not run on any box. It lives under `docs/` because `mini-apps/` is a closed
+tree of manifests and READMEs only.

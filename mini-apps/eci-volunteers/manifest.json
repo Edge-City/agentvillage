@@ -1,6 +1,6 @@
 {
   "manifest": 2,
-  "id": "edge-volunteers",
+  "id": "eci-volunteers",
   "name": "Edge City Volunteers",
   "version": "1.0.0",
   "description": "See your own Edge City volunteer shifts, hours and plan, the open shifts you could claim and your cover requests. Ask for scheduling changes in chat; each one is made only after you say yes to its summary.",
@@ -27,12 +27,12 @@
     "baseUrl": "https://edge-city-volunteers.vercel.app/api/mcp",
     "auth": {
       "mode": "app-token",
-      "secretRef": "MINI_APP_EDGE_VOLUNTEERS_TOKEN"
+      "secretRef": "MINI_APP_ECI_VOLUNTEERS_TOKEN"
     }
   },
   "operations": [
     {
-      "name": "edge-volunteers.initialize",
+      "name": "eci-volunteers.initialize",
       "class": "read",
       "target": {
         "tool": "eciv_initialize"
@@ -48,7 +48,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.guide",
+      "name": "eci-volunteers.guide",
       "class": "read",
       "target": {
         "tool": "eciv_guide"
@@ -95,7 +95,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.my_hours",
+      "name": "eci-volunteers.my_hours",
       "class": "read",
       "target": {
         "tool": "eciv_my_hours"
@@ -116,7 +116,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.my_shifts",
+      "name": "eci-volunteers.my_shifts",
       "class": "read",
       "target": {
         "tool": "eciv_my_shifts"
@@ -143,7 +143,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.get_shift",
+      "name": "eci-volunteers.get_shift",
       "class": "read",
       "target": {
         "tool": "eciv_get_shift"
@@ -167,7 +167,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.plan_view",
+      "name": "eci-volunteers.plan_view",
       "class": "read",
       "target": {
         "tool": "eciv_plan_view"
@@ -193,7 +193,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.open_shifts",
+      "name": "eci-volunteers.open_shifts",
       "class": "read",
       "target": {
         "tool": "eciv_list_open_shifts"
@@ -220,7 +220,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.my_requests",
+      "name": "eci-volunteers.my_requests",
       "class": "read",
       "target": {
         "tool": "eciv_my_requests"
@@ -247,7 +247,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.move_targets",
+      "name": "eci-volunteers.move_targets",
       "class": "read",
       "target": {
         "tool": "eciv_move_targets"
@@ -285,7 +285,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.propose",
+      "name": "eci-volunteers.propose",
       "class": "read",
       "target": {
         "tool": "eciv_propose"
@@ -739,7 +739,7 @@
       "framing": "data"
     },
     {
-      "name": "edge-volunteers.confirm",
+      "name": "eci-volunteers.confirm",
       "class": "write",
       "target": {
         "tool": "eciv_confirm"
@@ -767,10 +767,10 @@
   ],
   "skills": [
     {
-      "name": "edge-volunteers",
+      "name": "eci-volunteers",
       "version": "1.0.0",
-      "sha256": "65fb0e18496c8b6993dccef98a4ab455f3de68bd8c5192de77702b9e05e84b07",
-      "path": "skills/edge-volunteers/SKILL.md"
+      "sha256": "97652018e699b768d06980542f830860688a76507ffb885ffa673364c35b705b",
+      "path": "skills/eci-volunteers/SKILL.md"
     }
   ]
 }
