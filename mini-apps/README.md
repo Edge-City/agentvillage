@@ -23,6 +23,7 @@ Two complete starters are maintained with their real native skills:
 | Public read-only MCP | [Dizko](dizko/manifest.json) | [SKILL.md](../skills/dizko/SKILL.md) | Seven reviewed public tools, exact input schemas and fixed HTTPS endpoint |
 | Approved account action | [Gold Stars](gold-stars/manifest.json) | [SKILL.md](../skills/gold-stars/SKILL.md) | Recipient search, quota, immutable draft, chat confirmation of the exact preview, send/status/cancel; also carries the owner's Rolodex meeting mark/undo and Skylight status read |
 | Approved café order | [For Kicks](forkicks/manifest.json) | [SKILL.md](../skills/forkicks/SKILL.md) | Live menu/schedule; immutable prepare → exact resident approval → confirm; validated payment links, own-order status/cancel |
+| Owner-turn account writes | [Kismet](kismet/manifest.json) | [SKILL.md](../skills/kismet/SKILL.md) | Public MCP read plus own status, staged sign-up preview → later owner yes → send, yes/no on a shown recommendation, delete; [app-server contract](kismet/BACKEND.md) |
 
 ### Give your builder agent this prompt
 
@@ -345,6 +346,28 @@ model forwarding or Telegram acceptance. Unit entry points:
 `pytest plugins/village-bridge/tests/test_forkicks_media.py` (optional real parser
 half with `HERMES_AGENT_SRC`) and AV's `forkicks.test.ts` Vitest suite.
 
+### Kismet: owner-turn writes without a purchase grant
+
+The `kismet` 1.1.0 bundle carries `mini-app.read` (its three reviewed public
+MCP tools), then `kismet.status`, `kismet.signup`, `kismet.decide`,
+`kismet.delete`, in that order, and skill `["kismet"]`. The 1.0.0 entry
+(`mini-app.read` alone) stays accepted so the overlay can roll out first;
+every `kismet.*` operation is refused under it. Any other list, version or
+skill for `kismet` is refused (`_mini_apps.py` KISMET / KISMET_PUBLIC).
+
+`kismet.status` is a read; the plugin keeps only the reviewed shape (a
+recommendation's `dateId`, name, summary, reason, meetup idea and shared
+interests; a match's name and Telegram handle, rebuilding `link`), drops
+contact-shaped text with the same checks as `rolodex.person`, and never
+forwards Kismet's free `text`. The three writes take `gate_verified()` and a
+native owner-turn boundary instead of a daemon grant: sign-up and delete
+stage locally (no network) and return the exact preview; only a later owner
+message may send the saved `draftId`, and the saved answers are what is
+sent. `kismet.decide` takes only a `dateId` that status showed in an earlier
+message. Identity is the bearer's: no resident, tenant or Telegram argument
+exists. The app-server routes, the mapping to Kismet's partner API (its key
+is an app-server secret) and the approval rationale are in
+[kismet/BACKEND.md](kismet/BACKEND.md).
 
 ### Per-app context: `mini-app.context.read` and `mini-app.context.write`
 

@@ -16,6 +16,10 @@ import { EDGE_SKILL_NAMES, hermesHome } from "./paths";
  * `mini-app.context.write` (the app's own context namespace), after `mini-app.read`.
  * plugins/village-bridge/_mini_apps.py APP_OPERATIONS_ACCEPTED carries the same lists; the CP
  * projects them for dizko only after boxes run this overlay (BOX_DEFERRED_OPERATIONS until then).
+ *
+ * KISMET 1.1.0: the kismet entry carries its public read and then the owner's own account operations
+ * (kismet.status, .signup, .decide, .delete), exactly _mini_apps.py KISMET; the CP catalog moves to it
+ * only after boxes run this overlay.
  */
 export const REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"], skills: ["gold-stars"] },
@@ -27,6 +31,7 @@ export const REVIEWED_MINI_APPS = [
   // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
+  { id: "kismet", version: "1.1.0", operations: ["mini-app.read", "kismet.status", "kismet.signup", "kismet.decide", "kismet.delete"], skills: ["kismet"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
@@ -34,8 +39,9 @@ export const REVIEWED_MINI_APPS = [
  * eight-op entry (ov#350, _mini_apps.py GOLD_STARS_RESTORED; the CP's current entry, rolodex.person
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
- * projects the context operations), and mosaic's the same way. Remove each after the CP catalog serves a newer
- * list everywhere.
+ * projects the context operations), mosaic's the same way, and kismet's public read alone (1.0.0,
+ * _mini_apps.py KISMET_PUBLIC: the CP's entry until it serves 1.1.0). Remove each after the CP catalog
+ * serves a newer list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
@@ -43,6 +49,7 @@ export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
   // MOSAIC: its read alone, the CP's entry for a box that does not take the context entry (as dizko's).
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
+  { id: "kismet", version: "1.0.0", operations: ["mini-app.read"], skills: ["kismet"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
