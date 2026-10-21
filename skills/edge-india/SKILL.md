@@ -1,7 +1,7 @@
 ---
 name: edge-india-2026
 description: Public village knowledge for the CURRENT event, Edge City India 2026 (Oct 11 – Nov 1 2026, Mandrem, North Goa), from its published wiki, Substack guides and website. Read it for any India logistics or background question — housing and where people stay, getting there (flights, visas, airport transfer, local transport), check-in, meals and food, venues and coworking, WiFi, health and safety, packing, kids and families, tickets, volunteering, residencies and fellowships, weekly themes and programming previews. Read the local copy at $HERMES_HOME/knowledge/edge-india/ (start at index.md, or search it with refs.ts); never fetch these pages. Today's or tomorrow's events, session times and venues, who is going and RSVPs come from the `edgeos` skill; who to meet comes from `index-network`; looking up a named person follows AGENTS.md (Rolodex, directory, ask_village, website).
-version: 1.2.0
+version: 1.3.0
 author: Edge City
 tags: [edge-city, edge-india, india, community, popup-village, logistics, background]
 ---
@@ -28,6 +28,7 @@ Village already has the live skills.
 | Housing, Riva, room shares, arrival, travel, visas, check-in, meals, venues, coworking, WiFi, health, packing, families, tickets, residencies, weekly themes, "what is Edge City" | **This skill**: the local copy of the published guide. |
 | What's on today or tomorrow, a session's time or place, whether an event moved or was cancelled, RSVPing or cancelling an RSVP | **`edgeos`** (the live calendar, read in village time). Follow its rules for when the schedule isn't connected (it then points the person to the portal) and ask before every RSVP or cancel, as that skill says. |
 | Who to meet, intros, matching | **`index-network`**, through its own rules and approvals. It cannot look up a named person. |
+| What people in the village are saying, recommending, planning or asking about: opinions, recommendations, plans, sightings and tips from other residents (what others think, recommend, are doing or have found), or a local, practical question the calendar, this guide or the Rolodex does not answer | **`ask_village`** (the main village group), once per question; say the answer comes from the group. Not for the schedule, a session's time or place, or RSVPs (`edgeos`); not for logistics this guide covers (read the guide first, and ask the village only if it has no answer); not for anything private or personal about the resident; not for someone's contact details (Rolodex or directory rules apply); never to post or announce something, as it only reads what was said. Who is going to an event: `edgeos` first, then ask the village who plans to go. Who is X: the next row. |
 | Who is X, tell me about a person | In order: `village` `rolodex.search`, the **`edgeos`** directory, `ask_village` (what they said in the main group), then this skill's website copy. |
 | Rolodex cards, We met or Undo met; Gold Stars; Skylight characters and islands | **`rolodex`**, **`gold-stars`** or **`skylight`**. These skills give the right website links and current capability boundaries. |
 | Edge Esmeralda (the previous popup, Healdsburg CA) | `edge-esmeralda`, only when the person asks about it by name. Never use Esmeralda material for India. |

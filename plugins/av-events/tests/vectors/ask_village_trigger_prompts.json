@@ -1,0 +1,49 @@
+{
+  "about": [
+    "ASK-VILLAGE TRIGGER: product's rule for when the agent asks the village (ask_village) and when it does not,",
+    "with product's 16 example prompts (21 Oct 2026; private/handover/lanes-product/ASK-VILLAGE-trigger-rule.md).",
+    "Read by plugins/av-events/tests/test_ask_village_trigger.py, which checks that the ask_village tool description",
+    "(_ask_village.WHEN_TO_ASK, DO_NOT_ASK) carries the rule verbatim and that the edge-india routing row",
+    "(skills/edge-india/SKILL.md section 0) names every clause and alternative below. No model is called here: the",
+    "prompts and their expected tool are also the input for a later live eval.",
+    "expect: the tool or skill that should answer. cue: the rule's words that decide a positive. do_not: the index",
+    "into do_not_ask of the case that decides a negative. table_row / table_route: the existing edge-india routing",
+    "row that sends a negative elsewhere, and where it sends it."
+  ],
+  "rule": "Ask the village when the answer lives in what people in the village group have said: opinions, recommendations, plans, sightings and tips from other residents. Use it when the person asks what others think, recommend, are doing or have found, or when a local, practical question is not answered by the calendar, the Edge India guide or the Rolodex. Ask once per question, and say the answer comes from the group.",
+  "do_not_ask": [
+    "for the schedule, a session's time or place, or RSVPs (edgeos)",
+    "for logistics the Edge India guide covers (housing, transport, meals, wifi, check-in): read the guide first, and ask the village only if the guide has no answer",
+    "for anything private or personal about the resident (health, money, relationships, their own messages), or anything that would reveal it to the group",
+    "for someone's contact details (Rolodex or directory rules apply)",
+    "as a way to post or announce something: it only reads what was said"
+  ],
+  "positives": [
+    {"prompt": "Where's the best coffee near the venue?", "expect": "ask_village", "cue": "recommend"},
+    {"prompt": "Is anyone going to the waterfall trip on Saturday?", "expect": "ask_village", "cue": "plans",
+     "note": "who is going: edgeos first; ask the village for \"anyone planning to go / sharing a cab\""},
+    {"prompt": "What are people saying about the AI governance session?", "expect": "ask_village", "cue": "what others think"},
+    {"prompt": "Has anyone found a good place to rent a scooter?", "expect": "ask_village", "cue": "have found"},
+    {"prompt": "Did someone find a black water bottle at the beach?", "expect": "ask_village", "cue": "sightings"},
+    {"prompt": "What's the vibe at the Friday party, worth going?", "expect": "ask_village", "cue": "opinions"},
+    {"prompt": "Any recommendations for a doctor or pharmacy nearby?", "expect": "ask_village", "cue": "recommend",
+     "note": "the guide first; ask the village for people's experiences"},
+    {"prompt": "Is anyone organising a run in the mornings?", "expect": "ask_village", "cue": "are doing"},
+    {"prompt": "What did people think of yesterday's dinner?", "expect": "ask_village", "cue": "what others think"},
+    {"prompt": "Has anyone dealt with the visa extension here?", "expect": "ask_village", "cue": "tips"}
+  ],
+  "negatives": [
+    {"prompt": "What's on tomorrow?", "expect": "edgeos", "do_not": 0,
+     "table_row": "What's on today or tomorrow", "table_route": "**`edgeos`**"},
+    {"prompt": "RSVP me to the waterfall excursion", "expect": "edgeos", "do_not": 0,
+     "table_row": "RSVPing or cancelling an RSVP", "table_route": "**`edgeos`**"},
+    {"prompt": "How do I get from the airport?", "expect": "edge-india", "do_not": 1,
+     "table_row": "arrival, travel", "table_route": "**This skill**"},
+    {"prompt": "What's <name>'s Telegram?", "expect": "rolodex/directory", "do_not": 3,
+     "note": "Rolodex/directory rules, never ask_village for contacts"},
+    {"prompt": "Remind me to call my mum", "expect": "cron", "do_not": 2,
+     "note": "cron/reminder, private"},
+    {"prompt": "Tell everyone I'm hosting a dinner", "expect": "none", "do_not": 4,
+     "note": "not a broadcast tool"}
+  ]
+}

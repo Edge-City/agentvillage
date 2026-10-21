@@ -2160,6 +2160,15 @@ arguments are a closed object.
   `- topic (when)` lines as an answer's (at most 8, topic <= 80). Without a usable source it is
   `{error, message, source_count: 0}`. Nothing else from that body reaches the agent.
 
+- **When to ask (product rule, 21 Oct 2026):** the description ends with product's rule, verbatim
+  (`WHEN_TO_ASK`, `DO_NOT_ASK`, behind a short `WHEN_LEAD` heading that keeps the tool_search
+  words): ask when the answer lives in what people in the village group have
+  said (opinions, recommendations, plans, sightings, tips), once per question, saying the answer comes
+  from the group; never for the schedule or RSVPs (`edgeos`), logistics the Edge India guide covers
+  (guide first), anything private about the resident, contact details, or to post or announce. The
+  `edge-india` skill's routing table sends the same questions here, above its "Who is X" row.
+  `tests/test_ask_village_trigger.py` pins both against product's 16 prompts
+  (`tests/vectors/ask_village_trigger_prompts.json`, also the input for a later live eval).
 - **Who may ask:** the same fail-closed helper as `pray` (`_pray.session_kind`): the resident's
   direct chat, or the agent's own cron run that reports to the resident's Telegram DM; everything else
   is `group_session` and nothing is sent.
