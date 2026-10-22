@@ -51,13 +51,15 @@ import time
 import uuid
 from datetime import date as _date, datetime, timedelta, timezone
 
-from ._forkicks import cache_path, canonical, checked_payload, load_preview, order_preview
+from ._forkicks import KEY_PREFIX, LEGACY_KEY_PREFIX, cache_path, canonical, checked_payload, load_preview, order_preview
 from ._mini_apps import ORDER_PLACED_ON_APPROVAL, approval_modules
 
 LOG = logging.getLogger("village_bridge")
 
 PASS_NAME = "forkicks_orders"
-KEY_PREFIX = "marketplace.app.action:forkicks.order.confirm:"
+#: The member key (KEY_PREFIX, from _forkicks) first, then the parent key a marker written before the v2.1.13 roll waits
+#: on. A marker carries no key: the draft's one action on the task names it, and the start uses that same key.
+KEY_PREFIXES = (KEY_PREFIX, LEGACY_KEY_PREFIX)
 TASK = re.compile(r"propose:[a-f0-9]{32}")
 OWNER = re.compile(r"[1-9]\d{0,19}")
 ORDER_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -350,7 +352,7 @@ def advance(home, config, transport, installed, draft_id, now=None) -> str:
         _drop(marker_path)
         return "marker_invalid"
     owner = config.get("ownerTelegramId")
-    key = KEY_PREFIX + draft_id
+    keys = tuple(prefix + draft_id for prefix in KEY_PREFIXES)
     done = placed(home, draft_id)
     if done is not None:
         if done["by"] == "pass":  # this pass placed it; a crash may have come before its line
@@ -380,10 +382,10 @@ def advance(home, config, transport, installed, draft_id, now=None) -> str:
         ap = approval_modules()  # approval_unavailable: the marker waits for the next pass
         waited = ap.wait(task)
         status = waited.status
-        mine = [a for a in (waited.doc.get("actions") or []) if isinstance(a, dict) and a.get("action_key") == key]
+        mine = [a for a in (waited.doc.get("actions") or []) if isinstance(a, dict) and a.get("action_key") in keys]
         human = len(mine) == 1 and mine[0].get("state") == "granted"
         if waited.exit_code == 0 and status == "granted" and human:
-            started = ap.start(task, key, held)
+            started = ap.start(task, mine[0]["action_key"], held)
             if not started.ok or started.doc.get("authorization") != "grant":
                 return "start_refused"  # the next wait says why (spent, expired, void)
         elif waited.exit_code == 0 and status in ("nothing-to-wait-for", "executed") and human:

@@ -24,7 +24,9 @@ ENSURE = bridge._ensure_forkicks_pass  # the real one (setUp patches it)
 
 DRAFT = '550e8400-e29b-41d4-a716-446655440000'
 TASK = 'propose:' + 'a' * 32
-KEY = 'marketplace.app.action:forkicks.order.confirm:' + DRAFT
+# Autonomy sequence step 1: the member class's key; LEGACY_KEY is the parent-class key an older overlay proposed.
+KEY = 'marketplace.app.action.forkicks.order.confirm:' + DRAFT
+LEGACY_KEY = 'marketplace.app.action:forkicks.order.confirm:' + DRAFT
 RECEIPT = {'orderId': 'order-1', 'number': '#042', 'status': 'queued', 'paymentStatus': 'pay_at_pickup', 'totalInr': 380,
            'payment': {'method': 'card_on_pickup', 'payee': 'For Kicks', 'amountInr': 380}}
 PLACED = 'Approved: your For Kicks order is placed. Pickup: Café Mandrem · Mon 19 Oct, 08:00–18:00.'
@@ -39,16 +41,18 @@ def granted(key=KEY, status='granted', state='granted'):
 
 
 class Daemon:
-    """approval.md as the box sees it: one task per key; a start spends the grant once."""
+    """approval.md as the box sees it: one task per key; a start spends the grant once, under the task's own key."""
 
     def __init__(self):
         self.state = 'requested'  # requested | granted | started | <final status>
+        self.key = KEY  # the action key the task was proposed under
         self.propose = Mock(side_effect=self._propose)
         self.wait = Mock(side_effect=self._wait)
         self.start = Mock(side_effect=self._start)
         self.authorization = 'grant'
 
     def _propose(self, cls, key, summary, payload):
+        self.key = key
         return answer(0, ok=True, task=TASK, decision='requested', state='executed' if self.state == 'started' else None,
                       payload_hash=hashlib.sha256(payload.encode()).hexdigest())
 
@@ -56,13 +60,15 @@ class Daemon:
         if self.state == 'requested':
             return answer(6, ok=False, task=task, status='requested')
         if self.state == 'granted':
-            return granted()
+            return granted(self.key)
         if self.state == 'started':
-            return granted(status='nothing-to-wait-for')
+            return granted(self.key, status='nothing-to-wait-for')
         code = {'rejected': 1, 'revoked': 1, 'withdrawn': 1, 'expired': 3, 'void': 7}[self.state]
-        return answer(code, ok=True, task=task, status=self.state, actions=[{'action_key': KEY, 'state': self.state}])
+        return answer(code, ok=True, task=task, status=self.state, actions=[{'action_key': self.key, 'state': self.state}])
 
     def _start(self, task, key, held):
+        if key != self.key:
+            return answer(1, ok=False, error={'code': 'action-key-mismatch'})
         if self.state != 'granted':
             return answer(1, ok=False, error={'code': 'not-granted'})
         self.state = 'started'
@@ -315,7 +321,10 @@ class ForKicksOnGrantTest(unittest.TestCase):
 
     def test_a_grant_read_needs_this_drafts_own_action_granted_and_a_grant_start(self):
         self.ask()
-        for read in (granted(key=KEY + 'x'), granted(state='executed'), answer(0, ok=True, task=TASK, status='granted', actions=[]),
+        both = [{'action_key': KEY, 'state': 'granted'}, {'action_key': LEGACY_KEY, 'state': 'granted'}]
+        for read in (granted(key=KEY + 'x'), granted(key=LEGACY_KEY + 'x'), granted(key='marketplace.app.action.gold-stars.send:' + DRAFT),
+                     granted(key='marketplace.app.action:' + DRAFT), answer(0, ok=True, task=TASK, status='granted', actions=both),
+                     granted(state='executed'), answer(0, ok=True, task=TASK, status='granted', actions=[]),
                      answer(0, ok=True, task=TASK, status='requested', actions=[{'action_key': KEY, 'state': 'granted'}])):
             with self.subTest(read=read.doc):
                 self.daemon.wait.side_effect = lambda task, read=read: read
@@ -329,6 +338,39 @@ class ForKicksOnGrantTest(unittest.TestCase):
         self.daemon.start.assert_called_once()
         self.assertEqual(self.confirms(), [])
         self.assertEqual(self.sent, [])
+
+    # ---- the roll: markers written before and after the member class ------------------------------
+
+    def test_the_pass_recognises_the_member_key_and_the_parent_key_of_older_markers(self):
+        self.assertEqual(grant.KEY_PREFIX, 'marketplace.app.action.forkicks.order.confirm:')
+        self.assertEqual(grant.KEY_PREFIXES, (grant.KEY_PREFIX, 'marketplace.app.action:forkicks.order.confirm:'))
+        context = bridge.bound_context()
+        for key in (LEGACY_KEY, KEY):
+            for state in ('granted', 'started'):
+                with self.subTest(key=key, state=state):
+                    for path in self.home.joinpath('forkicks-drafts').glob('*'):
+                        path.unlink()
+                    self.sent.clear(); self.events.clear(); self.daemon.start.reset_mock(); self.transport.reset_mock()
+                    self.app.orders = 0
+                    # The draft and its .await marker as the overlay before (LEGACY_KEY) or after (KEY) the roll wrote
+                    # them: the marker's bytes carry no key, the daemon's task does. No propose in this test.
+                    self.prepared, _ = self.preview()
+                    fk.save_preview(self.home, self.prepared, context, self.config)
+                    self.marker().write_text(json.dumps({'task': TASK, 'since': int(time.time()), 'phase': 'awaiting', 'unverified': 0}))
+                    self.daemon.key, self.daemon.state = key, state
+                    self.run_pass()
+                    held = fk.canonical(self.prepared['approvalPayload'])
+                    if state == 'granted':  # started under the task's OWN key (the daemon binds the start to it)
+                        self.daemon.start.assert_called_once_with(TASK, key, held)
+                    else:  # a spent grant of this draft's action: straight to confirm
+                        self.daemon.start.assert_not_called()
+                    self.daemon.propose.assert_not_called()
+                    [confirm] = self.confirms()
+                    self.assertEqual(confirm.args[1]['approval']['taskId'], TASK)
+                    self.assertEqual(self.app.orders, 1)
+                    self.assertEqual(self.sent, [('42', PLACED)])
+                    self.assertEqual(self.events, [{'outcome': 'placed', 'code': 'on_grant'}])
+                    self.assertFalse(self.marker().exists())
 
     # ---- one placer --------------------------------------------------------------------------------
 

@@ -19,6 +19,9 @@ if fixture is None:
 bridge, mini, real_transport = fixture.bridge, fixture.mini, fixture.real_transport
 
 fk = sys.modules['village_bridge._forkicks']
+# Autonomy sequence step 1: For Kicks checkout proposes its own member class (B-133's pattern for gold-stars.send).
+MEMBER = 'marketplace.app.action.forkicks.order.confirm'
+ROLL_ORDER = 'ROLL ORDER: requires cp#351 AND the approval template commit (2b) deployed first'
 
 def answer(**doc):
     return types.SimpleNamespace(ok=doc.get('ok') is True, doc=doc, exit_code=0, status=doc.get('status'))
@@ -163,7 +166,8 @@ class ForKicksTest(unittest.TestCase):
         proof = self.transport.call_args.args[1]['approval']
         self.assertEqual(proof['payload'], result['approvalPayload'])
         self.assertEqual(proof['payloadHash'], result['payloadHash'])
-        self.assertEqual(ap.propose.call_args.args[1], 'marketplace.app.action:forkicks.order.confirm:' + result['draftId'])
+        self.assertEqual(ap.propose.call_args.args[:2], (MEMBER, MEMBER + ':' + result['draftId']))
+        self.assertEqual(ap.start.call_args.args[1], MEMBER + ':' + result['draftId'])
         self.assertEqual(json.loads(ap.propose.call_args.args[3]), result['approvalPayload'])
         self.assertEqual(ap.propose.call_args.args[2], '\n'.join([
             'For Kicks order',
@@ -230,6 +234,47 @@ class ForKicksTest(unittest.TestCase):
         ap = self.daemon(); ap.start.return_value = answer(ok=True, authorization='policy')
         with patch.object(fk, 'approval_modules', return_value=ap):
             self.assertEqual(self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_not_started')
+        self.transport.assert_not_called()
+
+    def test_checkout_proposes_the_member_class_and_key_and_keeps_the_parent_constants(self):
+        self.assertEqual((fk.APPROVAL_CLASS, fk.KEY_PREFIX, fk.order_key('d-1')), (MEMBER, MEMBER + ':', MEMBER + ':d-1'))
+        # A box on the older overlay still proposes the parent class and key; the CP accepts both keys (cp#351).
+        self.assertEqual((fk.LEGACY_APPROVAL_CLASS, fk.LEGACY_KEY_PREFIX), ('marketplace.app.action', 'marketplace.app.action:forkicks.order.confirm:'))
+        result = self.prepare(); self.next_turn(); ap = self.daemon()
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertIn('data', self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']}))
+        cls, key = ap.propose.call_args.args[:2]
+        self.assertEqual((cls, key), (MEMBER, MEMBER + ':' + result['draftId']))
+        self.assertNotEqual(cls, fk.LEGACY_APPROVAL_CLASS)
+        ap.start.assert_called_once(); self.assertEqual(ap.start.call_args.args[1], key)
+        # The roll order rides in the comment directly above the constant: core judges and draws by exact class
+        # name, so a box proposing this class needs the CP's verifier (2a) and template row + say entry (2b) first.
+        source = Path(fk.__file__).read_text(encoding='utf-8').splitlines()
+        at = next(i for i, line in enumerate(source) if line.startswith('APPROVAL_CLASS = '))
+        above = []
+        for line in reversed(source[:at]):
+            if not line.startswith('#'):
+                break
+            above.append(line)
+        self.assertIn(ROLL_ORDER, '\n'.join(above))
+
+    def test_an_autonomous_or_unknown_answer_for_the_member_class_places_no_order(self):
+        # A box whose policy has no member row yet: core answers the class from the policy's defaults (the shipped
+        # template's defaults.autonomy is autonomous) or refuses it as undeclared. Neither is a human grant, so the
+        # answer must be `requested`: no wait, no start, no confirm, no order.
+        result = self.prepare(); self.next_turn()
+        request = {'operation': 'forkicks.order.confirm', 'draftId': result['draftId']}
+        for decision, state in (('autonomous', None), ('autonomous', 'executed'), ('autonomous', 'started'), ('auto', None), ('denied', None), ('', None)):
+            with self.subTest(decision=decision, state=state):
+                ap = self.daemon(decision=decision, state=state)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    self.assertEqual(self.call(request)['error'], 'approval_refused')
+                self.assertEqual(ap.propose.call_args.args[0], MEMBER)
+                ap.wait.assert_not_called(); ap.start.assert_not_called()
+        ap = Mock(); ap.propose.return_value = types.SimpleNamespace(ok=False, doc={'ok': False, 'error': {'code': 'class-undeclared'}}, exit_code=1, status=None)
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertEqual(self.call(request)['error'], 'approval_refused')
+        ap.wait.assert_not_called(); ap.start.assert_not_called()
         self.transport.assert_not_called()
 
     def test_ambiguous_confirm_replays_same_preview_and_executed_proof_after_reload(self):

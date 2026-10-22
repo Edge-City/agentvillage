@@ -21,9 +21,22 @@ SUMMARY_HTML_MAX_BYTES = 3000
 #   CARD_KEYS:   exactly {order, total, pickup, name}, the strings the minimal card quotes. The app returns the
 #                order's `preview` BESIDE the payload in its prepare answer; the box saves it in the per-draftId record
 #                and re-derives the four strings from it (card_fields), refusing any difference.
-# Both shapes are proposed under the same class and per-draftId key as before (approval L17713: no class change in the
-# v2.1.10 hotfix). Spec + golden vectors: tests/vectors/forkicks-approval-card.{md,json}.
-APPROVAL_CLASS = "marketplace.app.action"
+# Both shapes are proposed under the same class and per-draftId key. Spec + golden vectors:
+# tests/vectors/forkicks-approval-card.{md,json}.
+#
+# Autonomy sequence step 1 (approval L19778, lead L19783): checkout proposes For Kicks' OWN member class, as a Gold Star
+# send does (B-133, _mini_apps.SEND_CLASS), so the parent marketplace.app.action can later run on its own while this
+# payment keeps its card through one member row pinned to manual. The daemon requires the key to start with "<class>:".
+# ROLL ORDER: requires cp#351 AND the approval template commit (2b) deployed first (approval L19818): 2a = cp#351, the
+# CP verifier accepting both the member and the legacy parent keys; 2b = the CP template's member row (manual) and its
+# say entry. Core judges and draws by exact class name, so a box proposing this class on a policy without that row and
+# say entry gets an undeclared class (the technical card at best, a refusal at worst), and the CP refuses every For
+# Kicks confirm whose key it does not accept. This overlay change rides v2.1.13 only after 2a and 2b are live.
+APPROVAL_CLASS = "marketplace.app.action.forkicks.order.confirm"
+KEY_PREFIX = APPROVAL_CLASS + ":"
+# The parent class and key a box on an older overlay still proposes (and its on-grant markers still wait on).
+LEGACY_APPROVAL_CLASS = "marketplace.app.action"
+LEGACY_KEY_PREFIX = LEGACY_APPROVAL_CLASS + ":forkicks.order.confirm:"
 # The card refusals the prepare path answers by preparing once more in the legacy shape (__init__.py, lead L17847).
 CARD_FALLBACK_ERRORS = frozenset({"approval_card_invalid", "approval_card_not_minimal", "approval_card_too_long"})
 LEGACY_KEYS = frozenset({"appId", "operation", "preview"})
@@ -284,10 +297,14 @@ def load_preview(home, draft_id, config):
     checked_payload(record.get("payload"), draft_id, record.get("payloadHash"), record.get("preview"))
     return record
 
+def order_key(draft_id):
+    """The per-draft propose/start key under the member class."""
+    return KEY_PREFIX + draft_id
+
 def authorize_order(record, draft_id, on_requested=None):
     payload = record["payload"]
     held = checked_payload(payload, draft_id, record["payloadHash"], record.get("preview"))
-    key = APPROVAL_CLASS + ":forkicks.order.confirm:" + draft_id
+    key = order_key(draft_id)
     try:
         summary = approval_summary({"preview": order_preview(record)})
     except ValueError as error:
@@ -296,7 +313,8 @@ def authorize_order(record, draft_id, on_requested=None):
     # The app's payload, byte for byte (its confirm compares it with the stored one): the box only checks it.
     answer = ap.propose(APPROVAL_CLASS, key, summary, held)
     task = answer.doc.get("task")
-    # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy.
+    # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy. Only `requested` proceeds: an
+    # `autonomous` answer (a policy with no member row falls to its defaults) or any other answer places no order.
     if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
         return None, {"error": "approval_refused"}
     proof = {"taskId": task, "payloadHash": record["payloadHash"], "payload": payload}

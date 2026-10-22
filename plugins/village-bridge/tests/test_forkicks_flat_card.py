@@ -1,7 +1,8 @@
 """The For Kicks flat order card (Carter P0, 21 Oct; v2.1.10 hotfix): the box accepts the app's legacy payload
 {appId, operation, preview} AND the four-key {order, total, pickup, name}, re-derives the four strings from the
 order preview the app returned beside the payload at prepare, refuses any difference, and proposes the app's payload
-byte for byte under the unchanged class and per-draftId key. Spec + golden vectors: tests/vectors/."""
+byte for byte under For Kicks' member class marketplace.app.action.forkicks.order.confirm and its per-draftId key
+(autonomy sequence step 1). Spec + golden vectors: tests/vectors/."""
 import copy
 import hashlib
 import importlib.util
@@ -23,7 +24,8 @@ bridge, mini = fixture.bridge, fixture.mini
 fk = sys.modules['village_bridge._forkicks']
 
 VECTORS = json.loads(Path(__file__).with_name('vectors').joinpath('forkicks-approval-card.json').read_text(encoding='utf-8'))
-KEY = 'marketplace.app.action:forkicks.order.confirm:'
+MEMBER = 'marketplace.app.action.forkicks.order.confirm'
+KEY = MEMBER + ':'
 
 
 def answer(**doc):
@@ -156,7 +158,7 @@ class FlatCardBoxTest(unittest.TestCase):
         with patch.object(fk, 'approval_modules', return_value=ap):
             return self.call({'operation': 'forkicks.order.confirm', 'draftId': draft})
 
-    def test_flat_payload_is_saved_with_its_preview_and_proposed_byte_for_byte_under_the_same_class_and_key(self):
+    def test_flat_payload_is_saved_with_its_preview_and_proposed_byte_for_byte_under_the_member_class_and_key(self):
         result = self.app_answer()
         response = self.prepare(result); self.assertEqual(response.get('data'), result, response)
         record = json.loads(self.record_path(result['draftId']).read_text())
@@ -164,7 +166,7 @@ class FlatCardBoxTest(unittest.TestCase):
         self.next_turn(); ap = self.daemon()
         self.assertIn('data', self.confirm(result['draftId'], ap))
         cls, key, summary, held = ap.propose.call_args.args
-        self.assertEqual((cls, key), ('marketplace.app.action', KEY + result['draftId']))
+        self.assertEqual((cls, key), (MEMBER, KEY + result['draftId']))
         self.assertEqual(held, fk.canonical(result['approvalPayload']))  # the app's payload, exactly
         self.assertEqual(sorted(json.loads(held)), ['name', 'order', 'pickup', 'total'])
         self.assertEqual(summary, fk.approval_summary({'preview': result['preview']}))  # the technical card's text, from the saved order
@@ -179,7 +181,7 @@ class FlatCardBoxTest(unittest.TestCase):
         self.next_turn(); ap = self.daemon()
         self.assertIn('data', self.confirm(result['draftId'], ap))
         cls, key, summary, held = ap.propose.call_args.args
-        self.assertEqual((cls, key, held), ('marketplace.app.action', KEY + result['draftId'], fk.canonical(result['approvalPayload'])))
+        self.assertEqual((cls, key, held), (MEMBER, KEY + result['draftId'], fk.canonical(result['approvalPayload'])))
         self.assertEqual(summary, fk.approval_summary(result['approvalPayload']))
 
     def test_flat_strings_that_differ_from_the_saved_order_are_refused_and_never_cached(self):

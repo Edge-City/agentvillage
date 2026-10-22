@@ -253,8 +253,10 @@ revokes permission, not the resident's saved order previews.
 Show every item/option, total, pickup place/time, payment method and the display
 name shared with the café, then wait for a later owner reply. Native confirm
 takes only `draftId`; a model-supplied `approval` is refused. The daemon must
-propose `marketplace.app.action:forkicks.order.confirm:<draftId>` over the
-unaltered envelope, wait for a direct resident grant, and start that exact
+propose the member class `marketplace.app.action.forkicks.order.confirm` with key
+`marketplace.app.action.forkicks.order.confirm:<draftId>` (boxes before v2.1.13
+propose the legacy parent key `marketplace.app.action:forkicks.order.confirm:<draftId>`)
+over the unaltered envelope, wait for a direct resident grant, and start that exact
 payload with `authorization: grant`. Policy autonomy never purchases coffee.
 An already-executed proposal reuses the exact proof for same-draft idempotent
 recovery; it does not create a new draft or spend again. Permission is rechecked
