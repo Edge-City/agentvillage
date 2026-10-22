@@ -411,6 +411,43 @@ Overlay first: the CP must not project zzzbot to a box below the overlay roll
 that carries this entry (v2.1.3), since an older box refuses the whole
 projection, Gold Stars included. See [zzzbot/README.md](zzzbot/README.md).
 
+## Edge City Volunteers: a volunteer's own schedule
+
+The [v2 manifest](eci-volunteers/manifest.json) and the native bundle
+allowlist (`_mini_apps.py` `ECI_VOLUNTEERS`, exact equality, in this order)
+expose eleven named operations, each mapped by the app to one ECV volunteer MCP
+tool: nine reads (`eci-volunteers.initialize`, `.guide`, `.my_hours`,
+`.my_shifts`, `.get_shift`, `.plan_view`, `.open_shifts`, `.my_requests`,
+`.move_targets`), `eci-volunteers.propose` (ECV's check: a summary and a code,
+nothing changes) and one write, `eci-volunteers.confirm`. `mini-app.read`
+refuses `eci-volunteers`.
+
+There is no per-volunteer sign-in. The service is `app-token`: the app server
+holds one token for ECV (`MINI_APP_ECI_VOLUNTEERS_TOKEN`) and sends the owner's
+Telegram user id (from pairing), and their current username when known, with
+each call. The id is `eci-volunteers` because the validator reserves `edge-`. The volunteer only installs the
+mini-app; they must have messaged the Edge City Volunteers Telegram bot once, so
+ECV knows their Telegram id.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_ecv.py` against ECV's published volunteer schemas (the
+manifest's `input` schemas say the same): exact keys, ECV's uuid/date/time
+patterns and ranges, and only the seven volunteer actions (at most three changes
+under one yes). Anything else is `invalid_ecv_arguments` before transport. The
+overlay adds `turnId` (trusted session and message) to propose and confirm; the
+app refuses a confirm whose code it did not see proposed, or that comes in the
+propose's own turn (`conflict`), so the change follows a later owner reply.
+`eci-volunteers.confirm` also needs the verified gate (`gate_verified`, zzz's
+path), no manual grant. Results are scrubbed and framed as untrusted; v2's
+generic codes (`not_connected`, `not_found`, `not_authorized`, `unavailable`,
+`conflict`, `invalid_arguments`, `rate_limited`) map to ECV-only text, for these
+operations only.
+
+Overlay first, then the CP catalog row and sandbox allowlist, then the app
+routes, then ECV sets the token. The app-server contract is in
+[eci-volunteers/README.md](eci-volunteers/README.md); reference app-server code
+is in [docs/reference/eci-volunteers/](../docs/reference/eci-volunteers/app-server.ts).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist

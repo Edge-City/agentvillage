@@ -27,6 +27,8 @@ export const REVIEWED_MINI_APPS = [
   // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
+  // Edge City Volunteers: a volunteer's own reads, ECV's propose and one gated write (_mini_apps.py ECI_VOLUNTEERS, exact).
+  { id: "eci-volunteers", version: "1.0.0", operations: ["eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose", "eci-volunteers.confirm"], skills: ["eci-volunteers"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
