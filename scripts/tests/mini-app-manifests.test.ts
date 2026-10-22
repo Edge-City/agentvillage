@@ -295,7 +295,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
       if (m.checkSchema(x).length) { expect([url, want]).not.toEqual([url, null]); continue; }
       expect([url, reasons(m.validateManifest(x))]).toEqual([url, want ? [`/service/baseUrl ${want}`] : []]);
     }
-    expect(index.apps.filter((id: string) => manifest(id).service.baseUrl).length).toBe(3);
+    expect(index.apps.filter((id: string) => manifest(id).service.baseUrl).length).toBe(4);
   });
 
   test("N2: deep nesting is a dropped manifest with a code, never a throw; the catalog serves the rest", () => {
@@ -309,7 +309,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
     const byId = Object.fromEntries(index.apps.map((id: string) => [id, manifest(id)]));
     byId.dizko = deep(20000);
     const built = m.buildCatalog(index, byId);
-    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "zzzbot", "slopfolio", "forkicks", "mosaic"]);
+    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "zzzbot", "slopfolio", "forkicks", "mosaic", "symbient-uncommons"]);
     expect(built.dropped).toEqual([{ id: "dizko", code: m.CODE, errors: [{ path: "/operations/0/input", reason: "too_large" }] }]);
   });
 
@@ -328,7 +328,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
     const byId: Record<string, any> = Object.fromEntries(index.apps.map((id: string) => [id, manifest(id)]));
     Object.defineProperty(byId.zzzbot, "name", { enumerable: true, get() { throw new RangeError("Maximum call stack size exceeded"); } });
     const built = m.buildCatalog(index, byId);
-    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "dizko", "slopfolio", "forkicks", "mosaic"]);
+    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "dizko", "slopfolio", "forkicks", "mosaic", "symbient-uncommons"]);
     expect(built.dropped).toEqual([{ id: "zzzbot", code: m.CODE, errors: [{ path: "/", reason: "unvalidatable" }] }]);
   });
 });
