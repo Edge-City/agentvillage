@@ -1,0 +1,1639 @@
+{
+  "generatedAt": "2026-10-21T08:04:01.805Z",
+  "activeIncidents": [
+    {
+      "id": "9bc9a3c0-fe6b-4b95-bd09-9dc1179da308",
+      "slug": "QH8L8B3E",
+      "title": "Builds are temporarily paused",
+      "status": "INVESTIGATING",
+      "createdAt": "2026-10-21T07:24:24.727677+00:00",
+      "resolvedAt": null,
+      "components": [
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "438dceef-96c3-4879-8524-8917ee6af0ba",
+          "status": "INVESTIGATING",
+          "message": "We are currently investigating this issue",
+          "createdAt": "2026-10-21T07:24:24.727677+00:00"
+        }
+      ]
+    }
+  ],
+  "recentIncidents": [
+    {
+      "id": "9bc9a3c0-fe6b-4b95-bd09-9dc1179da308",
+      "slug": "QH8L8B3E",
+      "title": "Builds are temporarily paused",
+      "status": "INVESTIGATING",
+      "createdAt": "2026-10-21T07:24:24.727677+00:00",
+      "resolvedAt": null,
+      "components": [
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "438dceef-96c3-4879-8524-8917ee6af0ba",
+          "status": "INVESTIGATING",
+          "message": "We are currently investigating this issue",
+          "createdAt": "2026-10-21T07:24:24.727677+00:00"
+        }
+      ]
+    },
+    {
+      "id": "b81f14f9-0c99-492e-abdc-9a8bc1c7e67d",
+      "slug": "PX5UYXCN",
+      "title": "Builds paused for Free, Trial and Hobby workspaces",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-21T02:49:46.359069+00:00",
+      "resolvedAt": "2026-10-21T02:51:30.987902+00:00",
+      "components": [
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "OPERATIONAL"
+        }
+      ],
+      "updates": [
+        {
+          "id": "bf3f905d-c263-4a5f-b922-575919cd2ca6",
+          "status": "RESOLVED",
+          "message": "Dismissed as a notice. No impact.",
+          "createdAt": "2026-10-21T02:51:30.987902+00:00"
+        },
+        {
+          "id": "b136535c-c81e-4204-a0e8-ed22bb0ebe88",
+          "status": "TRIAGE",
+          "message": "We have temporarily paused builds for workspaces for Free, Trial and Hobby plans. New deployments for these workspaces will stay queued until builds resume. \n\nServices that are already running are not affected. Builds for Pro and Enterprise workspaces are processing normally.",
+          "createdAt": "2026-10-21T02:49:46.359069+00:00"
+        }
+      ]
+    },
+    {
+      "id": "a9a5876a-89b2-440d-9cd9-441af823aacb",
+      "slug": "JUA1PC5H",
+      "title": "New builds are temporarily paused",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-20T17:03:41.416651+00:00",
+      "resolvedAt": "2026-10-20T20:56:03.245532+00:00",
+      "components": [
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "MAJOR_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "237cab43-3fac-4634-95e4-375efe4d45c9",
+          "status": "RESOLVED",
+          "message": "Builds have resumed for all workspaces and are completing normally. This incident is now resolved.\n\nIf you triggered a deploy, pushed to GitHub, or restarted a service while builds were paused, please trigger it again. Those were not queued during the pause and will not start on their own. Cron jobs scheduled during the pause did not run, and will continue from their next scheduled time.\n\nWe're sorry for the disruption",
+          "createdAt": "2026-10-20T20:56:03.245532+00:00"
+        },
+        {
+          "id": "9b47a4ea-7c5d-4289-9395-e8b0e81fe0a0",
+          "status": "MONITORING",
+          "message": "Builds are now enabled for Hobby workspaces, in addition to Enterprise and Pro. We are working to resume builds for all remaining workspaces next.\n\nDeploys triggered while builds were paused will need to be triggered again once builds are back for your workspace.\n\nWe'll share another update as we resume builds for the remaining workspaces.",
+          "createdAt": "2026-10-20T20:43:43.722588+00:00"
+        },
+        {
+          "id": "2e7f928d-93f8-468c-8480-d3d3c9bbbd7b",
+          "status": "MONITORING",
+          "message": "Builds are now enabled for Pro workspaces, in addition to Enterprise. We are working to resume builds for all remaining workspaces next.\n\nDeploys triggered while builds were paused will need to be triggered again once builds are back for your workspace.\n\nWe'll share another update as we resume builds for the remaining workspaces.",
+          "createdAt": "2026-10-20T20:20:06.323101+00:00"
+        },
+        {
+          "id": "10ac2b05-1ef3-42ad-a36f-61225d0ffa46",
+          "status": "IDENTIFIED",
+          "message": "We have applied a fix and are gradually resuming builds. Builds are now enabled for Enterprise workspaces, and we are working to resume builds for all other workspaces next.\n\nDeploys triggered while builds were paused will need to be triggered again once builds are back for your workspace.\n\nWe'll share another update as we resume builds for more workspaces.",
+          "createdAt": "2026-10-20T19:59:29.513099+00:00"
+        },
+        {
+          "id": "35b3595c-8c6e-4fe2-860a-ad709293c421",
+          "status": "IDENTIFIED",
+          "message": "We are continuing to work on the issue affecting builds. Builds remain paused for all workspaces while we do, and we will bring them back in stages once we're confident everything is working as expected.\n\nDeploys triggered during this period will need to be triggered again once builds resume. Services that are already deployed and running are not affected.\n\nWe'll share another update as soon as builds begin to resume.",
+          "createdAt": "2026-10-20T19:10:56.431912+00:00"
+        },
+        {
+          "id": "6a45c1bd-47a5-4035-8458-c4c1cff8968f",
+          "status": "IDENTIFIED",
+          "message": "We have identified the issue affecting builds and are working on a fix. While we do, new builds are now paused for all workspaces. Deploys triggered during this period will need to be triggered again once we resume builds.\n\nServices that are already deployed and running are not affected.\n\nWe will provide further updates as we make progress.",
+          "createdAt": "2026-10-20T17:18:53.181035+00:00"
+        },
+        {
+          "id": "ec8bd0fb-702e-4c14-8b29-e7f91d2ea228",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting builds and have temporarily paused new builds for most workspaces while we investigate. Deploys triggered during this period will need to be triggered again once we resume builds.\n\nServices that are already deployed and running are not affected.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-10-20T17:03:41.416651+00:00"
+        }
+      ]
+    },
+    {
+      "id": "59de63c8-2212-4f7b-b9dd-d0911eff3932",
+      "slug": "U3RALRQ7",
+      "title": "Builds are taking longer than usual",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-13T16:12:34.344490+00:00",
+      "resolvedAt": "2026-10-13T17:00:06.889234+00:00",
+      "components": [
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "bdaf8f61-178a-4516-9b58-853e9d622123",
+          "status": "RESOLVED",
+          "message": "The issue affecting build times in US West has been resolved. Build times have returned to normal and the queue has cleared.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-10-13T17:00:06.889234+00:00"
+        },
+        {
+          "id": "cd5fef7b-34ba-442b-9303-ddcce123ceea",
+          "status": "MONITORING",
+          "message": "Build times in US West are returning to normal. We are monitoring the situation and will mark this incident as resolved once we have confirmed sustained recovery.\n\nUsers in other regions are not affected. We will provide a further update shortly.",
+          "createdAt": "2026-10-13T16:45:45.381686+00:00"
+        },
+        {
+          "id": "2933f2c8-7e62-421d-80d3-356c2c54c3d5",
+          "status": "IDENTIFIED",
+          "message": "We have identified the root cause of the build slowness in US West and are rolling out a fix. Build times are beginning to improve as the fix is deployed.\n\nUsers in US West may still experience builds taking longer than usual while the fix propagates. Users in other regions are not affected. We will provide a further update once the fix is fully in place.",
+          "createdAt": "2026-10-13T16:39:21.306405+00:00"
+        },
+        {
+          "id": "ce2f9472-26e8-4cdc-98d6-d200c9814f99",
+          "status": "IDENTIFIED",
+          "message": "We have identified an issue affecting build infrastructure in US West and are investigating a potential cause. Our team is working on a fix and scaling capacity in the region.\n\nUsers in US West may experience builds taking significantly longer to complete. Users in other regions are not affected. We will provide updates as we learn more.",
+          "createdAt": "2026-10-13T16:35:49.851440+00:00"
+        },
+        {
+          "id": "1340e3f0-8f8b-4d11-980f-6a778c7097f3",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing builds to take longer than usual. Users may experience extended build times.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-10-13T16:12:34.344490+00:00"
+        }
+      ]
+    },
+    {
+      "id": "3c8efb98-d637-40e3-9e8e-e8941e5a57e7",
+      "slug": "31JU4V10",
+      "title": "Central Station not loading for some users",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-10T01:34:56.813655+00:00",
+      "resolvedAt": "2026-10-10T01:39:52.002872+00:00",
+      "components": [
+        {
+          "id": "d67c1212-cdeb-4476-81ef-34fa605d5e1f",
+          "name": "Support & Community — station.railway.com",
+          "groupName": "Railway",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "ebe6ad0c-1ddb-4f5f-8e0e-3125673cbe0c",
+          "status": "RESOLVED",
+          "message": "This incident has been resolved",
+          "createdAt": "2026-10-10T01:39:52.002872+00:00"
+        },
+        {
+          "id": "0fe3d446-9f21-4098-b573-a2012bbfc3e0",
+          "status": "INVESTIGATING",
+          "message": "We're investigating reports of station.railway.com being unavailable",
+          "createdAt": "2026-10-10T01:34:56.813655+00:00"
+        }
+      ]
+    },
+    {
+      "id": "1bae4415-6e04-41bc-812a-31d325f2e66c",
+      "slug": "O3D8H5MZ",
+      "title": "Builds and deploys failing to pull images from Docker Hub",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-09T21:29:46.442434+00:00",
+      "resolvedAt": "2026-10-09T22:07:19.844355+00:00",
+      "components": [
+        {
+          "id": "3488ede3-6856-471a-9e1b-cec742247c1e",
+          "name": "Image Registry — Dockerhub",
+          "groupName": "External & Third-Party Integrations",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "708120da-baee-4adf-93da-9f625cf5eab1",
+          "status": "RESOLVED",
+          "message": "The issue affecting image pulls from Docker Hub has been resolved: https://www.dockerstatus.com/incidents/01M4HA1E00AH6NXA276AW0CK2V. Builds and deployments that use Docker Hub images are completing normally.\n\nIf you had a deployment fail during this window, redeploying it should go through.",
+          "createdAt": "2026-10-09T22:07:19.844355+00:00"
+        },
+        {
+          "id": "4a80640e-43c8-4742-bff8-e1101736d6fc",
+          "status": "MONITORING",
+          "message": "Docker Hub has resolved the issue on their side and image pulls are succeeding again. Builds and deployments that use Docker Hub images should now complete normally. If a deployment failed during this incident, please redeploy it. We're monitoring to make sure everything stays stable.",
+          "createdAt": "2026-10-09T22:03:35.262119+00:00"
+        },
+        {
+          "id": "debfb717-5c54-4652-a535-3d160cd5a1ab",
+          "status": "IDENTIFIED",
+          "message": "We've identified that this is caused by an ongoing incident with Docker Hub, which is causing image pulls to fail. Builds and deployments that use Docker Hub images may fail until this is resolved.\n\nImages from other registries are not affected. You can follow Docker's updates here: https://www.dockerstatus.com/incidents/01M4HA1E00AH6NXA276AW0CK2V\n\nWe're monitoring closely and will share an update as pulls recover.",
+          "createdAt": "2026-10-09T21:49:31.687856+00:00"
+        },
+        {
+          "id": "f4656f5b-e60d-49d2-bf0b-eeb8f3e99b42",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting builds and deployments that use images from Docker Hub. Affected builds or deploys may fail with a \"429 Too Many Requests\" error when pulling images.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-10-09T21:29:46.442434+00:00"
+        }
+      ]
+    },
+    {
+      "id": "ab437bce-de82-4d89-ba2d-43edad41ad90",
+      "slug": "W5G4XFDQ",
+      "title": "Dashboard loading issues",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-05T15:37:51.287162+00:00",
+      "resolvedAt": "2026-10-05T16:12:55.528751+00:00",
+      "components": [
+        {
+          "id": "3986bf05-60cf-4555-bb3d-35edcd71b2c2",
+          "name": "Dashboard — railway.com",
+          "groupName": "Railway",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "6543e447-8f89-4102-8dc3-3ad73eae8201",
+          "status": "RESOLVED",
+          "message": "The dashboard loading issues have been resolved. The disruption was caused by API pods experiencing high event loop delays, leading to slow response times and liveness probe failures. We scaled up capacity to restore normal performance.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-10-05T16:12:55.528751+00:00"
+        },
+        {
+          "id": "195e555c-3b71-44e7-bef5-9fa5d9d8e76e",
+          "status": "MONITORING",
+          "message": "We are seeing recovery in dashboard response time and will continue to monitor this incident.\n\nWe will provide updates as recovery completes.",
+          "createdAt": "2026-10-05T15:57:50.851378+00:00"
+        },
+        {
+          "id": "bdb5ac05-094d-4e3e-ace8-69a5ab360d7e",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting the Railway dashboard. Users may experience slow load times or difficulty accessing the dashboard.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-10-05T15:37:51.287162+00:00"
+        }
+      ]
+    },
+    {
+      "id": "183cfeee-e840-444c-ae35-61a6f81cb4ca",
+      "slug": "8RELVRFI",
+      "title": "GitHub-triggered builds are delayed",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-05T14:55:10.694201+00:00",
+      "resolvedAt": "2026-10-05T16:13:29.541385+00:00",
+      "components": [
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "781f2691-180a-4ab6-a876-33244a259913",
+          "name": "GitHub — Auto-Deploys",
+          "groupName": "External & Third-Party Integrations",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "15400c4a-aa4c-4fd2-aa82-971339e29425",
+          "status": "RESOLVED",
+          "message": "The issue affecting GitHub-triggered builds has been resolved. The build queue has fully drained and builds are processing normally across all regions.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-10-05T16:13:29.541385+00:00"
+        },
+        {
+          "id": "342396d7-d274-4407-9374-b8b4f4d4c94c",
+          "status": "MONITORING",
+          "message": "We are seeing recovery and the build queue is continuing to drain. GitHub-triggered builds may still take longer than usual to start while we work through the remaining backlog.\n\nWe will provide another update as we make further progress.",
+          "createdAt": "2026-10-05T15:52:56.432162+00:00"
+        },
+        {
+          "id": "19400473-5ea8-4cba-863f-d2e55d7e0894",
+          "status": "IDENTIFIED",
+          "message": "We've identified the issue and are working on a fix.\n\nWe will continue to provide updates as we learn more.",
+          "createdAt": "2026-10-05T15:40:50.325468+00:00"
+        },
+        {
+          "id": "b9043367-dc0e-4b63-827e-2424828ba18d",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting builds triggered by GitHub. Users may experience builds queuing or taking longer than usual to start.\n\nWe are actively investigating the root cause and will provide updates as we learn more.",
+          "createdAt": "2026-10-05T14:55:10.694201+00:00"
+        }
+      ]
+    },
+    {
+      "id": "d1873242-0a30-4549-904b-5b70b3d9e222",
+      "slug": "A0O39CGE",
+      "title": "Slow attached storage for some users in US West",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-04T02:47:47.451481+00:00",
+      "resolvedAt": "2026-10-04T06:23:38.196605+00:00",
+      "components": [
+        {
+          "id": "9b63a7ce-3e44-412d-ace8-654a9dab6dc7",
+          "name": "Storage",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "9ea7ffe1-0dcc-4953-ad93-fa41b305775d",
+          "status": "RESOLVED",
+          "message": "The storage performance issue affecting some users in US West has been resolved. Latency has returned to baseline and storage operations are back to normal levels.\n\nWe apologize for any inconvenience this caused. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-10-04T06:23:38.196605+00:00"
+        },
+        {
+          "id": "1225bf51-f31d-4378-9a33-891932aabab2",
+          "status": "MONITORING",
+          "message": "Storage performance in US West has returned to normal. Latency is back to baseline and write operations have resumed at expected levels.\n\nWe are continuing to monitor to confirm stability. If you are still experiencing issues, please reach out to support at https://station.railway.com.",
+          "createdAt": "2026-10-04T06:14:12.455249+00:00"
+        },
+        {
+          "id": "ebd2434f-acf9-4819-97fa-f6165a41795a",
+          "status": "MONITORING",
+          "message": "Storage performance in US West continues to improve. Latency is gradually decreasing as we work through the remaining remediation steps.\n\nWe are actively monitoring and will provide another update once we have more to share.",
+          "createdAt": "2026-10-04T06:08:09.340084+00:00"
+        },
+        {
+          "id": "49e4b927-8566-44e7-a337-b6d9e7e10c5b",
+          "status": "IDENTIFIED",
+          "message": "We have identified the cause of the storage performance degradation affecting some users in US West and are actively working to resolve it.\n\nWe will continue to provide updates as we make progress.",
+          "createdAt": "2026-10-04T04:50:09.914788+00:00"
+        },
+        {
+          "id": "dd51154a-c45a-40ca-9134-6718a4dded61",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting attached storage performance for some users in US West. Users may experience slow services and databases, queries taking longer than expected, deploys that are slow to become healthy, or intermittent crash loops.\n\nWe have identified the cause and are actively working to restore normal performance. We will provide updates as we learn more.",
+          "createdAt": "2026-10-04T00:34:47.451+00:00"
+        }
+      ]
+    },
+    {
+      "id": "db0015bb-b09d-46d2-969b-28c27e3423bb",
+      "slug": "72DDHCC1",
+      "title": "Services and databases unavailable for some users in US West",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-03T16:55:13.647495+00:00",
+      "resolvedAt": "2026-10-03T19:33:30.056681+00:00",
+      "components": [
+        {
+          "id": "62e90e91-bad4-4caa-b948-7585c6a6c3f3",
+          "name": "Compute",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "488cd907-de51-48e2-8fe1-fc06b499fd29",
+          "status": "RESOLVED",
+          "message": "The issue affecting services and databases in US West has been resolved.\n\nWe apologize for any disruption. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-10-03T19:33:30.056681+00:00"
+        },
+        {
+          "id": "abece16f-d586-4a6b-9a7a-51834880f5e6",
+          "status": "MONITORING",
+          "message": "All affected hosts in US West have been restarted, and services running on them are recovering. Users with affected services have been notified by email and in-app.\n\nIf one of your services is still unavailable, redeploy it once from your dashboard. If that doesn't resolve it, please reach out at station.railway.com.",
+          "createdAt": "2026-10-03T17:21:43.391947+00:00"
+        },
+        {
+          "id": "a714a355-f1c5-4b23-8e0c-b99ebda72a9e",
+          "status": "IDENTIFIED",
+          "message": "We have identified an issue causing some hosts in US West to become unresponsive. Services and databases running on those hosts may be unreachable or fail to connect, and redeploys of affected services may stall.\n\nWe are restarting the affected hosts, and services will come back automatically as each host recovers. Users with affected services will receive an email and an in-app notification. We will provide updates as we learn more.",
+          "createdAt": "2026-10-03T11:43:13.647+00:00"
+        }
+      ]
+    },
+    {
+      "id": "40ff3b6a-0a65-47d3-8f2e-e706ce3b0bbc",
+      "slug": "APS57NR6",
+      "title": "Potential intermittent connectivity issues",
+      "status": "RESOLVED",
+      "createdAt": "2026-10-02T16:53:41.001730+00:00",
+      "resolvedAt": "2026-10-02T17:17:43.891015+00:00",
+      "components": [
+        {
+          "id": "5cdc7232-4592-4485-9e6c-1727853dbcd6",
+          "name": "Networking — Public",
+          "groupName": "US West (California, USA)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "7c64e6e4-5f08-4c90-b337-94f590ff55b5",
+          "name": "Networking — Public",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "90ea440b-950e-401f-a13d-00394cb44c66",
+          "name": "Networking — Public",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "OPERATIONAL"
+        },
+        {
+          "id": "3dab8031-9369-40bb-b5d5-c87b8bce91eb",
+          "name": "Networking — Public",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "OPERATIONAL"
+        }
+      ],
+      "updates": [
+        {
+          "id": "613d0db2-9c4b-4b37-a19b-aa4710bc20f6",
+          "status": "RESOLVED",
+          "message": "Dismissed as a notice. No impact.",
+          "createdAt": "2026-10-02T17:17:43.891015+00:00"
+        },
+        {
+          "id": "e153827a-4abc-4bd3-8d89-c954d12f14ac",
+          "status": "TRIAGE",
+          "message": "We are aware of intermittent connectivity issues affecting some services hosted. Users may have experienced slower response times or brief connectivity disruptions. We are actively applying network-level mitigations and are monitoring to confirm full recovery. We will provide updates as we learn more.",
+          "createdAt": "2026-10-02T16:53:41.001730+00:00"
+        }
+      ]
+    },
+    {
+      "id": "82b46e4b-d195-4a7e-b63e-086448a1db8b",
+      "slug": "P69V3NT0",
+      "title": "Slow dashboard and auth timeouts",
+      "status": "RESOLVED",
+      "createdAt": "2026-09-30T15:06:40.060610+00:00",
+      "resolvedAt": "2026-09-30T15:34:30.083792+00:00",
+      "components": [],
+      "updates": [
+        {
+          "id": "e86e2611-f1bf-4755-8143-7d35528b472a",
+          "status": "RESOLVED",
+          "message": "The issue causing dashboard slowness and auth timeouts has been resolved. Error rates have returned to normal levels.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-09-30T15:34:30.083792+00:00"
+        },
+        {
+          "id": "da7b113e-6003-4a98-8278-d2a0179578a0",
+          "status": "MONITORING",
+          "message": "We're seeing recovery and are continuing to monitor this incident.",
+          "createdAt": "2026-09-30T15:21:51.114689+00:00"
+        },
+        {
+          "id": "16689d9a-499b-495b-9b2a-b8edd5cf493e",
+          "status": "INVESTIGATING",
+          "message": "We're investigating an issue causing the dashboard to load slower than usual, along with some auth issues causing users to be disconnected.\n\nWe are investigating this incident and will post updates here as we know more.",
+          "createdAt": "2026-09-30T15:06:40.060610+00:00"
+        }
+      ]
+    },
+    {
+      "id": "f2daa9bd-6812-4fde-b8ad-5348a59824d4",
+      "slug": "IFBXJTGG",
+      "title": "Domain routing disruption",
+      "status": "RESOLVED",
+      "createdAt": "2026-09-30T07:34:39.721+00:00",
+      "resolvedAt": "2026-09-30T07:57:53.005+00:00",
+      "components": [
+        {
+          "id": "90ea440b-950e-401f-a13d-00394cb44c66",
+          "name": "Networking — Public",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "5cdc7232-4592-4485-9e6c-1727853dbcd6",
+          "name": "Networking — Public",
+          "groupName": "US West (California, USA)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "7c64e6e4-5f08-4c90-b337-94f590ff55b5",
+          "name": "Networking — Public",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "MAJOR_OUTAGE"
+        },
+        {
+          "id": "3dab8031-9369-40bb-b5d5-c87b8bce91eb",
+          "name": "Networking — Public",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "MAJOR_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "585ae823-bd35-47e8-ad28-fa77cae0b78a",
+          "status": "RESOLVED",
+          "message": "The global routing service provided a `not-found` response after a rollout of a network config change. The system self healed after the config change led to errors. Unfortunately, this led to observed impact to new connections to Railway hosted workloads for 5 minutes. There is no further and ongoing impact. The Networking team will be working on a full root cause and we will update this status report with a published cause.",
+          "createdAt": "2026-09-30T08:17:53.005116+00:00"
+        },
+        {
+          "id": "95ca2f69-ac13-4fbf-9d8e-a8c4eb53dc5a",
+          "status": "MONITORING",
+          "message": "We are aware of an issue that caused domains hosted on Railway to return 404 errors. The issue lasted approximately 5 minutes and has since been mitigated, this is a post facto report. \n\nWe are investigating the root cause and will provide updates as we learn more.",
+          "createdAt": "2026-09-30T07:48:39.721111+00:00"
+        }
+      ]
+    },
+    {
+      "id": "71199b93-2740-4d53-a8d4-e93fad9010c1",
+      "slug": "YYTG8I10",
+      "title": "API degradation causing slow or stuck deployments",
+      "status": "RESOLVED",
+      "createdAt": "2026-09-29T15:29:30.391697+00:00",
+      "resolvedAt": "2026-09-29T19:15:15.828708+00:00",
+      "components": [
+        {
+          "id": "2f6f64ef-7853-45d2-ad5d-ee553211249a",
+          "name": "API — backboard.railway.com",
+          "groupName": "Railway",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "d8e05971-a6a6-4399-a331-b106e2912468",
+          "status": "RESOLVED",
+          "message": "The issue affecting our API and causing slow or stuck deployments has been resolved. A period of elevated load on our API caused a backlog to build in our deployment queue faster than it could drain. We applied several fixes to improve how our deployment system handles backpressure and temporarily paused new deployments for Hobby-tier projects while the queue recovered. All deployments have since resumed and are processing normally.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-09-29T19:15:15.828708+00:00"
+        },
+        {
+          "id": "13c50e5e-d19d-43e0-ae56-bcc71d1c3618",
+          "status": "MONITORING",
+          "message": "We are seeing recovery and are monitoring this incident.\n\nHobby deployments have been re-enabled.",
+          "createdAt": "2026-09-29T18:37:57.901531+00:00"
+        },
+        {
+          "id": "87063e03-4af0-45d4-95bd-4759674cd988",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting our API that is causing slow or stuck deployments for some users.\n\nWe are actively investigating and working to restore normal operations. We will provide updates as we learn more.",
+          "createdAt": "2026-09-29T15:29:30.391697+00:00"
+        }
+      ]
+    },
+    {
+      "id": "152b3250-d741-4959-ae17-b088707c8fdd",
+      "slug": "K8KROKKW",
+      "title": "Builds are slow in EU West",
+      "status": "RESOLVED",
+      "createdAt": "2026-09-23T13:24:40.122496+00:00",
+      "resolvedAt": "2026-09-23T15:13:51.912006+00:00",
+      "components": [
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "02859caa-4a14-423f-9b7c-6c3ffc8dc3c4",
+          "status": "RESOLVED",
+          "message": "Build times in EU West (Amsterdam) have returned to normal and the issue has been resolved.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-09-23T15:13:51.912006+00:00"
+        },
+        {
+          "id": "81cdae4d-d352-44cf-9a2e-8aec06648a44",
+          "status": "MONITORING",
+          "message": "We are continuing to monitor the situation following our fix. Build times in EU West (Amsterdam) are returning to normal and the queue is clearing.\n\nWe will provide a further update shortly.",
+          "createdAt": "2026-09-23T14:52:09.239444+00:00"
+        },
+        {
+          "id": "02a41018-4c87-4ca7-bb01-15b4d121e1fe",
+          "status": "IDENTIFIED",
+          "message": "We have identified the root cause as an issue with our deployment system in EU West that was causing builds to queue and take longer than expected. We are working to resolve this and will provide another update as we make progress.",
+          "createdAt": "2026-09-23T14:13:03.023467+00:00"
+        },
+        {
+          "id": "6fad0501-66d2-434a-8100-f99321805dbe",
+          "status": "INVESTIGATING",
+          "message": "We have identified a possible issue with our deployment system in EU West that may be causing builds to queue and take longer than expected. We are continuing to investigate and working to resolve the issue.\n\nWe will provide another update as we learn more.",
+          "createdAt": "2026-09-23T13:53:09.689346+00:00"
+        },
+        {
+          "id": "6ebb46cc-2aa4-4397-9aa8-475eb316e49c",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing builds to take longer than expected in EU West (Amsterdam). Users in this region may experience builds progressing slowly or taking longer to start.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-09-23T13:24:40.122496+00:00"
+        }
+      ]
+    },
+    {
+      "id": "8f5ed951-5e00-465c-9554-14dd0ba94da0",
+      "slug": "OR0KYYZU",
+      "title": "Storage bucket creation is degraded",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-31T15:31:06.692894+00:00",
+      "resolvedAt": "2026-08-31T16:12:54.102767+00:00",
+      "components": [
+        {
+          "id": "846bac00-2f00-4fdd-b641-31b5eaf75ce8",
+          "name": "Storage Buckets",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "8ebd7238-ad06-411a-9a96-11c78d60ca6b",
+          "name": "Storage Buckets",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "07e9cf1b-3482-43ab-8e2b-7e5acc636da2",
+          "name": "Storage Buckets",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "b073ad1b-b196-4b29-93e7-1bc33b886784",
+          "name": "Storage Buckets",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "0168affd-c5fe-4449-b135-aa323f5f649a",
+          "status": "RESOLVED",
+          "message": "The issue affecting storage bucket creation has been resolved. Requests are processing normally again.\n\nWe apologize for any inconvenience this caused. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-08-31T16:12:54.102767+00:00"
+        },
+        {
+          "id": "b5444eba-af14-4d2d-a434-e1535ddde9b1",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting the creation of storage buckets and bucket access keys. Users attempting to create new buckets or access keys may experience failures.\n\nWe are actively investigating the root cause and will provide updates as we learn more.",
+          "createdAt": "2026-08-31T15:31:06.692894+00:00"
+        }
+      ]
+    },
+    {
+      "id": "607baf5f-0372-42c3-90a0-57fd533b0cdc",
+      "slug": "Z5Y3WO06",
+      "title": "Storage and networking issues affecting some services in US West",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-29T01:38:31.895892+00:00",
+      "resolvedAt": "2026-08-29T02:18:11.321260+00:00",
+      "components": [
+        {
+          "id": "62e90e91-bad4-4caa-b948-7585c6a6c3f3",
+          "name": "Compute",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "a22e5c86-a06f-40e4-ab5d-34cc60f9d739",
+          "name": "Networking — Private",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "8ebd7238-ad06-411a-9a96-11c78d60ca6b",
+          "name": "Storage Buckets",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "c69b4cc0-8baa-4c0f-91b8-f0a06eef2bc7",
+          "status": "RESOLVED",
+          "message": "The storage and networking issues affecting some services in US West have been resolved. The hardware fault in our physical infrastructure has been isolated and removed from rotation, and all services have recovered.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-08-29T02:18:11.321260+00:00"
+        },
+        {
+          "id": "8e15101b-035a-4dc2-95d0-b9685f77249b",
+          "status": "MONITORING",
+          "message": "We have identified the root cause of the storage and networking issues affecting some services in US West. A hardware fault in our physical infrastructure caused degraded connectivity to our storage cluster.\n\nWe have isolated the affected hardware, taken it out of rotation, and are seeing recovery. We will continue to monitor and provide updates as services stabilize.",
+          "createdAt": "2026-08-29T02:08:52.645691+00:00"
+        },
+        {
+          "id": "65765848-32e2-4e29-820d-e7a9070a0344",
+          "status": "INVESTIGATING",
+          "message": "We have isolated the issue to our storage infrastructure in US West. Affected services may experience problems starting up, slow or unavailable storage, and degraded private network connectivity.\n\nWe are actively working to resolve the storage issue. We will provide updates as we learn more.",
+          "createdAt": "2026-08-29T01:45:08.260630+00:00"
+        },
+        {
+          "id": "49a002a6-ae7d-4e1b-8b0d-cd30e897ad63",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting some services hosted in our US West region. Users may experience services that are unavailable, stuck restarting, or experiencing slow connectivity.\n\nWe are actively investigating this issue. We will provide updates as we learn more.",
+          "createdAt": "2026-08-29T01:38:31.895892+00:00"
+        }
+      ]
+    },
+    {
+      "id": "f8db13f5-2212-4646-8d9c-5a5ed533e1f8",
+      "slug": "8GL2R2U5",
+      "title": "Deployments slow to start",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-28T23:59:04.509777+00:00",
+      "resolvedAt": "2026-08-29T03:38:53.496101+00:00",
+      "components": [
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "5e782d9b-32eb-4972-8f86-35b7ebd3b59a",
+          "status": "RESOLVED",
+          "message": "Deployment delays have been resolved. Our deployment pipeline has stabilized. The backlog of queued deployments has been cleared, and throughput has fully returned to normal.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-08-29T03:38:53.496101+00:00"
+        },
+        {
+          "id": "0ea923ef-417e-4fc7-91d5-617f77e285d1",
+          "status": "MONITORING",
+          "message": "Deployments are continuing to recover. We have stabilized our deployment pipeline and cleared most of the backlog of queued deployments. Throughput has returned to nominal levels and new deployments are progressing through the queue.\n\nSome delays may still be experienced as the remaining backlog fully clears. We are actively monitoring and will provide a further update shortly.",
+          "createdAt": "2026-08-29T03:33:12.066011+00:00"
+        },
+        {
+          "id": "214b94c9-c310-4206-87a7-1e7cf86cc942",
+          "status": "INVESTIGATING",
+          "message": "We continue to work through a backlog of queued deployments. Our deployment workers have stabilized following configuration changes, and throughput is gradually returning to normal levels. Some deployments may still experience delays as the backlog clears.\n\nWe are actively working to reduce the remaining queue. We will provide further updates as we make progress.",
+          "createdAt": "2026-08-29T03:05:52.186856+00:00"
+        },
+        {
+          "id": "2ec39388-c2b4-4d0d-b548-f576f775803e",
+          "status": "INVESTIGATING",
+          "message": "We are continuing to investigate an issue with deployment initialization. While we identified and removed an affected host from rotation, some of our deployment workers are experiencing instability as they work through the backlog of queued deployments.\n\nWe are actively working to stabilize the deployment system and clear the backlog. We will provide further updates as we make progress.",
+          "createdAt": "2026-08-29T00:37:58.681822+00:00"
+        },
+        {
+          "id": "52c13798-66c1-4ce9-b0c5-723492d09d98",
+          "status": "MONITORING",
+          "message": "We have identified the cause of the delay: a networking issue on a single host in our infrastructure caused a backlog of deployments to queue up. We have removed the affected host from rotation and are scaling additional capacity to work through the backlog.\n\nDeployments are beginning to progress again. We will continue to monitor and provide an update once things have fully returned to normal.",
+          "createdAt": "2026-08-29T00:20:02.585411+00:00"
+        },
+        {
+          "id": "15bc93a5-2d08-4ed8-b56e-b6a415b8747a",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing deployments to take longer than normal to initialize. Users may experience delays when starting new deployments.\n\nWe have identified a potential cause and are actively working to restore normal behavior. We will provide updates as we learn more.",
+          "createdAt": "2026-08-28T23:59:04.509777+00:00"
+        }
+      ]
+    },
+    {
+      "id": "8a0d13e0-a47e-4725-9ec4-dd4f81522958",
+      "slug": "DU8F8R4G",
+      "title": "Delayed deploys in AMS",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-20T18:43:48.706422+00:00",
+      "resolvedAt": "2026-08-20T18:44:06.185003+00:00",
+      "components": [
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "6d8434b4-f7e0-4353-b230-f625e2d6666c",
+          "status": "RESOLVED",
+          "message": "We had an incident where deploys were delayed in AMS for a short period. We are now back to normal deploy times and are watching the situation closely.",
+          "createdAt": "2026-08-20T18:44:06.185003+00:00"
+        },
+        {
+          "id": "dcfe2da1-c264-4a9d-84ba-1ae8f04d94b6",
+          "status": "MONITORING",
+          "message": "We had an incident where deploys were delayed in AMS for a short period. We are now back to normal deploy times and are watching the situation closely.",
+          "createdAt": "2026-08-20T18:43:48.706422+00:00"
+        }
+      ]
+    },
+    {
+      "id": "d5ab1910-86e8-4602-8903-341a2ba8c6ce",
+      "slug": "VVL3A03V",
+      "title": "Deployments are slow",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-20T15:27:37.480299+00:00",
+      "resolvedAt": "2026-08-20T18:20:22.017891+00:00",
+      "components": [
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "e233d251-3ff8-4da5-80bc-c49455a0d691",
+          "status": "RESOLVED",
+          "message": "Deployments are operating normally. The backlog of queued deployments has cleared and deployment times have returned to expected levels.\n\nThe root cause was a Google Cloud infrastructure issue beginning around 14:53 UTC that caused elevated errors in our backend services, leading to congestion in our deployment processing pipeline. We temporarily paused new deployments to prevent further backlog buildup while we worked to restore normal operations. The Google Cloud issue has since resolved and our systems have recovered.\n\nWe apologize for the disruption. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-08-20T18:20:22.017891+00:00"
+        },
+        {
+          "id": "fa899d61-a19e-45a9-aab7-24ada13e44aa",
+          "status": "MONITORING",
+          "message": "The deployment pause has been lifted and the backlog of queued deployments is clearing. New deployments are being accepted and processing again, though some delays may persist as the queue continues to drain.\n\nWe are continuing to monitor the situation and will provide further updates.",
+          "createdAt": "2026-08-20T17:31:30.951652+00:00"
+        },
+        {
+          "id": "ddc5fce4-ab88-4555-b04b-82367e360100",
+          "status": "IDENTIFIED",
+          "message": "We have identified that a Google Cloud infrastructure issue is contributing to deployment delays. Our backend services experienced elevated internal errors from Google Cloud beginning around 14:53 UTC, which caused our deployment processing pipeline to become congested. We have made adjustments and it is starting to improve but still delayed. We will provide further updates as the situation develops.",
+          "createdAt": "2026-08-20T17:29:03.324498+00:00"
+        },
+        {
+          "id": "71095ddb-b0cf-4a3e-a2a2-3a278000f4e1",
+          "status": "IDENTIFIED",
+          "message": "We have identified that a Google Cloud infrastructure issue is contributing to deployment delays. Our backend services experienced elevated internal errors from Google Cloud beginning around 14:53 UTC, which caused our deployment processing pipeline to become congested.\n\nWe are actively working to mitigate the impact and restore normal deployment throughput. As we do this deployments will be temporarily paused at times and slower. We will provide further updates as the situation develops.",
+          "createdAt": "2026-08-20T16:15:08.137841+00:00"
+        },
+        {
+          "id": "6ab806e0-3763-43e9-aa6e-438952998682",
+          "status": "IDENTIFIED",
+          "message": "We have identified that a Google Cloud infrastructure issue is contributing to deployment delays. Our backend services experienced elevated internal errors from Google Cloud beginning around 14:53 UTC, which caused our deployment processing pipeline to become congested.\n\nWe are actively working to mitigate the impact and restore normal deployment throughput. We will provide further updates as the situation develops.",
+          "createdAt": "2026-08-20T15:56:36.111387+00:00"
+        },
+        {
+          "id": "801f3df5-c854-4574-91d3-fdcaed67fde7",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing deployments to queue and take longer than usual to progress. Users may experience delays in deployments starting or completing.\n\nWe are actively investigating the root cause and will provide updates as we learn more.",
+          "createdAt": "2026-08-20T15:27:37.480299+00:00"
+        }
+      ]
+    },
+    {
+      "id": "75e2821d-391a-457e-b309-c8c570e68a2e",
+      "slug": "YYU63JUO",
+      "title": "Deployments are slow to progress and are prone to timeout failure",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-18T23:19:52.454983+00:00",
+      "resolvedAt": "2026-08-19T02:17:35.783485+00:00",
+      "components": [
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "a96191dd-88ab-491e-a14c-db7f56a84eed",
+          "status": "RESOLVED",
+          "message": "We have observed recovery of builds and API back to nominal. Builds are progressing for everyone on the platform.",
+          "createdAt": "2026-08-19T02:17:35.783485+00:00"
+        },
+        {
+          "id": "ec1d09d9-4554-4c0f-9a38-867ae4b46827",
+          "status": "MONITORING",
+          "message": "Update: we are now seeing recovery of all build queues, however, a second order impact of the build queue is API response times increasing. API performance should restore once the queue is cleared.\n\nTrial/Hobby/Pro/Enterprise builds are all active and resumed.\n\nWe'll monitor the situation and will provide further updates as we learn more.",
+          "createdAt": "2026-08-19T01:47:02.931473+00:00"
+        },
+        {
+          "id": "082b2e6a-b9f7-416c-b50b-3ba290c60300",
+          "status": "IDENTIFIED",
+          "message": "We have identified a load issue within our infrastructure affecting the ability for deployments and builds to progress. \n\nWe have restored builds to Pro users, and are working to get to full capacity for all customers. We will continue to provide updates as the situation develops.",
+          "createdAt": "2026-08-19T01:16:52.612549+00:00"
+        },
+        {
+          "id": "813103d1-ac16-406a-942d-1601d05e1a3d",
+          "status": "INVESTIGATING",
+          "message": "We are continuing to investigate and are narrowing down the cause of delayed and failing builds. Thank you for your patience.",
+          "createdAt": "2026-08-19T01:01:17.656191+00:00"
+        },
+        {
+          "id": "2e0c89dd-9f80-429b-933a-2ac53e787bd8",
+          "status": "INVESTIGATING",
+          "message": "We are continuing to investigate and are narrowing down cause of delayed builds. Thanks for patience.",
+          "createdAt": "2026-08-19T01:01:17.314603+00:00"
+        },
+        {
+          "id": "8ce808da-7698-45f4-9904-9d87bd358e71",
+          "status": "INVESTIGATING",
+          "message": "We are continuing to investigate and are narrowing down cause of delayed builds. Thanks for patience.",
+          "createdAt": "2026-08-19T00:40:48.954859+00:00"
+        },
+        {
+          "id": "4dac3fd2-ab9e-4c86-91c3-8ff33702abe0",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing deployments to remain in an initializing state longer than expected. Users may experience delays in new deployments progressing.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-08-18T23:19:52.454983+00:00"
+        }
+      ]
+    },
+    {
+      "id": "3d369396-42cc-44c0-8d57-bcba4e42ebcf",
+      "slug": "7M7CBL9X",
+      "title": "Deployments are slow to progress",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-18T21:45:01.650906+00:00",
+      "resolvedAt": "2026-08-18T22:40:32.803856+00:00",
+      "components": [
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "d536b82a-ab22-4b9e-8918-44fd1186a1bb",
+          "status": "RESOLVED",
+          "message": "We have fixed the issue causing deployments to slow and they have returned to normal.",
+          "createdAt": "2026-08-18T22:40:32.803856+00:00"
+        },
+        {
+          "id": "6ccab297-9d88-43c1-bade-fdd49ef7bf72",
+          "status": "MONITORING",
+          "message": "We have identified the root cause as an issue with our task queue processing, which is causing builds and deployments to progress more slowly than usual. A revert is currently in progress.\n\nUsers may continue to experience delays in deployments progressing. We will provide another update once the fix is deployed.",
+          "createdAt": "2026-08-18T22:17:24.756179+00:00"
+        },
+        {
+          "id": "4f4bf355-634e-4717-946e-66458ff8fab9",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing deployments to remain in an initializing state longer than expected. Users may experience delays in new deployments progressing.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-08-18T21:45:01.650906+00:00"
+        }
+      ]
+    },
+    {
+      "id": "9ff97bd5-8299-4fc2-bc6f-e99f608f6ca8",
+      "slug": "M2WMOGK3",
+      "title": "Deployments queued longer than usual",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-17T19:50:23.447747+00:00",
+      "resolvedAt": "2026-08-17T21:52:34.782607+00:00",
+      "components": [
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "a3e679fc-1d23-4c2d-84df-63c11511ad4e",
+          "status": "RESOLVED",
+          "message": "The issue causing deployments to remain queued longer than usual has been resolved. Deployment times are returning to normal across all regions.\n\nWe apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-08-17T21:52:34.782607+00:00"
+        },
+        {
+          "id": "c574d1ad-eb30-43ab-9515-c1f149031542",
+          "status": "MONITORING",
+          "message": "We have deployed a fix for delayed deployments and they are improving. We are monitoring closely.",
+          "createdAt": "2026-08-17T21:25:08.672940+00:00"
+        },
+        {
+          "id": "87306b22-50f5-431f-91b6-86ec18b35080",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing deployments to remain in a queued state longer than usual. Users may experience delays before their deployments begin.\n\nWe are actively investigating the root cause and will provide updates as we learn more.",
+          "createdAt": "2026-08-17T19:50:23.447747+00:00"
+        }
+      ]
+    },
+    {
+      "id": "ae9fcc3d-8293-4539-a15b-dbf5ec8d0751",
+      "slug": "W4MIGEVT",
+      "title": "GitHub is experiencing elevated error rates",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-17T13:59:36.308022+00:00",
+      "resolvedAt": "2026-08-17T21:29:19.852591+00:00",
+      "components": [
+        {
+          "id": "781f2691-180a-4ab6-a876-33244a259913",
+          "name": "GitHub — Auto-Deploys",
+          "groupName": "External & Third-Party Integrations",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "e475159f-6fed-4a13-a980-240517fdb27d",
+          "status": "RESOLVED",
+          "message": "GitHub is reporting that they're fully operational again.",
+          "createdAt": "2026-08-17T21:29:19.852591+00:00"
+        },
+        {
+          "id": "c10529a4-4aa1-4ac6-b6c6-140c36128dc7",
+          "status": "MONITORING",
+          "message": "GitHub has seen slight recovery and is monitoring results before resolving.",
+          "createdAt": "2026-08-17T19:52:54.317391+00:00"
+        },
+        {
+          "id": "0db60a9a-c151-492f-8854-2eec1675a298",
+          "status": "IDENTIFIED",
+          "message": "GitHub has identified the issue and is working on a fix.",
+          "createdAt": "2026-08-17T16:46:57.547437+00:00"
+        },
+        {
+          "id": "67780314-bd55-453b-ab3c-5dd3f8d639cb",
+          "status": "INVESTIGATING",
+          "message": "Automatic deployments, pr environments, and anything relating to GitHub may be heavily delayed or fail. \n\nThey are currently investigating this issue. https://www.githubstatus.com/incidents/zkxwbgr0cnmx",
+          "createdAt": "2026-08-17T13:59:36.308022+00:00"
+        }
+      ]
+    },
+    {
+      "id": "13ffccc0-ff8a-4654-abcc-08555a2da21b",
+      "slug": "4R20FOKZ",
+      "title": "Logs and Metrics Delays",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-14T16:05:49.172989+00:00",
+      "resolvedAt": "2026-08-14T16:22:51.440428+00:00",
+      "components": [
+        {
+          "id": "75c763da-6e95-4025-a6de-00255bbe7028",
+          "name": "Logs",
+          "groupName": "Observability",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "3a438799-8199-47a4-920b-93ecbdf8af75",
+          "name": "Metrics",
+          "groupName": "Observability",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "036bb206-cfa2-47a1-a5fa-2804f3042de7",
+          "status": "RESOLVED",
+          "message": "We have seen consistent full recovery. \n\nThis incident is now resolved",
+          "createdAt": "2026-08-14T16:22:51.440428+00:00"
+        },
+        {
+          "id": "dacac996-991e-4894-af83-41aabe820872",
+          "status": "MONITORING",
+          "message": "We have implemented a fix and have seen full recovery.\n\nWe are monitoring the results",
+          "createdAt": "2026-08-14T16:16:54.478661+00:00"
+        },
+        {
+          "id": "1407236b-d780-41b8-a995-3b99640433c9",
+          "status": "IDENTIFIED",
+          "message": "We have identified the issue and are working on a fix.",
+          "createdAt": "2026-08-14T16:08:31.443527+00:00"
+        },
+        {
+          "id": "05431527-cefd-4b82-80e9-77b5043eb927",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue affecting logs and metrics. Users may experience delays or gaps in log and metric delivery.\n\nWe are actively investigating and will provide updates as we learn more.",
+          "createdAt": "2026-08-14T16:05:49.172989+00:00"
+        }
+      ]
+    },
+    {
+      "id": "8caad6d8-7ce3-460a-a31d-fee2d49dc805",
+      "slug": "RZNJOBXD",
+      "title": "Railpack builds may be delayed",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-11T18:52:17.819610+00:00",
+      "resolvedAt": "2026-08-11T20:14:51.010093+00:00",
+      "components": [
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "45ccd315-caa2-4f7f-9ddf-795d6ae021cf",
+          "status": "RESOLVED",
+          "message": "We have seen full recovery and have marked this incident as resolved. \n\nIf you encounter any issues, please open a thread at https://station.railway.com",
+          "createdAt": "2026-08-11T20:14:51.010093+00:00"
+        },
+        {
+          "id": "20ceed73-7bc9-4d15-ae43-186d8b6b4c00",
+          "status": "MONITORING",
+          "message": "We have rolled out a fix and are seeing recovery.",
+          "createdAt": "2026-08-11T19:47:57.170757+00:00"
+        },
+        {
+          "id": "1e3544ff-586f-4cea-b736-54c82020b8f2",
+          "status": "IDENTIFIED",
+          "message": "We are continuing to work on a fix for this incident.",
+          "createdAt": "2026-08-11T19:24:08.932782+00:00"
+        },
+        {
+          "id": "1d2153d8-2651-4c38-a8be-8d5f33a533af",
+          "status": "IDENTIFIED",
+          "message": "We have identified this issue as isolated to users deploying via railway up with railpack. We are working on a fix for this incident.",
+          "createdAt": "2026-08-11T18:55:10.876684+00:00"
+        },
+        {
+          "id": "6a7af912-1dd9-4dd9-b4d4-c6e7aa946901",
+          "status": "INVESTIGATING",
+          "message": "We are aware that some select services built using Railpack might have extended build times or fail. We are investigating this incident",
+          "createdAt": "2026-08-11T18:52:17.819610+00:00"
+        }
+      ]
+    },
+    {
+      "id": "c52cc5a4-3c9c-4be2-8712-4509afa92f6a",
+      "slug": "RL8FRJE6",
+      "title": "Connectivity issues in US West",
+      "status": "RESOLVED",
+      "createdAt": "2026-08-10T03:39:58.373641+00:00",
+      "resolvedAt": "2026-08-10T05:47:35.309247+00:00",
+      "components": [
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        },
+        {
+          "id": "5cdc7232-4592-4485-9e6c-1727853dbcd6",
+          "name": "Networking — Public",
+          "groupName": "US West (California, USA)",
+          "impact": "PARTIAL_OUTAGE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "59d04402-0050-42ec-bea5-2cef91cc398f",
+          "status": "RESOLVED",
+          "message": "This incident has been resolved. Services in US West (California) have returned to normal operation.\n\nA small number of services may need a redeploy to fully recover. If yours is still not behaving as expected, please reach out at https://station.railway.com and we will take a look.\n\nWe apologize for the disruption.",
+          "createdAt": "2026-08-10T05:47:35.309247+00:00"
+        },
+        {
+          "id": "8ca83550-4ed6-45d8-884e-11d1c967068a",
+          "status": "MONITORING",
+          "message": "Services in US West (California) are recovering\n\nWe are monitoring the region to confirm it remains stable. If you are still seeing issues with a service in this region, please reach out at https://station.railway.com.",
+          "createdAt": "2026-08-10T04:37:10.540958+00:00"
+        },
+        {
+          "id": "d69e2e73-02ec-425a-ba89-9e515d2f5e84",
+          "status": "IDENTIFIED",
+          "message": "We have identified the cause. Elevated traffic into our US West (California) region saturated network capacity, which caused services in the region to become slow or unreachable.\n\nNetwork capacity has recovered and we are seeing affected services return to normal. Some services in the region may still be recovering.\n\nWe will provide another update shortly.",
+          "createdAt": "2026-08-10T04:27:46.615275+00:00"
+        },
+        {
+          "id": "e11b6907-63a7-4747-b98c-4b17af6c33c6",
+          "status": "INVESTIGATING",
+          "message": "We are continuing to work on the issues affecting services in US West (California). Some services in the region remain affected: databases may be unreachable, and new deployments may fail or stall\n\nWe will provide another update as we have more.",
+          "createdAt": "2026-08-10T04:21:50.453466+00:00"
+        },
+        {
+          "id": "74965c81-0f7f-4889-bac2-7b2d2162784a",
+          "status": "INVESTIGATING",
+          "message": "We are aware of issues affecting services in our US West (California) region. Users may experience intermittent connectivity to deployed services and delays with new deployments in this region.\n\nWe are actively investigating and we will provide updates as we learn more.",
+          "createdAt": "2026-08-10T03:39:58.373641+00:00"
+        }
+      ]
+    },
+    {
+      "id": "6ceddfcb-4070-4d3f-b6c2-8bdad29206f7",
+      "slug": "LJT4X01X",
+      "title": "Dashboard slowness",
+      "status": "RESOLVED",
+      "createdAt": "2026-07-31T11:08:39.572908+00:00",
+      "resolvedAt": "2026-07-31T11:39:29.630188+00:00",
+      "components": [
+        {
+          "id": "3986bf05-60cf-4555-bb3d-35edcd71b2c2",
+          "name": "Dashboard — railway.com",
+          "groupName": "Railway",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2f6f64ef-7853-45d2-ad5d-ee553211249a",
+          "name": "API — backboard.railway.com",
+          "groupName": "Railway",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "68f1c354-49a5-4a16-a700-4fdd81b37f77",
+          "status": "RESOLVED",
+          "message": "This incident has been resolved.",
+          "createdAt": "2026-07-31T11:39:29.630188+00:00"
+        },
+        {
+          "id": "75d72415-a743-42e1-98c4-537298b05ffb",
+          "status": "MONITORING",
+          "message": "We have rolled out a fix and are seeing recovery. We are continuing to monitor this incident.",
+          "createdAt": "2026-07-31T11:34:41.142356+00:00"
+        },
+        {
+          "id": "398f09cb-8092-406d-a9b3-12b88c2e0c4c",
+          "status": "IDENTIFIED",
+          "message": "We have identified the issue and are rolling out a fix.",
+          "createdAt": "2026-07-31T11:26:17.082618+00:00"
+        },
+        {
+          "id": "cfce4060-6ca2-4c8c-a503-7eaa33d7ffbc",
+          "status": "INVESTIGATING",
+          "message": "Triage escalated to incident",
+          "createdAt": "2026-07-31T11:09:32.135636+00:00"
+        },
+        {
+          "id": "80ee3071-a416-4198-a809-8e118cfedc64",
+          "status": "TRIAGE",
+          "message": "We're investigating reports of slowness with the railway.com dashboard",
+          "createdAt": "2026-07-31T11:08:39.572908+00:00"
+        }
+      ]
+    },
+    {
+      "id": "c11563af-ca04-4d5c-ba51-79a146ada382",
+      "slug": "OA5Z6SQY",
+      "title": "Builds and deployments are delayed",
+      "status": "RESOLVED",
+      "createdAt": "2026-07-30T16:32:04.607759+00:00",
+      "resolvedAt": "2026-07-30T17:59:41.025753+00:00",
+      "components": [
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "855ae123-f205-4228-89b9-7f38d1912f4b",
+          "name": "Deployments",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "2d3d5456-51aa-4ab8-a83a-7e5273a58c2f",
+          "name": "Deployments",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "7fcef7e9-ca32-41c2-ba6e-181691976a2d",
+          "name": "Deployments",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "5aaa8735-8c33-4cc8-b517-abafb707c225",
+          "name": "Deployments",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "68c21c44-261b-4d37-b15e-4c2ed0b7fd53",
+          "status": "RESOLVED",
+          "message": "Build and deployment processing has been restored across all regions. All plan tiers are processing normally and the backlog has cleared.\n\nWe apologize for any inconvenience this caused. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-07-30T17:59:41.025753+00:00"
+        },
+        {
+          "id": "c79c40df-d2ad-4360-957c-f941c2d24ab5",
+          "status": "MONITORING",
+          "message": "Build and deployment processing has fully resumed. Non-Pro plan deployments have been re-enabled and the Pro plan backlog has cleared.\n\nWe are monitoring the situation to ensure processing remains stable and will provide another update shortly.",
+          "createdAt": "2026-07-30T17:47:48.860079+00:00"
+        },
+        {
+          "id": "89bc3fde-a364-4d61-a0b6-df44b3d3a04c",
+          "status": "IDENTIFIED",
+          "message": "We are seeing improvement in build and deployment processing. Hobby plan deployments are no longer queued; Pro plan deployments are still working through a backlog but are trending in the right direction.\n\nWe are continuing to monitor the situation and will provide another update shortly.",
+          "createdAt": "2026-07-30T17:43:45.289055+00:00"
+        },
+        {
+          "id": "dab35305-1c91-40ae-bebe-f79ca2979e79",
+          "status": "IDENTIFIED",
+          "message": "We have identified the root cause of the build and deployment delays. We are working to resolve this as soon as possible.\n\nIn the meantime, we have paused new deployments for Hobby and Trial plans to reduce load while we continue to investigate and implement a fix. Pro projects remain active but may continue to experience delays.\n\nWe will provide another update shortly.",
+          "createdAt": "2026-07-30T17:10:53.366147+00:00"
+        },
+        {
+          "id": "c971748a-1e61-4dfa-927b-11da85d6b4ed",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing builds and deployments to be delayed. Hobby and Pro projects are affected. Deployments may take longer to queue and start than usual.\n\nWe are actively investigating and working to restore normal processing times. We will provide updates as we learn more.",
+          "createdAt": "2026-07-30T16:32:04.607759+00:00"
+        }
+      ]
+    },
+    {
+      "id": "c91504aa-70f9-4508-bfbe-86247fffbfe1",
+      "slug": "IJ0R4Q80",
+      "title": "Builds are delayed",
+      "status": "RESOLVED",
+      "createdAt": "2026-07-28T16:19:44.643092+00:00",
+      "resolvedAt": "2026-07-28T17:04:50.119949+00:00",
+      "components": [
+        {
+          "id": "a83c1eb5-855a-46c3-af2c-da91887cffb9",
+          "name": "Builds",
+          "groupName": "US East (Virginia, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "69b44a29-f7ea-4f65-875e-87496c4de392",
+          "name": "Builds",
+          "groupName": "US West (California, USA)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "ccee9c8c-69ff-4dc2-8638-6a64bcffc7fc",
+          "name": "Builds",
+          "groupName": "EU West (Amsterdam, Netherlands)",
+          "impact": "DEGRADED_PERFORMANCE"
+        },
+        {
+          "id": "bd296c88-3ed3-4b2a-8889-7410aac865e1",
+          "name": "Builds",
+          "groupName": "Southeast Asia (Singapore)",
+          "impact": "DEGRADED_PERFORMANCE"
+        }
+      ],
+      "updates": [
+        {
+          "id": "86e08fef-e708-4e91-ac8b-b5193d7ba2bc",
+          "status": "RESOLVED",
+          "message": "All build plans have returned to normal operation. Trial plan builds have been re-enabled, and Pro and Hobby plan builds are operating normally.\n\nThis incident has been resolved. We apologize for any inconvenience. If you continue to experience issues, please contact support at https://station.railway.com.",
+          "createdAt": "2026-07-28T17:04:50.119949+00:00"
+        },
+        {
+          "id": "80821e65-c20f-42e2-a330-efa9a815b836",
+          "status": "MONITORING",
+          "message": "Trial plan builds have been re-enabled. Pro and Hobby plan builds are operating normally.\n\nWe are continuing to monitor the situation.",
+          "createdAt": "2026-07-28T16:50:01.164271+00:00"
+        },
+        {
+          "id": "45c1fa5c-cd32-460b-8043-76069836ff84",
+          "status": "IDENTIFIED",
+          "message": "Pro plan builds have recovered and the build queue has fully drained. Trial plan builds remain paused while we continue monitoring.\n\nWe will provide a further update shortly.",
+          "createdAt": "2026-07-28T16:38:02.638138+00:00"
+        },
+        {
+          "id": "57eed243-fc83-4727-8823-4821beb171cc",
+          "status": "IDENTIFIED",
+          "message": "We have identified the root cause of the build delays and are actively working to clear the build queue.\n\nHobby plan builds have recovered. Trial plan builds remain paused, and Pro plan builds are still slow to progress as the queue continues to drain. We will provide further updates as we learn more.",
+          "createdAt": "2026-07-28T16:32:20.150118+00:00"
+        },
+        {
+          "id": "11b6a17d-230c-4ed6-99eb-6861b68da7e0",
+          "status": "INVESTIGATING",
+          "message": "We are aware of an issue causing builds to be delayed. Users may experience builds taking longer than usual to start or progress. Builds on the trial plan have been disabled; hobby and pro plans builds will be slow to progress. \n\nWe are actively investigating and working to restore normal build times. We will provide updates as we learn more.",
+          "createdAt": "2026-07-28T16:19:44.643092+00:00"
+        }
+      ]
+    }
+  ],
+  "maintenances": []
+}
