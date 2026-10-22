@@ -180,3 +180,20 @@ check against this manifest, the MCP call, the refusal mapping, the confirm rule
 and the budgets, with tests (`app-server.test.ts`, a fake fetch, no network). It
 is not run on any box. It lives under `docs/` because `mini-apps/` is a closed
 tree of manifests and READMEs only.
+
+## V0 conformance evidence
+
+This PR already uses a v2 manifest and hash-pins the author skill. An actual
+unauthenticated read-only MCP probe from 22 October 2026 is preserved at
+`scripts/tests/fixtures/eci-volunteers/eci-volunteers.initialize/error-unauthenticated.json`.
+The live service answers HTTP 401 with `{error, error_description}`, not the
+documented `{code, detail}`. With #422's runner and that fixture directory,
+v0 therefore fails error-body hygiene. No authenticated success fixture is
+invented; the app token and a consented sandbox volunteer identity are required
+before those reads can be tested.
+
+The reference app-server file remains reference code, not an installed AV
+adapter. Staff must separately review and implement the real app/CP path,
+including trusted identity injection and the proposal/confirmation semantics.
+The manifest and author skill have not been relabelled to imply that generic
+app-token dispatch or an approval card exists today.
