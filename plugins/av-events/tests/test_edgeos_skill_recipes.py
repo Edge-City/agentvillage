@@ -1,8 +1,12 @@
-"""The `edgeos` skill's own curl recipes, verbatim, are recognised (DATA-28 recheck R1).
+"""The `edgeos` skill's own recipes, verbatim, are recognised (DATA-28 recheck R1).
 
-The skill writes its recipes as multi-line `curl` with `\\`-newline
-continuations; the agent copies them. If the parser does not read them, the
-whole action path is dead in production while every hand-written test passes.
+Since v2.1.10 (EDGEOS-BLOCK step B) every recipe is a run of the skill's own
+script, `bun skills/edgeos/scripts/edgeos.ts <verb> …`, not a curl: approval.md
+core 0.4.6 refuses a curl naming `$EDGEOS_API_KEY` from the Hermes folder. The
+agent copies the recipes; if the parser does not read them, the whole action
+path is dead in production while every hand-written test passes. The v2.1.9
+curl recipes are kept below (`LEGACY`) for sessions that still hold them, and
+each must read as the same operation as the verb that replaced it.
 """
 
 from __future__ import annotations
@@ -27,17 +31,22 @@ SUBSTITUTIONS = {
 }
 
 
+SCRIPT_RUN = "bun skills/edgeos/scripts/edgeos.ts "
+
+
+def fill(command: str) -> str:
+    for placeholder, value in SUBSTITUTIONS.items():
+        command = command.replace(placeholder, value)
+    return command
+
+
 def recipes(section: str) -> list[str]:
-    """Every ```bash block in `## <section>.` of the skill, verbatim."""
+    """Every fenced shell block in `## <section>.` of the skill that runs the
+    EdgeOS script, verbatim, placeholders filled."""
     text = SKILL.read_text(encoding="utf-8")
     body = re.search(rf"^## {section}\..*?(?=^## )", text, re.S | re.M).group(0)
-    blocks = re.findall(r"```bash\n(.*?)```", body, re.S)
-    out = []
-    for block in blocks:
-        for placeholder, value in SUBSTITUTIONS.items():
-            block = block.replace(placeholder, value)
-        out.append(block.rstrip("\n"))
-    return out
+    blocks = re.findall(r"```(?:sh|bash)\n(.*?)```", body, re.S)
+    return [fill(block).rstrip("\n") for block in blocks if SCRIPT_RUN in block]
 
 
 @pytest.fixture()
@@ -57,7 +66,7 @@ def recognise(edgeos, command):
 def test_section_6_has_the_four_recipes_this_test_expects():
     commands = recipes(6)
     assert len(commands) == 4
-    assert all("\\\n" in command for command in commands)  # multi-line, as the skill writes them
+    assert all(command.startswith(SCRIPT_RUN) and "\n" not in command for command in commands)
 
 
 def test_every_section_6_recipe_is_recognised(edgeos):
@@ -101,7 +110,7 @@ def test_a_verbatim_rsvp_recipe_waits_for_and_gets_its_receipt(plugin, ctx, monk
     participant = {"id": str(uuid.uuid4()), "event_id": EVENT, "status": "registered"}
     ctx.fire("post_tool_call", session_id="s", tool_name="terminal", args={"command": register},
              result=json.dumps({"output": json.dumps(participant), "exit_code": 0}), status="ok")
-    read = [c for c in recipes(3) if f"/events/portal/events/{EVENT}" in c][0]
+    read = recipe("Fetch a single event")
     ctx.fire("post_tool_call", session_id="s", tool_name="terminal", args={"command": read},
              result=json.dumps({"output": json.dumps({"id": EVENT, "my_rsvp_status": "registered"}),
                                 "exit_code": 0}), status="ok")
@@ -111,9 +120,51 @@ def test_a_verbatim_rsvp_recipe_waits_for_and_gets_its_receipt(plugin, ctx, monk
     assert events[1]["payload"]["receipt"]["id"] == plugin._COLLECTOR.keyed_hash(participant["id"])
 
 
+def test_a_verbatim_occurrence_rsvp_and_its_cancel_get_their_receipts(plugin, ctx, monkeypatch, av):
+    """A recurring event: the RSVP's record names the occurrence, the verb's
+    `--occurrence` read confirms it; the cancel reverses it and a read showing
+    `cancelled` confirms that too."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    plugin.register(ctx)
+    _, occurrence_rsvp, cancel, _ = recipes(6)
+    occurrence = SUBSTITUTIONS["{occurrence_iso}"]
+    cancel = f"{cancel} --occurrence {occurrence}"
+    read = f'{recipe("Fetch a single event")} --occurrence {occurrence}'
+    participant = {"id": str(uuid.uuid4()), "event_id": EVENT, "status": "registered", "occurrence_start": occurrence}
+
+    def fire(command, body):
+        ctx.fire("post_tool_call", session_id="s", tool_name="terminal", args={"command": command},
+                 result=json.dumps({"output": json.dumps(body), "exit_code": 0}), status="ok")
+
+    fire(occurrence_rsvp, participant)
+    fire(read, {"id": EVENT, "my_rsvp_status": "registered"})
+    fire(cancel, {**participant, "status": "cancelled"})
+    fire(read, {"id": EVENT, "my_rsvp_status": "cancelled"})
+    events = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("action.")]
+    assert [(e["event_type"], e["payload"]["action_class"]) for e in events] == [
+        ("action.attempted", "rsvp"), ("action.receipted", "rsvp"),
+        ("action.attempted", "cancel_rsvp"), ("action.receipted", "cancel_rsvp")]
+    assert all(e["payload"]["occurrence_start"] == "2026-10-20T10:00:00.000Z" for e in events)
+    assert events[2]["payload"]["reversal"] is True and events[2]["payload"]["reverses_action_id"] is not None
+
+
+def test_a_failed_script_rsvp_is_attempted_and_failed_and_waits_on_nothing(plugin, ctx, monkeypatch, av):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    plugin.register(ctx)
+    register = recipes(6)[0]
+    ctx.fire("post_tool_call", session_id="s", tool_name="terminal", args={"command": register},
+             result=json.dumps({"output": "edgeos: EdgeOS answered 404: Event not found\n", "exit_code": 1}), status="ok")
+    events = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("action.")]
+    assert [e["event_type"] for e in events] == ["action.attempted", "action.failed"]
+    assert events[1]["payload"]["error"] == "exit_nonzero"
+
+
 def test_a_continuation_does_not_hide_a_second_command(edgeos):
     command = recipes(6)[0] + " \\\n; curl -s https://api.edgeos.world/api/v1/humans/me"
     assert edgeos.http_call("terminal", {"command": command}) is None
+    for tail in (" ; curl -s https://api.edgeos.world/api/v1/humans/me", " && true", " | jq .", " > out.json",
+                 " 2>&1", "\nbun skills/edgeos/scripts/edgeos.ts rsvp " + EVENT):
+        assert edgeos.http_call("terminal", {"command": recipes(6)[0] + tail}) is None, tail
 
 
 def test_every_section_6_recipe_is_recognised_with_trailing_whitespace(edgeos):
@@ -123,12 +174,14 @@ def test_every_section_6_recipe_is_recognised_with_trailing_whitespace(edgeos):
             assert call is not None
 
 
-def test_recipes_are_read_only_on_an_edgeos_base(edgeos, monkeypatch):
+def test_the_legacy_curl_is_read_only_on_an_edgeos_base(edgeos, monkeypatch):
     """DATA-269: the base is the plugin's own `EDGEOS_API_BASE`, and only an
     allowlisted EdgeOS authority counts. Before, any value (a dev tunnel) was
     accepted, and with it the literal host it named — so whatever set that
-    variable could make another host's answers read as EdgeOS receipts."""
-    register = recipes(6)[0]
+    variable could make another host's answers read as EdgeOS receipts.
+    (The script verbs need no such rule: the script itself refuses any base
+    but https on an EdgeOS host under /api/v1 and sends nothing then.)"""
+    register = LEGACY["RSVP to a one-off event"]
     monkeypatch.setenv("EDGEOS_API_BASE", "https://api.edgeos.world/api/v1")
     call, op, _ = recognise(edgeos, register)
     assert (call.path, op.operation) == (f"/api/v1/event-participants/portal/register/{EVENT}", "edgeos.rsvp")
@@ -172,13 +225,13 @@ RECIPE_OPERATIONS = {
 
 
 def every_recipe() -> list[tuple[str, str]]:
-    """(heading, command) for every ```bash block in the skill that runs curl,
-    the heading being the last bold text before it."""
+    """(heading, command) for every fenced shell block in the skill that runs
+    the EdgeOS script, the heading being the last bold text before it."""
     text = SKILL.read_text(encoding="utf-8")
     out = []
-    for block in re.finditer(r"```bash\n(.*?)```", text, re.S):
+    for block in re.finditer(r"```(?:sh|bash)\n(.*?)```", text, re.S):
         command = block.group(1)
-        if "curl" not in command:
+        if SCRIPT_RUN not in command:
             continue
         headings = re.findall(r"\*\*(.+?)\*\*", text[:block.start()])
         heading = re.sub(r"\s*\(.*\)", "", headings[-1]).rstrip(":").strip()
@@ -209,46 +262,130 @@ def test_every_recipe_in_the_skill_is_classified(edgeos, monkeypatch, base, head
 
 
 # --------------------------------------------------------------------------
-# EDGEOS-BLOCK (20 Oct): the recipes pass their URL with `--url`, because
-# approval.md core 0.4.6 holds a curl whose URL word starts with `$` as
-# human-only (`fetch-output-unknown`). The observer must read the `--url`
-# form as the same operation the old positional form was.
+# EDGEOS-BLOCK step B (v2.1.10): the recipes are script verbs. approval.md core
+# 0.4.6 refuses a curl whose header word holds `$EDGEOS_API_KEY` from the
+# Hermes folder (the terminal's default directory) as `account.credential`.
+# No agent-facing command names the key; each verb reads as the operation the
+# v2.1.9 curl recipe it replaced was, with the same path parameters, so labels,
+# RSVP actions and their receipts carry on unchanged.
 # --------------------------------------------------------------------------
 
-URL_FLAG = '--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/'
-POSITIONAL = '"${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/'
+_AUTH = '-H "Authorization: Bearer $EDGEOS_API_KEY"'
+_BASE = "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}"
+#: The v2.1.9 curl recipes, verbatim (continuations joined), placeholders
+#: filled: sessions begun before v2.1.10 may still run them.
+LEGACY = {
+    "List upcoming events": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events?popup_id={POPUP}&event_status=published&start_after=2026-10-11T00:00:00Z&start_before=2026-10-12T00:00:00Z"',
+    "List events in a date range": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events?popup_id={POPUP}&event_status=published&start_after=2026-10-11T00:00:00Z&start_before=2026-10-12T00:00:00Z"',
+    "Search events by title": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events?popup_id={POPUP}&event_status=published&search=KEYWORD&start_after=2026-10-11T00:00:00Z"',
+    "Filter by tag, kind, venue, or track": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events?popup_id={POPUP}&event_status=published&tags=AI&tags=Privacy&start_after=2026-10-11T00:00:00Z&start_before=2026-10-12T00:00:00Z"',
+    "Only events you've RSVPed to": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events?popup_id={POPUP}&event_status=published&rsvped_only=true&start_after=2026-10-11T00:00:00Z"',
+    "Fetch a single event": f'curl -s {_AUTH} --url "{_BASE}/events/portal/events/{EVENT}"',
+    "RSVP to a one-off event": f'curl -s -X POST {_AUTH} -H "Content-Type: application/json" --url "{_BASE}/event-participants/portal/register/{EVENT}" -d \'{{}}\'',
+    "RSVP to one occurrence of a recurring event": f'curl -s -X POST {_AUTH} -H "Content-Type: application/json" --url "{_BASE}/event-participants/portal/register/{EVENT}" -d \'{{"occurrence_start":"2026-10-20T10:00:00Z"}}\'',
+    "Cancel a previous RSVP": f'curl -s -X POST {_AUTH} -H "Content-Type: application/json" --url "{_BASE}/event-participants/portal/cancel-registration/{EVENT}" -d \'{{}}\'',
+    "List who is going to one event": f'curl -s {_AUTH} --url "{_BASE}/event-participants/portal/participants?event_id={EVENT}&skip=0&limit=100"',
+    "List active venues for a popup": f'curl -s {_AUTH} --url "{_BASE}/event-venues/portal/venues?popup_id={POPUP}&limit=100"',
+}
 
 
-def test_every_recipe_passes_its_url_with_the_url_flag():
-    recipes = every_recipe()
-    assert len(recipes) == len(RECIPE_OPERATIONS) == 11
-    for heading, command in recipes:
-        assert command.count(URL_FLAG) == 1, heading
+def test_every_recipe_is_one_script_run_and_none_names_the_key():
+    found = every_recipe()
+    assert len(found) == len(RECIPE_OPERATIONS) == len(LEGACY) == 11
+    for heading, command in found:
+        assert command.startswith(SCRIPT_RUN) and command.count("bun ") == 1, heading
+        assert "$" not in command and "curl" not in command, heading
+    # No agent-facing command anywhere in the skill names the key or runs curl.
+    text = SKILL.read_text(encoding="utf-8")
+    for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.S):
+        assert "EDGEOS_API_KEY" not in block and "curl" not in block, block
+    for span in re.findall(r"`([^`\n]+)`", text):
+        assert not re.match(r"\s*(curl|wget)\s", span), span
+    assert "$EDGEOS_API_KEY" not in text
+
+
+def test_the_scripts_run_from_the_absolute_hermes_folder_and_no_curl_sentence_is_left():
+    """Replaces ov#436's pin (v2.1.9: curl from `~`, the bun scripts from the Hermes folder). With
+    no curl left, the curl-from-`~` sentence goes; every run names its absolute `HERMES_HOME`
+    workdir as AGENTS.md does (the approval gate refuses a `terminal` call without one), and a
+    script not found means the wrong folder, never "EdgeOS unreachable" (review-b N5)."""
+    text = SKILL.read_text(encoding="utf-8")
+    flat = re.sub(r"\s+", " ", text)
+    assert "workdir` set to your home directory (`~`)" not in text
+    assert "Run every `curl` command" not in text
+    assert ("Run every `bun skills/edgeos/scripts/…` command from your Hermes folder (the paths are relative to it): "
+            "call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) "
+            "and nothing else; the approval gate refuses a `terminal` call without that absolute `workdir`.") in flat
+    assert "(a `workdir` is fine)" not in text
+    assert ("If bun answers that the script or module was not found, the command ran from the wrong folder: run it "
+            "again with `workdir` set to your absolute `HERMES_HOME` directory; that is not EdgeOS being unreachable") in flat
 
 
 @pytest.mark.parametrize("base", [None, "https://api.edgeos.world/api/v1"])
 @pytest.mark.parametrize("heading,command", every_recipe())
-def test_the_url_flag_form_reads_as_the_positional_form(edgeos, monkeypatch, base, heading, command):
+def test_each_verb_reads_as_the_curl_recipe_it_replaced(edgeos, monkeypatch, base, heading, command):
     if base is None:
         monkeypatch.delenv("EDGEOS_API_BASE", raising=False)
     else:
         monkeypatch.setenv("EDGEOS_API_BASE", base)
-    positional = command.replace(URL_FLAG, POSITIONAL)
-    assert positional != command
-    flag_call, flag_op, flag_params = recognise(edgeos, command)
-    pos_call, pos_op, pos_params = recognise(edgeos, positional)
-    assert (flag_call.method, flag_call.path, flag_op.operation, flag_op.role, flag_op.action_class) == (
-        pos_call.method, pos_call.path, pos_op.operation, pos_op.role, pos_op.action_class), heading
-    assert flag_params == pos_params, heading
-    assert flag_op.operation == RECIPE_OPERATIONS[heading], heading
+    verb_call, verb_op, verb_params = recognise(edgeos, command)
+    old_call, old_op, old_params = recognise(edgeos, LEGACY[heading])
+    assert (verb_call.method, verb_call.path, verb_op.operation, verb_op.role, verb_op.action_class) == (
+        old_call.method, old_call.path, old_op.operation, old_op.role, old_op.action_class), heading
+    assert verb_params == old_params, heading
+    assert verb_op.operation == RECIPE_OPERATIONS[heading], heading
+    assert not verb_call.piped
 
 
 def test_a_second_url_flag_is_two_urls_and_not_a_request(edgeos):
     """curl fetches every `--url`; the observer reads one URL only, so a doubled
     `--url` stays unrecognised (README: "the same URL twice is two")."""
-    command = recipe("Fetch a single event")
-    url = command[command.index(URL_FLAG):].split()[1]
+    command = LEGACY["Fetch a single event"]
+    url = command[command.index("--url "):].split()[1]
     assert edgeos.http_call("terminal", {"command": f"{command} --url {url}"}) is None
+
+
+@pytest.mark.parametrize("command", [
+    # Not the script, or not only the script.
+    f"bun ./skills/edgeos/scripts/edgeos.ts event {EVENT}",
+    f"bun /root/.hermes/skills/edgeos/scripts/edgeos.ts event {EVENT}",
+    f"bun run skills/edgeos/scripts/edgeos.ts event {EVENT}",
+    f"cd /tmp && bun skills/edgeos/scripts/edgeos.ts event {EVENT}",
+    f"FOO=1 bun skills/edgeos/scripts/edgeos.ts event {EVENT}",
+    f"bun skills/edgeos/scripts/edgeos.ts event $EVENT",
+    f"bun skills/edgeos/scripts/edgeos.ts event {EVENT} > /tmp/out",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT}; bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT}",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT}\nbun skills/edgeos/scripts/edgeos.ts cancel {EVENT}",
+    f"bun skills/edgeos/scripts/events.ts --when today",
+    # Arguments the script refuses: it sends nothing, so nothing is labelled.
+    "bun skills/edgeos/scripts/edgeos.ts rsvp not-a-uuid",
+    "bun skills/edgeos/scripts/edgeos.ts rsvp",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --occurrence 2026-10-20T10:00:00",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --occurrence 2026-02-30T10:00:00Z",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --occurrence=2026-10-20T10:00:00Z",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --occurrence 2026-10-20T10:00:00Z --occurrence 2026-10-21T10:00:00Z",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --skip 0",
+    f"bun skills/edgeos/scripts/edgeos.ts event {EVENT} extra",
+    "bun skills/edgeos/scripts/edgeos.ts list --before 2026-10-12T00:00:00Z",
+    "bun skills/edgeos/scripts/edgeos.ts list --after 2026-10-12T00:00:00Z --before 2026-10-11T00:00:00Z",
+    "bun skills/edgeos/scripts/edgeos.ts venues --limit 1001",
+    "bun skills/edgeos/scripts/edgeos.ts venues --popup not-a-uuid",
+    "bun skills/edgeos/scripts/edgeos.ts delete " + EVENT,
+])
+def test_anything_but_one_clean_script_run_is_not_read(edgeos, command):
+    assert edgeos.http_call("terminal", {"command": command}) is None, command
+
+
+def test_the_verbs_name_the_occurrence_as_the_curl_did(edgeos):
+    """An occurrence read keys the confirming read; quoted values read as the
+    shell hands them over; repeated filters keep the first value, as
+    `parse_query` does for a curl's query."""
+    call = edgeos.http_call("terminal", {"command": f"bun skills/edgeos/scripts/edgeos.ts event {EVENT.upper()} --occurrence 2026-10-20T15:30:00+05:30"})
+    assert call.path == f"/api/v1/events/portal/events/{EVENT}"
+    assert call.query == {"occurrence_start": "2026-10-20T15:30:00+05:30"}
+    call = edgeos.http_call("terminal", {"command": "bun skills/edgeos/scripts/edgeos.ts list --after 2026-10-11T00:00:00Z --search 'yoga class' --tag AI --tag Privacy\n"})
+    assert call.query["search"] == "yoga class" and call.query["tags"] == "AI"
+    assert edgeos.http_call("carrier-not-on-the-list", {"command": recipe("Fetch a single event")}) is None
 
 
 # --------------------------------------------------------------------------
@@ -290,19 +427,19 @@ def test_the_participants_recipe_names_one_event():
     """`GET /event-participants/portal/participants` takes a required
     `event_id`: it lists one event's participants, not the caller's RSVPs."""
     command = recipe("List who is going to one event")
-    assert f"/event-participants/portal/participants?event_id={EVENT}" in command
+    assert command.startswith(f"{SCRIPT_RUN}participants {EVENT}")
     text = SKILL.read_text(encoding="utf-8")
     assert "own RSVPs across events" not in text
     assert "no route that lists one person's RSVPs across events" in text
-    assert "rsvped_only=true" in recipe("Only events you've RSVPed to")
+    assert recipe("Only events you've RSVPed to").endswith(" --rsvped")
 
 
 def test_the_events_list_is_not_paged():
     """`GET /events/portal/events` has no `skip` or `limit`: it returns every
     match, and its `paging` is informational."""
     for heading, command in every_recipe():
-        if "/events/portal/events?" in command:
-            assert "limit=" not in command and "skip=" not in command, heading
+        if command.startswith(f"{SCRIPT_RUN}list "):
+            assert "--limit" not in command and "--skip" not in command, heading
     text = SKILL.read_text(encoding="utf-8")
     assert "**No pagination:** the events list returns every matching event in one response" in text
     assert "results.length < limit" not in text
@@ -328,14 +465,18 @@ def test_every_events_list_recipe_has_a_popup_status_and_window():
     (event/crud.py find_by_popup), so `rsvped_only` misses RSVPs to later
     instances; the 30-day recipe needs its end bound or it returns every
     future event."""
-    lists = [(h, c) for h, c in every_recipe() if "/events/portal/events?" in c]
+    lists = [(h, c) for h, c in every_recipe() if c.startswith(f"{SCRIPT_RUN}list ")]
     assert len(lists) == 5
+    script = (SKILL.parent / "scripts" / "edgeos.ts").read_text(encoding="utf-8")
+    # The script, not the recipe, sends the popup and the status, on every list.
+    assert 'q.set("popup_id", args.popup || popup);' in script
+    assert 'q.set("event_status", "published");' in script
     for heading, command in lists:
-        assert f"popup_id={POPUP}" in command and "event_status=published" in command, heading
-        assert "start_after=" in command or "start_before=" in command, heading
+        assert " --after " in command, heading
+        assert "--popup" not in command, heading
     upcoming = recipe("List upcoming events")
-    assert "start_after=2026-10-11T00:00:00Z" in upcoming
-    assert "start_before=2026-10-12T00:00:00Z" in upcoming
+    assert "--after 2026-10-11T00:00:00Z" in upcoming
+    assert "--before 2026-10-12T00:00:00Z" in upcoming
 
 
 def test_the_no_popup_id_path_is_described_as_the_source_has_it():
@@ -467,7 +608,8 @@ def test_section_9_runs_the_directory_script_and_no_curl():
     assert "EDGEOS_BEARER_TOKEN" not in body
     assert "/applications/my/directory" not in body
     # The terminal rule reads as §2's and §3's do.
-    assert "Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else." in body
+    assert ("Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) "
+            "and nothing else.") in body
 
 
 def test_section_9_maps_the_script_exit_codes_to_the_fail_soft_answers():
@@ -514,7 +656,8 @@ def test_section_8_runs_the_profile_script_reads_only_and_sends_edits_to_the_app
     assert PROFILE_SCRIPT.is_file()
     assert "curl -" not in body and "```bash" not in body
     assert "PATCH" not in SKILL.read_text(encoding="utf-8")
-    assert "Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else." in body
+    assert ("Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) "
+            "and nothing else.") in body
     flat = re.sub(r"\s+", " ", body)
     assert "**Edits are made in the Edge City portal app, never by you.** There is no write call" in flat
     # Refute O-N3: the owner's profile is read and shared in their private chat only.
@@ -532,3 +675,77 @@ def test_section_8_runs_the_profile_script_reads_only_and_sends_edits_to_the_app
     # The directory script gives the same exit 4 for the same cause.
     assert "**Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0." in re.sub(r"\s+", " ", section(9))
     assert 'signinLapsed("directory"' in DIRECTORY_SCRIPT.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Security review of #437 (20 Oct): a script run is read only when the
+# relative path names the installed script, and only with ASCII digits.
+# --------------------------------------------------------------------------
+
+RSVP_RUN = f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT}"
+
+
+@pytest.fixture()
+def box(home, tmp_path_factory, monkeypatch):
+    """`home` is $HERMES_HOME; HOME is a separate clean directory (no global bunfig)."""
+    user = tmp_path_factory.mktemp("user-home")
+    monkeypatch.setenv("HOME", str(user))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    return home, user
+
+
+def read(edgeos, command, **extra):
+    return edgeos.http_call("terminal", {"command": command, **extra})
+
+
+def test_review1_a_script_run_is_read_from_the_hermes_folder_only(edgeos, box, tmp_path_factory):
+    hermes, user = box
+    alias = tmp_path_factory.mktemp("alias") / "hermes-link"
+    alias.symlink_to(hermes)
+    for workdir in (None, "", str(hermes), str(hermes) + "/", str(alias)):
+        extra = {} if workdir is None else {"workdir": workdir}
+        assert read(edgeos, RSVP_RUN, **extra) is not None, workdir
+    # Another directory could hold another file at the same relative path.
+    other = tmp_path_factory.mktemp("other")
+    (other / "skills" / "edgeos" / "scripts").mkdir(parents=True)
+    (other / "skills" / "edgeos" / "scripts" / "edgeos.ts").write_text("console.log('{}')\n")
+    for workdir in (str(user), "~", str(other), "skills", ".", str(hermes / "skills"), 7, ["/"]):
+        assert read(edgeos, RSVP_RUN, workdir=workdir) is None, workdir
+
+
+def test_review1_a_bunfig_that_could_preload_code_stops_the_read(edgeos, box):
+    hermes, user = box
+    assert read(edgeos, RSVP_RUN) is not None
+    (hermes / "bunfig.toml").write_text('preload = ["./x.ts"]\n')
+    assert read(edgeos, RSVP_RUN) is None
+    assert read(edgeos, RSVP_RUN, workdir=str(hermes)) is None
+    (hermes / "bunfig.toml").unlink()
+    (user / ".bunfig.toml").write_text('preload = ["./x.ts"]\n')
+    assert read(edgeos, RSVP_RUN) is None
+
+
+def test_review1_a_run_elsewhere_forges_no_receipt(plugin, ctx, monkeypatch, av, box, tmp_path_factory):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    plugin.register(ctx)
+    other = tmp_path_factory.mktemp("elsewhere")
+    participant = {"id": str(uuid.uuid4()), "event_id": EVENT, "status": "registered"}
+    for command, body in ((RSVP_RUN, participant),
+                          (f"bun skills/edgeos/scripts/edgeos.ts event {EVENT}", {"id": EVENT, "my_rsvp_status": "registered"})):
+        ctx.fire("post_tool_call", session_id="s", tool_name="terminal", args={"command": command, "workdir": str(other)},
+                 result=json.dumps({"output": json.dumps(body), "exit_code": 0}), status="ok")
+    assert [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("action.")] == []
+
+
+@pytest.mark.parametrize("command", [
+    f"bun skills/edgeos/scripts/edgeos.ts participants {EVENT} --skip ١٢",
+    f"bun skills/edgeos/scripts/edgeos.ts participants {EVENT} --limit １２",
+    "bun skills/edgeos/scripts/edgeos.ts venues --limit ١٢",
+    "bun skills/edgeos/scripts/edgeos.ts venues --skip １２",
+    f"bun skills/edgeos/scripts/edgeos.ts rsvp {EVENT} --occurrence 2026-10-2٠T10:00:00Z",
+    f"bun skills/edgeos/scripts/edgeos.ts event {EVENT} --occurrence ２026-10-20T10:00:00Z",
+    "bun skills/edgeos/scripts/edgeos.ts list --after 2026-10-11T00:00:00Z --before 2026-10-1٢T00:00:00Z",
+])
+def test_review2_non_ascii_digits_are_refused(edgeos, box, command):
+    assert read(edgeos, command) is None
+    ascii_form = command.translate(str.maketrans("٠١٢１２", "01212"))
+    assert read(edgeos, ascii_form) is not None, ascii_form

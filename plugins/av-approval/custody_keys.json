@@ -52,7 +52,7 @@
     },
     "EDGEOS_API_KEY": {
       "decision": "agent_readable",
-      "reason": "The edgeos skill's curl recipes name it as \"$EDGEOS_API_KEY\" and av-events reads RSVPs and their confirming reads from those curls (the 'Act on intentions' outcome). No approval class gates an EdgeOS call yet (edgeos.*.write is reserved). Moving it out needs a carrier script av-events can read; follow-up in APPROVAL-CUSTODY."
+      "reason": "Since v2.1.10 the edgeos skill's bun scripts (skills/edgeos/scripts/*.ts), run by the agent's terminal, read it from their environment or $HERMES_HOME/.env (no command names it), and av-events reads RSVPs and their confirming reads from those script runs (the 'Act on intentions' outcome). No approval class gates an EdgeOS call yet (edgeos.*.write is reserved). Moving it out of the agent's reach needs the scripts to run outside the agent's uid; follow-up in APPROVAL-CUSTODY."
     },
     "EDGEOS_BEARER_TOKEN": {
       "decision": "agent_readable",

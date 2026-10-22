@@ -1,16 +1,129 @@
 {
+  "manifest": 2,
   "id": "gold-stars",
   "name": "Gold Stars",
-  "description": "Send a thoughtful thank-you after you confirm the exact preview in chat.",
   "version": "1.1.0",
-  "homepage": "https://agents.edgecity.live/rolodex#gold-stars",
+  "description": "Recognize someone in your village with a Gold Star.",
+  "homepage": "https://agents.edgecity.live",
+  "visibility": "everyone",
+  "staff": true,
   "permissions": [
-    { "kind": "read", "label": "Find recipients and check allowance", "description": "Search shared Rolodex recipients and read your remaining Gold Stars and draft status." },
-    { "kind": "action", "label": "Send confirmed gratitude", "description": "Stage an exact recipient, note and visibility preview; send only after you confirm the exact preview in chat. Cancel unsent drafts." },
-    { "kind": "action", "label": "Mark or undo your meetings", "description": "Mark a Rolodex meeting as met, or undo it, only when you ask. Your own marks only." },
-    { "kind": "read", "label": "Read your Skylight status", "description": "Read your own Skylight agent's current status and recent places. No Skylight changes." },
-    { "kind": "read", "label": "Look up a resident's public profile", "description": "Read what another resident does, their public and village context and their social profile links. Never their email, phone, Telegram handle or private notes." }
+    {
+      "kind": "read",
+      "label": "Find recipients and check stars",
+      "description": "Search the village directory, read your quota and draft status, read your own Skylight status, and send your own Skylight picture to your own chat when you ask."
+    },
+    {
+      "kind": "action",
+      "label": "Prepare and send Gold Stars",
+      "description": "Prepare, send or cancel your exact draft, and mark or undo a Rolodex meeting when you ask. Sending requires manual approval."
+    },
+    {
+      "kind": "read",
+      "label": "Look up a resident's public profile",
+      "description": "Read what another resident does, their public and village context and their social profile links. Never their email, phone, Telegram handle or private notes."
+    }
   ],
-  "skills": ["gold-stars"],
-  "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]
+  "service": {
+    "kind": "internal"
+  },
+  "operations": [
+    {
+      "name": "rolodex.search",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "gold-stars.quota",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "gold-stars.prepare",
+      "class": "prepare",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "gold-stars.send",
+      "class": "needs-card",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 60000,
+      "framing": "data",
+      "approval": {
+        "prepare": "gold-stars.prepare"
+      }
+    },
+    {
+      "name": "gold-stars.status",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "gold-stars.cancel",
+      "class": "write",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "rolodex.meeting",
+      "class": "write",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "skylight.status",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "rolodex.person",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 65536,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "gold-stars",
+      "version": "1.1.0",
+      "sha256": "83e1d576b4d506834cf3a80055fc06d9f6db913f7bc05e3f3acf9363c617ced1",
+      "path": "skills/gold-stars/SKILL.md"
+    }
+  ],
+  "legacy": {
+    "prefixes": [
+      "rolodex",
+      "skylight"
+    ],
+    "personOnly": {
+      "operations": [
+        "rolodex.person"
+      ],
+      "permissions": [
+        "Look up a resident's public profile"
+      ]
+    }
+  }
 }

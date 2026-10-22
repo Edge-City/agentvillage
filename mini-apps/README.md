@@ -6,6 +6,14 @@ endpoint, package installer, shell hook, custom runtime or automatic approval
 of user-supplied MCP URLs. Submit changes for review in this repository and the
 control-plane catalog; a manifest in a checkout alone does not publish an app.
 
+**New here?** Read the [developer guide](../docs/MINI-APPS-DEVELOPER.md). It
+covers how to get a sandbox, the v2 manifest field by field with one worked
+example that passes the validator, how to run the checks before you open a pull
+request, what still needs a human and a fleet roll, and what is not built yet.
+This file is the reference for the rules and the native contracts below.
+`MINI_APPS_MANIFESTS` is off in production: a manifest in this repo does not
+change what a resident sees.
+
 ## Start from a working app
 
 Two complete starters are maintained with their real native skills:
@@ -40,14 +48,48 @@ Use Dizko as the starting bundle for another **public read-only** service:
    description, exact native call examples, result attribution, error handling
    and explicit limitations. Do not embed credentials or ask an agent to fetch
    code, install packages, run shell helpers, create cron jobs or bypass refusal.
-2. Add `mini-apps/<app-id>/manifest.json` following the real Dizko manifest.
-   Set id, name, description, version, homepage, human-readable permissions,
-   `skills: ["<app-id>"]` and `operations: ["mini-app.read"]` (or the reviewed
-   context list below, only with a CP namespace review). Pin a reviewed
-   HTTPS MCP URL and explicit tools with their observed JSON input schemas.
+2. Add `mini-apps/<app-id>/manifest.json` following the real Dizko manifest,
+   and list the id in `mini-apps/catalog.json`. Manifests are **v2**
+   (`"manifest": 2`; the closed JSON Schema is
+   [manifest.v2.schema.json](manifest.v2.schema.json), validated by
+   `scripts/mini-apps-manifests.cjs`, the same module the control plane uses):
+   id, name, description, version, homepage, `visibility`, human-readable
+   permissions, `service` (`mcp` with `auth.mode: "none"` for a public read
+   app, and its reviewed HTTPS `baseUrl`), one op per reviewed tool
+   (`<app-id>.<tool>`, `class: "read"`, `target.tool`, and the tool's observed
+   JSON input schema as `input`), and `skills` (name, version and the sha256 of
+   `skills/<app-id>/SKILL.md`). The control plane serves such an app exactly as
+   today: `operations: ["mini-app.read"]` plus its tools (or the reviewed
+   context list below, only with a CP namespace review and a `data.context`
+   block). `bun test scripts/tests/mini-app-manifests.test.ts` checks it; a
+   skill edit changes its sha256, so it is also a manifest edit. Two optional
+   booleans mark the catalog entry: `"staff": true` (the app comes with every
+   agent and is never removable) and `"listed": false` (kept off every install
+   and discovery surface); absent means `false` and `true`, and any other type
+   is refused. A `baseUrl`, and an OAuth `resource` and `discovery` (every URL
+   the platform fetches), must be canonical (`new URL(s).href === s` exactly, so a bare origin is
+   written with its `/`) lower-case ASCII `https://` with no port, userinfo,
+   query, fragment, `%` in the host, `xn--` label, backslash or whitespace, and
+   name a public DNS host: any IP literal, a single-label name, `localhost` and
+   `*.localhost`, `*.internal`, `*.local`, `*.lan`, `*.home.arpa`, `*.intranet`
+   and `*.corp` are refused. This static check cannot stop DNS rebinding or a
+   public name that resolves to a private address: the fetcher must re-check
+   the resolved IP at connect time. A `target.path` has no empty (`//`) or
+   dot (`.`, `..`) segment. An `app-token` `secretRef` must be
+   `MINI_APP_<ID>_<NAME>` (`-` as `_`, no `_` in NAME); nesting deeper than 64
+   is refused; a relay app must have only `read` ops; `service.kind: "none"`
+   (no service: a context-only app whose page writes the resident's own
+   context namespace, served as `mini-app.read` plus its `data.context`) is a
+   first-party grant pinned in the validator, to Mosaic alone, with no
+   `baseUrl`, no `auth`, `operations: []` and a `data.context` block, while
+   every other kind has at least one op; and each file must be
+   canonical JSON (`JSON.stringify(value, null, 2)` plus a newline, so no
+   duplicate keys).
    Exclude profile/account/private-data/purchase/write tools. A service calling
    itself read-only is not sufficient: reviewers must inspect its semantics.
-3. Submit the same reviewed definition to the control-plane catalog. Update
+3. Submit the same reviewed definition to the control-plane catalog (Phase 0:
+   the cp vendors `mini-apps/` byte for byte and serves it only under
+   `MINI_APPS_MANIFESTS=1`; its five reviewed constants stay the default). Update
    `install/install_miniapps.ts`'s reviewed bundle table so only that exact id,
    version, skill and operations can be staged from the pinned overlay checkout.
    No native plugin change is needed for another reviewed public-read MCP app:
@@ -230,8 +272,9 @@ claim mock funds arrived. Later test-paid notifications use CP's distinct
 #### On-request menu board attachments
 
 The same installed **read** operation `forkicks.menu` accepts optional
-`format: "image"` and `theme: "chalk" | "paper"` (theme requires image format;
-default chalk, paper provisional). Omitting format leaves the text call unchanged.
+`format: "image"` and `theme: "forkicks" | "chalk" | "paper"` (theme requires image
+format; default forkicks, the café's own menu design; chalk and paper are earlier
+concepts, paper provisional). Omitting format leaves the text call unchanged.
 No operation, install projection, bundle version, CP sender or purchase gate changes.
 AV uses its existing merchant bearer for `GET /api/agent/menu-image`, forwarding
 date/location filters and theme. The exact response is
@@ -273,10 +316,10 @@ Opt-in isolated local fixture smoke, run only after preview integration:
 python3 scripts/forkicks-menu-media-smoke.py \
   --fixture-home "$HOME/.local/state/sdj/agentvillage-local/fake-agents/8b3aa9f5-79f4-4a1e-adcc-3ed800c1c105/.hermes" \
   --origin https://jmill-desktop.tail587341.ts.net:8472 \
-  --theme chalk --evidence-dir /absolute/private/evidence/chalk
+  --theme forkicks --evidence-dir /absolute/private/evidence/forkicks
 ```
 
-Repeat with paper and a distinct evidence directory. It copies only the fixture
+Repeat with chalk and paper, each with a distinct evidence directory. It copies only the fixture
 credential/install projection into a temporary `HERMES_HOME`, changes the origin
 only in that copy (native HTTP remains forbidden), binds an explicit simulated
 private-owner session, and calls the actual native handler/HTTPS transport to
@@ -464,8 +507,25 @@ interrupted change), reconciles only owned files, then atomically publishes the
 full installed projection. The receipt is:
 
 ```json
-{"version":1,"projectionSha256":"<sha256>","files":[{"path":"skills/gold-stars/SKILL.md","sha256":"<sha256>"}],"apps":[{"id":"gold-stars","version":"1.1.0"}],"staged":true}
+{"version":1,"projectionSha256":"<sha256>","files":[{"path":"skills/gold-stars/SKILL.md","sha256":"<sha256>"}],"apps":[{"id":"gold-stars","version":"1.1.0"}],"staged":true,"skills":{"offer":null,"served":[],"fallback":[]}}
 ```
+
+**Skill delivery (v2 Phase 2; the cp's `MINI_APPS_SKILL_DELIVERY`, default off).**
+The cp may hand the installer each app's reviewed `SKILL.md` beside the projection,
+in two environment variables on the installer process: `MINI_APPS_SKILLS_OFFER`
+(a 64-hex digest, echoed as `skills.offer`) and `MINI_APPS_SKILLS`
+(`{"version":1,"skills":[{"id","sha256","bytes":<base64>}]}`, at most 96 KiB).
+The projection on stdin, `mini-apps.json` and the plugin's `installed()` check are
+unchanged, and an older installer ignores both variables.
+- An app's served bytes are written only when they are strict base64, at most 32 KiB,
+  UTF-8, and hash to the entry's `sha256`. The cp offers only bytes whose hash equals
+  the validated manifest's `skills[0].sha256`.
+- Any failure falls back to this checkout's copy for that app alone, with a code in
+  `skills.fallback`: `mini_apps_skill_hash_mismatch`, `mini_apps_skill_oversize`,
+  `mini_apps_skill_not_utf8` or `mini_apps_skill_invalid_entry`. A bad bundle falls
+  back for every app (`mini_apps_skill_bundle_invalid`). A skill problem never fails
+  the stage, so Gold Stars and the other apps stay installed.
+- The installer fetches nothing and opens no path the cp names.
 
 The projection digest covers `JSON.stringify` of the validated projection with
 keys `version,apps` and entry keys `id,version,operations,skills`, without a
@@ -488,3 +548,27 @@ every box, so a chat's saved tools need no refresh either.
 For deterministic regressions, run the install mini-app tests and native
 `plugins/village-bridge/tests` with no real daemon or model. Full rollout
 verification remains the integration owner's responsibility.
+
+## Symbient Uncommons v2 packaging
+
+The community board (`symbient-uncommons`, overlay #392 and CP #305) is packaged
+as a sandbox v2 public-read MCP app. Its service URL, exact four input schemas
+and author skill bytes are unchanged; the manifest pins that skill's SHA-256.
+The named reads project to `mini-app.read`. Promotion requires Carter's review,
+the normal cohort and an explicit app-specific tenant allowlist.
+
+Read-only MCP captures from 22 October 2026 are checked in under
+`scripts/tests/fixtures/symbient-uncommons/<operation>/`. Run the #422 v0
+conformance runner with `mini-apps/symbient-uncommons/manifest.json`,
+`--fixtures scripts/tests/fixtures/symbient-uncommons` and an `--out` outside
+this repository. The service's actual MCP `isError` refusal is preserved as
+`tool-refusal.json`; it is not the closed `{code, detail}` error fixture v0
+requires, so overall conformance does not pass. Do not replace it with a
+fabricated service response to make that check green.
+
+This packaging does not resolve the already reviewed service hardening:
+32 KiB complete response bounds and honest thread paging/refusal, per-post
+lengths, bounded identifiers, canonical board links, moderation/takedown and
+retention evidence. Existing schemas and budgets are not silently tightened
+while the external service still implements the old contract. No posting or
+other board mutation is authorized.

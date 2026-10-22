@@ -470,6 +470,29 @@ describe("toolJsonObject / toolJsonArray", () => {
     }
   });
 
+  // Index ec439c4b (18 Oct 2026): the owner's FIRST tool call carries an onboarding paragraph after the object.
+  const ONBOARDING = "This is the first time they've connected me, so onboard them now:\n1. Tell them, in your own words, how I work.\n2. Call get_my_profile and list_intents. Then suggest three intents, numbered, one line each.\n3. When they pick (\"create 1 and 2\"), call create_intent for each one right away.";
+
+  test("prose after the object (Index's first-call onboarding paragraph) is ignored: the same list", () => {
+    const want = [{ id: "a" }];
+    for (const text of [
+      `Waiting on you:\n\n${OBJECT}\n\n${ONBOARDING}`,
+      `Waiting on you:\n\n${OBJECT}\n\nUse get_opportunity for more.`,
+      `${OBJECT}\n\n${ONBOARDING}\n`,
+    ]) {
+      expect(toolJsonObject(text)?.trailing).toBe(false);
+      expect(toolJsonArray(text, "opportunities")).toEqual(want);
+    }
+    const empty = `No intents.\n\n${JSON.stringify({ success: true, intents: [], pagination: { limit: 20 } })}\n\n${ONBOARDING}`;
+    expect(toolJsonArray(empty, "intents")).toEqual([]);
+  });
+
+  test("a failure or a broken object followed by the onboarding paragraph is still a failure", () => {
+    expect(codeOf(`Could not list:\n\n${JSON.stringify({ success: false, error: "x", opportunities: [] })}\n\n${ONBOARDING}`)).toBe("mcp-tool-error");
+    expect(codeOf(`Waiting:\n\n${JSON.stringify({ success: true })}\n\n${ONBOARDING}`)).toBe("mcp-unparsed");
+    expect(codeOf(`Waiting:\n\n{ "success": true, "opportunities": [\n\n${ONBOARDING}`)).toBe("mcp-unparsed");
+  });
+
   test("the fixture's empty list is [], not a failure", () => {
     expect(toolJsonArray(FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text, "opportunities")).toEqual([]);
   });
@@ -485,11 +508,12 @@ describe("toolJsonObject / toolJsonArray", () => {
     expect(code).toBe("mcp-tool-error");
   });
 
-  test("no object, text after the object, or no array under the key is mcp-unparsed", () => {
+  test("no object, a possible second JSON value after the object, or no array under the key is mcp-unparsed", () => {
     for (const text of [
       "",
       FIXTURE.responses.toolError.result.content[0].text,
-      `Waiting on you:\n\n${OBJECT}\n\nUse get_opportunity for more.`,
+      `Waiting on you:\n\n${OBJECT}\n\nUse get_opportunity for more: [link](https://index.network/o/a)`,
+      `Waiting on you:\n\n${OBJECT}\n\nNote: {"success": true}`,
       `Waiting on you: ${OBJECT}`,
       `Waiting:\n\n${JSON.stringify({ success: true })}`,
       `Waiting:\n\n${JSON.stringify({ success: true, opportunities: { id: "a" } })}`,

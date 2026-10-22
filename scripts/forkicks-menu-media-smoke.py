@@ -66,7 +66,7 @@ def main():
     parser.add_argument('--origin', required=True, help='Existing HTTPS tailnet-only AV preview, no production')
     parser.add_argument('--evidence-dir', type=Path, required=True)
     parser.add_argument('--hermes-source', type=Path, help='Optional actual installed Hermes source + dependencies')
-    parser.add_argument('--theme', choices=('chalk', 'paper'), default='chalk')
+    parser.add_argument('--theme', choices=('forkicks', 'chalk', 'paper'), default='forkicks')
     parser.add_argument('--date')
     parser.add_argument('--location-id')
     args = parser.parse_args()

@@ -1,13 +1,89 @@
 {
+  "manifest": 2,
   "id": "forkicks",
   "name": "For Kicks",
-  "description": "Read the café menu and schedule, and order with an exact approved preview.",
   "version": "1.0.0",
+  "description": "Read the café menu and schedule, and order with an exact approved preview.",
   "homepage": "https://agents.edgecity.live",
+  "visibility": "everyone",
   "permissions": [
-    { "kind": "read", "label": "Read menu, schedule and your orders", "description": "Read current café availability, stops and your own order status." },
-    { "kind": "action", "label": "Order coffee and receive updates", "description": "Place only an exact manually approved order, sharing your previewed display name with the café; cancel eligible orders and receive templated status updates through your own paired bot." }
+    {
+      "kind": "read",
+      "label": "Read menu, schedule and your orders",
+      "description": "Read current café availability, stops and your own order status."
+    },
+    {
+      "kind": "action",
+      "label": "Order coffee and receive updates",
+      "description": "Place only an exact manually approved order, sharing your previewed display name with the café; cancel eligible orders and receive templated status updates through your own paired bot."
+    }
   ],
-  "skills": ["forkicks"],
-  "operations": ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"]
+  "service": {
+    "kind": "https-json",
+    "auth": {
+      "mode": "app-token",
+      "secretRef": "FORKICKS_AV_TOKEN"
+    }
+  },
+  "operations": [
+    {
+      "name": "forkicks.menu",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "forkicks.schedule",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "forkicks.order.prepare",
+      "class": "prepare",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "forkicks.order.confirm",
+      "class": "needs-card",
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 60000,
+      "framing": "data",
+      "approval": {
+        "prepare": "forkicks.order.prepare"
+      }
+    },
+    {
+      "name": "forkicks.order.status",
+      "class": "read",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "forkicks.order.cancel",
+      "class": "write",
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "forkicks",
+      "version": "1.0.5",
+      "sha256": "911457ceddcf9c055b4c91d29a2538348000fa9e3c74c8fb764c57fa14644cba",
+      "path": "skills/forkicks/SKILL.md"
+    }
+  ]
 }

@@ -352,6 +352,31 @@ class ProjectionTest(unittest.TestCase):
                         self.assertFalse(mini.installed(home, "dizko", op))
                         self.assertFalse(mini.installed(home, "gold-stars", op))  # the whole projection is refused
 
+    def test_mosaic_entries_granted_like_dizko_and_skills_must_be_exactly_mosaic(self):
+        # MOSAIC (app#486, rides v2.1.9): no plugin change. The generic branch grants Mosaic's two reviewed
+        # lists (install/install_miniapps.ts) only with skills exactly ["mosaic"]; `[]`, a missing name or
+        # another skill refuses the whole projection, Gold Stars included.
+        read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
+        gold = {"id": "gold-stars", **mini.GOLD_STARS}
+        mosaic = {"id": "mosaic", "version": "1.0.0", "skills": ["mosaic"]}
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            path = home / "mini-apps.json"
+            for ops in ((read, ctx_read, ctx_write), (read,)):
+                path.write_text(json.dumps({"version": 1, "apps": [gold, {**mosaic, "operations": list(ops)}]}))
+                for op in (read, ctx_read, ctx_write, "gold-stars.send", "rolodex.person"):
+                    with self.subTest(ops=ops, op=op):
+                        self.assertEqual(mini.installed(home, "mosaic", op), op in ops)
+                self.assertTrue(mini.installed(home, "gold-stars", "rolodex.search"))
+            for skills in ([], ["mosaic-box"], ["dizko"], ["mosaic", "mosaic"], "mosaic", None):
+                path.write_text(json.dumps({"version": 1, "apps": [gold, {**mosaic, "skills": skills, "operations": [read, ctx_read, ctx_write]}]}))
+                with self.subTest(skills=skills):
+                    self.assertFalse(mini.installed(home, "mosaic", ctx_read))
+                    self.assertFalse(mini.installed(home, "gold-stars", "rolodex.search"))
+            # An install of another app never carries Mosaic's operations.
+            path.write_text(json.dumps({"version": 1, "apps": [gold, {"id": "dizko", "version": "1.0.0", "skills": ["dizko"], "operations": [read, ctx_read, ctx_write]}]}))
+            self.assertFalse(mini.installed(home, "mosaic", ctx_read))
+
     def test_new03_gold_stars_entries_unchanged_and_never_carry_context_ops(self):
         read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
         self.assertEqual(len(mini.GOLD_STARS_ACCEPTED), 3)

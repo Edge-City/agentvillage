@@ -76,6 +76,13 @@ APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in 
                   "cannot authorize sending.")
 ORDER_APPROVE_IN_BOT = ("Ask the owner to approve this exact For Kicks order on its card in the approvals bot, then retry "
                         "forkicks.order.confirm with this SAME draftId. Never prepare another order to retry an uncertain confirm.")
+# FK-ON-GRANT (CLAIMS L17710/L17711/L17726): the daemon's "not granted yet" when this box will place the order
+# itself on the resident's tap (_forkicks_grant.py) and tell them in this chat. Product owns the quoted words.
+ORDER_PLACED_ON_APPROVAL = ("The approval card for this exact For Kicks order is in the owner's approvals bot. Tell the owner: "
+                            "\"I'll place it as soon as you approve.\" When they approve, it is placed automatically and they "
+                            "get a message in this chat; never ask them to approve or confirm here, and never claim it was "
+                            "placed before a receipt. If they ask later, retry forkicks.order.confirm with this SAME draftId; "
+                            "never prepare another order.")
 
 
 def installed(home: Path, app_id: str, operation: str) -> bool:

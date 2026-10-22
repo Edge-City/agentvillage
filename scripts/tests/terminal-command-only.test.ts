@@ -257,7 +257,9 @@ describe("terminal: exactly the command (DATA-312)", () => {
 
   test("every file with a curl or npx recipe carries the rule", () => {
     const recipes = recipeDocs(docs);
-    expect(recipes.map((r) => r.doc)).toContain("skills/edgeos/SKILL.md");
+    // EDGEOS-BLOCK step B (v2.1.10): the edgeos skill has no curl any more; its script runs are held to the
+    // rule by the test above. A curl or npx recipe added anywhere is held to it here.
+    expect(recipes.map((r) => r.doc)).not.toContain("skills/edgeos/SKILL.md");
     expect(recipes.filter((r) => !r.ruled).map((r) => r.doc)).toEqual([]);
   });
 

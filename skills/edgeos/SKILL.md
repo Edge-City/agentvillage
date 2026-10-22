@@ -1,7 +1,7 @@
 ---
 name: edgeos
-description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, search the attendee directory and read the person's own Edge City profile through the Agent Village control plane (two scripts; the app reads EdgeOS with the person's own Edge City sign-in; the profile is read only). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.7.0
+description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event (all through the skill's own scripts, never a curl), search the attendee directory and read the person's own Edge City profile through the Agent Village control plane (the app reads EdgeOS with the person's own Edge City sign-in; the profile is read only). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
+version: 1.8.0
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
@@ -22,13 +22,13 @@ metadata:
 
 # EdgeOS — Agent Skill
 
-You have access to the **EdgeOS** popup-village platform. Its base URL is `$EDGEOS_API_BASE` (default `https://api.edgeos.world/api/v1`); every recipe below writes it as `--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/…"` so the shell picks the right one. Keep the `--url`: the approval gate holds a curl whose URL word starts with `$` (no `--url` in front) as human-only, and it never runs. Never hardcode another host. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
+You have access to the **EdgeOS** popup-village platform. You reach it **only through this skill's scripts** (`bun skills/edgeos/scripts/…`), never with `curl`, `wget` or code of your own: each script reads the key, the popup id and the EdgeOS address (`$EDGEOS_API_BASE`, default `https://api.edgeos.world/api/v1`) itself and refuses any other host. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
 
-**The current village's popup id is `$AV_POPUP_ID`.** The current event is **Edge City India** (Mandrem, Goa, October 11 to November 1, 2026). When `AV_POPUP_ID` is set, use its value as `{popup_id}` for every event list, venue and directory call (read it with `printenv AV_POPUP_ID` and paste the UUID in). Only when `AV_POPUP_ID` is unset or empty, tell the person the village schedule isn't connected to their agent yet and point them to the Edge City portal or the organisers. Never substitute the previous popup's id (the `edge-esmeralda` skill carries Edge Esmeralda 2026's constant) and present the results as India; use that id only when the person explicitly asks about that previous popup.
+**The current village's popup id is `$AV_POPUP_ID`.** The current event is **Edge City India** (Mandrem, Goa, October 11 to November 1, 2026). The scripts use it for every event list, venue and directory call themselves; you never type it in. When a script exits 2 saying `AV_POPUP_ID is not set`, tell the person the village schedule isn't connected to their agent yet and point them to the Edge City portal or the organisers. Never substitute the previous popup's id (the `edge-esmeralda` skill carries Edge Esmeralda 2026's constant) and present the results as India; use that id only when the person explicitly asks about that previous popup.
 
 ## 0. What you can and cannot do
 
-Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps to **`events:read`, `rsvp:write`, `venues:read`**. So:
+Your EdgeOS API key (`EDGEOS_API_KEY`, which the scripts read themselves) is a partner-app attendee key. EdgeOS limits partner apps to **`events:read`, `rsvp:write`, `venues:read`**. So:
 
 - You **can** read the schedule, read venues, see who is going to an event, RSVP the person to an event, and cancel their RSVP.
 - You **cannot** create, edit, cancel, or invite people to village events, and cannot create or change venues. Those calls fail with `403`. When the person wants to host or change an event, tell them plainly that agents can't create village events and send them to the Edge City portal (the events page, `$AV_PORTAL_URL` when set) to do it themselves. Don't attempt those calls.
@@ -38,28 +38,28 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 - You **cannot** change the person's profile: there is no write call. Edits are made by the person themselves, in the Edge City portal app (§8).
 - For any script answer, never show the error text, a status code or a key.
 
-**Ask before every RSVP or cancel.** Before each `POST` to `register` or `cancel-registration` (one call per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI").
+**Ask before every RSVP or cancel.** Before each `rsvp` or `cancel` run of the EdgeOS script (one run per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI").
 
 ## 1. Authentication
 
-You need one token, passed as `Authorization: Bearer <token>`:
+One token, which the scripts read themselves:
 
-- **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` on EdgeOS (§0); the profile script (§8) and the directory script (§9) send it to the Agent Village control plane, which reads EdgeOS with the person's own Edge City sign-in (`portal:profile:read`, `portal:directory:read`).
+- **`EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` on EdgeOS (§0); the profile script (§8) and the directory script (§9) send it to the Agent Village control plane, which reads EdgeOS with the person's own Edge City sign-in (`portal:profile:read`, `portal:directory:read`).
 
-Every curl recipe below names its token as `"$EDGEOS_API_KEY"` inside double quotes, and the shell fills it in. Run the recipe as written. Never print, echo or paste a token's value, never type one into a command, and never put one in a message: a pasted value ends up in the conversation log and the approval log.
+Every command below is a script that reads the key from its own environment: no command names the key, and none needs it. Never print, echo or paste a token's value, never type one or a variable holding one into a command, never write your own `curl` to EdgeOS, and never put a token in a message: a pasted value ends up in the conversation log and the approval log, and a hand-written EdgeOS curl is refused by the approval gate.
 
 ## 2. Conventions
 
-- Every list endpoint here returns `{ "results": T[], "paging": { "offset", "limit", "total" } }`; there is no `pagination` key. Single-resource endpoints return the resource directly. The events list is **not** paginated (§3). Event participants (§6), venues (§7) and the directory (§9) page with `skip` and `limit` query parameters (`limit` at most 1000); `paging.offset` echoes `skip`.
+- Every list endpoint here returns `{ "results": T[], "paging": { "offset", "limit", "total" } }`; there is no `pagination` key. Single-resource endpoints return the resource directly. The events list is **not** paginated (§3). Event participants (§6) and venues (§7) page with `--skip` and `--limit` (`--limit` at most 1000), the directory (§9) with its own `--skip` and `--limit`; `paging.offset` echoes the skip.
 - Times from the API are ISO-8601 in UTC (e.g. `2026-10-14T15:00:00Z`). **Before you show any event time, convert it to the village's local time and label it. Never read the UTC clock value out as the local time.** The village timezone is `$HERMES_TIMEZONE` (Edge City India: `Asia/Kolkata`, IST, UTC+5:30, no daylight saving): `15:00:00Z` is **8:30 PM IST**, not 3:00 PM. For "now" use the newest message stamp (`[Wed 2026-10-14 05:22:10 IST]`) or the schedule script's `Today is` line (§3), never the date in your system prompt: that is the day this chat began, which can be days ago. For the previous popup, Edge Esmeralda (Healdsburg), use `America/Los_Angeles`. Every time you display, every reminder you set, and every "is it soon?" judgment must be in local time. UUIDs are RFC-4122.
-- **"Today", "tomorrow", "this weekend" mean local dates.** Work out the local calendar day first, then convert its local midnight-to-midnight bounds to UTC for `start_after` / `start_before`. In IST, "today" on 2026-10-14 is `start_after=2026-10-13T18:30:00Z&start_before=2026-10-14T18:30:00Z`. Don't use the UTC date: between midnight and 5:30 AM IST it is still yesterday in UTC.
-- Recurring events expand into virtual occurrences when `start_after` or `start_before` is set. Without either, a series comes back once, as its first occurrence, so give every events list a date window (§3). When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
-- Error codes: `401` missing or invalid key · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
-- Run every recipe below through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: each call finishes in seconds and its output comes straight back. If the call returns an error about background commands, the request was not sent; make it once more without those arguments.
+- **"Today", "tomorrow", "this weekend" mean local dates.** For today, tomorrow and the weekend the schedule script does this for you (§3). Otherwise work out the local calendar day first, then convert its local midnight-to-midnight bounds to UTC for `--after` / `--before`. In IST, "today" on 2026-10-14 is `--after 2026-10-13T18:30:00Z --before 2026-10-14T18:30:00Z`. Don't use the UTC date: between midnight and 5:30 AM IST it is still yesterday in UTC.
+- Recurring events expand into virtual occurrences inside a date window, so every events list takes one (§3). When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `--occurrence`.
+- **The EdgeOS script** (`bun skills/edgeos/scripts/edgeos.ts <verb> …`, §3, §6, §7) prints EdgeOS's JSON answer. **Exit 0** is that answer. **Exit 2** with "not set" means EdgeOS isn't connected to this agent (§0). **Exit 1** with a line starting `edgeos: EdgeOS` means EdgeOS was unreachable or answered an error; that line names the status and, when EdgeOS gave one, its short reason (`401` key refused · `403` not allowed for this key or popup · `404` not found or not visible · `409` conflict, e.g. already checked in · `422` invalid · `429` rate limited, retry later): say what that means in plain words, never the raw line. **Exit 3** is a usage error: fix the arguments. If bun answers that the script or module was not found, the command ran from the wrong folder: run it again with `workdir` set to your absolute `HERMES_HOME` directory; that is not EdgeOS being unreachable, so never tell the person it is.
+- Run every `bun skills/edgeos/scripts/…` command from your Hermes folder (the paths are relative to it): call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else; the approval gate refuses a `terminal` call without that absolute `workdir`. Do not add `notify`, `heartbeat` or `background`: each call finishes in seconds and its output comes straight back. If the call returns an error about background commands, the request was not sent; make it once more without those arguments.
 
 ## 3. Reading events
 
-**For "what's on today / tomorrow / this weekend / on a date", use the schedule script** rather than a curl and your own date arithmetic. It works out the local day window, reads the key itself, and prints local times with the zone label, the venue, the person's RSVP status and each event's id:
+**For "what's on today / tomorrow / this weekend / on a date", use the schedule script** rather than the events list and your own date arithmetic. It works out the local day window, reads the key itself, and prints local times with the zone label, the venue, the person's RSVP status and each event's id:
 
 ```sh
 bun skills/edgeos/scripts/events.ts --when today
@@ -68,7 +68,7 @@ bun skills/edgeos/scripts/events.ts --when 2026-10-20 --days 3 --search yoga
 bun skills/edgeos/scripts/events.ts --when today --days 7 --rsvped
 ```
 
-`--when` is `today`, `tomorrow`, `weekend` or a local date `YYYY-MM-DD`; `--days N` (up to 14) extends it (for `weekend`, N-1 more days after Sunday); each line carries the event's id and `start <ISO>`, which is the `occurrence_start` to send when RSVPing to one occurrence of a recurring event (§6); `--search WORDS` and `--rsvped` narrow it; `--json` prints the raw events instead. Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments. Exit 2 with "not set" means the schedule isn't connected to this agent (§0 above); exit 1 means EdgeOS was unreachable or refused, so say you can't reach the schedule right now. For anything the script doesn't cover (a tag, venue or track filter, a single event), use the recipes below.
+`--when` is `today`, `tomorrow`, `weekend` or a local date `YYYY-MM-DD`; `--days N` (up to 14) extends it (for `weekend`, N-1 more days after Sunday); each line carries the event's id and `start <ISO>`, which is the `--occurrence` to pass when RSVPing to one occurrence of a recurring event (§6); `--search WORDS` and `--rsvped` narrow it; `--json` prints the raw events instead. Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments. Exit 2 with "not set" means the schedule isn't connected to this agent (§0 above); exit 1 means EdgeOS was unreachable or refused, so say you can't reach the schedule right now. For anything the schedule script doesn't cover (a tag, venue or track filter, a single event, a longer window), use the EdgeOS script below.
 
 Each event line ends with `link <url>`, its portal page: when asked for an event's link, give that one exactly as printed and never build one; if a line has no `link`, send them to the Edge City portal's events page (`$AV_PORTAL_URL` when set).
 
@@ -76,57 +76,55 @@ Each event line ends with `link <url>`, its portal page: when asked for an event
 
 **Check the Now line before offering a session; never offer one that has ended.** For today the script leaves out events that already ended and says how many; a cron run's prompt has no time of day, so take it from Now.
 
-All event-read recipes use `Authorization: Bearer $EDGEOS_API_KEY`.
+**The EdgeOS script** (`bun skills/edgeos/scripts/edgeos.ts <verb> …`) reads the key and the popup itself and makes one EdgeOS call per run, printing EdgeOS's JSON answer (exit codes in §2). Replace each `{…}` in the commands below with the literal value (an id from the schedule or a list, a time as an ISO-8601 UTC instant).
 
-**REQUIRED parameters for all event list queries:** `popup_id={popup_id}` and `event_status=published`. `{popup_id}` is the value of `$AV_POPUP_ID` (see the top of this skill). Your API key is bound to one popup: a `popup_id` naming any other popup answers `403` ("This API key does not have access to this popup"), and an omitted one falls back to the key's own popup. Any other token without `popup_id` takes a different path: it ignores every filter except `search` (no `event_status`, `start_after`, `start_before`, `tags`, `kind`, venue or track filter) and returns at most the 100 most recently created events across every popup it can see. So always pass both.
+**Every events list is the current village's published events.** The script always sends the popup id (`$AV_POPUP_ID`) and `event_status=published`; your API key is bound to that popup, and `--popup <id>` naming any other popup answers `403` ("This API key does not have access to this popup"), so pass `--popup` only when the person asks about the previous popup. (Without a popup id, any token that is not bound to a popup ignores every filter except `search` and gets at most the 100 most recently created events across every popup it can see, which is why the script never leaves it out.)
 
-**Give every list a date window.** `start_after` and `start_before` bound the event's start time. With either set, a recurring series comes back as one row per occurrence inside the window; with neither, it comes back once, as its first occurrence, and an RSVP to a later occurrence shows up neither in `rsvped_only=true` nor in `my_rsvp_status`.
+**Give every list a date window.** `--after` (required) and `--before` bound the event's start time, as literal ISO-8601 UTC instants (e.g. `2026-10-11T00:00:00Z`): compute them yourself, counting from the day in the newest message stamp, not via shell substitution. With a window, a recurring series comes back as one row per occurrence inside it; without `--before` the list runs to every future event, however far ahead. Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 **List upcoming events (next 30 days):**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}&start_before={end_iso}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts list --after {current_iso_timestamp} --before {end_iso}
 ```
-`{current_iso_timestamp}` is now and `{end_iso}` is 30 days later, both literal ISO-8601 UTC strings (e.g. `2026-10-11T00:00:00Z` and `2026-11-10T00:00:00Z`): compute them in code or via the agent's date tools, not via shell substitution. Without `start_before` the call returns every future event, however far ahead.
+`{current_iso_timestamp}` is now and `{end_iso}` is 30 days later.
 
 **List events in a date range:**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={start_iso}&start_before={end_iso}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts list --after {start_iso} --before {end_iso}
 ```
 
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+
 **Search events by title:**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&search=KEYWORD&start_after={start_iso}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts list --after {start_iso} --search "KEYWORD"
 ```
 
 **Filter by tag, kind, venue, or track:**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy&start_after={start_iso}&start_before={end_iso}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts list --after {start_iso} --before {end_iso} --tag AI --tag Privacy
 ```
-`tags` matches events carrying any of the given tags. The other filters are `kind`, `venue_id` (a venue's `id` from §7; repeat `venue_ids` for several) and repeated `track_ids` (an event's `track_id`).
+`--tag` (repeat it for several) matches events carrying any of the given tags. The other filters are `--kind KIND`, `--venue <venue id>` (a venue's `id` from §7; repeat it for several) and `--track <track id>` (an event's `track_id`; repeat it for several).
+
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 **Only events you've RSVPed to:**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&start_after={current_iso_timestamp}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts list --after {current_iso_timestamp} --rsvped
 ```
 
 **Fetch a single event (includes caller's RSVP status):**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events/{event_id}"
+```sh
+bun skills/edgeos/scripts/edgeos.ts event {event_id}
 ```
 
-For a recurring event, scope the RSVP lookup to one instance with `?occurrence_start={occurrence_iso}`.
+For a recurring event, scope the RSVP lookup to one instance with `--occurrence {occurrence_iso}`. Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
-**No pagination:** the events list returns every matching event in one response. It takes no `skip` or `limit` (a `limit` you add is ignored), so don't loop over pages; narrow the call with `start_after` / `start_before`, `search`, `tags` and the other filters instead. Its `paging` is informational only: `paging.limit` is the number of results returned, and `paging.total` counts occurrences before visibility filtering, so it can be larger than `results.length`. Never fetch again because `total` looks bigger.
+**No pagination:** the events list returns every matching event in one response. It takes no `skip` or `limit` (a `limit` you add is ignored), so don't loop over pages; narrow the call with `--after` / `--before`, `--search`, `--tag` and the other filters instead. Its `paging` is informational only: `paging.limit` is the number of results returned, and `paging.total` counts occurrences before visibility filtering, so it can be larger than `results.length`. Never fetch again because `total` looks bigger.
 
-**Your own RSVPs:** EdgeOS has no route that lists one person's RSVPs across events. Use the list with `rsvped_only=true` (above): it returns the events in the popup where the caller has an RSVP that isn't cancelled. Every event, in the list or a single read, also carries `my_rsvp_status`: null when the caller has no RSVP for it, otherwise `registered`, `checked_in` or `cancelled` (a cancelled RSVP keeps its row, so `cancelled` means they are not going). A single read also carries `attendee_count`, the number of RSVPs that aren't cancelled (for a recurring event, of the occurrence named by `occurrence_start`).
+**Your own RSVPs:** EdgeOS has no route that lists one person's RSVPs across events. Use the list with `--rsvped` (above; it sends `rsvped_only=true`): it returns the events in the popup where the caller has an RSVP that isn't cancelled. Every event, in the list or a single read, also carries `my_rsvp_status`: null when the caller has no RSVP for it, otherwise `registered`, `checked_in` or `cancelled` (a cancelled RSVP keeps its row, so `cancelled` means they are not going). A single read also carries `attendee_count`, the number of RSVPs that aren't cancelled (for a recurring event, of the occurrence named by `--occurrence`).
 
-**Highlighted events:** event records include a boolean `highlighted` field. The list endpoint does not provide a `highlighted` query parameter; fetch the relevant date range and filter client-side with `event.highlighted === true`.
+**Highlighted events:** event records include a boolean `highlighted` field. The list has no `highlighted` filter; list the relevant date range and pick the events whose `highlighted` is `true`.
 
 ## 4. Creating or changing events: not available
 
@@ -135,50 +133,48 @@ Agents cannot create, edit, cancel, or send invitations for village events, and 
 ## 5. Showing the schedule
 
 - Group events by local day and show local start and end times with the zone label (e.g. "Wed 14 Oct, 8:30–9:30 PM IST").
-- Mention the venue and whether the person has already RSVPed (`my_rsvp_status` on each event, in the list or a single read; `rsvped_only=true` narrows the list to their RSVPs).
+- Mention the venue and whether the person has already RSVPed (`my_rsvp_status` on each event, in the list or a single read; `--rsvped` narrows the list to their RSVPs).
 - When offering to RSVP, name the event and its local time and ask; act only on a yes (§0).
 
 ## 6. RSVP (`rsvp:write`; ask first, every time, see §0)
 
+Each RSVP or cancel is one run of the EdgeOS script, only after the person said yes to that event (§0). It prints EdgeOS's participant record (its `status` is `registered`, or `cancelled` after a cancel); exit 1 means it did not happen, so say so plainly. Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+
 **RSVP to a one-off event:**
-```bash
-curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  -H "Content-Type: application/json" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
-  -d '{}'
+```sh
+bun skills/edgeos/scripts/edgeos.ts rsvp {event_id}
 ```
 
 **RSVP to one occurrence of a recurring event:**
-```bash
-curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  -H "Content-Type: application/json" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
-  -d '{"occurrence_start":"{occurrence_iso}"}'
+```sh
+bun skills/edgeos/scripts/edgeos.ts rsvp {event_id} --occurrence {occurrence_iso}
 ```
+
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 **Cancel a previous RSVP:**
-```bash
-curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  -H "Content-Type: application/json" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/cancel-registration/{event_id}" \
-  -d '{}'
+```sh
+bun skills/edgeos/scripts/edgeos.ts cancel {event_id}
 ```
+For one occurrence of a recurring event, add `--occurrence {occurrence_iso}` (the occurrence you RSVPed to).
 
 **List who is going to one event (`event_id` is required):**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/participants?event_id={event_id}&skip=0&limit=100"
+```sh
+bun skills/edgeos/scripts/edgeos.ts participants {event_id} --skip 0 --limit 100
 ```
 
-This lists the participants of **one** event, the caller included if they RSVPed; it is not a list of the caller's own RSVPs, and without `event_id` it fails with `422`. Each row carries a participation `status` (a cancelled RSVP stays in the list with its status). For a recurring event, always add `&occurrence_start={occurrence_iso}` (that occurrence's `start_time`, exactly). If you leave it out, the list holds only the RSVPs not tied to any occurrence (for an event with no host, it mixes the RSVPs of every occurrence instead); RSVPs are made per occurrence, so for a recurring event that list is usually empty or short, and it does **not** mean nobody is going. For the count alone, the single-event read with `?occurrence_start=` returns `attendee_count` (§3). The event's host is not listed, and attendees who chose to hide their name on their application are left out entirely. It pages with `skip` and `limit` (default 100, at most 1000): fetch again with a larger `skip` only while `skip + results.length < paging.total`. To find the caller's own RSVPs, use the events list with `rsvped_only=true` (§3).
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`: each run finishes in seconds. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+
+This lists the participants of **one** event, the caller included if they RSVPed; it is not a list of the caller's own RSVPs. Each row carries a participation `status` (a cancelled RSVP stays in the list with its status). For a recurring event, always add `--occurrence {occurrence_iso}` (that occurrence's `start_time`, exactly). If you leave it out, the list holds only the RSVPs not tied to any occurrence (for an event with no host, it mixes the RSVPs of every occurrence instead); RSVPs are made per occurrence, so for a recurring event that list is usually empty or short, and it does **not** mean nobody is going. For the count alone, the single-event read with `--occurrence` returns `attendee_count` (§3). The event's host is not listed, and attendees who chose to hide their name on their application are left out entirely. It pages with `--skip` and `--limit` (default 100, at most 1000): run it again with a larger `--skip` only while `skip + results.length < paging.total`. To find the caller's own RSVPs, use the events list with `--rsvped` (§3).
 
 ## 7. Venues
 
-**List active venues for a popup (`popup_id` is required: the UUID in `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
-  --url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-venues/portal/venues?popup_id={popup_id}&limit=100"
+**List active venues for a popup (the script sends the current village's popup id, `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
+```sh
+bun skills/edgeos/scripts/edgeos.ts venues --limit 100
 ```
+
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments. It pages with `--skip` and `--limit` as §6's participants list does.
 
 Creating, editing, or deleting venues needs `venues:write`, which agents don't have (§4).
 
@@ -191,7 +187,7 @@ bun skills/edgeos/scripts/profile.ts
 bun skills/edgeos/scripts/profile.ts --json
 ```
 
-Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 **Private chat only.** Read and share the person's profile only in your private chat with them (or in your own scheduled job delivering to that private chat); never in a group or shared chat, and never for anyone but the person whose agent you are.
 
@@ -211,7 +207,7 @@ bun skills/edgeos/scripts/directory.ts --search "priya@example.com" --json
 bun skills/edgeos/scripts/directory.ts --limit 100 --skip 100
 ```
 
-Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 `--search` (1-120 characters) matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, list the directory and filter the rows yourself. Leave `--search` out to list everyone. `--hide-empty` sends `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. The script uses the current village (`$AV_POPUP_ID`); pass `--popup <id>` only when the person asks about the previous popup (the `edge-esmeralda` skill's id). Each line is one attendee, `hidden` where the attendee hid a field; `--json` prints the rows instead, as `{ results: Attendee[], paging: { offset, limit, total } }`.
 
@@ -228,9 +224,9 @@ Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. D
 ## 10. Tips for answering well
 
 - **Always use live API calls** for schedule and attendee queries — do not rely on cached or memorized data.
-- **Be specific with dates.** For today, tomorrow and this weekend use the schedule script (§3). For a curl recipe, convert "this Thursday" or "next week" to actual ISO-8601 timestamps with timezone before querying, counting from the day in the newest message stamp.
-- **Pagination:** the events list is not paginated; one call returns every match (§3). Event participants and venues take `skip` + `limit` (at most 1000), the directory script `--skip` + `--limit` (at most 100); all answer `{results, paging}`; page only while `skip + results.length < paging.total`.
-- **Recurring events:** when RSVPing to one instance, pass `occurrence_start` matching the virtual occurrence's `start_time`.
+- **Be specific with dates.** For today, tomorrow and this weekend use the schedule script (§3). For the EdgeOS script's `list`, convert "this Thursday" or "next week" to actual ISO-8601 timestamps with timezone before querying, counting from the day in the newest message stamp.
+- **Pagination:** the events list is not paginated; one call returns every match (§3). Event participants and venues take `--skip` + `--limit` (at most 1000), the directory script `--skip` + `--limit` (at most 100); all answer `{results, paging}`; page only while `skip + results.length < paging.total`.
+- **Recurring events:** when RSVPing to one instance, pass `--occurrence` with the virtual occurrence's `start_time`.
 
 ## 11. What's NOT available
 

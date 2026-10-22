@@ -99,6 +99,30 @@ class ForKicksTest(unittest.TestCase):
                 self.assertFalse(mini.installed(Path(self.tmp.name), 'forkicks', op))
         self.transport.assert_not_called()
 
+    def test_free_text_note_is_forwarded_verbatim_and_oversized_notes_are_refused(self):
+        self.enable()
+        result, order = self.preview()
+        note = ' less ice; decaf if possible '
+        order['note'] = note
+        result['approvalPayload']['preview']['note'] = note
+        result['payloadHash'] = hashlib.sha256(fk.canonical(result['approvalPayload']).encode()).hexdigest()
+        self.transport.return_value = result
+        self.assertEqual(self.call({'operation': 'forkicks.order.prepare', **order})['data'], result)
+        self.transport.assert_called_once_with(self.config, {'operation': 'forkicks.order.prepare', **order})
+        self.assertIn('Note: ' + json.dumps(note), fk.approval_summary(result['approvalPayload']))
+        self.transport.reset_mock()
+        for invalid in ('x' * 141, 17, {'text': 'less ice'}, 'less\nice', 'less ice\u202e', 'less ice\x1f', 'less\u2028ice'):
+            self.assertNotIn('data', self.call({'operation': 'forkicks.order.prepare', **{**order, 'note': invalid}}))
+        self.transport.assert_not_called()
+
+    def test_note_change_breaks_saved_approval_hash(self):
+        result, _ = self.preview()
+        original = result['payloadHash']
+        result['approvalPayload']['preview']['note'] = 'decaf if possible'
+        self.assertNotEqual(hashlib.sha256(fk.canonical(result['approvalPayload']).encode()).hexdigest(), original)
+        with self.assertRaisesRegex(ValueError, 'approval_preview_unavailable'):
+            fk.checked_payload(result['approvalPayload'], result['draftId'], original)
+
     def test_prepare_caches_exact_server_envelope_and_replay_keeps_original_turn(self):
         result = self.prepare()
         record = fk.load_preview(Path(self.tmp.name), result['draftId'], self.config)

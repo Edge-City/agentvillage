@@ -232,11 +232,15 @@ card cuts a claimed line at 280 characters. The payloads quoted: an intention
 `{text}` (av-events _intent_approval.py), a share `{digest_id, scope, text,
 expires_at}` and a vote `{question_id, answer}` (_share_vote.py), and a Hermes
 tool call the hook gates `{tool, input}` (core's hook, APRV-445/499). ids are
-`~`. The reserved classes no tool proposes yet (treasury.*, edgeos.*.write,
-marketplace.app.*, resource.allocate, review.delegate.model, moralmod.*,
-coordinator.contact) have no entry:
-their payload keys do not exist yet, so they stay technical (`undeclared`)
-until their tool writes one, and that tool's PR adds the entry.
+`~`. APPROVAL-UX (20 Oct, cp#336) gave every other class a resident can be
+asked about an entry: a mini-app action `{appId, operation, preview}` (the
+preview, a nested object with ids, is `~`; the order's own summary shows),
+treasury.propose and resource.allocate by the data contract's keys, and
+marketplace.app.install, treasury.withdraw, edgeos.*.write and moralmod.assess
+by product's keys, to confirm in each producer's PR (any other key draws the
+technical card, `unlisted-key`). moralmod.share_context (a consent choice),
+review.delegate.model (nothing can propose it) and coordinator.contact keep no
+entry.
 opportunity.accept has an entry: nothing proposes it, so its only payload is
 a Hermes tool call the hook routes to it (Index's accept_opportunity and
 reject_opportunity, the plugin's index_update_opportunity), quoted as `{tool,
@@ -313,6 +317,40 @@ channels:
           does: "accept or decline a connection or meeting on Index for you"
           quote: { tool: "Tool", input: "Details" }
           note: none
+        # APPROVAL-UX (P0, 20 Oct): every class a resident can be asked about has an entry, so no card
+        # falls back to technical for want of one (`undeclared`). does phrases and labels: product@2.
+        marketplace.app.action:       # a mini-app order or action, e.g. a For Kicks order (overlay _forkicks.py, _mini_apps.py)
+          does: "do something in one of your mini-apps, such as place an order"
+          quote: { appId: "App", operation: ~, preview: ~ }   # the preview is a nested object with ids: kept to Full details; the order's lines and prices show as the summary
+        marketplace.app.install:      # nothing proposes it yet: keys to confirm in its producer's PR
+          does: "add a mini-app to your agent"
+          quote: { appId: "App", version: "Version" }
+        treasury.propose:             # keys: the data contract's treasuryProposalHash (amount in US cents; a label is letters, digits and spaces only)
+          does: "propose spending from the village treasury for you"
+          quote: { text: "Proposal", amount_cents: "Amount in US cents", budget_day: "Budget date", proposal_id: ~ }
+        treasury.withdraw:            # nothing proposes it yet: keys to confirm in its producer's PR
+          does: "withdraw one of your treasury proposals"
+          quote: { text: "Proposal", proposal_id: ~ }
+          note: none
+        resource.allocate:            # keys: the data contract's allocationProposalHash; resource_id is an opaque uuid, so the summary names the resource
+          does: "ask for village resources for you"
+          quote: { amount: "How much", resource_id: ~, allocation_id: ~, proposal_id: ~ }
+        edgeos.event.write:           # nothing proposes it yet: keys to confirm in its producer's PR
+          does: "create or change an event on EdgeOS for you"
+          quote: { title: "Event", starts_at: "Starts", venue: "Where" }
+        edgeos.venue.write:           # nothing proposes it yet: keys to confirm in its producer's PR
+          does: "add or change a venue on EdgeOS for you"
+          quote: { name: "Venue", address: "Address" }
+        moralmod.assess:              # nothing proposes it yet: keys to confirm in its producer's PR
+          does: "get a second opinion from the research advisor on a decision"
+          quote: { question: "Decision" }
+        # marketplace.app.read: product@2's words (COPY READ, 20 Oct).
+        marketplace.app.read:         # asked only if the resident sets its row to ask; the village tool call the hook routes here
+          does: "look something up in one of your mini-apps"
+          quote: { tool: "Tool", input: ~ }   # the tool's arguments are JSON: kept to Full details
+          note: none
+        # moralmod.share_context has no entry on purpose: sharing the resident's context is a consent
+        # choice (off unless the resident chooses it), and it keeps the full technical card.
         message.send:   { quote: { tool: "Tool", input: "Details" }, note: none }   # these eight ask only if the resident sets their row to ask
         network.call:   { quote: { tool: "Tool", input: "Details" }, note: none }   # a terminal command is quoted by core itself, not by this map
         read.web:       { quote: { tool: "Tool", input: "Details" }, note: none }

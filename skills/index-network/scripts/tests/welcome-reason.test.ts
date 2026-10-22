@@ -141,6 +141,18 @@ describe("switch on (AV_WELCOME_REASON=1): the unreachable trailer ends with why
     });
   }
 
+  test("a new resident's FIRST read carries Index's onboarding paragraph after the object (Index ec439c4b): listed, never bad_answer", async () => {
+    process.env.AV_WELCOME_REASON = "1";
+    const onboarding = "This is the first time they've connected me, so onboard them now:\n1. Tell them how I work.\n2. Call get_my_profile and list_intents.";
+    const zero = await draft(() => `No intents.\n\n${JSON.stringify({ success: true, intents: [], pagination: { limit: 20, offset: 0, count: 0 } })}\n\n${onboarding}`);
+    expect(zero.stderr).toBe(`${today.zero}\n`);
+    expect(zero.stdout).not.toBe(`${golden.unreachable}\n`);
+    const two = await draft(() => `${intentsText(TWO)}\n\n${onboarding}`);
+    expect(two.stderr).toBe(`${today.two}\n`);
+    writeContext();
+    expect((await draft(() => `${intentsText([])}\n\n${onboarding}`)).stderr).toBe(`${today.context}\n`);
+  });
+
   test("no key gives no_key and nothing else (never list_failed or bad_answer)", async () => {
     process.env.AV_WELCOME_REASON = "1";
     const out = await draft(null);

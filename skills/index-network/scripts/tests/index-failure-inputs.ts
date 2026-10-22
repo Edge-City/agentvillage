@@ -23,7 +23,8 @@ export function failureInputs(key: "opportunities" | "intents"): FailureInput[] 
     { label: "an empty text", handler: () => "", code: "mcp-unparsed" },
     { label: `an object without ${key}`, handler: () => `${lead}${JSON.stringify({ success: true })}`, code: "mcp-unparsed" },
     { label: `${key} not an array`, handler: () => `${lead}${JSON.stringify({ success: true, [key]: row })}`, code: "mcp-unparsed" },
-    { label: "text after the JSON", handler: () => `${lead}${JSON.stringify({ success: true, [key]: [row] })}\n\nMore below.`, code: "mcp-unparsed" },
+    // Prose after the object is Index's first-call onboarding paragraph and is ignored; a possible second JSON value is not.
+    { label: "a second JSON value after the JSON", handler: () => `${lead}${JSON.stringify({ success: true, [key]: [row] })}\n\nMore below: ${JSON.stringify({ success: true, [key]: [] })}`, code: "mcp-unparsed" },
     { label: "result.content missing", handler: () => ({ result: { resultType: "complete" } }), code: "mcp-bad-response" },
     { label: "result.content not an array", handler: () => ({ result: { content: "text", resultType: "complete" } }), code: "mcp-bad-response" },
     {

@@ -6,8 +6,14 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PREVIOUS_REVIEWED_MINI_APPS, reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection } from "../install_miniapps";
 import { EDGE_SKILL_NAMES } from "../paths";
+import { createRequire } from "node:module";
 
 const REPO = join(import.meta.dir, "..", "..");
+// P0-1: mini-apps/<id>/manifest.json is a v2 manifest; what the cp serves from it (and what these tests
+// hold the installer's reviewed tables to) is its v1 entry (scripts/mini-apps-manifests.cjs).
+const manifests = createRequire(import.meta.url)("../../scripts/mini-apps-manifests.cjs");
+const reviewedManifest = (id: string, opts: { person?: boolean; context?: boolean } = {}) =>
+  manifests.v1Entry(JSON.parse(readFileSync(join(REPO, "mini-apps", id, "manifest.json"), "utf8")), opts);
 /** Every file under `root` with its bytes and mode, for "nothing changed" proofs. */
 function snapshot(root: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -52,7 +58,7 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(receipt).toEqual(reconcileMiniApps(all, root));
   expect(receipt).toEqual(reconcileMiniApps(all, root, undefined, true));
   expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(all)).digest("hex"));
-  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/symbient-uncommons/SKILL.md"]);
+  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/symbient-uncommons/SKILL.md", "skills/mosaic/SKILL.md"]);
   expect(receipt).not.toHaveProperty("active");
   writeFileSync(join(root, "skills", "gold-stars", "SKILL.md"), "tampered");
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
@@ -78,6 +84,7 @@ test("uninstall revokes the projection and removes only exact managed files, nev
   expect(existsSync(join(root, "skills", "forkicks", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "zzzbot", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "slopfolio", "SKILL.md"))).toBe(false);
+  expect(existsSync(join(root, "skills", "mosaic", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(true);
   expect(reconcileMiniApps({ version: 1, apps: [] }, root, undefined, true).apps).toEqual([]);
 });
@@ -86,7 +93,7 @@ test("the helper never removes an installer-shipped skill, for any desired set",
   // The reviewed ids the installer also ships (today: gold-stars) are exactly the protected ones.
   expect(REVIEWED_MINI_APPS.filter((a) => SHIPPED_SKILLS.has(a.id)).map((a) => a.id)).toEqual(["gold-stars"]);
   expect([...SHIPPED_SKILLS].sort()).toEqual([...EDGE_SKILL_NAMES].sort());
-  const sets = [[], [REVIEWED_MINI_APPS[0]], [REVIEWED_MINI_APPS[1]], [REVIEWED_MINI_APPS[2]], [REVIEWED_MINI_APPS[3]], [REVIEWED_MINI_APPS[4]], [...REVIEWED_MINI_APPS]];
+  const sets = [[], ...REVIEWED_MINI_APPS.map((app) => [app]), [...REVIEWED_MINI_APPS]];
   for (const first of sets) for (const second of sets) {
     const root = installedBox();
     const shipped = () => Object.fromEntries(EDGE_SKILL_NAMES.map((n) => [n, readFileSync(join(root, "skills", n, "SKILL.md"), "base64")]));
@@ -100,6 +107,7 @@ test("the helper never removes an installer-shipped skill, for any desired set",
     expect(existsSync(join(root, "skills", "forkicks", "SKILL.md"))).toBe(second.some((a) => a.id === "forkicks"));
     expect(existsSync(join(root, "skills", "zzzbot", "SKILL.md"))).toBe(second.some((a) => a.id === "zzzbot"));
     expect(existsSync(join(root, "skills", "slopfolio", "SKILL.md"))).toBe(second.some((a) => a.id === "slopfolio"));
+    expect(existsSync(join(root, "skills", "mosaic", "SKILL.md"))).toBe(second.some((a) => a.id === "mosaic"));
   }
 });
 
@@ -108,7 +116,7 @@ test("non-cohort box: an empty projection on a box with no mini-app state writes
   const root = installedBox();
   const before = snapshot(root);
   const receipt = reconcileMiniApps(empty, root);
-  expect(receipt).toEqual({ version: 1, projectionSha256: createHash("sha256").update(JSON.stringify(empty)).digest("hex"), files: [], apps: [], staged: true });
+  expect(receipt).toEqual({ version: 1, projectionSha256: createHash("sha256").update(JSON.stringify(empty)).digest("hex"), files: [], apps: [], staged: true, skills: { offer: null, served: [], fallback: [] } });
   expect(reconcileMiniApps(empty, root, undefined, true)).toEqual(receipt);
   expect(snapshot(root)).toEqual(before);
   // The exact command the control plane runs (stdin JSON, `bun install/install_miniapps.ts`), with and without --verify.
@@ -143,8 +151,8 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
   expect(gold.operations.slice(0, 8)).toEqual([...restored.operations]);
   expect(gold.operations.slice(0, 6)).toEqual([...previous.operations]);
-  // NEW-03: the third previous entry is dizko's public read alone (asserted in its own test below).
-  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(3);
+  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's (each asserted in its own test below).
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(4);
   expect(PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "gold-stars").length).toBe(2);
   for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
   // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
@@ -154,7 +162,8 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(list("GOLD_STARS_RESTORED")).toEqual([...restored.operations]);
   expect(list("GOLD_STARS_PREVIOUS")).toEqual([...previous.operations]);
   expect(/^GOLD_STARS_ACCEPTED = \(GOLD_STARS, GOLD_STARS_RESTORED, GOLD_STARS_PREVIOUS\)$/m.test(plugin)).toBe(true);
-  expect(JSON.parse(readFileSync(join(REPO, "mini-apps", "gold-stars", "manifest.json"), "utf8")).operations).toEqual([...gold.operations]);
+  expect(reviewedManifest("gold-stars", { person: true }).operations).toEqual([...gold.operations]);
+  expect(reviewedManifest("gold-stars").operations).toEqual([...restored.operations]);
   // The exact entry the CP projects for release ({id, version, operations, skills}, catalog.projection()).
   expect(JSON.stringify({ id: gold.id, version: gold.version, operations: gold.operations, skills: gold.skills })).toBe(
     '{"id":"gold-stars","version":"1.1.0","operations":["rolodex.search","gold-stars.quota","gold-stars.prepare","gold-stars.send","gold-stars.status","gold-stars.cancel","rolodex.meeting","skylight.status","rolodex.person"],"skills":["gold-stars"]}');
@@ -234,7 +243,7 @@ test("symbient-uncommons: a public read-only entry, staged and removed like dizk
   expect([board.id, board.version, [...board.skills], [...board.operations]]).toEqual(["symbient-uncommons", "1.0.0", ["symbient-uncommons"], ["mini-app.read"]]);
   expect(EDGE_SKILL_NAMES).not.toContain("symbient-uncommons");
   // the manifest and skill agree with the entry, and the manifest asks for nothing beyond the public read
-  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps", "symbient-uncommons", "manifest.json"), "utf8"));
+  const manifest = reviewedManifest("symbient-uncommons");
   expect([manifest.id, manifest.version, manifest.skills, manifest.operations]).toEqual([board.id, board.version, [...board.skills], [...board.operations]]);
   expect(manifest.mcp.url.startsWith("https://")).toBe(true);
   expect(manifest.mcp.tools.map((t: { name: string }) => t.name)).toEqual(["list_rooms", "list_posts", "get_thread", "search_posts"]);
@@ -258,10 +267,10 @@ test("symbient-uncommons: a public read-only entry, staged and removed like dizk
 test("zzz.bot manifest and native allowlist pin exactly its five named operations and stage the author skill", () => {
   const app = REVIEWED_MINI_APPS.find(app => app.id === "zzzbot")!;
   const ops = ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"];
-  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps", "zzzbot", "manifest.json"), "utf8"));
+  const manifest = reviewedManifest("zzzbot");
   expect(app).toEqual({ id: "zzzbot", version: "1.0.0", operations: ops, skills: ["zzzbot"] });
   expect(manifest).toMatchObject({ ...app, homepage: "https://zzz.bot" });
-  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "skills", "version"]);
+  expect(Object.keys(manifest).sort()).toEqual(["auth", "description", "homepage", "id", "name", "operations", "permissions", "provenance", "restricted", "skills", "version"]);
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
   expect(manifest).not.toHaveProperty("mcp");
   expect(EDGE_SKILL_NAMES).not.toContain("zzzbot");
@@ -293,7 +302,7 @@ test("zzz.bot manifest and native allowlist pin exactly its five named operation
 
 test("Slopfolio manifest and native allowlist pin only private draft operations and stage the author skill", () => {
   const app = REVIEWED_MINI_APPS.find(app => app.id === "slopfolio")!;
-  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps", "slopfolio", "manifest.json"), "utf8"));
+  const manifest = reviewedManifest("slopfolio");
   expect(app).toEqual({ id: "slopfolio", version: "1.0.0", operations: ["slopfolio.prepare", "slopfolio.status"], skills: ["slopfolio"] });
   expect(manifest).toMatchObject({ ...app, homepage: "https://slopfolio.com" });
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
@@ -322,7 +331,7 @@ test("Slopfolio manifest and native allowlist pin only private draft operations 
 
 test("For Kicks stages its exact reviewed skill and revokes only its permission and managed file", () => {
   const app = REVIEWED_MINI_APPS[2];
-  const manifest = JSON.parse(readFileSync(join(REPO, "mini-apps/forkicks/manifest.json"), "utf8"));
+  const manifest = reviewedManifest("forkicks");
   expect([app.id, app.version, [...app.skills], [...app.operations]]).toEqual([
     "forkicks", "1.0.0", ["forkicks"],
     ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"],
@@ -344,4 +353,66 @@ test("For Kicks stages its exact reviewed skill and revokes only its permission 
   for (const operations of [app.operations.slice(0, -1), [...app.operations].reverse(), [...app.operations, "mini-app.read"]]) {
     expect(() => validateProjection({ version: 1, apps: [{ ...app, operations }] })).toThrow("mini_apps_unreviewed_bundle");
   }
+});
+
+test("MOSAIC (app#486): Dizko's shape, its context read/write after mini-app.read, the read-only entry stageable byte for byte", () => {
+  const mosaic = REVIEWED_MINI_APPS.find((app) => app.id === "mosaic")!;
+  const previous = PREVIOUS_REVIEWED_MINI_APPS.find((app) => app.id === "mosaic")!;
+  const dizko = REVIEWED_MINI_APPS[1], dizkoPrevious = PREVIOUS_REVIEWED_MINI_APPS[2];
+  const read = "mini-app.read", ctxRead = "mini-app.context.read", ctxWrite = "mini-app.context.write";
+  expect([mosaic.id, mosaic.version, [...mosaic.skills], [...mosaic.operations]]).toEqual(["mosaic", "1.0.0", ["mosaic"], [read, ctxRead, ctxWrite]]);
+  expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["mosaic", "1.0.0", ["mosaic"], [read]]);
+  // Exactly Dizko's two operation lists, so the plugin's generic allow-list (APP_OPERATIONS_ACCEPTED, skills
+  // exactly [appId]) grants it with no plugin change.
+  expect([[...mosaic.operations], [...previous.operations]]).toEqual([[...dizko.operations], [...dizkoPrevious.operations]]);
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  expect(plugin).toContain('app["skills"] != [name] or not any(app["operations"] == list(ops) for ops in APP_OPERATIONS_ACCEPTED)');
+  expect(plugin).not.toContain('"mosaic"');
+  // The reviewed manifest (v2, service kind "none": a context-only app, the validator's grant to mosaic alone)
+  // serves the CP's two entries: its base entry is the previous list, its context entry the current one,
+  // restricted with the 12-line namespace declaration, and never an MCP block or a credit.
+  const manifest = reviewedManifest("mosaic");
+  expect(manifest).toMatchObject({ id: "mosaic", version: "1.0.0", skills: ["mosaic"], operations: [read], homepage: "https://agents.edgecity.live" });
+  expect(Object.keys(manifest).sort()).toEqual(["data", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect([manifest.restricted, manifest.data]).toEqual([true, { context: { maxEntries: 12 } }]);
+  expect([[...manifest.operations], [...reviewedManifest("mosaic", { person: true, context: true }).operations]]).toEqual([[...previous.operations], [...mosaic.operations]]);
+  expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read"]);
+  // Only ever staged on install: not shipped to every box, never a references path.
+  expect(EDGE_SKILL_NAMES).not.toContain("mosaic");
+  expect(SHIPPED_SKILLS.has("mosaic")).toBe(false);
+  const skill = readFileSync(join(REPO, "skills", "mosaic", "SKILL.md"), "utf8");
+  expect(skill).toMatch(/^---\nname: mosaic\n[\s\S]*\nversion: 1\.0\.0\n/);
+  expect(skill).toContain('{"operation":"mini-app.context.read","appId":"mosaic","arguments":{}}');
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget|https?:\/\//);
+  for (const entry of [mosaic, previous]) {
+    const projection = { version: 1, apps: [REVIEWED_MINI_APPS[0], { id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    const root = installedBox();
+    const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.files.map((file) => file.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/mosaic/SKILL.md"]);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
+    expect(readFileSync(join(root, "mini-apps.json"), "utf8")).toBe(JSON.stringify(projection));
+    expect(readFileSync(join(root, "skills", "mosaic", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "mosaic", "SKILL.md")));
+    expect(statSync(join(root, "skills", "mosaic", "SKILL.md")).mode & 0o777).toBe(0o600);
+    expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+    reconcileMiniApps({ version: 1, apps: [REVIEWED_MINI_APPS[0]] }, root);
+    expect(existsSync(join(root, "skills", "mosaic", "SKILL.md"))).toBe(false);
+  }
+  expect(() => validateProjection({ version: 1, apps: [mosaic, previous] })).toThrow("mini_apps_unreviewed_bundle");
+  // A skill that does not exist (or none) is not this review: refused before anything is written.
+  for (const skills of [[], ["mosaic-box"], ["dizko"], ["mosaic", "mosaic"]]) {
+    expect(() => validateProjection({ version: 1, apps: [{ ...mosaic, skills }] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+  for (const changed of [{ ...mosaic, version: "1.0.1" }, { ...mosaic, data: { context: { maxEntries: 12 } } }, { ...mosaic, restricted: true }]) {
+    expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+  // The helper stages skills/<appId>/SKILL.md for every desired app, so a reviewed app with no SKILL.md in the
+  // source fails the reconcile (the box's whole mini-apps projection, Gold Stars included) and writes nothing.
+  const empty = home(), box = installedBox(), before = snapshot(box);
+  expect(() => reconcileMiniApps({ version: 1, apps: [REVIEWED_MINI_APPS[0], mosaic] }, box, empty)).toThrow();
+  expect(snapshot(box)).toEqual(before);
+  const planted = [
+    [read, ctxRead, ctxWrite, "mini-app.context.delete"], [read, "gold-stars.send"], [ctxRead, read, ctxWrite],
+    [read, ctxWrite, ctxRead], [read, read], [read, ctxRead], [read, ctxWrite], [ctxRead, ctxWrite], [],
+  ];
+  for (const operations of planted) expect(() => validateProjection({ version: 1, apps: [{ ...mosaic, operations }] })).toThrow("mini_apps_unreviewed_bundle");
 });

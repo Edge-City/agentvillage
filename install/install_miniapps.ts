@@ -25,6 +25,9 @@ export const REVIEWED_MINI_APPS = [
   { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
   { id: "slopfolio", version: "1.0.0", operations: ["slopfolio.prepare", "slopfolio.status"], skills: ["slopfolio"] },
   { id: "symbient-uncommons", version: "1.0.0", operations: ["mini-app.read"], skills: ["symbient-uncommons"] },
+  // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
+  // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
+  { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
@@ -32,12 +35,15 @@ export const REVIEWED_MINI_APPS = [
  * eight-op entry (ov#350, _mini_apps.py GOLD_STARS_RESTORED; the CP's current entry, rolodex.person
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
- * projects the context operations). Remove each after the CP catalog serves a newer list everywhere.
+ * projects the context operations), and mosaic's the same way. Remove each after the CP catalog serves a newer
+ * list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
+  // MOSAIC: its read alone, the CP's entry for a box that does not take the context entry (as dizko's).
+  { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
@@ -89,8 +95,59 @@ function atomic(path: string, bytes: string | Buffer): void {
     renameSync(temporary, path);
   } finally { if (exists(temporary)) unlinkSync(temporary); }
 }
-export function reconcileMiniApps(value: unknown, home = hermesHome(), source = resolve(import.meta.dir, "../skills"), verify = false) {
+/**
+ * MINIAPPS v2 Phase 2, skill delivery (lanes-context/MINIAPPS-V2-SKILL-DELIVERY-design.md): the cp may
+ * hand this installer each app's reviewed SKILL.md bytes BESIDE the projection, in two environment
+ * variables (an older installer ignores both; the projection on stdin stays byte for byte today's):
+ *   MINI_APPS_SKILLS_OFFER  the cp's offer digest (64 hex), echoed in the receipt so the cp can tell an
+ *                           offer this box already took (or refused) from a new one; never interpreted;
+ *   MINI_APPS_SKILLS        {"version":1,"skills":[{"id","sha256","bytes":<base64>}]}.
+ * An app's served bytes are used only when they decode (strict base64, at most SKILL_MAX_BYTES, UTF-8)
+ * and hash to the entry's sha256. ANY failure falls back to the pinned checkout copy (today's bytes) for
+ * that app alone, with a code in the receipt; a bad bundle falls back for every app. A baseline skill
+ * (SHIPPED_SKILLS) always keeps its checkout copy (code mini_apps_skill_baseline when one is offered). A skill problem
+ * never fails the stage, so it never takes Gold Stars (or any other app) down. Nothing is fetched: no
+ * URL, no path from the cp is ever opened; the target is always skills/<id>/SKILL.md for an id
+ * validateProjection accepted.
+ */
+export const SKILL_MAX_BYTES = 32768;
+export const BUNDLE_MAX_CHARS = 98304;
+export const SKILL_FALLBACK_CODES = ["mini_apps_skill_bundle_invalid", "mini_apps_skill_invalid_entry", "mini_apps_skill_oversize", "mini_apps_skill_hash_mismatch", "mini_apps_skill_not_utf8", "mini_apps_skill_baseline"] as const;
+type FallbackCode = typeof SKILL_FALLBACK_CODES[number];
+export type SkillDelivery = { offer?: string; skills?: string };
+type ServedEntry = { bytes: Buffer; code?: undefined } | { bytes?: undefined; code: FallbackCode };
+const HEX64 = /^[a-f0-9]{64}$/;
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const closed = (value: unknown, keys: string) => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === keys;
+function servedEntry(entry: { sha256: unknown; bytes: unknown }): ServedEntry {
+  if (typeof entry.sha256 !== "string" || !HEX64.test(entry.sha256) || typeof entry.bytes !== "string" || !entry.bytes.length || !BASE64.test(entry.bytes)) return { code: "mini_apps_skill_invalid_entry" };
+  const bytes = Buffer.from(entry.bytes, "base64");
+  if (bytes.length > SKILL_MAX_BYTES) return { code: "mini_apps_skill_oversize" };
+  if (hash(bytes) !== entry.sha256) return { code: "mini_apps_skill_hash_mismatch" };
+  try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return { code: "mini_apps_skill_not_utf8" }; }
+  return { bytes };
+}
+export function parseSkillDelivery(delivery: SkillDelivery = {}): { offer: string | null; entries: Map<string, ServedEntry>; code?: FallbackCode } {
+  const offer = typeof delivery.offer === "string" && HEX64.test(delivery.offer) ? delivery.offer : null;
+  const entries = new Map<string, ServedEntry>();
+  const raw = delivery.skills;
+  if (raw === undefined || raw === "") return { offer, entries };
+  try {
+    if (typeof raw !== "string" || raw.length > BUNDLE_MAX_CHARS) throw new Error("bundle");
+    const doc = JSON.parse(raw);
+    if (!closed(doc, "skills,version") || doc.version !== 1 || !Array.isArray(doc.skills) || doc.skills.length > 32) throw new Error("bundle");
+    for (const entry of doc.skills) {
+      if (!closed(entry, "bytes,id,sha256") || typeof entry.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(entry.id) || entries.has(entry.id)) throw new Error("bundle");
+      entries.set(entry.id, servedEntry(entry));
+    }
+  } catch { return { offer, entries: new Map(), code: "mini_apps_skill_bundle_invalid" }; }
+  return { offer, entries };
+}
+export function reconcileMiniApps(value: unknown, home = hermesHome(), source = resolve(import.meta.dir, "../skills"), verify = false, delivery: SkillDelivery = {}) {
   const projection = validateProjection(value);
+  const served = parseSkillDelivery(delivery);
+  const servedIds: string[] = [];
+  const fallback: { id: string; code: FallbackCode }[] = [];
   const bytes = JSON.stringify(projection);
   const target = join(home, "mini-apps.json");
   const credential = join(home, "village-bridge.json");
@@ -103,9 +160,21 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   const stateless = () => !exists(target) && !exists(credential) &&
     REVIEWED_MINI_APPS.every(app => !owned(app.id) || !exists(join(home, "skills", app.id, "SKILL.md")));
   const desired = projection.apps.map(app => {
-    const path = join(source, app.id, "SKILL.md");
-    regular(path);
-    const content = readFileSync(path);
+    const entry = served.entries.get(app.id);
+    let content: Buffer;
+    // review-b S1: a baseline skill this installer ships to every box (SHIPPED_SKILLS: gold-stars) is never
+    // replaced by served bytes, valid or not; any entry for one is refused with its own code.
+    if (entry?.bytes && owned(app.id)) {
+      content = entry.bytes;
+      servedIds.push(app.id);
+    } else {
+      const code: FallbackCode | undefined = entry && !owned(app.id) ? "mini_apps_skill_baseline" : entry?.code ?? served.code;
+      if (code) fallback.push({ id: app.id, code });
+      // The pinned checkout copy: today's source, today's checks.
+      const path = join(source, app.id, "SKILL.md");
+      regular(path);
+      content = readFileSync(path);
+    }
     files.push({ path: `skills/${app.id}/SKILL.md`, sha256: hash(content) });
     return { app, content };
   });
@@ -125,14 +194,17 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
     for (const { app, content } of desired) atomic(join(home, "skills", app.id, "SKILL.md"), content);
     atomic(target, bytes);
   }
-  return { version: 1, projectionSha256: hash(bytes), files, apps: projection.apps.map(({ id, version }) => ({ id, version })), staged: true };
+  // `skills` also marks an installer that can take served bytes (an older one never writes it).
+  return { version: 1, projectionSha256: hash(bytes), files, apps: projection.apps.map(({ id, version }) => ({ id, version })), staged: true,
+    skills: { offer: served.offer, served: servedIds, fallback } };
 }
 if (import.meta.main) {
   try {
     if (process.argv.slice(2).some(x => x !== "--verify")) throw new Error("mini_apps_invalid_argument");
     const input = await Bun.stdin.text();
     if (Buffer.byteLength(input) > 16384) throw new Error("mini_apps_projection_too_large");
-    console.log(JSON.stringify(reconcileMiniApps(JSON.parse(input), hermesHome(), undefined, process.argv.includes("--verify"))));
+    const delivery = { offer: process.env.MINI_APPS_SKILLS_OFFER, skills: process.env.MINI_APPS_SKILLS };
+    console.log(JSON.stringify(reconcileMiniApps(JSON.parse(input), hermesHome(), undefined, process.argv.includes("--verify"), delivery)));
   } catch {
     console.error(JSON.stringify({ error: "mini_apps_reconcile_failed" }));
     process.exitCode = 1;

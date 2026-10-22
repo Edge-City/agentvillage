@@ -30,7 +30,7 @@ This skill is a **knowledge layer** about the popup itself. For live calendar, R
 ## 1. Popup constants (use these with the `edgeos` skill)
 
 - **`popup_id`**: `43746fd0-bce2-472b-93e4-a438177b2dff`
-  Pass this as the `popup_id` parameter to the `edgeos` skill's read calls that need it: `GET /events/portal/events?popup_id=...` (always pass it; see the `edgeos` skill §3), the `edgeos` skill's directory script (`--popup` with this id; §9) and `GET /event-venues/portal/venues?popup_id=...`. Agents cannot create or change events or venues for any popup. The `edgeos` API key is bound to the current village's popup, so the events and venues calls with this id answer `403` ("This API key does not have access to this popup"); when they do, tell the person the previous popup's live schedule isn't reachable from their agent.
+  Pass this as `--popup` to the `edgeos` skill's scripts when the person asks about this popup: its EdgeOS script's events list and venues (`list --popup <this id> --after …`, `venues --popup <this id>`; the `edgeos` skill §3 and §7) and its directory script (`--popup` with this id; §9). Agents cannot create or change events or venues for any popup. The `edgeos` API key is bound to the current village's popup, so the events and venues calls with this id answer `403` ("This API key does not have access to this popup"); when they do, tell the person the previous popup's live schedule isn't reachable from their agent.
 - **`popup_slug`**: `edge-esmeralda-2026` (informational; not used by EdgeOS API calls).
 - **`event_base_url`**: `https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/`
   Use this as the prefix for event links by appending the `event_id` returned by the EdgeOS API.
@@ -48,7 +48,7 @@ Standardized weeks for Edge Esmeralda 2026. Week 1 is extended back to May 30 to
 
 Themes are the published programming emphasis for each week, sourced from the Edge Esmeralda programming preview. They are directional: themes overlap and some programs span multiple weeks. A theme describes the week's focus, not a given day's schedule. For the actual events on any day, query the live `edgeos` calendar; do not infer "today's events" or "today's track" from this table, and do not present a theme as the day's schedule. Some EdgeOS tracks run across the whole month and do not map one-to-one to these theme weeks.
 
-When the user says "week 2", convert to `start_after=2026-06-08T07:00:00Z&start_before=2026-06-15T07:00:00Z` (PDT midnight = 07:00 UTC; `start_before` is the start of the day *after* the last day). Week 1 is `start_after=2026-05-30T07:00:00Z&start_before=2026-06-08T07:00:00Z`.
+When the user says "week 2", convert to `--after 2026-06-08T07:00:00Z --before 2026-06-15T07:00:00Z` for the `edgeos` skill's events list (PDT midnight = 07:00 UTC; `--before` is the start of the day *after* the last day). Week 1 is `--after 2026-05-30T07:00:00Z --before 2026-06-08T07:00:00Z`.
 
 ---
 

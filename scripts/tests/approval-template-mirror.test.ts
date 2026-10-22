@@ -45,7 +45,12 @@ import { join } from "node:path";
 // product/gold-stars-member-class) moved it: one row, `marketplace.app.action.gold-stars.send`
 // (autonomous, agent_may_request) directly under the unchanged manual marketplace.app.action row,
 // nothing else in the block. The previous pin was ef0d342e (rc41 MINI-APPS re-land).
-const POLICY_BLOCK_SHA256 = "8e59e8d773146c36c19b40d63d1e5fa8c3da7789a82ea66701d5d6e97c3af800";
+// APPROVAL-UX (P0, 20 Oct; paired with cp#336 on the same branch name context/approval-ux) moved it:
+// one block of say entries for every class a resident can be asked about (marketplace.app.action/
+// install/read, treasury.propose/withdraw, resource.allocate, edgeos.event/venue.write,
+// moralmod.assess), say lines and comments only; no class value moves. The block is cp#336's byte
+// for byte (head acec28bd). The previous pin was 8e59e8d7 (B-133).
+const POLICY_BLOCK_SHA256 = "c9a58616260b08c7215a6e9f57babb394593e2dc9bf80b3ef04e104110694b27";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

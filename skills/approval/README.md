@@ -334,9 +334,12 @@ file that dropped a floor name, or a Hermes other than the measured 0.21.5.
 Each credential-shaped name the overlay reads has a decision in that file
 (`strip`, `hermes`, `agent_readable`, `not_secret`) with its reason, and
 `plugins/av-approval/tests/test_custody.py` fails when a new one appears
-without one. `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` stay readable: the
-EdgeOS skill's curls name them (`"$EDGEOS_API_KEY"`, never a pasted value) and
-av-events reads RSVPs from those curls; no approval class gates EdgeOS yet.
+without one. `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` stay readable: since
+v2.1.10 the EdgeOS skill reaches EdgeOS only through its own bun scripts
+(`skills/edgeos/scripts/`), which the agent's terminal runs and which read the
+key from their environment or `$HERMES_HOME/.env` themselves (no command names
+it), and av-events reads RSVPs from those script runs; no approval class gates
+EdgeOS yet.
 
 **What it does not close.** `$HERMES_HOME/.env` and `/proc/<gateway pid>/environ`
 are readable by the agent's own user, so code the agent writes can still open

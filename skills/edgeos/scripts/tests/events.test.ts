@@ -280,7 +280,7 @@ describe("today and the listing head every output (DATE-1)", () => {
 
 describe("the skill tells the agent to read the day from the script (DATE-1)", () => {
   const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
-  const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+  const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("\n**The EdgeOS script** ("));
 
   test("pass the word, take the day from the first line, never from the conversation's start line", () => {
     expect(section).toContain("pass the word (`--when today`, `--when tomorrow`, `--when weekend`), never a date you worked out");
@@ -411,7 +411,7 @@ describe("the Now line, and today's ended events left out (EVENTS-NOW)", () => {
 
   test("the skill tells the agent to check Now and never offer an ended session", () => {
     const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
-    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("\n**The EdgeOS script** ("));
     expect(section).toContain("Check the Now line before offering a session; never offer one that has ended.");
     expect(section).toContain("the second, `Now: <Wkd YYYY-MM-DD HH:MM> IST`, is the village clock");
   });
@@ -521,7 +521,7 @@ describe("each line ends with the event's portal link (B-138 EVENT-LINKS)", () =
 
   test("the skill says to give the printed link, never build one, and the portal page when there is none", () => {
     const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
-    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("\n**The EdgeOS script** ("));
     expect(section).toContain("Each event line ends with `link <url>`, its portal page: when asked for an event's link, give that one exactly as printed and never build one");
     expect(section).toContain("if a line has no `link`, send them to the Edge City portal's events page");
     expect(section).not.toContain("constitution/join");

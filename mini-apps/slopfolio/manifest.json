@@ -1,13 +1,75 @@
 {
+  "manifest": 2,
   "id": "slopfolio",
   "name": "Slopfolio",
-  "description": "Turn something you built with AI into a private Slopfolio draft that you review and publish yourself.",
   "version": "1.0.0",
+  "description": "Turn something you built with AI into a private Slopfolio draft that you review and publish yourself.",
   "homepage": "https://slopfolio.com",
+  "credit": {
+    "role": "product",
+    "attendeeId": "1f5fa0af-c4b4-4664-8d5f-b030baac6535",
+    "name": "Salman"
+  },
+  "visibility": "sandbox",
   "permissions": [
-    { "kind": "read", "label": "Check your drafts", "description": "Read whether a draft your agent prepared is still a draft, was published, or was deleted, and its post link once live." },
-    { "kind": "action", "label": "Prepare private drafts", "description": "Create and revise private drafts on your Slopfolio account from what you paste. Never publishes: you approve and publish on Slopfolio." }
+    {
+      "kind": "read",
+      "label": "Check your drafts",
+      "description": "Read whether a draft your agent prepared is still a draft, was published, or was deleted, and its post link once live."
+    },
+    {
+      "kind": "action",
+      "label": "Prepare private drafts",
+      "description": "Create and revise private drafts on your Slopfolio account from what you paste. Never publishes: you approve and publish on Slopfolio."
+    }
   ],
-  "skills": ["slopfolio"],
-  "operations": ["slopfolio.prepare", "slopfolio.status"]
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://slopfolio.com/mcp",
+    "auth": {
+      "mode": "oauth",
+      "oauth": {
+        "resource": "https://slopfolio.com/mcp",
+        "scopes": [
+          "offline_access"
+        ],
+        "discovery": "https://slopfolio.com/.well-known/oauth-protected-resource/mcp"
+      }
+    }
+  },
+  "operations": [
+    {
+      "name": "slopfolio.prepare",
+      "class": "write",
+      "target": {
+        "tool": "prepare_slopfolio_post"
+      },
+      "maxRequestBytes": 262144,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "slopfolio.status",
+      "class": "read",
+      "target": {
+        "tool": "get_slopfolio_draft_status"
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "slopfolio",
+      "version": "1.0.0",
+      "sha256": "b9b9674598a0817cd2d1b09cce901cc71c3dc4f0a153014450ed3c137947bf55",
+      "path": "skills/slopfolio/SKILL.md"
+    }
+  ],
+  "legacy": {
+    "provenance": "first-party-reviewed-external"
+  }
 }

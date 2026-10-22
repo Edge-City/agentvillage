@@ -44,7 +44,7 @@ test("For Kicks card refuses controls, missing prices and UTF-8/HTML overflow wi
 
 test("For Kicks skill uses returned UPI-at-pickup details without claiming payment", () => {
   const skill = readFileSync(join(import.meta.dir, "../../skills/forkicks/SKILL.md"), "utf8");
-  expect(skill).toContain("version: 1.0.3");
+  expect(skill).toContain("version: 1.0.5");
   expect(skill).toContain('paymentStatus: "upi_at_pickup"');
   expect(skill).toContain('payment.method: "upi"');
   expect(skill).toContain('payment.confirmation: "at_pickup"');

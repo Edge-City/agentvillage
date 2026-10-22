@@ -1,364 +1,439 @@
 {
+  "manifest": 2,
   "id": "dizko",
   "name": "Dizko",
-  "description": "Discover public music events, artists and venues.",
   "version": "1.0.0",
+  "description": "Discover public music events, artists and venues.",
   "homepage": "https://dizko.app",
+  "credit": {
+    "role": "product",
+    "attendeeId": "ed865427-2efd-4219-9194-f910e991e29d",
+    "name": "Zak Krevitt"
+  },
+  "visibility": "everyone",
   "permissions": [
     {
       "kind": "read",
-      "label": "Public music discovery",
-      "description": "Read public cities, artists, venues and events. No profiles, accounts, purchases or private data."
+      "label": "Discover public events",
+      "description": "Read public cities, scenes, artists, venues and events. No accounts, profiles or purchases."
     }
   ],
-  "skills": [
-    "dizko"
-  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://mcp.dizko.app/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
   "operations": [
-    "mini-app.read"
+    {
+      "name": "dizko.list_cities",
+      "class": "read",
+      "target": {
+        "tool": "list_cities"
+      },
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.find_scene_entities",
+      "class": "read",
+      "target": {
+        "tool": "find_scene_entities"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "dj",
+              "artist",
+              "venue",
+              "collective",
+              "promoter"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "genre": {
+            "type": "string"
+          },
+          "date_from": {
+            "type": "string"
+          },
+          "date_to": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "required": [
+              "query"
+            ]
+          }
+        ]
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.get_artist",
+      "class": "read",
+      "target": {
+        "tool": "get_artist"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "date_from": {
+            "type": "string"
+          },
+          "date_to": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "required": [
+              "query"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.get_venue",
+      "class": "read",
+      "target": {
+        "tool": "get_venue"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "date_from": {
+            "type": "string"
+          },
+          "date_to": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "required": [
+              "query"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.search_events",
+      "class": "read",
+      "target": {
+        "tool": "search_events"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          },
+          "date_from": {
+            "type": "string"
+          },
+          "date_to": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vibe": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "neighborhoods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "free": {
+            "type": "boolean"
+          },
+          "pride": {
+            "type": "boolean"
+          },
+          "price_min": {
+            "type": "number"
+          },
+          "price_max": {
+            "type": "number"
+          },
+          "max_price": {
+            "type": "number"
+          },
+          "featuring": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string"
+          },
+          "promoter": {
+            "type": "string"
+          },
+          "avoid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "result_limit": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.recommend_events",
+      "class": "read",
+      "target": {
+        "tool": "recommend_events"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          },
+          "date_from": {
+            "type": "string"
+          },
+          "date_to": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vibe": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "neighborhoods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "free": {
+            "type": "boolean"
+          },
+          "pride": {
+            "type": "boolean"
+          },
+          "price_min": {
+            "type": "number"
+          },
+          "price_max": {
+            "type": "number"
+          },
+          "max_price": {
+            "type": "number"
+          },
+          "featuring": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string"
+          },
+          "promoter": {
+            "type": "string"
+          },
+          "avoid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "result_limit": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dizko.get_event",
+      "class": "read",
+      "target": {
+        "tool": "get_event"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
   ],
-  "mcp": {
-    "url": "https://mcp.dizko.app/mcp",
-    "tools": [
-      {
-        "name": "list_cities",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "find_scene_entities",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "dj",
-                "artist",
-                "venue",
-                "collective",
-                "promoter"
-              ]
-            },
-            "id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "city": {
-              "type": "string"
-            },
-            "genre": {
-              "type": "string"
-            },
-            "date_from": {
-              "type": "string"
-            },
-            "date_to": {
-              "type": "string"
-            },
-            "limit": {
-              "type": "number",
-              "minimum": 1,
-              "maximum": 20
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "anyOf": [
-            {
-              "required": [
-                "id"
-              ]
-            },
-            {
-              "required": [
-                "query"
-              ]
-            }
-          ]
-        }
-      },
-      {
-        "name": "get_artist",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "city": {
-              "type": "string"
-            },
-            "date_from": {
-              "type": "string"
-            },
-            "date_to": {
-              "type": "string"
-            },
-            "limit": {
-              "type": "number",
-              "minimum": 1,
-              "maximum": 20
-            }
-          },
-          "anyOf": [
-            {
-              "required": [
-                "id"
-              ]
-            },
-            {
-              "required": [
-                "query"
-              ]
-            }
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "get_venue",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "city": {
-              "type": "string"
-            },
-            "date_from": {
-              "type": "string"
-            },
-            "date_to": {
-              "type": "string"
-            },
-            "limit": {
-              "type": "number",
-              "minimum": 1,
-              "maximum": 20
-            }
-          },
-          "anyOf": [
-            {
-              "required": [
-                "id"
-              ]
-            },
-            {
-              "required": [
-                "query"
-              ]
-            }
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "search_events",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "city": {
-              "type": "string"
-            },
-            "when": {
-              "type": "string"
-            },
-            "date_from": {
-              "type": "string"
-            },
-            "date_to": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "event_types": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "genres": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "vibe": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "neighborhoods": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "free": {
-              "type": "boolean"
-            },
-            "pride": {
-              "type": "boolean"
-            },
-            "price_min": {
-              "type": "number"
-            },
-            "price_max": {
-              "type": "number"
-            },
-            "max_price": {
-              "type": "number"
-            },
-            "featuring": {
-              "type": "string"
-            },
-            "venue": {
-              "type": "string"
-            },
-            "promoter": {
-              "type": "string"
-            },
-            "avoid": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "limit": {
-              "type": "number"
-            },
-            "offset": {
-              "type": "number"
-            },
-            "cursor": {
-              "type": "string"
-            },
-            "result_limit": {
-              "type": "number"
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "recommend_events",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "city": {
-              "type": "string"
-            },
-            "when": {
-              "type": "string"
-            },
-            "date_from": {
-              "type": "string"
-            },
-            "date_to": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "event_types": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "genres": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "vibe": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "neighborhoods": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "free": {
-              "type": "boolean"
-            },
-            "pride": {
-              "type": "boolean"
-            },
-            "price_min": {
-              "type": "number"
-            },
-            "price_max": {
-              "type": "number"
-            },
-            "max_price": {
-              "type": "number"
-            },
-            "featuring": {
-              "type": "string"
-            },
-            "venue": {
-              "type": "string"
-            },
-            "promoter": {
-              "type": "string"
-            },
-            "avoid": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "limit": {
-              "type": "number"
-            },
-            "offset": {
-              "type": "number"
-            },
-            "cursor": {
-              "type": "string"
-            },
-            "result_limit": {
-              "type": "number"
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "get_event",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "id"
-          ]
-        }
-      }
-    ]
-  }
+  "data": {
+    "context": {
+      "maxEntries": 16,
+      "ceiling": "private"
+    }
+  },
+  "skills": [
+    {
+      "name": "dizko",
+      "version": "1.0.0",
+      "sha256": "a308d2edefb8949f23c8a30eca20cce61214c6b6a439ea7f95a3c68a14ae4929",
+      "path": "skills/dizko/SKILL.md"
+    }
+  ]
 }

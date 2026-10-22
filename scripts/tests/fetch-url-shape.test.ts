@@ -237,17 +237,20 @@ describe("fetch recipes keep `$` out of curl's and wget's option slots (approval
   test("no agent-facing curl or wget recipe has a `$`-first word in an option slot", () => {
     const recipes = agentFacingRecipes();
     const fetches = recipes.filter((r) => /(^|[|;&(]\s*)\s*(\S*\/)?(curl|wget)\s/.test(r.command));
-    expect(fetches.length).toBeGreaterThanOrEqual(11);
+    // EDGEOS-BLOCK step B (v2.1.10): the eleven EdgeOS recipes are script runs now, so few or no fetch
+    // recipes remain; the rule still holds for any that are (or will be) written.
+    expect(recipes.length).toBeGreaterThan(0);
     const offenders = fetches
       .map((r) => ({ where: r.where, words: dollarFirstOptionWords(r.command) }))
       .filter((r) => r.words.length > 0);
     expect(offenders).toEqual([]);
   });
 
-  test("every EdgeOS recipe passes its URL with --url", () => {
-    const recipes = recipesIn("skills/edgeos/SKILL.md", readFileSync(EDGEOS_SKILL, "utf8")).filter((r) => /^curl\s/.test(r.command));
-    expect(recipes.length).toBe(11);
-    for (const r of recipes) expect(r.command).toContain('--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/');
+  test("the EdgeOS skill has no fetch recipe: its eleven EdgeOS calls are runs of its own script (v2.1.10)", () => {
+    const recipes = recipesIn("skills/edgeos/SKILL.md", readFileSync(EDGEOS_SKILL, "utf8"));
+    expect(recipes.filter((r) => /(^|[|;&(]\s*)\s*(\S*\/)?(curl|wget)\s/.test(r.command))).toEqual([]);
+    expect(recipes.filter((r) => r.command.startsWith("bun skills/edgeos/scripts/edgeos.ts ")).length).toBe(11);
+    for (const r of recipes) expect(r.command).not.toContain("$");
   });
 });
 
@@ -275,6 +278,15 @@ function templateAutonomy(): Map<string, string> {
   return out;
 }
 
+/**
+ * The template's `defaults.autonomy`: the autonomy of a class its table does not list (e.g. `exec.local`, the
+ * class core gives a skill-script run), as the real hook resolves it.
+ */
+function templateDefaultAutonomy(): string {
+  const text = readFileSync(join(REPO, "skills", "approval", "templates", "APPROVAL.md"), "utf8");
+  return text.match(/^defaults:\s*\n\s+autonomy:\s*([a-z-]+)/m)?.[1] ?? "manual";
+}
+
 const FILL: [RegExp, string][] = [
   [/\{(current_iso_timestamp|start_iso|end_iso|occurrence_iso)\}/g, "2026-10-21T10:00:00Z"],
   [/\{(event_id|popup_id)\}/g, "3fa85f64-5717-4562-b3fc-2c963f66afa6"],
@@ -290,8 +302,10 @@ describe.skipIf(!HAVE_CORE)("approval.md core classes every EdgeOS recipe autono
     const { classifyForHook } = await import(join(CORE, "src", "cli", "hook.ts"));
     const autonomy = templateAutonomy();
     const raw = readFileSync(EDGEOS_SKILL, "utf8");
-    const recipes = recipesIn("skills/edgeos/SKILL.md", raw).filter((r) => /^curl\s/.test(r.command));
-    expect(recipes.length).toBe(11);
+    // v2.1.10: every EdgeOS recipe is a script run (scripts/tests/edgeos-verbs-corpus.test.ts runs them
+    // through the real hook from the Hermes folder); the classifier must still class each autonomous.
+    const recipes = recipesIn("skills/edgeos/SKILL.md", raw).filter((r) => r.command.startsWith("bun skills/edgeos/scripts/"));
+    expect(recipes.length).toBeGreaterThanOrEqual(11);
     const held: string[] = [];
     for (const r of recipes) {
       let command = r.command;
@@ -300,7 +314,8 @@ describe.skipIf(!HAVE_CORE)("approval.md core classes every EdgeOS recipe autono
         const res = classifyForHook(command, [], "/tmp", []).result;
         const classes: string[] = res.ok ? res.classes : [];
         const rules: string[] = res.ok ? (res.segments ?? []).map((s: { rule: string }) => s.rule) : [];
-        const ok = res.ok && classes.length > 0 && classes.every((c) => autonomy.get(c) === "autonomous") && !rules.includes("fetch-output-unknown");
+        const fallback = templateDefaultAutonomy();
+        const ok = res.ok && classes.length > 0 && classes.every((c) => (autonomy.get(c) ?? fallback) === "autonomous") && !rules.includes("fetch-output-unknown");
         if (!ok) held.push(`${r.where} ${res.ok ? classes.join(",") + " " + rules.join(",") : res.code}`);
       }
     }

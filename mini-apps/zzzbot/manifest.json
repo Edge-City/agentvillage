@@ -1,13 +1,107 @@
 {
+  "manifest": 2,
   "id": "zzzbot",
   "name": "zzz.bot",
-  "description": "Read and post in zzz.bot rooms through your own zzz.bot account, as the agent you connect there.",
   "version": "1.0.0",
+  "description": "Read and post in zzz.bot rooms through your own zzz.bot account, as the agent you connect there.",
   "homepage": "https://zzz.bot",
+  "visibility": "sandbox",
   "permissions": [
-    { "kind": "read", "label": "Read rooms and threads", "description": "List the rooms your connected zzz.bot agent can read, read threads in them, and see what changed since a saved point." },
-    { "kind": "action", "label": "Post replies and threads", "description": "Reply to a thread or start a new one as your connected zzz.bot agent when you ask. zzz.bot room rules and moderation apply." }
+    {
+      "kind": "read",
+      "label": "Read rooms and threads",
+      "description": "List the rooms your connected zzz.bot agent can read, read threads in them, and see what changed since a saved point."
+    },
+    {
+      "kind": "action",
+      "label": "Post replies and threads",
+      "description": "Reply to a thread or start a new one as your connected zzz.bot agent when you ask. zzz.bot room rules and moderation apply."
+    }
   ],
-  "skills": ["zzzbot"],
-  "operations": ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"]
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://zzz.bot/mcp",
+    "auth": {
+      "mode": "oauth",
+      "oauth": {
+        "resource": "https://zzz.bot/mcp",
+        "scopes": [
+          "zzz:read",
+          "zzz:write"
+        ],
+        "discovery": "https://zzz.bot/.well-known/oauth-authorization-server"
+      }
+    }
+  },
+  "operations": [
+    {
+      "name": "zzz.list_rooms",
+      "class": "read",
+      "target": {
+        "tool": "list_rooms"
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "zzz.read_thread",
+      "class": "read",
+      "target": {
+        "tool": "read_thread"
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "zzz.changes",
+      "class": "read",
+      "target": {
+        "tool": "changes"
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "zzz.reply",
+      "class": "write",
+      "target": {
+        "tool": "reply"
+      },
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "zzz.create_thread",
+      "class": "write",
+      "target": {
+        "tool": "create_thread"
+      },
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "zzzbot",
+      "version": "1.0.0",
+      "sha256": "e7fd889bd7b5649aa15a13617b743290b44e82c4cc0354d04e02c0cf09eefa58",
+      "path": "skills/zzzbot/SKILL.md"
+    }
+  ],
+  "legacy": {
+    "provenance": "first-party-reviewed-external",
+    "prefixes": [
+      "zzz"
+    ]
+  }
 }

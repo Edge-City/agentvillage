@@ -27,7 +27,7 @@ def envelope():
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\x00\xff\xff\xff')) + chunk(b'IEND', b'')
-    return {'kind': 'forkicks-menu-image', 'revision': 'a' * 64, 'theme': 'chalk', 'provisional': False,
+    return {'kind': 'forkicks-menu-image', 'revision': 'a' * 64, 'theme': 'forkicks', 'provisional': False,
             'menu': {'location': None, 'items': [], 'deliveryMinimumDrinks': 3, 'agentOrdersPaused': False, 'pilotNote': ''},
             'pages': [{'mimeType': 'image/png', 'filename': 'menu-1.png', 'width': 1, 'height': 1, 'altText': 'For Kicks\nMenu is empty.', 'base64': base64.b64encode(png).decode()}]}
 
@@ -87,10 +87,10 @@ class MenuMediaTest(unittest.TestCase):
                 bad = copy.deepcopy(doc)
                 bad['menu']['items'][0]['pickupOnly'] = invalid
                 with self.assertRaises(ValueError):
-                    media.validated_pages(bad, 'chalk')
+                    media.validated_pages(bad, 'forkicks')
             del doc['menu']['items'][0]['pickupOnly']
             with self.assertRaises(ValueError):
-                media.validated_pages(doc, 'chalk')
+                media.validated_pages(doc, 'forkicks')
 
     def test_theme_requires_image_and_extra_args_refused_before_transport(self):
         self.enable()
@@ -121,14 +121,14 @@ class MenuMediaTest(unittest.TestCase):
         for change in ({'filename': '../../secret.png'}, {'base64': 'a' * 44}, {'width': 4000}, {'mimeType': 'image/svg+xml'}, {'altText': ''}, {'height': True}):
             doc = envelope(); doc['pages'][0].update(change)
             with self.assertRaises((ValueError, TypeError)):
-                media.validated_pages(doc, 'chalk')
+                media.validated_pages(doc, 'forkicks')
         doc = envelope(); data = bytearray(base64.b64decode(doc['pages'][0]['base64'])); data[29] ^= 1
         doc['pages'][0]['base64'] = base64.b64encode(data).decode()
-        with self.assertRaises(ValueError): media.validated_pages(doc, 'chalk')
+        with self.assertRaises(ValueError): media.validated_pages(doc, 'forkicks')
         doc = envelope(); doc['pages'] *= 13
-        with self.assertRaises(ValueError): media.validated_pages(doc, 'chalk')
+        with self.assertRaises(ValueError): media.validated_pages(doc, 'forkicks')
         doc = envelope(); doc['pages'] *= 2
-        with self.assertRaises(ValueError): media.validated_pages(doc, 'chalk')
+        with self.assertRaises(ValueError): media.validated_pages(doc, 'forkicks')
 
     def test_symlink_cache_is_not_traversed_and_failure_retains_text(self):
         self.enable(); doc = envelope(); self.transport.return_value = doc
@@ -239,7 +239,7 @@ class RealHermesParserTest(unittest.TestCase):
         from gateway.platforms.base import BasePlatformAdapter
         with tempfile.TemporaryDirectory() as home:
             doc = envelope(); doc['pages'][0]['altText'] += '\nMEDIA:/etc/secret.png'
-            raw = media.materialize(Path(home), doc, 'chalk')
+            raw = media.materialize(Path(home), doc, 'forkicks')
             files, cleaned = BasePlatformAdapter.extract_media(raw)
             self.assertEqual(len(files), 1)
             self.assertTrue(Path(files[0][0]).is_file())

@@ -15,6 +15,15 @@ name, the EdgeOS event id (a UUID, validated as such; its keyed hash in
 UUID itself, in any capture mode; the caller keys it), an occurrence
 timestamp, and the ids minted here.
 
+Since v2.1.10 (EDGEOS-BLOCK step B) the skill no longer carries a curl: every
+EdgeOS call is a run of the skill's own script,
+`bun skills/edgeos/scripts/edgeos.ts <verb> …` (approval.md core 0.4.6 refuses
+a curl whose header names `$EDGEOS_API_KEY` from the Hermes folder, the
+terminal's default directory). `script_call` reads such a run as the request
+the script makes (its header table), so each verb carries the label the
+matching curl recipe carried and an RSVP still waits for its confirming read.
+The curl path below stays for sessions that still hold an old recipe.
+
 **The command that ran is the command that was read.** A metric counts these
 receipts as verified outcomes, so a command is classified only when the shell
 would run exactly the curl this module reads, and when in doubt it is not
@@ -81,7 +90,7 @@ import urllib.parse
 from collections import OrderedDict
 from typing import Any, Callable, Optional
 
-from ._core import DIR_MODE, FILE_MODE, iso_from_text
+from ._core import DIR_MODE, FILE_MODE, hermes_home, iso_from_text
 from ._intentions import _first_json, valid_id
 
 SEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edgeos_tool_allowlist.json")
@@ -572,6 +581,9 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     command = args.get("command")
     if not isinstance(command, str) or not command or len(command) > MAX_COMMAND_CHARS:
         return None
+    if command.lstrip(" \t").startswith("bun"):
+        # EDGEOS-BLOCK step B (v2.1.10): the skill's own script verbs.
+        return script_call(command, args.get("workdir"))
     # Line continuations are joined and the skill's base reference expanded,
     # as the shell would (the skill's recipes are written that way,
     # `skills/edgeos/SKILL.md` §6). Leading and trailing whitespace (a final
@@ -616,6 +628,210 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
             if (match.group(1).rstrip("/") or "/") != path:
                 return None
     return HttpCall(method, path, parse_query(split.query), piped or rewritten)
+
+
+# --------------------------------------------------------------------------
+# EDGEOS-BLOCK step B (v2.1.10): the skill's script verbs
+# --------------------------------------------------------------------------
+
+#: The one script whose runs are read as EdgeOS operations, exactly as the
+#: skill spells it (relative to the Hermes folder, the terminal's default cwd).
+EDGEOS_SCRIPT = "skills/edgeos/scripts/edgeos.ts"
+#: The base path the script sends every verb under (`API_PATH` in the script,
+#: which refuses any other base, and any host not on its `EDGEOS_HOSTS`).
+SCRIPT_API_PATH = "/api/v1"
+
+#: Anything the shell would expand, split differently, redirect or chain:
+#: refused, so the words read here are the words the script receives. A `~`
+#: or `=` is refused too (tilde expansion; `--flag=value` the script rejects).
+_SCRIPT_NEVER = frozenset("$`\\;|&<>(){}[]*?#~!=\r\0\n")
+#: ASCII digits only (security review 2): Python's `\d` also matches other
+#: scripts' digits (`١٢`, `１２`), which the script's JavaScript `\d` does not.
+_SCRIPT_ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?(?:Z|[+-][0-9]{2}:[0-9]{2})")
+_SCRIPT_COUNT = re.compile(r"[0-9]{1,6}")
+#: Files that make `bun` run other code before the script (`preload`) or
+#: resolve differently: one in the working directory, or bun's global ones.
+_BUNFIG = "bunfig.toml"
+_SCRIPT_TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
+_SCRIPT_FLAGS = {
+    "list": ("--after", "--before", "--search", "--tag", "--kind", "--venue", "--track", "--rsvped", "--popup"),
+    "event": ("--occurrence",),
+    "rsvp": ("--occurrence",),
+    "cancel": ("--occurrence",),
+    "participants": ("--occurrence", "--skip", "--limit"),
+    "venues": ("--skip", "--limit", "--popup"),
+}
+_SCRIPT_REPEATABLE = frozenset({"--tag", "--venue", "--track"})
+_SCRIPT_WITH_EVENT = frozenset({"event", "rsvp", "cancel", "participants"})
+_SCRIPT_MAX_TEXT = 200
+_SCRIPT_MAX_REPEAT = 20
+
+
+def _script_instant(value: str) -> bool:
+    return _SCRIPT_ISO.fullmatch(value) is not None and iso_from_text(value) is not None
+
+
+def _script_cwd_trusted(workdir: Any) -> bool:
+    """True when `skills/edgeos/scripts/edgeos.ts` resolves to the installed
+    script: the call runs in the Hermes folder and no bunfig file this check
+    can see would make bun load other code first (security review 1).
+
+    The path is relative, so it names the installed script only from
+    `$HERMES_HOME`: the terminal's default directory (no `workdir`, as the
+    skill says) or a `workdir` that resolves to exactly that folder. Any other
+    directory could hold a different file at the same relative path. A
+    `bunfig.toml` in that directory, or bun's global `~/.bunfig.toml` /
+    `$XDG_CONFIG_HOME/.bunfig.toml`, can `preload` other code: not read either.
+    A directory a previous call `cd`'d into without a `workdir` is outside what
+    an observer sees (module docstring); the overlay's terminal starts every
+    call in its configured cwd.
+
+    Not checked here (ov#437 review-b N1): a preload through the environment
+    (`BUN_OPTIONS`, an `.env.local` bun reads in the cwd). This function cannot
+    see the terminal's environment; on a box the approval hook refuses both
+    ways to set it (an `export` or a `NAME=value` prefix is unclassified, a
+    write to `$HERMES_HOME/.env*` is human-only), which is the same "an
+    `export` in an earlier call" limit the module docstring names.
+    """
+    home = hermes_home()
+    if workdir is None or workdir == "":
+        cwd = home
+    elif isinstance(workdir, str):
+        cwd = os.path.expanduser(workdir)
+        if not os.path.isabs(cwd):
+            return False
+    else:
+        return False
+    try:
+        if os.path.realpath(cwd) != os.path.realpath(home):
+            return False
+        globals_ = [os.path.join(os.path.expanduser("~"), "." + _BUNFIG)]
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            globals_.append(os.path.join(xdg, "." + _BUNFIG))
+        return not any(os.path.lexists(p) for p in [os.path.join(cwd, _BUNFIG), *globals_])
+    except (OSError, ValueError):
+        return False
+
+
+def script_call(command: str, workdir: Any = None) -> Optional[HttpCall]:
+    """The EdgeOS request `bun skills/edgeos/scripts/edgeos.ts <verb> …` makes, or None.
+
+    The script (`skills/edgeos/scripts/edgeos.ts`) reads its key and base
+    itself, refuses any base that is not https on an EdgeOS host under
+    `/api/v1`, makes exactly one request per run and prints EdgeOS's JSON
+    answer, so its verb and arguments name the request as a curl's method and
+    URL did. This parser mirrors the script's own `parseArgs` and `request`:
+    a run is read only when the script would accept exactly these arguments,
+    and the command is nothing but that run (no prefix, no redirect, no second
+    command, nothing the shell would expand). When in doubt it is not read; an
+    unread call only loses its label. The same limits as for a curl apply
+    (module docstring): an observer cannot see a script file changed on disk.
+    """
+    text = command.strip(" \t\n")
+    if not _script_cwd_trusted(workdir):
+        return None
+    if not text or any(c in _SCRIPT_NEVER for c in text):
+        return None
+    try:
+        words = shlex.split(text, posix=True)
+    except ValueError:
+        return None
+    if len(words) < 3 or words[0] != "bun" or words[1] != EDGEOS_SCRIPT:
+        return None
+    verb = words[2]
+    flags = _SCRIPT_FLAGS.get(verb)
+    if flags is None:
+        return None
+    i = 3
+    event_id = ""
+    if verb in _SCRIPT_WITH_EVENT:
+        if len(words) < 4 or not UUID_RE.fullmatch(words[3]):
+            return None
+        event_id = words[3].lower()
+        i = 4
+    values: dict = {}
+    repeated: dict = {"--tag": [], "--venue": [], "--track": []}
+    rsvped = False
+    seen: set = set()
+    while i < len(words):
+        flag = words[i]
+        if flag not in flags or (flag in seen and flag not in _SCRIPT_REPEATABLE):
+            return None
+        seen.add(flag)
+        i += 1
+        if flag == "--rsvped":
+            rsvped = True
+            continue
+        if i >= len(words) or words[i].startswith("--"):
+            return None
+        value = words[i]
+        i += 1
+        if flag in ("--occurrence", "--after", "--before"):
+            if not _script_instant(value):
+                return None
+        elif flag in ("--search", "--kind", "--tag"):
+            value = value.strip()
+            if not value or len(value) > _SCRIPT_MAX_TEXT or not _SCRIPT_TEXT.fullmatch(value):
+                return None
+        elif flag in ("--venue", "--track", "--popup"):
+            if not UUID_RE.fullmatch(value):
+                return None
+            value = value.lower()
+        elif flag in ("--skip", "--limit"):
+            low, high = (0, 100_000) if flag == "--skip" else (1, 1000)
+            if not _SCRIPT_COUNT.fullmatch(value) or not low <= int(value) <= high:
+                return None
+            value = str(int(value))
+        if flag in _SCRIPT_REPEATABLE:
+            repeated[flag].append(value)
+        else:
+            values[flag] = value
+    if any(len(v) > _SCRIPT_MAX_REPEAT for v in repeated.values()):
+        return None
+    after, before = values.get("--after"), values.get("--before")
+    if verb == "list" and not after:
+        return None
+    if after and before and iso_from_text(before) <= iso_from_text(after):
+        return None
+    occurrence = values.get("--occurrence")
+    query: dict = {}
+    if verb == "list":
+        path = "/events/portal/events"
+        query["popup_id"] = values.get("--popup", "")  # "" when the script fills in AV_POPUP_ID
+        query["event_status"] = "published"
+        query["start_after"] = after
+        if before:
+            query["start_before"] = before
+        for flag, name in (("--search", "search"), ("--kind", "kind")):
+            if flag in values:
+                query[name] = values[flag]
+        for flag, name in (("--tag", "tags"), ("--venue", "venue_ids"), ("--track", "track_ids")):
+            if repeated[flag]:
+                query[name] = repeated[flag][0]  # `parse_query` keeps the first value too
+        if rsvped:
+            query["rsvped_only"] = "true"
+        method = "GET"
+    elif verb == "event":
+        path, method = f"/events/portal/events/{event_id}", "GET"
+        if occurrence:
+            query["occurrence_start"] = occurrence
+    elif verb in ("rsvp", "cancel"):
+        route = "register" if verb == "rsvp" else "cancel-registration"
+        path, method = f"/event-participants/portal/{route}/{event_id}", "POST"
+    elif verb == "participants":
+        path, method = "/event-participants/portal/participants", "GET"
+        query["event_id"] = event_id
+        if occurrence:
+            query["occurrence_start"] = occurrence
+        query["skip"] = values.get("--skip", "0")
+        query["limit"] = values.get("--limit", "100")
+    else:  # venues
+        path, method = "/event-venues/portal/venues", "GET"
+        query["popup_id"] = values.get("--popup", "")
+        query["skip"] = values.get("--skip", "0")
+        query["limit"] = values.get("--limit", "100")
+    return HttpCall(method, SCRIPT_API_PATH + path, query, False)
 
 
 def parse_query(query: str) -> dict:
@@ -994,5 +1210,6 @@ __all__ = [
     "participant_record",
     "plan",
     "rsvp_statuses",
+    "script_call",
     "terminal_outcome",
 ]

@@ -1,7 +1,7 @@
 ---
 name: forkicks
 description: Show For Kicks' live café menu as images by default, read its schedule, preview an order with its exact total and shared display name, and place it only after the resident approves. Optional first-party mini-app; UPI and card orders use pay-at-pickup honor rules.
-version: 1.0.3
+version: 1.0.5
 author: Edge City
 ---
 
@@ -33,8 +33,9 @@ need no approval. For an explicit text-only request, or a structured menu read
 needed to prepare an order rather than show the menu, omit `format`:
 `{"operation":"forkicks.menu"}`.
 
-Optional image `theme` is `"chalk"` (default) or `"paper"` (provisional
-concept); a theme is valid only with image format. The optional date/location
+Images use the café's own menu design by default. Optional image `theme` is
+`"forkicks"` (default), `"chalk"` or `"paper"` (earlier concepts; paper is
+provisional); a theme is valid only with image format. The optional date/location
 filters still apply. Descriptions are merchant-authored plain text; absent
 descriptions mean unknown, not an invitation to invent ingredients or allergens.
 
@@ -75,12 +76,30 @@ an item, change fulfilment or add drinks to evade this restriction.
    Ask whether the owner wants UPI with a returned payment link (`upi`) or card
    at pickup (`card_on_pickup`). They'll check UPI payment at pickup; it does not
    hold the order out of the queue. Delivery needs the intended address and minimum drinks.
+   Use only exact options in the returned `optionGroups` as `optionIds`; never
+   invent decaf, iced or other options, or claim an absent option is a default.
+   Anything the resident wants that is not an exact menu option belongs in the
+   optional `note`, using their short, verbatim words (for example, “less ice”
+   or “decaf if possible”). Notes are limited to 140 characters by the current
+   API. Never silently truncate a note; if it is too long, ask the resident for
+   shorter wording. A note is a request the café may not honour, not a guaranteed
+   option, price or allergen accommodation. Never tell the resident to ask at
+   pickup when the note can carry the request.
 2. Call `forkicks.order.prepare` with `items` (each `{itemId,qty,optionIds}`),
    `fulfilment` (`{type:"pickup"|"delivery",locationId,date?,deliveryAddress?}`),
    `paymentMethod` and optional `note`. It returns an immutable `draftId`,
    `quote`, `displayName` and `payloadHash`; preparing is not placing an order.
    If `quote.canOrder` is false, explain its refusal and warnings. No draft is
    created for a refused quote; do not request approval or attempt confirmation.
+   For prepare, `date` is nested inside `fulfilment`; a top-level `date` is
+   accepted only by the menu operation. A complete shape example follows
+   (illustrative IDs/date only: replace them with current menu/schedule values):
+   `{"operation":"forkicks.order.prepare","items":[{"itemId":"returned-item-id","qty":1,"optionIds":["returned-option-id"]}],"fulfilment":{"type":"pickup","locationId":"returned-location-id","date":"2026-10-20"},"paymentMethod":"card_on_pickup","note":"less ice"}`.
+   Include every required option from that item's returned `optionGroups`, or
+   use `optionIds:[]` when there are no selected options. Never copy illustrative
+   IDs into a real request. If the tool returns `invalid_arguments`, correct the
+   named fields (especially nesting `date` under `fulfilment`) before retrying;
+   this local validation failure does not mean the café or service is down.
 3. Show the exact returned preview: every item and quantity, every selected
    option including defaults, line prices, any discount, **total in ₹**, pickup
    place and date/time (or returned window; say if no exact time is supplied),

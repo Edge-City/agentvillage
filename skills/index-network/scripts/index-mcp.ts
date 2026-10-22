@@ -293,10 +293,14 @@ const OBJECT_START = /(?:^\s*|\n[ \t]*\r?\n[ \t]*)\{/g;
 const OPENS_OBJECT = /^\{\s*(?:"|\}|$)/;
 
 /**
- * The JSON object a list tool puts after its markdown lead, and whether
- * anything other than whitespace follows it. Null when there is no
- * candidate, or when the one candidate does not parse as an object; a later
- * object is never read in its place.
+ * The JSON object a list tool puts after its markdown lead, and whether what
+ * follows it could hold another JSON value (`trailing`: any `{` or `[` after
+ * the object). Plain prose after the object is not `trailing`: since Index
+ * ec439c4b (18 Oct 2026) the owner's FIRST tool call carries Index's
+ * onboarding paragraph after the object (mcp.tools.ts `withOnboarding`), and
+ * that paragraph has no brace or bracket. Null when there is no candidate, or
+ * when the one candidate does not parse as an object; a later object is never
+ * read in its place.
  */
 export function toolJsonObject(text: string): { root: Record<string, unknown>; trailing: boolean } | null {
   for (const match of text.matchAll(OBJECT_START)) {
@@ -306,7 +310,7 @@ export function toolJsonObject(text: string): { root: Record<string, unknown>; t
     if (end < 0) return null;
     try {
       const root = asRecord(JSON.parse(text.slice(start, end + 1)));
-      return root ? { root, trailing: text.slice(end + 1).trim() !== "" } : null;
+      return root ? { root, trailing: /[{[]/.test(text.slice(end + 1)) } : null;
     } catch {
       return null;
     }
@@ -317,9 +321,11 @@ export function toolJsonObject(text: string): { root: Record<string, unknown>; t
 /**
  * The array under `key` in a list tool's JSON object. Index always sends the
  * object, with an empty array when there is nothing, so an object with
- * `success: false` throws `mcp-tool-error`, and a text with no object, text
- * after the object, or an object without that array, throws `mcp-unparsed`.
- * Never an empty list on failure.
+ * `success: false` throws `mcp-tool-error`, and a text with no object, a
+ * possible second JSON value after the object (toolJsonObject `trailing`), or
+ * an object without that array, throws `mcp-unparsed`. Prose after the object
+ * (Index's first-call onboarding paragraph) is ignored. Never an empty list on
+ * failure.
  */
 export function toolJsonArray(text: string, key: string): unknown[] {
   const found = toolJsonObject(text);

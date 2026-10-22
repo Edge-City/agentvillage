@@ -392,6 +392,8 @@ describe("writers are unchanged: nothing in the overlay writes a new id", () => 
       if (text.includes("agentvillage/private") || text.includes("agentvillage/edgecityindia2026")) hits.push(rel);
     }
     expect(hits.sort()).toEqual([
+      // ov#431: the developer docs describe the vocabulary; write nothing.
+      "docs/MINI-APPS-DEVELOPER.md",
       "scripts/tests/memory-signal-gate.test.ts",
       "skills/index-network/scripts/context-tags.ts",
       "skills/index-network/scripts/memory_signal_gate.py",

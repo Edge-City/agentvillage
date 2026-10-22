@@ -14,6 +14,34 @@ SUMMARY_MAX_BYTES = 4096
 # Telegram technical cards reserve the rest of a 3600-character segment for labels.
 SUMMARY_HTML_MAX_BYTES = 3000
 
+# The For Kicks flat order card (Carter P0, 21 Oct; product L17668 (a), nonav L17696/L17701, approval L17700/L17702).
+# The APP builds the approval payload at prepare and hashes it (agentvillage-app forkicks.ts); the box never builds
+# it. Two shapes are accepted, so the box can ship before the app switches (nonav's ordering trap L17692):
+#   LEGACY_KEYS: {appId, operation, preview} (today's shape);
+#   CARD_KEYS:   exactly {order, total, pickup, name}, the strings the minimal card quotes. The app returns the
+#                order's `preview` BESIDE the payload in its prepare answer; the box saves it in the per-draftId record
+#                and re-derives the four strings from it (card_fields), refusing any difference.
+# Both shapes are proposed under the same class and per-draftId key as before (approval L17713: no class change in the
+# v2.1.10 hotfix). Spec + golden vectors: tests/vectors/forkicks-approval-card.{md,json}.
+APPROVAL_CLASS = "marketplace.app.action"
+# The card refusals the prepare path answers by preparing once more in the legacy shape (__init__.py, lead L17847).
+CARD_FALLBACK_ERRORS = frozenset({"approval_card_invalid", "approval_card_not_minimal", "approval_card_too_long"})
+LEGACY_KEYS = frozenset({"appId", "operation", "preview"})
+CARD_KEYS = frozenset({"order", "total", "pickup", "name"})
+PREVIEW_KEYS = frozenset({"appId", "draftId", "quote", "displayName", "items", "fulfilment", "paymentMethod"})
+# approval-md 0.4.7 telegram-minimal: a quoted value is cut past MINIMAL_QUOTE_MAX (280) code points, two of which are
+# the runtime's own isolate marks, and some characters are drawn as «U+XXXX» marks (which count). A card value must be
+# shown whole and unmarked, so a value longer than this, or failing card_value_fits, is not a minimal card: the app
+# sends the legacy shape instead (the technical card, every line, never cut).
+CARD_VALUE_MAX = 278
+CARD_VALUE_REFUSED = frozenset("\u00ab\u23ce\u115f\u1160\u3164\uffa0\u2800")  # « ⏎, Hangul fillers, braille blank
+# Combining marks core draws as themselves (at most CARD_MARKS_MAX in a row), minus the default-ignorable ones it marks.
+CARD_MARKS_MAX = 2
+CARD_MARKS_REFUSED = frozenset([0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x1810), *range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0)])
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# Product owns these words (product-confirm, L17668): how the payment method reads after the total.
+PAYMENT_WORDS = {"upi": "pay by UPI", "card_on_pickup": "card at pickup"}
+
 def approval_summary(payload):
     """Mirrored by CP forkicksSummary; never shorten the order the human approves."""
     def text(value, allow_empty=False):
@@ -70,17 +98,145 @@ def approval_summary(payload):
 def canonical(payload):
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
-def checked_payload(payload, draft_id, expected_hash):
-    if not isinstance(payload, dict) or set(payload) != {"appId", "operation", "preview"} or payload["appId"] != "forkicks" or payload["operation"] != "forkicks.order.confirm":
+def card_value_fits(value, lines=False):
+    """Whether core 0.4.7's minimal card draws `value` whole and unmarked (see CARD_VALUE_MAX): only U+0020 spaces,
+    letters, numbers, punctuation and symbols (minus CARD_VALUE_REFUSED), and combining marks (minus the
+    default-ignorable ones) at most CARD_MARKS_MAX in a row. With `lines` (the Order row) a U+000A between items is
+    allowed; core draws it as " ⏎ " (MINIMAL_NEWLINE_MARK), three code points, and counts them."""
+    if not isinstance(value, str) or not 0 < len(value) + (2 * value.count("\n") if lines else 0) <= CARD_VALUE_MAX:
+        return False
+    run = 0
+    for c in value:
+        if lines and c == "\n":
+            run = 0
+            continue
+        kind = unicodedata.category(c)[0]
+        if kind == "M" and ord(c) not in CARD_MARKS_REFUSED:
+            run += 1
+            if run > CARD_MARKS_MAX:
+                return False
+            continue
+        run = 0
+        if c != " " and (kind not in "LNPS" or c in CARD_VALUE_REFUSED):
+            return False
+    return True
+
+# What the flat card shows is what the order sends (security review, WYSIWYS). Every preview field is SHOWN on the four
+# rows, BOUND to a shown one, or the flat card is refused (approval_card_invalid) and the app sends the legacy shape,
+# whose technical card shows everything:
+#   appId                 constant "forkicks" (checked);
+#   draftId               the per-draftId approval key and record (bound);
+#   displayName           shown (name);
+#   paymentMethod         shown (total);
+#   quote.lines           name, qty, options shown (order); unitInr/lineInr are the merchant's prices summed in the shown
+#                         total; itemId/optionIds must equal items[i] (bound);
+#   quote.totalInr        shown (total); quote.location.name shown (pickup); the rest of the quote is the merchant's own
+#                         answer for this quoteId, not text the agent sends;
+#   items[i]              exactly {itemId, optionIds, qty}, equal to quote.lines[i] (bound);
+#   fulfilment            exactly type (shown), locationId (equal to the quote's location id when it names one), date
+#                         (shown), deliveryAddress (shown; only for delivery);
+#   note                  text the agent writes to the café: NOT on the card. KNOWN GAP accepted by Carter (lead L17772,
+#                         21 Oct: "it's fine for now if there is a note the agent sends without the resident seeing it").
+FULFILMENT_KEYS = frozenset({"type", "locationId", "date", "deliveryAddress"})
+# No phantom lines (product + lead L17778): the Order row puts ONE item per line, joined with U+000A, so a separator
+# inside a name cannot fake a line, and no text may hold a line break of its own: control/format characters (Cc, Cf,
+# incl. U+000A/U+000D and bidi controls; also Cs, Zl, Zp: U+2028/U+2029) in any order text are refused by
+# approval_summary (approval_card_invalid; no shape carries them, as today) and core's marked characters by
+# card_value_fits. A pickup location's name must not start like the delivery form: NFKC, runs of U+0020 collapsed to
+# one, leading U+0020 dropped, ASCII A-Z lowercased, then no "delivery to" prefix (approval_card_not_minimal).
+CARD_DELIVERY_PREFIX = "delivery to"
+# Security review fold: free text must not fake the Pickup row's " · <date>" part or the Order row's " ⏎ " line mark.
+# After NFKC, a pickup place or delivery address holding U+00B7, or an item/option name holding U+23CE or a character
+# of the arrow and control-picture blocks below, gets approval_card_not_minimal (the app sends the legacy shape).
+# Second fold: the middle-dot and bullet lookalikes that survive NFKC (U+2022 U+2027 U+2219 U+22C5 U+30FB; U+FF65
+# normalises to U+30FB), and the Dingbat arrows U+2794-U+27BF and Supplemental Arrows-C U+1F800-U+1F8FF.
+CARD_PLACE_REFUSED = frozenset("\u00b7\u16eb\u2022\u2024\u2027\u2219\u22c5\u2e31\u30fb")
+CARD_LINE_MARK_BLOCKS = ((0x23CE, 0x23CE), (0x2190, 0x21FF), (0x2400, 0x243F), (0x2794, 0x27BF), (0x27F0, 0x27FF), (0x2900, 0x297F), (0x2B00, 0x2BFF), (0x1F800, 0x1F8FF))
+
+def card_place_fakes_date(text):
+    return any(c in CARD_PLACE_REFUSED for c in unicodedata.normalize("NFKC", text))
+
+def card_name_fakes_line(text):
+    return any(lo <= ord(c) <= hi for c in unicodedata.normalize("NFKC", text) for lo, hi in CARD_LINE_MARK_BLOCKS)
+
+def card_place_like_delivery(text):
+    """Whether a pickup location's name starts like the delivery form (see above)."""
+    collapsed = re.sub(" +", " ", unicodedata.normalize("NFKC", text)).lstrip(" ")
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in collapsed).startswith(CARD_DELIVERY_PREFIX)
+
+def _card_unshown(preview):
+    """Why the flat card would not show everything this order sends, or None."""
+    quote, fulfilment = preview["quote"], preview["fulfilment"]
+    if not isinstance(fulfilment, dict) or not set(fulfilment) <= FULFILMENT_KEYS or (fulfilment["type"] != "delivery" and "deliveryAddress" in fulfilment):
+        return "fulfilment"
+    location = quote["location"]
+    if fulfilment.get("locationId") != location.get("id", fulfilment.get("locationId")) or fulfilment.get("locationId") != quote.get("locationId", fulfilment.get("locationId")):
+        return "location"
+    for item, line in zip(preview["items"], quote["lines"]):
+        if not isinstance(item, dict) or set(item) != {"itemId", "optionIds", "qty"} or line.get("itemId") != item["itemId"] or line.get("optionIds") != item["optionIds"]:
+            return "items"
+    return None
+
+def card_fields(preview):
+    """The four strings of the flat order card, from the app's saved order preview. Mirrored byte for byte by the app
+    (prepare + confirm) and the CP forkicksSummary mirror; spec + golden vectors in tests/vectors/."""
+    approval_summary({"preview": preview})  # every check the technical card makes, first
+    try:
+        if _card_unshown(preview) is not None:
+            raise ValueError("approval_card_invalid")
+        quote, fulfilment = preview["quote"], preview["fulfilment"]
+        lines = []
+        for line in quote["lines"]:
+            options = ", ".join(line["options"])
+            lines.append(f'{line["qty"]} × {line["name"]}' + (f" ({options})" if options else ""))
+        date = fulfilment.get("date") or quote["location"]["opens"][:10]
+        year, month, day = (int(part) for part in date.split("-"))
+        if not 1 <= month <= 12 or not 1 <= day <= 31:
+            raise ValueError("approval_card_invalid")
+        when = f"{day} {MONTHS[month - 1]} {year}"
+        where = quote["location"]["name"] if fulfilment["type"] == "pickup" else "Delivery to " + fulfilment["deliveryAddress"]
+        fields = {"order": "\n".join(lines), "total": f'₹{quote["totalInr"]}, {PAYMENT_WORDS[preview["paymentMethod"]]}',
+                  "pickup": f"{where} · {when}", "name": preview["displayName"]}
+        place = quote["location"]["name"] if fulfilment["type"] == "pickup" else fulfilment["deliveryAddress"]
+        names = [line["name"] for line in quote["lines"]] + [o for line in quote["lines"] for o in line["options"]]
+        # review-b ov#446 S1: a delivery address is the agent's free text (app forkicks-schema.ts:14), so today only a
+        # PICKUP order gets the flat card; a delivery order keeps the technical card (an address allowlist: v2.1.12).
+        if fulfilment["type"] != "pickup" or card_place_like_delivery(place) or card_place_fakes_date(place) or \
+                any(card_name_fakes_line(name) for name in names):
+            raise ValueError("approval_card_not_minimal")
+    except (KeyError, TypeError, IndexError, AttributeError) as error:
+        raise ValueError("approval_card_invalid") from error
+    if not all(card_value_fits(value, lines=key == "order") for key, value in fields.items()):
+        raise ValueError("approval_card_not_minimal")
+    return fields
+
+def is_flat(payload):
+    """The flat card's shape: exactly the four rows."""
+    return isinstance(payload, dict) and set(payload) == CARD_KEYS
+
+def _checked_preview(preview, draft_id):
+    if not isinstance(preview, dict) or set(preview) not in (PREVIEW_KEYS, PREVIEW_KEYS | {"note"}) or preview["appId"] != "forkicks" or preview["draftId"] != draft_id:
         raise ValueError("approval_preview_unavailable")
-    preview = payload["preview"]
-    keys = {"appId", "draftId", "quote", "displayName", "items", "fulfilment", "paymentMethod"}
-    if not isinstance(preview, dict) or set(preview) not in (keys, keys | {"note"}) or preview["appId"] != "forkicks" or preview["draftId"] != draft_id:
+    return preview
+
+def checked_payload(payload, draft_id, expected_hash, preview=None):
+    """The app's payload, checked; `preview` is the order the app returned beside a CARD_KEYS payload."""
+    if is_flat(payload):
+        if card_fields(_checked_preview(preview, draft_id)) != payload:
+            raise ValueError("approval_card_invalid")
+    elif isinstance(payload, dict) and set(payload) == LEGACY_KEYS and payload["appId"] == "forkicks" and payload["operation"] == "forkicks.order.confirm":
+        _checked_preview(payload["preview"], draft_id)
+    else:
         raise ValueError("approval_preview_unavailable")
     held = canonical(payload)
     if len(held.encode("utf-8")) > MAX_PAYLOAD_BYTES or hashlib.sha256(held.encode("utf-8")).hexdigest() != expected_hash:
         raise ValueError("approval_preview_unavailable")
     return held
+
+def order_preview(record):
+    """The saved order behind a record: inside a legacy payload, beside a flat one."""
+    payload = record["payload"]
+    return record["preview"] if is_flat(payload) else payload["preview"]
 
 def cache_path(home: Path, draft_id):
     if not isinstance(draft_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", draft_id):
@@ -94,11 +250,15 @@ def cache_path(home: Path, draft_id):
 def save_preview(home, result, context, config):
     if not isinstance(result, dict) or result.get("error") or not result.get("draftId"):
         return  # A refused quote has no draft and cannot be confirmed.
-    held = checked_payload(result.get("approvalPayload"), result["draftId"], result.get("payloadHash"))
+    payload = result.get("approvalPayload")
+    flat = is_flat(payload)
+    # The order behind a flat payload is the app's own `preview` beside it in this prepare answer (never the agent's).
+    held = checked_payload(payload, result["draftId"], result.get("payloadHash"), result.get("preview") if flat else None)
     path = cache_path(home, result["draftId"])
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     record = {"payload": json.loads(held), "payloadHash": result["payloadHash"], "owner": config["ownerTelegramId"],
-              "origin": config["origin"], "session": context["SESSION_KEY"], "message": context["MESSAGE_ID"]}
+              "origin": config["origin"], "session": context["SESSION_KEY"], "message": context["MESSAGE_ID"],
+              **({"preview": result["preview"]} if flat else {})}
     data = canonical(record).encode("utf-8")
     # O_EXCL keeps the first immutable preview/turn across retries; a prepare replay cannot move its consent boundary.
     try:
@@ -121,19 +281,20 @@ def load_preview(home, draft_id, config):
         record = json.load(handle)
     if record.get("owner") != config["ownerTelegramId"] or record.get("origin") != config["origin"]:
         raise ValueError("approval_preview_unavailable")
-    checked_payload(record.get("payload"), draft_id, record.get("payloadHash"))
+    checked_payload(record.get("payload"), draft_id, record.get("payloadHash"), record.get("preview"))
     return record
 
-def authorize_order(record, draft_id):
+def authorize_order(record, draft_id, on_requested=None):
     payload = record["payload"]
-    held = checked_payload(payload, draft_id, record["payloadHash"])
-    key = "marketplace.app.action:forkicks.order.confirm:" + draft_id
+    held = checked_payload(payload, draft_id, record["payloadHash"], record.get("preview"))
+    key = APPROVAL_CLASS + ":forkicks.order.confirm:" + draft_id
     try:
-        summary = approval_summary(payload)
+        summary = approval_summary({"preview": order_preview(record)})
     except ValueError as error:
         return None, {"error": str(error)}
     ap = approval_modules()
-    answer = ap.propose("marketplace.app.action", key, summary, held)
+    # The app's payload, byte for byte (its confirm compares it with the stored one): the box only checks it.
+    answer = ap.propose(APPROVAL_CLASS, key, summary, held)
     task = answer.doc.get("task")
     # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy.
     if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
@@ -143,7 +304,10 @@ def authorize_order(record, draft_id):
         return proof, None  # The CP re-reads the direct grant/start; same draft is merchant-idempotent.
     granted = ap.wait(task)
     if granted.exit_code != 0 or granted.status != "granted":
-        return None, {"error": "approval_required", "instruction": ORDER_APPROVE_IN_BOT}
+        # FK-ON-GRANT: a card still waiting for its tap (wait exit 6) is handed to the on-grant pass
+        # (_forkicks_grant.track), which places the order on the resident's grant; it returns the instruction.
+        tracked = on_requested(task) if on_requested is not None and granted.exit_code == 6 else None
+        return None, {"error": "approval_required", "instruction": tracked or ORDER_APPROVE_IN_BOT}
     started = ap.start(task, key, held)
     if not started.ok or started.doc.get("authorization") != "grant":
         return None, {"error": "approval_not_started"}

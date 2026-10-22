@@ -56,6 +56,8 @@ from . import _gate_events
 from . import _code_run
 # MM-INFER-VIS, on its own line for the same reason.
 from . import _negotiator_llm
+# B-169b, on its own line for the same reason.
+from . import _skill_label
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -595,6 +597,9 @@ def _emit_tool_call(collector: Collector, kwargs: dict) -> None:
     )
     window = dict(occurred_at=occurred_at, occurred_at_earliest=earliest, occurred_at_latest=occurred_at)
     matched = _edgeos_match(kwargs, payload)
+    if matched is None:
+        # B-169b: a shipped skill's script run, only where EdgeOS wrote no label.
+        _skill_match(kwargs, payload)
     if matched is None or matched[0].role not in ("action", "confirming_read"):
         collector.emit("tool.call", payload, tool_call_id=tool_call_id, **window, **refs)
         return
@@ -697,6 +702,16 @@ def _edgeos_match(kwargs: dict, tool_payload: dict) -> Optional[tuple]:
     tool_payload["operation"] = op.operation
     tool_payload["target_system"] = _edgeos.TARGET_SYSTEM
     return op, params, call
+
+
+def _skill_match(kwargs: dict, tool_payload: dict) -> None:
+    """B-169b: label a `terminal` run of a shipped skill's script
+    (`_skill_label`): `target_system` `skill`, `operation` the skill's name or
+    `other`. Called only when `_edgeos_match` labelled nothing, so an EdgeOS
+    script verb keeps its `edgeos` label."""
+    label = _skill_label.skill_label(kwargs.get("tool_name"), kwargs.get("args"))
+    if label is not None:
+        tool_payload["target_system"], tool_payload["operation"] = label
 
 
 def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched: tuple) -> list:
