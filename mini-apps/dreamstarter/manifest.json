@@ -1,0 +1,93 @@
+{
+  "id": "dreamstarter",
+  "name": "DreamStarter",
+  "description": "Turn what a resident wrote about themselves into their top 3 dreams, with a claim link for each on dreamstarter.xyz and a read-only view of how the dream's AI agents are executing after it is claimed.",
+  "version": "1.0.0",
+  "homepage": "https://dreamstarter.xyz",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Discover dreams from text the resident shares",
+      "description": "Send only the about-me, interests and goals text the resident agrees to share, and read back up to three suggested dreams with public claim links. No Edge City account, email, phone, Telegram handle or identifier is sent, and nothing is created on DreamStarter until the resident opens a claim link in their own browser."
+    },
+    {
+      "kind": "read",
+      "label": "Read a suggested dream's execution status",
+      "description": "Read the public status of a dream the resident's own claim reference points to: whether it is unclaimed, claimed or executing, and which agent workflows have run. No dream content, credits or account data."
+    },
+    {
+      "kind": "read",
+      "label": "Read the public workflow catalog",
+      "description": "Read the public list of what DreamStarter's agents do automatically after a dream is claimed."
+    }
+  ],
+  "skills": [
+    "dreamstarter"
+  ],
+  "operations": [
+    "mini-app.read"
+  ],
+  "mcp": {
+    "url": "https://mcp.dreamstarter.xyz/mcp",
+    "tools": [
+      {
+        "name": "discover_dreams",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "about": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "interests": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "maxItems": 12
+            },
+            "goals": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            }
+          },
+          "required": [
+            "about"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "dream_status",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "pattern": "^[a-z0-9]{20,64}$"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "list_workflows",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}
