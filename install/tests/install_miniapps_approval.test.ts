@@ -68,9 +68,9 @@ function staged(projection: { version: number; apps: Record<string, unknown>[] }
   expect(reconcileMiniApps(projection, root, undefined, true, delivery)).toEqual(receipt);
   return receipt;
 }
-function refusedAlone(app: Record<string, unknown>, code: string): void {
+function refusedAlone(app: Record<string, unknown>, code: string, delivery: Delivery = bundle()): void {
   const root = home();
-  const receipt = staged({ version: 1, apps: [gold(), dizko(), app] }, root);
+  const receipt = staged({ version: 1, apps: [gold(), dizko(), app] }, root, delivery);
   expect(receipt.refused).toEqual([{ id: app.id as string, code }]);
   expect(existsSync(join(root, "skills", app.id as string, "SKILL.md"))).toBe(false);
   expect(JSON.parse(onDisk(root)).apps.map((a: { id: string }) => a.id)).toEqual(["gold-stars", "dizko"]);
@@ -242,7 +242,11 @@ test("a malformed `approval` refuses that app alone (operations_not_generic), ex
     ["fields with a fifth", { ...key, fields: { ...fields, note: "note" } }],
     ["fields a list", { ...key, fields: Object.values(fields) }],
     ["an empty field", { ...key, fields: { ...fields, total: "" } }],
-    ["a field over 200 code points", { ...key, fields: { ...fields, when: "a".repeat(201) } }],
+    // review-b N3: every one of the four fields is bounded, not only `when` (201 code points, ASCII and astral).
+    ...CARD_FIELDS.flatMap(field => [
+      [`${field} over 200 code points`, { ...key, fields: { ...fields, [field]: "a".repeat(201) } }],
+      [`${field} over 200 astral code points`, { ...key, fields: { ...fields, [field]: "\u{1F600}".repeat(201) } }],
+    ] as [string, unknown][]),
     ["a field not a string", { ...key, fields: { ...fields, item: 7 } }],
     ["a null field", { ...key, fields: { ...fields, shared: null } }],
     ["bind not a list", { ...key, bind: {} }],
@@ -252,7 +256,18 @@ test("a malformed `approval` refuses that app alone (operations_not_generic), ex
     ["a bind path empty", { ...key, bind: [["", "request.kayakId"]] }],
     ["a bind path over 200 code points", { ...key, bind: [["kayakId", "r".repeat(201)]] }],
     ["a bind path not a string", { ...key, bind: [["hours", 2]] }],
+    // review-b N2: `__proto__` and `constructor` as JSON.parse makes them (own keys, as stdin is parsed), on the key
+    // and inside fields: inOrder sees them as a fifth key.
+    ["__proto__ on the key", JSON.parse(`{"prepare":"${PREPARE}","card":"${CONFIRM}","fields":${JSON.stringify(fields)},"bind":[],"__proto__":{"card":"x"}}`)],
+    ["constructor on the key", JSON.parse(`{"prepare":"${PREPARE}","card":"${CONFIRM}","fields":${JSON.stringify(fields)},"bind":[],"constructor":"x"}`)],
+    ["__proto__ in fields", JSON.parse(`{"prepare":"${PREPARE}","card":"${CONFIRM}","fields":{"item":"a","total":"a","when":"a","shared":"a","__proto__":"a"},"bind":[]}`)],
+    ["constructor in fields", JSON.parse(`{"prepare":"${PREPARE}","card":"${CONFIRM}","fields":{"item":"a","total":"a","when":"a","shared":"a","constructor":"a"},"bind":[]}`)],
   ];
+  // The JSON.parse'd keys really carry the name as an own key (an object literal's `__proto__:` would set the prototype).
+  for (const [name, approval] of malformed.filter(([name]) => /__proto__|constructor/.test(name))) {
+    const own = name.endsWith("fields") ? (approval as { fields: object }).fields : approval as object;
+    expect([name, Object.keys(own).at(-1)]).toEqual([name, name.split(" ")[0]]);
+  }
   // The two places the installer is stricter than the bridge (which ignores key order and takes {prepare, card}
   // alone): the cp emits neither (boxEntry: the four in contract order; fields and bind always present).
   const stricter: [string, unknown][] = [
@@ -265,9 +280,17 @@ test("a malformed `approval` refuses that app alone (operations_not_generic), ex
     ["prepare twice", [PREPARE, PREPARE, CONFIRM]], ["no accepted list", [READ, CTX_READ, PREPARE, CONFIRM]], ["the read alone", [READ]],
     ["an own op beside", [READ, "acme.status", PREPARE, CONFIRM]], ["context out of order", [CTX_READ, READ, CTX_WRITE, PREPARE, CONFIRM]],
   ];
+  // review-b N4: a malformed key beside PLAIN ops (an accepted list, no card op) is refused, never staged as a plain
+  // generic app with the key dropped (the `card === null` refusal in checkApp).
+  const plainOps: [string, unknown][] = [
+    ["a malformed key with [read]", { ...cardApp({ ...key, card: PREPARE }), operations: [READ] }],
+    ["a malformed key with the context list", { ...cardApp({ ...key, fields: { ...fields, total: "" } }), operations: [READ, CTX_READ, CTX_WRITE] }],
+    ["a null key with [read]", { ...cardApp(null), operations: [READ] }],
+  ];
   const entries: [string, Record<string, unknown>, boolean][] = [
     ...malformed.map(([name, approval]) => [name, cardApp(approval), false] as [string, Record<string, unknown>, boolean]),
     ...opsWrong.map(([name, operations]) => [name, { ...cardApp(), operations }, false] as [string, Record<string, unknown>, boolean]),
+    ...plainOps.map(([name, app]) => [name, app as Record<string, unknown>, false] as [string, Record<string, unknown>, boolean]),
     ...stricter.map(([name, approval]) => [name, cardApp(approval), true] as [string, Record<string, unknown>, boolean]),
   ];
   for (const [, app] of entries) refusedAlone(app, "operations_not_generic");
@@ -281,6 +304,36 @@ test("a malformed `approval` refuses that app alone (operations_not_generic), ex
     const root = home();
     expect(staged({ version: 1, apps: [gold(), cardApp(approval)] }, root)).not.toHaveProperty("refused");
     expect(bridge([{ entry: cardApp(approval) }])[0].accepted).toBe(true);
+  }
+});
+
+test("ov#466 S1: a card op that is a platform generic op, duplicated in operations, refuses that app alone (the cp's prepare-and-card-once rule)", () => {
+  // Only app id `mini-app` can name one (a card op starts with `<id>.`, and every accepted op starts with `mini-app.`).
+  // cp#352 boxRefusal (control-plane/src/mini-apps-catalog.js:403-404) takes operations [an accepted list or none,
+  // prepare, card] with prepare and card ONCE each, so it never emits these; the installer now answers as the cp does.
+  const id = "mini-app", delivery = bundle(id);
+  const key = (prepare: string, card: string) => keyFor(DECLARATION, id, prepare, card);
+  const duplicated: [string, Record<string, unknown>][] = [
+    ["prepare is the read, after [read]", cardApp(key(READ, "mini-app.order.confirm"), [READ], id)],
+    ["prepare is the read, after the context list", cardApp(key(READ, "mini-app.order.confirm"), [READ, CTX_READ, CTX_WRITE], id)],
+    ["prepare is the context read, after the context list", cardApp(key(CTX_READ, "mini-app.order.confirm"), [READ, CTX_READ, CTX_WRITE], id)],
+    ["card is the read, after [read]", cardApp(key("mini-app.order.prepare", READ), [READ], id)],
+    ["card is the context write, after the context list", cardApp(key("mini-app.order.prepare", CTX_WRITE), [READ, CTX_READ, CTX_WRITE], id)],
+  ];
+  for (const [name, app] of duplicated) {
+    expect([name, (app.operations as string[]).length - new Set(app.operations as string[]).size]).toEqual([name, 1]);
+    refusedAlone(app, "operations_not_generic", delivery);
+    expect(() => validateProjection({ version: 1, apps: [app] }, delivery)).toThrow("operations_not_generic");
+  }
+  // The bridge's _card_entry_ok still takes these (`[*ops, prepare, card]`, no once-each check): the installer is the
+  // stricter side here, as the cp is, so the box never stages one.
+  expect(bridge(duplicated.map(([, entry]) => ({ entry }))).map(v => v.accepted)).toEqual(duplicated.map(() => true));
+  // Each op once is the cp's accepted shape and stays accepted, byte for byte (fail-closed only on the duplicate).
+  for (const app of [cardApp(key(READ, "mini-app.order.confirm"), [], id), cardApp(key(CTX_WRITE, "mini-app.order.confirm"), [READ], id)]) {
+    const root = home();
+    const projection = { version: 1, apps: [gold(), app] };
+    expect(staged(projection, root, delivery)).not.toHaveProperty("refused");
+    expect(onDisk(root)).toBe(JSON.stringify(projection));
   }
 });
 
