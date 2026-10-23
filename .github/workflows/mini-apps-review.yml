@@ -22,11 +22,27 @@
 # trusted. The suite's output goes into the artifact too. The version-bump rule
 # is reported (N) and not enforced until S2 is settled.
 #
-# Phase 0: dark and advisory. It is not a required check, it posts no comment
-# (jmill's LLM half does that later), it holds no secret and no write token,
-# and it never uses pull_request_target. Exit 0 for PASS and NEEDS_HUMAN, exit
-# 1 for FAIL (the job is red; the check is still not required), exit 2 when the
-# bot cannot judge (the report then says FAIL with bot_error).
+# Phase 0: advisory. It is not a required check and it never uses
+# pull_request_target. The review job holds no secret and no write token. Exit
+# 0 for PASS and NEEDS_HUMAN, exit 1 for FAIL (the job is red; the check is
+# still not required), exit 2 when the bot cannot judge (the report then says
+# FAIL with bot_error).
+#
+# The comment job (P0-3 operating rule; design §6.3): a separate job on a fresh
+# runner that only ever sees the review job's artifact, never the pull request.
+# It posts the §6.3 JSON as ONE pull request comment, edited in place on each
+# push and marked DRY RUN (scripts/mini-apps-review-comment.ts, run from the
+# BASE tree like the review). It never approves, merges, requests changes or
+# posts a check run. Its token is a GitHub App installation token, minted last
+# and revoked at the end of the job by actions/create-github-app-token, from
+# two repository secrets read by name: MINI_APPS_BOT_CLIENT_ID and
+# MINI_APPS_BOT_PRIVATE_KEY (a human creates the App and the secrets, C4).
+# The token asks for Pull requests write only. When neither secret is set (a
+# fork's pull request, or before the App exists) the job says so in its
+# summary and skips the rest, green. When only one is set, or anything after
+# that fails (no report, a malformed report, an API error), it fails red and
+# posts nothing that reads as a pass (a missing or malformed report sets the
+# comment to FAIL bot_error for this head).
 #
 # NON-REQUIRED, by design (review-b N-b, a design item for the lead and release):
 # - on pull_request GitHub runs the pull request's own copy of THIS FILE, so a
@@ -116,3 +132,86 @@ jobs:
             ${{ runner.temp }}/mini-apps-conformance/
           if-no-files-found: warn
           retention-days: 14
+
+  # The PR comment (dry run). needs: review, so it runs after the review job,
+  # and !cancelled(), so a FAIL (exit 1) or a bot error (exit 2) is posted too.
+  comment:
+    name: mini-apps review comment (bot v0, dry run)
+    needs: review
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The App's two secrets live ONLY in this GitHub Environment, restricted to
+    # the main branch with no required reviewers (lead ruling 20 Oct). A run on
+    # any other ref, a same-repo PR branch included, gets no secrets, so the
+    # gate below skips green; the comment posts once a workflow_run follow-up
+    # runs this job from main.
+    environment: mini-apps-bot
+    permissions:
+      contents: read
+    steps:
+      # Whether the App's secrets exist, as true/false only: no secret value
+      # enters this step. Neither set: skip, green. One set: fail closed.
+      - name: Comment gate
+        id: gate
+        env:
+          HAS_CLIENT_ID: ${{ secrets.MINI_APPS_BOT_CLIENT_ID != '' }}
+          HAS_PRIVATE_KEY: ${{ secrets.MINI_APPS_BOT_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$HAS_CLIENT_ID" = "true" ] && [ "$HAS_PRIVATE_KEY" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_CLIENT_ID" = "false" ] && [ "$HAS_PRIVATE_KEY" = "false" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Bot comment skipped (DRY RUN): the secrets MINI_APPS_BOT_CLIENT_ID and MINI_APPS_BOT_PRIVATE_KEY are not set here (a fork's pull request, or the App does not exist yet). No comment was posted; the verdict is in the review job's summary and its artifact." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Bot comment FAILED CLOSED** (DRY RUN): only one of MINI_APPS_BOT_CLIENT_ID and MINI_APPS_BOT_PRIVATE_KEY is set. Nothing was posted." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      # The tool again: the BASE commit's tree. Nothing of the pull request.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: tool
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+      # This run's review artifact. A pattern, so a missing artifact downloads
+      # nothing instead of failing here: the comment step then sets the comment
+      # to FAIL bot_error for this head and fails the job.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          pattern: mini-apps-review
+          merge-multiple: true
+          path: ${{ runner.temp }}/review
+      # Minted last, scoped to this repository and to Pull requests write
+      # (issue comments on a pull request), revoked in the action's post step.
+      - name: Mint the bot token
+        id: token
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.MINI_APPS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.MINI_APPS_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+      # The token goes to the script on stdin, and env -u keeps it out of
+      # bun's environment. Every value arrives through env.
+      - name: Post the comment (dry run)
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          BOT_TOKEN: ${{ steps.token.outputs.token }}
+          BOT_LOGIN: ${{ steps.token.outputs.app-slug }}[bot]
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$BOT_TOKEN" | env -u BOT_TOKEN bun --config=/dev/null --no-env-file --no-install --tsconfig-override=/dev/null ./tool/scripts/mini-apps-review-comment.ts \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" --report "$RUNNER_TEMP/review/mini-apps-review.json" \
+            --bot-login "$BOT_LOGIN" --run-url "$RUN_URL" --summary "$GITHUB_STEP_SUMMARY"
