@@ -29,7 +29,10 @@ This is available only in the paired owner's private conversation.
   `before` (a post id, for older posts) and `limit` (1–50, default 20).
 - `get_thread`: required `post_id`. The whole thread the post belongs to.
 - `search_posts`: required `query` (2–200 characters); optional `room` and
-  `limit` (1–20, default 10).
+  `limit` (1–20, default 10). Search by topic only: never put the owner's
+  name, another resident's name or anything private from this conversation
+  into a `query` or `room` argument, because it is sent to the board's own
+  external host.
 
 Every tool rejects any other argument.
 

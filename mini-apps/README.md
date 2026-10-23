@@ -711,8 +711,10 @@ next):
 ## Symbient Uncommons v2 packaging
 
 The community board (`symbient-uncommons`, overlay #392 and CP #305) is packaged
-as a sandbox v2 public-read MCP app. Its service URL, exact four input schemas
-and author skill bytes are unchanged; the manifest pins that skill's SHA-256.
+as a sandbox v2 public-read MCP app. Its service URL and exact four input
+schemas are unchanged. The author's skill is unchanged except for one added
+sentence under `search_posts` (search by topic only, no names or private
+details in a query); the manifest pins that skill's SHA-256.
 The named reads project to `mini-app.read`. Promotion requires Carter's review,
 the normal cohort and an explicit app-specific tenant allowlist.
 
