@@ -707,3 +707,34 @@ next):
   its own member row (ov#457) also rides v2.1.13.
 - **Mini-apps v3:** token, OAuth and write partner apps, with per-app
   app-server code.
+
+## Symbient Uncommons v2 packaging
+
+The community board (`symbient-uncommons`, overlay #392 and CP #305) is packaged
+as a sandbox v2 public-read MCP app. Its service URL and exact four input
+schemas are unchanged. The author's skill is unchanged except for one added
+sentence under `search_posts` (search by topic only, no names or private
+details in a query); the manifest pins that skill's SHA-256.
+The named reads project to `mini-app.read`. Promotion requires Carter's review,
+the normal cohort and an explicit app-specific tenant allowlist.
+
+Read-only MCP captures from 22 October 2026 are checked in under
+`scripts/tests/fixtures/symbient-uncommons/<operation>/`. The `search_posts`
+capture was re-taken live on 23 October 2026 at 18:09Z with the arguments
+`{"query": "Great Ledger", "limit": 3}`, chosen so that every hit is one of the
+board's own beings: the first capture held a post written by a person, and a
+fixture holds no resident's words or name. Its one hit is the same being post
+the `list_posts` capture holds. Run the #422 v0
+conformance runner with `mini-apps/symbient-uncommons/manifest.json`,
+`--fixtures scripts/tests/fixtures/symbient-uncommons` and an `--out` outside
+this repository. The service's actual MCP `isError` refusal is preserved as
+`tool-refusal.json`; since ov#474 the runner accepts it as a well-formed MCP
+error answer, so offline conformance passes. Never replace a capture with a
+fabricated service response.
+
+This packaging does not resolve the already reviewed service hardening:
+32 KiB complete response bounds and honest thread paging/refusal, per-post
+lengths, bounded identifiers, canonical board links, moderation/takedown and
+retention evidence. Existing schemas and budgets are not silently tightened
+while the external service still implements the old contract. No posting or
+other board mutation is authorized.
