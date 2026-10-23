@@ -87,7 +87,7 @@ test("install.ts runs the step right after configureIndexLinks, as a bare statem
   const main = text.slice(text.indexOf("function main(): void {"));
   const body = main.slice(0, main.indexOf("\n}\n"));
   expect(body.match(/^.*configureAvDisplay.*$/gm)).toEqual(["  configureAvDisplay();"]);
-  expect(body).toMatch(/^  configureIndexLinks\(\);\n  configureAvDisplay\(\);$/m);
+  expect(body).toMatch(/^  if \(resident\) configureIndexLinks\(\);\n  configureAvDisplay\(\);$/m);
 });
 
 test("the plugin directory exists where the installer stages plugins from", () => {
@@ -232,5 +232,5 @@ test("rc44: install.ts runs the menu step right after configureAvVote, as a bare
   const main = text.slice(text.indexOf("function main(): void {"));
   const body = main.slice(0, main.indexOf("\n}\n"));
   expect(body.match(/^.*configureVillageMenu.*$/gm)).toEqual(["  configureVillageMenu();"]);
-  expect(body).toMatch(/^  configureAvVote\(\);\n  \/\/ rc44 .*\n  configureVillageMenu\(\);$/m);
+  expect(body).toMatch(/^  if \(resident\) configureAvVote\(\);\n  \/\/ rc44 .*\n  configureVillageMenu\(\);$/m);
 });

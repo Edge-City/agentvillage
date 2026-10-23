@@ -312,7 +312,9 @@ class FlatCardBoxTest(unittest.TestCase):
                 self.assertEqual(out.get('data'), legacy, out)  # the agent only ever sees the legacy draft
                 self.assertEqual([c.kwargs for c in self.transport.call_args_list], [{}, {'flat_card': False}])
                 self.assertEqual(self.transport.call_args_list[0].args, self.transport.call_args_list[1].args)
-                self.assertEqual(logs.output, ['WARNING:village_bridge:village_bridge forkicks card_fallback_legacy code=' + code])
+                # (FK-CARD-AT-PREPARE: no daemon here, so the card-at-prepare's own codes-only line follows; not counted.)
+                self.assertEqual([line for line in logs.output if 'card_fallback' in line],
+                                 ['WARNING:village_bridge:village_bridge forkicks card_fallback_legacy code=' + code])
                 self.assertFalse(self.record_path(flat['draftId']).exists())  # the card draft is never saved
                 self.assertEqual(json.loads(self.record_path(legacy['draftId']).read_text())['payload'], legacy['approvalPayload'])
                 self.transport.side_effect = None; self.transport.reset_mock()

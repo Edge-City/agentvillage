@@ -1,7 +1,7 @@
 ---
 name: forkicks
 description: Show For Kicks' live café menu as images by default, read its schedule, preview an order with its exact total and shared display name, and place it only after the resident approves. Optional first-party mini-app; UPI and card orders use pay-at-pickup honor rules.
-version: 1.0.5
+version: 1.0.6
 author: Edge City
 ---
 
@@ -107,18 +107,25 @@ an item, change fulfilment or add drinks to evade this restriction.
    instead of implying pickup. Explicitly state **the display name that will be
    shared with the café**; do not send the owner's email, Telegram id or EdgeOS
    identity. If the name is wrong, stop rather than quietly sharing a substitute.
-   Ask the resident to approve this exact order. Mention once per order:
+   Then follow the prepare answer's `instruction`: with `approval: "requested"`
+   the approval card for this exact order was sent to the resident's approvals
+   bot, so say: “I've sent your approval card to your approvals bot; tap Approve
+   there and I'll place it. If no card arrives within a minute, tell me and I'll
+   check.” Mention once per order:
 
    > Agent ordering is a new experiment this week, so tell me if anything looks off.
 
-4. End the turn and wait for the resident's approval of that preview. Then use
-   `forkicks.order.confirm` with the **same** `draftId` and native approval proof.
-   The approval gate must authorize the exact immutable payload; a model boolean
-   or chat reply alone is not purchase authority. If the tool requests approval
-   in the approvals bot, ask the resident to approve that card, then retry the
-   same draft with its actual proof. Never fabricate `approval`, `taskId`, hashes
-   or an execution record. A changed item, option, fulfilment, name, note or
-   payment method needs a new exact preview and approval, not a patched draft.
+4. Do not ask for a “yes” in chat and do not wait for one: the card tap is the
+   approval. When the resident taps Approve, the order is placed automatically
+   and they get one message in this chat; do not announce it again. If the
+   prepare answer has an `error` saying the approval card could not be raised,
+   tell the resident plainly that nothing was ordered. To check on an order
+   (they ask, no card arrived, or an instruction says to retry), use
+   `forkicks.order.confirm` with the **same** `draftId`; it never sends a second
+   card. The approval gate must authorize the exact immutable payload; a model
+   boolean or chat reply alone is not purchase authority. Never fabricate
+   `approval`, `taskId`, hashes or an execution record. A changed item, option,
+   fulfilment, name, note or payment method needs a new exact preview and approval, not a patched draft.
    The native approval card is derived from the saved canonical payload, not
    agent-written preview text: quantity, items/options, unit/line prices, ₹ total,
    fulfilment, café name/id/address, IST date, delivery destination, payment,

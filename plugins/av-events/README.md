@@ -45,7 +45,7 @@ plugins/av-events/
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
-  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v3)
+  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v4)
   outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v5)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
@@ -770,7 +770,7 @@ shared by `digest.share` and `village.vote` later through `register_pass`) and
 | `AV_APPROVAL_URL` | The daemon: `http://127.0.0.1:<port>` (or `localhost`, `[::1]`), `unix:<absolute socket path>`, or an `https://` origin (the hosted dogfood). No path, no query, nothing else. |
 | `AV_APPROVAL_TOKEN_FILE` | The agent credential's file. Else `$HERMES_HOME/approval/agent-token` when it exists, else `AV_APPROVAL_TOKEN`: the shim's order. A token file must be absolute, a regular file owned by this uid, mode 0600; a named file that fails never falls back. |
 | `AV_APPROVAL_DAEMON_UID` | The uid that must own the loopback listener or the socket (default 10001). |
-| `AV_APPROVAL_POLL_S` | Seconds between poller passes (default 30, at least 5). |
+| `AV_APPROVAL_POLL_S` | Seconds between poller passes (default 30, at least 5). While a registered busy probe (`register_busy`) reports live work, e.g. a village-bridge approval card waiting for its tap, the poller waits 5 s instead (adaptive polling; core has no push). |
 | `AV_APPROVAL_POLLER` | `1` starts the poller thread in any process; `0` never (session-start passes still run). |
 
 **The calls, exactly as the plugin makes them** (`POST /verb/<name>` with `Authorization: Bearer
@@ -1684,16 +1684,19 @@ tenant the ask confirms and reads answers without waiting for a chat. It reads:
   execution's window (±2 s); otherwise both are null. The last 512 KiB is read, and only when there
   is something to report.
 - `$HERMES_HOME/cron/jobs.json`: `job_name`, **only when it is exactly one of the names the
-  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v3`;
-  `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS`). A prefix check
+  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v4`;
+  `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS` plus the ZZZ managed job). A prefix check
   is not enough: a participant can have the agent schedule a job named `Edge — …` too, and its name
   is then their words. Nor is an exact name (DATA-92): the participant can ask for a job named
   exactly `Edge — daily digest`, so the name is reported only when the job id is also one the
   installer recorded in `$HERMES_HOME/av-events/installed_jobs.json` (`{"ids": [...]}`, rewritten by
-  `install/install_index.ts` on every install and update with the ids of the crons it created or
-  manages). No record, no names: a tenant installed before the record existed reports `job_name:
-  null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
+  `install/install_index.ts` and the ZZZ managed-job reconciler with the ids of the crons they
+  created or manage). The ZZZ id is retained only while its exact installed job shape remains
+  verified. No record, no names: a tenant installed before the record existed reports
+  `job_name: null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
   (spec §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+  The ZZZ job is a `no_agent` script: `cron.run` records Hermes execution status, not proof that a
+  pair post reached the app, and it supplies no generic AIAgent model/tool trajectory.
 - **A missing or stale record drops installer runs, not only their names.** The worker keeps a
   `cron.run` from a tenant without research consent only when it names an installer job; one with
   `job_name: null` is dropped as `cron_participant_job` (`agentvillage-data`

@@ -1012,11 +1012,15 @@ def _content_problem(entry: dict) -> Optional[str]:
 
 
 def _withdraw_task(entry: dict, reason: str) -> None:
+    """`reason` is core's closed set: `timeout` (the share expired, the question
+    closed: the answer can no longer be used) or `cancelled`. Core withdraws by
+    the entry's action key; without it the call changed nothing."""
     task = entry.get("task")
     if not isinstance(task, str) or entry.get("state") != "requested":
         return
     try:
-        _approval.withdraw(task, reason)
+        done = _approval.withdraw(task, reason, entry.get("key"))
+        logger.info("av-events: share_vote withdraw=%s", "withdrawn" if done.ok else "refused")
     except _approval.ApprovalUnavailable as exc:
         logger.info("av-events: share_vote withdraw_unsent=%s", exc.code)
     except Exception as exc:  # noqa: BLE001
@@ -1027,7 +1031,7 @@ def _end_out_of_bounds(entry_id: str, entry: dict, state: str, code: str, expect
     """A proposal past its share's expiry or its question's close: ended, and
     a pending question withdrawn on the daemon (best effort)."""
     if _set(entry_id, expect, state, code=code) is not None:
-        _withdraw_task(entry, "the share expired" if entry.get("class") == SHARE_CLASS else "the question closed")
+        _withdraw_task(entry, "timeout")  # the share expired or the question closed
     return Outcome(state, code=code, task=entry.get("task"))
 
 
@@ -1263,7 +1267,7 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
     problem = _content_problem(entry)
     if problem is not None:
         _set(entry_id, {back}, "refused", code=problem)
-        _withdraw_task(entry, "the proposal can no longer be sent")
+        _withdraw_task(entry, "cancelled")  # the proposal can no longer be sent
         return Outcome("refused", code=problem)
     if not _ready():
         # Nothing could carry the event: the grant waits (until it lapses).
@@ -1865,7 +1869,7 @@ def _revoke(args: dict) -> dict:
         after = _set(entry_id, {"unfiled", "requested", "cleared", "refused"}, "withdrawn", code="resident_revoked")
         if after is None:
             return _refuse("share_in_flight", digest_id=digest_id)
-        _withdraw_task(entry, "the resident revoked the digest")
+        _withdraw_task(entry, "cancelled")  # the resident revoked the digest
         return _state_answer(Outcome("withdrawn", code="resident_revoked"), digest_id=digest_id, shared=False)
     if state == "emitted":
         now = float(_clock())
@@ -2023,7 +2027,7 @@ def _vote_withdraw(args: dict) -> dict:
     if state in ("unfiled", "requested", "cleared", "refused"):
         if _set(key, {"unfiled", "requested", "cleared", "refused"}, "withdrawn", code="agent_withdrew") is None:
             return _refuse("vote_in_flight")
-        _withdraw_task(entry, "the agent withdrew the answer")
+        _withdraw_task(entry, "cancelled")  # the agent withdrew the answer
         state = "withdrawn"
     return _state_answer(Outcome(state or "unknown"), question_id=entry.get("question_id"))
 

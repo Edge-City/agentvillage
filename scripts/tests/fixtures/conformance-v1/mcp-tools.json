@@ -1,0 +1,5 @@
+[
+  {"name": "lookup", "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}, "limit": {"type": "integer"}}}},
+  {"name": "quote", "inputSchema": {"type": "object"}},
+  {"name": "place", "inputSchema": {"type": "object", "properties": {"draftId": {"type": "string"}}}}
+]

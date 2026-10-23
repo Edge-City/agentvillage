@@ -57,7 +57,9 @@ class ForKicksInvalidArgumentsTest(unittest.TestCase):
         sent['fulfilment'] = {'locationId': 'cafe', 'type': 'pickup', 'date': '2026-10-19'}
         result = self.result_for(sent); self.transport.return_value = result
         response = self.call(request)
-        self.assertEqual(response, {'data': result, 'handling': bridge.HANDLING})
+        # FK-CARD-AT-PREPARE: the answer also carries the card's approval fields (no daemon here: not raised).
+        self.assertEqual({k: response[k] for k in ('data', 'handling')}, {'data': result, 'handling': bridge.HANDLING})
+        self.assertEqual(response['instruction'], mini.ORDER_CARD_NOT_RAISED)
         self.transport.assert_called_once_with(self.config, {'operation': 'forkicks.order.prepare', **sent})
         self.assertNotIn('date', self.transport.call_args.args[1])
         self.assertEqual(request, original)  # the model's own arguments are never mutated

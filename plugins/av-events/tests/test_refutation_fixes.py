@@ -75,7 +75,8 @@ def test_only_exact_installer_job_names_leave(live, av, home, name, expected):
 def test_the_job_name_seed_loads(plugin):
     cron = __import__(f"{plugin.__name__}._cron", fromlist=["_cron"])
     names = cron.load_job_name_allowlist()
-    assert "Edge — daily digest" in names and "Edge — knowledge sync" in names and "Edge — pending opportunity" in names and len(names) == 10
+    assert {"Edge — daily digest", "Edge — knowledge sync", "Edge — pending opportunity", "Edge — zzz pairs"} <= names
+    assert len(names) == 11
     assert cron.load_job_name_allowlist("/nonexistent.json") == frozenset()
 
 
