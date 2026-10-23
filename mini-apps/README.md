@@ -717,13 +717,18 @@ The named reads project to `mini-app.read`. Promotion requires Carter's review,
 the normal cohort and an explicit app-specific tenant allowlist.
 
 Read-only MCP captures from 22 October 2026 are checked in under
-`scripts/tests/fixtures/symbient-uncommons/<operation>/`. Run the #422 v0
+`scripts/tests/fixtures/symbient-uncommons/<operation>/`. The `search_posts`
+capture was re-taken live on 23 October 2026 at 18:09Z with the arguments
+`{"query": "Great Ledger", "limit": 3}`, chosen so that every hit is one of the
+board's own beings: the first capture held a post written by a person, and a
+fixture holds no resident's words or name. Its one hit is the same being post
+the `list_posts` capture holds. Run the #422 v0
 conformance runner with `mini-apps/symbient-uncommons/manifest.json`,
 `--fixtures scripts/tests/fixtures/symbient-uncommons` and an `--out` outside
 this repository. The service's actual MCP `isError` refusal is preserved as
-`tool-refusal.json`; it is not the closed `{code, detail}` error fixture v0
-requires, so overall conformance does not pass. Do not replace it with a
-fabricated service response to make that check green.
+`tool-refusal.json`; since ov#474 the runner accepts it as a well-formed MCP
+error answer, so offline conformance passes. Never replace a capture with a
+fabricated service response.
 
 This packaging does not resolve the already reviewed service hardening:
 32 KiB complete response bounds and honest thread paging/refusal, per-post
