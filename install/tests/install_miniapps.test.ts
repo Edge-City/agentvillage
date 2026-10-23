@@ -78,7 +78,7 @@ test("uninstall revokes the projection and removes only exact managed files, nev
   expect(JSON.parse(readFileSync(join(root, "mini-apps.json"), "utf8")).apps.map((a: { id: string }) => a.id)).toEqual(["dizko"]);
   expect(readFileSync(join(root, "skills", "gold-stars", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "gold-stars", "SKILL.md")));
   expect(readFileSync(join(root, "skills", "gold-stars", "resident-note.txt"), "utf8")).toBe("keep");
-  expect(reconcileMiniApps(one, root, undefined, true).apps).toEqual([{ id: "dizko", version: "1.0.0" }]);
+  expect(reconcileMiniApps(one, root, undefined, true).apps).toEqual([{ id: "dizko", version: "1.0.1" }]);
   reconcileMiniApps({ version: 1, apps: [] }, root);
   expect(existsSync(join(root, "village-bridge.json"))).toBe(false);
   expect(JSON.parse(readFileSync(join(root, "mini-apps.json"), "utf8"))).toEqual({ version: 1, apps: [] });
@@ -153,8 +153,9 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
   expect(gold.operations.slice(0, 8)).toEqual([...restored.operations]);
   expect(gold.operations.slice(0, 6)).toEqual([...previous.operations]);
-  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's (each asserted in its own test below).
-  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(4);
+  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's; DIZKO 1.0.1: the fifth and sixth
+  // are dizko's two 1.0.0 entries for the cp re-vendor window (each asserted in its own test below).
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(6);
   expect(PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "gold-stars").length).toBe(2);
   for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
   // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
@@ -190,8 +191,8 @@ test("NEW-03: dizko carries its context read/write after mini-app.read; the read
   const dizko = REVIEWED_MINI_APPS[1];
   const previous = PREVIOUS_REVIEWED_MINI_APPS[2];
   const read = "mini-app.read", ctxRead = "mini-app.context.read", ctxWrite = "mini-app.context.write";
-  expect([dizko.id, dizko.version, [...dizko.skills], [...dizko.operations]]).toEqual(["dizko", "1.0.0", ["dizko"], [read, ctxRead, ctxWrite]]);
-  expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["dizko", "1.0.0", ["dizko"], [read]]);
+  expect([dizko.id, dizko.version, [...dizko.skills], [...dizko.operations]]).toEqual(["dizko", "1.0.1", ["dizko"], [read, ctxRead, ctxWrite]]);
+  expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["dizko", "1.0.1", ["dizko"], [read]]);
   // Parity: the plugin's closed allow-list for a non-Gold-Stars app is exactly these two lists, newest first.
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
   const accepted = /^APP_OPERATIONS_ACCEPTED = \((.*)\)$/m.exec(plugin)![1];
@@ -215,6 +216,37 @@ test("NEW-03: dizko carries its context read/write after mini-app.read; the read
   for (const gold of [REVIEWED_MINI_APPS[0], PREVIOUS_REVIEWED_MINI_APPS[0], PREVIOUS_REVIEWED_MINI_APPS[1]]) {
     for (const operations of [[...gold.operations, ctxRead, ctxWrite], [...gold.operations, ctxWrite], [read, ctxRead, ctxWrite]]) {
       expect(() => validateProjection({ version: 1, apps: [{ ...gold, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+    }
+  }
+});
+
+test("DIZKO 1.0.1: the manifest's version; the 1.0.0 entries stay stageable byte for byte until the cp serves 1.0.1", () => {
+  // The cp re-vendor lags the overlay tag: a box on this overlay is still served dizko 1.0.0 (either list), and a
+  // reviewed-id mismatch fails the WHOLE stage (Gold Stars included). So 1.0.0 stays accepted beside 1.0.1, matched
+  // by id, operations AND version; remove the two 1.0.0 entries after the cp serves 1.0.1 everywhere.
+  const read = "mini-app.read", ctxRead = "mini-app.context.read", ctxWrite = "mini-app.context.write";
+  const manifest = reviewedManifest("dizko");
+  const current = REVIEWED_MINI_APPS.filter((app) => app.id === "dizko");
+  const earlier = PREVIOUS_REVIEWED_MINI_APPS.filter((app) => app.id === "dizko");
+  expect(current.map((app) => [app.version, [...app.operations]])).toEqual([["1.0.1", [read, ctxRead, ctxWrite]]]);
+  expect(earlier.map((app) => [app.version, [...app.operations]])).toEqual([["1.0.1", [read]], ["1.0.0", [read, ctxRead, ctxWrite]], ["1.0.0", [read]]]);
+  expect([manifest.version, [...manifest.operations]]).toEqual(["1.0.1", [read]]);
+  expect(readFileSync(join(REPO, "skills", "dizko", "SKILL.md"), "utf8")).toMatch(/^---\nname: dizko\n[\s\S]*\nversion: 1\.0\.1\n/);
+  for (const entry of [...current, ...earlier]) {
+    const projection = { version: 1, apps: [REVIEWED_MINI_APPS[0], { id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    const root = installedBox();
+    const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.apps).toEqual([{ id: "gold-stars", version: "1.1.0" }, { id: "dizko", version: entry.version }]);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
+    expect(readFileSync(join(root, "mini-apps.json"), "utf8")).toBe(JSON.stringify(projection));
+    expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  }
+  // One dizko entry at a time; any other version (either list) fails the whole stage as before.
+  const [newest] = current, [, older] = earlier;
+  expect(() => validateProjection({ version: 1, apps: [newest, older] })).toThrow("mini_apps_unreviewed_bundle");
+  for (const version of ["1.0.2", "1.1.0", "0.9.9", "1.0.1-rc.1", "1.0.0-rc.1", "1.0", 1]) {
+    for (const operations of [[read, ctxRead, ctxWrite], [read]]) {
+      expect(() => validateProjection({ version: 1, apps: [{ ...newest, version, operations }] })).toThrow("mini_apps_unreviewed_bundle");
     }
   }
 });

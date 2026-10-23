@@ -2,7 +2,7 @@
   "manifest": 2,
   "id": "dizko",
   "name": "Dizko",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Discover public music events, artists and venues.",
   "homepage": "https://dizko.app",
   "credit": {
@@ -431,8 +431,8 @@
   "skills": [
     {
       "name": "dizko",
-      "version": "1.0.0",
-      "sha256": "30a47940516f3626398b1d82d60f31a3dc62540509f1dd7ecfdee81aa1b25b93",
+      "version": "1.0.1",
+      "sha256": "574c2dc71234308c9839c664d79159b4335298e2709f18f24637a3b786c2626c",
       "path": "skills/dizko/SKILL.md"
     }
   ]
