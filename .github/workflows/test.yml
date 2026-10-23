@@ -210,63 +210,104 @@ jobs:
   #
   # One source of truth: the extractor and the check are approval.md's own
   # scripts, checked out at the pinned commit below (approval-md/approval.md is
-  # public, so no token). Move the ref to the v0.4.7 tag once that release
-  # carries them; until then it names the head commit of the approval.md B-167 PR.
+  # public, so no token). Until a release carries them the ref names the head
+  # commit of the approval.md B-167N PR (#668, stacked on the B-167 PR, #665).
+  # B-167N fold 1 M4 + fold 2 S-D1: the job fails unless that commit is on
+  # approval.md main's first-parent line (a state main held, never a merge-queue
+  # branch commit) at or above the floor in tool-ref-on-main.sh, so this job stays
+  # red until #668 merges and the ref (and the floor) move to the commit that
+  # merges it.
   #
-  # The report (first line: the GATE line) is the job summary and the
-  # `class-diff` artifact (markdown + JSON).
+  # B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): the tool is
+  # a fresh clone in the runner's temp dir, outside this checkout, so no file of
+  # the PR is on its path; nothing is installed in it; `bun install` here ignores
+  # lifecycle scripts; tool-intact.sh proves the clone is the ref, clean and
+  # byte-identical at the ref check and again right before the check; bun runs
+  # from the clone with an empty config (approval-class-diff.sh tbun). The root
+  # files bun and npm read, and the overlay code approval.md's extractor imports
+  # (install/install_index.ts and its imports), are code-owned.
+  #
+  # B-167N NEW-CALLS (Carter L17349, L17375; spec approval L17350): every call
+  # NEW or CHANGED against the previous release tag (recipes, and the harness-
+  # tool envelopes approval.md's extractor derives from the mini-app manifests
+  # and the gated plugin tools) must carry its declared outcome in
+  # scripts/approval-class-diff/expected.json, and the real hook must give
+  # exactly it under the village default template and in each settings cell.
+  #
+  # The report (first line: the GATE line; the NEW-CALLS line heads its own
+  # section) is the job summary and the `class-diff` artifact (markdown + JSON).
   class-diff:
     name: approval class-diff (shipped corpus at the pinned core)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # APPROVAL_MD_TOOL_REF, see the comment above: the one place the ref is named.
+      AV_APPROVAL_MD_TOOL_REF: ce36c9d9cd195543e78440acdef35e2a99ab3f69
     steps:
-      # Full history and tags: a push to main and a Tag release call measure
-      # against the previous release tag (the overlay the boxes run), not HEAD^1
-      # (B-167 fold 1 S-2), so a pin bump merged red stays red on every later
-      # commit until a release carries it.
+      # Full history, every branch and tag: every event measures against the
+      # previous release (the overlay the boxes run), not HEAD^1 (B-167 fold 1 S-2;
+      # B-167N fold 1 N6: pull requests too), so a pin bump merged red stays red on
+      # every later commit until a release carries it. origin/main is read for the
+      # release rule (S3).
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: class-diff base (the PR's base, or the previous release tag)
+      - name: class-diff base (the previous release, on every event)
         id: base
         env:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = pull_request ]; then
-            base=$(git rev-parse HEAD^1)
-            echo "pull request: measured against its base ${base:0:12}"
-          elif tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-rc*' HEAD^ 2>/dev/null); then
-            base=$(git rev-parse "$tag^{commit}")
-            echo "$EVENT: measured against the previous release $tag (${base:0:12})"
-          else
-            echo "::error::no previous release tag (v*, not -rc) below HEAD; the class-diff has nothing the boxes run to measure against"
+          # B-167N fold 1 (S3, N6): every event, a pull request included, is measured
+          # against the previous release, so a PR sees what main's push run will see,
+          # and a move merged earlier is never "unchanged" to a later PR. A release is an
+          # annotated vX.Y.Z tag on main that release/RC-MANIFEST.md on main names with
+          # its commit (scripts/approval-class-diff/previous-release.sh); a lightweight
+          # tag, an rc tag or a tag nobody approved never re-baselines.
+          if ! found=$(bash scripts/approval-class-diff/previous-release.sh HEAD^ origin/main); then
+            echo "::error::no previous release below HEAD (an annotated vX.Y.Z tag on main that release/RC-MANIFEST.md on main names with its commit); the class-diff and the new-calls check have nothing the boxes run to measure against"
             exit 1
           fi
+          tag_ref=${found%% *}
+          base=${found##* }
+          echo "$EVENT: measured against the previous release $tag_ref (${base:0:12})"
           echo "ref=$base" >> "$GITHUB_OUTPUT"
-      - name: check out approval.md's extractor and check at the pinned ref
-        uses: actions/checkout@v4
-        with:
-          repository: approval-md/approval.md
-          ref: fb998ecc3d01fc6e2aba623085f6b99703ae2120 # APPROVAL_MD_TOOL_REF, see the comment above
-          path: .test-deps/approval-md-tool
-          persist-credentials: false
-          sparse-checkout: scripts
+          echo "tag=$tag_ref" >> "$GITHUB_OUTPUT"
+      # B-167N fold 2 M-D1: a fresh clone outside the workspace (actions/checkout can
+      # only write under it, where the PR's own files and code are).
+      - name: clone approval.md's extractor and check at the pinned ref (outside this checkout)
+        env:
+          AV_APPROVAL_MD_TOOL_DIR: ${{ runner.temp }}/approval-md-tool
+        run: bash scripts/approval-class-diff/tool-clone.sh "$AV_APPROVAL_MD_TOOL_REF" "$AV_APPROVAL_MD_TOOL_DIR"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
+      # B-167N fold 2 M-D1: no lifecycle script of the PR's package.json runs in this job.
+      - run: bun install --frozen-lockfile --ignore-scripts
+      # B-167N fold 1 M4 + fold 2: the check reads the pinned expected.json from the clone,
+      # so its commit must be a state approval.md main held (its first-parent line) at or
+      # above the floor, and the clone must be exactly that commit. It runs after the setup
+      # steps, so the fixtures step below still runs when it fails.
+      - name: the approval.md tool ref is on approval.md main
+        env:
+          AV_APPROVAL_MD_TOOL_DIR: ${{ runner.temp }}/approval-md-tool
+        run: bash scripts/approval-class-diff/tool-ref-on-main.sh "$AV_APPROVAL_MD_TOOL_DIR"
       - name: class-diff, base pin -> this pin
         env:
-          AV_APPROVAL_MD_TOOL_DIR: ${{ github.workspace }}/.test-deps/approval-md-tool
+          AV_APPROVAL_MD_TOOL_DIR: ${{ runner.temp }}/approval-md-tool
           AV_CLASS_DIFF_OUT: ${{ github.workspace }}/class-diff
           AV_CLASS_DIFF_BOX_CONCURRENCY: "4"
           BASE_REF: ${{ steps.base.outputs.ref }}
+          AV_NEW_CALLS_BASE_REF: ${{ steps.base.outputs.tag }}
+          # B-167N fold 1 S2: an undated acceptance on a call unchanged since the release
+          # fails a pull request and only warns on main and a Tag release call, so it never
+          # halts tag-release; anything else fails on every event.
+          AV_NEW_CALLS_PENDING_ACCEPTANCE: ${{ github.event_name == 'pull_request' && 'fail' || 'warn' }}
         run: |
           set +e
           bash scripts/approval-class-diff.sh "$BASE_REF"
@@ -277,7 +318,7 @@ jobs:
       - name: class-diff fixtures
         if: always()
         env:
-          AV_APPROVAL_MD_TOOL_DIR: ${{ github.workspace }}/.test-deps/approval-md-tool
+          AV_APPROVAL_MD_TOOL_DIR: ${{ runner.temp }}/approval-md-tool
         # A block, not a one-line `run: bun test`: Tag release reads test.yml's one such line as the suite
         # list (tag-release.ts suiteDirs), and this file already sits in that list's scripts/tests.
         run: |

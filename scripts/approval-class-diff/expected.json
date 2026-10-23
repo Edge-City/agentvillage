@@ -1,0 +1,447 @@
+{
+  "about": "B-167N new-calls expectations: one entry per call a skill or mini-app adds or changes (recipes by file + command, harness-tool envelopes by tool + input), the outcome its author declares under the village default template and in each settings cell (class, decision, card_style, matrix), and for a limiting entry Carter's acceptance by name (accepted_by human:carter, accepted_at YYYY-MM-DD). Read by approval.md's scripts/overlay-recipes-check.mjs --expected (scripts/approval-class-diff.sh). Protected like the allowlist: a change here is reviewed by approval and pinned.",
+  "template": "village default",
+  "entries": [
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.order.confirm",
+        "draftId": "fk-draft-0001"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "a purchase always asks",
+      "owner": "ov#399/#406/#407",
+      "propose": {
+        "class": "marketplace.app.action",
+        "key": "marketplace.app.action:forkicks.order.confirm:fk-draft-0001",
+        "summary": "For Kicks order",
+        "payload": {
+          "appId": "forkicks",
+          "operation": "forkicks.order.confirm",
+          "preview": {
+            "appId": "forkicks",
+            "draftId": "fk-draft-0001",
+            "quote": {
+              "lines": [
+                {
+                  "itemId": "item-0001",
+                  "name": "Cold brew",
+                  "qty": 1,
+                  "options": [],
+                  "optionIds": [],
+                  "unitInr": 250,
+                  "lineInr": 250
+                }
+              ],
+              "totalInr": 250,
+              "location": {
+                "name": "Test cafe stop",
+                "address": "Test address",
+                "opens": "2026-10-22T08:00:00+05:30"
+              }
+            },
+            "displayName": "Test resident",
+            "items": [
+              {
+                "itemId": "item-0001",
+                "qty": 1,
+                "optionIds": []
+              }
+            ],
+            "fulfilment": {
+              "type": "pickup",
+              "locationId": "loc-0001",
+              "date": "2026-10-22"
+            },
+            "paymentMethod": "upi"
+          }
+        },
+        "source": "plugins/village-bridge/_forkicks.py:127-140",
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "YYYY-MM-DD"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.menu",
+        "format": "image"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks browse: reading the menu runs on its own, as every village read does (marketplace.app.read is autonomous in the village default).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.schedule",
+        "days": 7
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks browse: reading the schedule runs on its own, as every village read does (marketplace.app.read is autonomous in the village default).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.order.prepare",
+        "items": [
+          {
+            "itemId": "item-0001",
+            "qty": 1,
+            "optionIds": []
+          }
+        ],
+        "fulfilment": {
+          "type": "pickup",
+          "locationId": "loc-0001"
+        },
+        "paymentMethod": "upi"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks quote and draft: preparing the exact order preview runs on its own through the village tool; the purchase itself asks at confirm (its own propose).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "list_cities",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "find_scene_entities",
+        "arguments": {
+          "kind": "venue",
+          "query": "test",
+          "city": "Goa"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_artist",
+        "arguments": {
+          "query": "test"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_venue",
+        "arguments": {
+          "query": "test"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "search_events",
+        "arguments": {
+          "city": "Goa",
+          "when": "today"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "recommend_events",
+        "arguments": {
+          "city": "Goa",
+          "when": "this weekend"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_event",
+        "arguments": {
+          "id": "evt-0001"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.read",
+        "appId": "dizko",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko reads its own context namespace through the village tool: runs on its own with no card (NEW-03, rc44).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.write",
+        "appId": "dizko",
+        "arguments": {
+          "key": "test-note",
+          "value": "fake"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko saves the owner's note in its own context namespace: no card, the village tool's gated-write path (NEW-03, rc44; __init__.py gate_verified).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.read",
+        "appId": "mosaic",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Mosaic reads its own context namespace through the village tool: runs on its own with no card (NEW-03, rc44).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.write",
+        "appId": "mosaic",
+        "arguments": {
+          "key": "test-note",
+          "value": "fake"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Mosaic saves the owner's note in its own context namespace: no card, the village tool's gated-write path (NEW-03, rc44; __init__.py gate_verified).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "file": "skills/edgeos/SKILL.md",
+      "command": "bun skills/edgeos/scripts/edgeos.ts rsvp {event_id}",
+      "class": "exec.local",
+      "decision": "auto",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "EdgeOS RSVP runs on its own today with no card (B-172 cancelled, DECISIONS 21 Oct): pinned so no core or template move adds a gate to it.",
+      "owner": "skills/edgeos (EdgeOS skill; B-167N pin)"
+    },
+    {
+      "file": "skills/edgeos/SKILL.md",
+      "command": "bun skills/edgeos/scripts/edgeos.ts rsvp {event_id} --occurrence {occurrence_iso}",
+      "class": "exec.local",
+      "decision": "auto",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "EdgeOS RSVP runs on its own today with no card (B-172 cancelled, DECISIONS 21 Oct): pinned so no core or template move adds a gate to it.",
+      "owner": "skills/edgeos (EdgeOS skill; B-167N pin)"
+    }
+  ]
+}
