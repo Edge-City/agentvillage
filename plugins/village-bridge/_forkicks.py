@@ -325,7 +325,9 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
     Quote expiry (lead L20310, approval L20313): with `on_quote_expired`, a confirm past the quote's `expiresAt` that
     would propose, wait for a tap or start answers ORDER_CARD_CLOSED and calls `on_quote_expired(task or None)`
     (`_forkicks_grant.close_expired`: tombstone + withdraw), never "tap Approve" for a quote that is gone. A spent
-    grant (an order in flight) is still adopted: the app answers its idempotency key."""
+    grant (an order in flight) is still adopted: the app answers its idempotency key. That includes a start the close
+    itself finds (its own read under the drafts lock, approval L20892): `on_quote_expired` answers False, nothing is
+    closed, and the start is adopted."""
     payload = record["payload"]
     held = checked_payload(payload, draft_id, record["payloadHash"], record.get("preview"))
     key = APPROVAL_CLASS + ":forkicks.order.confirm:" + draft_id
@@ -368,7 +370,12 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
         return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
     if on_quote_expired is not None and _quote_gone(record, now):
         # Quote expiry: neither a tap nor a start can place this draft any more; its card is withdrawn.
-        on_quote_expired(task)
+        if on_quote_expired(task) is False:
+            # FK-N6 (approval L20892): the close read the wait again under the drafts lock and found it spent (the
+            # on-grant pass's start landed after this wait): an order in flight, never "nothing was ordered". It is
+            # adopted like any spent grant; the app answers its idempotency key, and the merchant refuses a new create
+            # past the quote (forkicks lib/orders.ts:33-44).
+            return _adopted(proof, guard_adopt)
         return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
     if granted.exit_code != 0 or granted.status != "granted":
         # FK-ON-GRANT: a card still waiting for its tap (wait exit 6) is handed to the on-grant pass

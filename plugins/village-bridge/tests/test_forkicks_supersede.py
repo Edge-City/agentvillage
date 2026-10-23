@@ -592,37 +592,52 @@ class SupersedeTest(unittest.TestCase):
         self.lose_the_agents_confirm_answer(D1)
         self.age(D1)
         self.run_pass()
-        self.assertEqual((self.sent, self.tombstone_of(D1), self.timeouts()), ([], None, []))
+        # Never "wasn't placed" for an order that may exist, and (review-a ov#468 N13) no longer silent either: one late
+        # confirm with the same draftId, and the app answers the existing order by its idempotency key.
+        self.assertEqual((self.tombstone_of(D1), self.timeouts()), (None, []))
+        self.assertEqual((len(self.placed_lines()), len(self.sent)), (1, 1))
+        self.assertEqual(self.app.orders, {D1: 2})  # the agent's lost confirm and the pass's: one order at the app
         # An unreadable wait: before the TTL the marker waits for the next pass; past it, today's line, no close.
         self.prepare(D2, qty=3, expires=PAST)
         marker = self.home / 'forkicks-drafts' / (D2 + '.await')
         with patch.object(grant, 'approval_modules', side_effect=ValueError('approval_unavailable')):
             self.run_pass()
-            self.assertEqual(self.sent, [])
+            self.assertEqual(len(self.sent), 1)
             self.assertEqual(json.loads(marker.read_text())['phase'], 'awaiting')
             self.age(D2)
             self.run_pass()
-        self.assertEqual(self.sent, [('42', self.EXPIRED_LINE)])
+        self.assertEqual(self.sent[1:], [('42', self.EXPIRED_LINE)])
         self.assertIsNone(self.tombstone_of(D2))
         self.assertFalse(marker.exists())
         self.assertEqual(self.timeouts(), [])
 
-    def test_n2_the_agents_close_between_the_pass_start_and_its_confirm_drops_the_confirm(self):
-        # Review-a ov#465 N2: the agent's wait read `granted` just before the pass's start, then found the quote gone,
-        # closed the draft and told the owner nothing was ordered; the pass must not send its confirm.
+    def test_n2_the_agents_close_between_the_pass_start_and_its_confirm_finds_the_start_and_closes_nothing(self):
+        # Review-a ov#465 N2, as approval L20892 rules it: the agent's wait read `granted` just before the pass's start,
+        # then the quote lapsed and the agent closed. Its close reads the wait again under the lock and finds the start:
+        # no `expired` tombstone (that would say nothing started), no withdraw, and the agent adopts the start. The
+        # pass's confirm goes out once; past the quote the merchant refuses a new create: the true "couldn't take it".
         self.prepare(D1)
         self.daemon.tap(D1)
+        expires = self.lapse_soon(D1)
+        clock = [expires - 1]
         real_guarded = grant.guarded_start
+        closes = []
 
         def guarded(home, draft_id, start):
             out = real_guarded(home, draft_id, start)
-            grant.close_expired(self.home, D1, self.task(D1))  # the agent's close (its withdraw: already decided)
+            clock[0] = expires + 1
+            closes.append(grant.close_expired(self.home, D1, self.task(D1)))  # the agent's close
             return out
 
-        with patch.object(grant, 'guarded_start', side_effect=guarded):
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: clock[0]), patch.object(grant, 'guarded_start', side_effect=guarded):
             self.run_pass()
+        self.assertEqual(closes, [False])
         self.daemon.start.assert_called_once()
-        self.assertEqual((self.app.orders, self.sent), ({}, []))
+        self.assertIsNone(self.tombstone_of(D1))
+        self.assertEqual(self.timeouts(), [])
+        self.assertEqual(self.confirms_sent(), [D1])
+        self.assertEqual((self.app.orders, self.sent), ({}, [('42', "Your For Kicks order wasn't placed: For Kicks couldn't take it.")]))
         self.assertFalse((self.home / 'forkicks-drafts' / (D1 + '.await')).exists())
 
     REFUSED_LINE = "Your For Kicks order wasn't placed: For Kicks couldn't take it."
@@ -680,34 +695,50 @@ class SupersedeTest(unittest.TestCase):
         self.assertEqual((self.tombstone_of(D1), self.timeouts()), (None, []))
         self.daemon.start.assert_called_once()  # no second start: the spent grant's own task and bytes
 
-    def test_n9_a_late_confirm_after_the_agents_expired_close_sends_nothing(self):
-        # Review-a ov#468 N9 (Q5b): the pass's own start is spent with its answer lost; the agent then finds the quote
-        # gone, closes the draft (`expired`) and tells the owner nothing was ordered. With the merchant's clock behind
-        # the box's, a late confirm would still create an order: the tombstone stops it before the transport.
+    def test_n9_the_agents_close_after_the_late_read_finds_the_start_and_closes_nothing(self):
+        # Review-a ov#468 N9 (Q5b), as approval L20892 rules it: the pass's own start is spent with its answer lost; the
+        # agent finds the quote gone and closes right after the pass's late read. The close reads the wait under the lock
+        # and finds the start: no `expired` tombstone, and the agent adopts it (never "nothing was ordered"). With the
+        # merchant's clock behind the box's the late confirm creates the order, and the placed line is true.
         self.prepare(D1)
         self.daemon.tap(D1)
-        real_start = self.daemon.start.side_effect
-
-        def lossy_start(task, key, held):
-            real_start(task, key, held)
-            raise TimeoutError('answer lost')
-
-        self.daemon.start.side_effect = lossy_start
-        self.run_pass()
-        self.daemon.start.side_effect = real_start
+        self.lose_the_pass_start_answer(D1)
         expires = self.lapse_soon(D1)
-        marker = self.home / 'forkicks-drafts' / (D1 + '.await')
         real_spent = grant._spent
+        closes, fired = [], []
 
         def spent_then_agent_closes(waited, key):  # the pass read the wait; the agent's close lands right after
             out = real_spent(waited, key)
-            grant.close_expired(self.home, D1, self.task(D1))
+            if not fired:  # once: the close's own read (under its lock) comes back through here
+                fired.append(True)
+                closes.append(grant.close_expired(self.home, D1, self.task(D1)))
             return out
 
         with patch('time.time', lambda: expires + 1), patch.object(grant, '_spent', side_effect=spent_then_agent_closes):
-            self.run_pass()  # the app (the merchant's clock behind) would still accept a create
+            self.run_pass()  # the app (the merchant's clock behind) still accepts a create
+        self.assertEqual(closes, [False])
+        self.assertIsNone(self.tombstone_of(D1))
+        self.assertEqual((self.confirms_sent(), self.app.orders), ([D1], {D1: 1}))
+        self.assertEqual((len(self.placed_lines()), len(self.sent)), (1, 1))
+
+    def test_n9_an_expired_tombstone_read_in_the_last_check_drops_the_late_confirm_without_a_word(self):
+        # An `expired` tombstone already on disk (a close from before approval L20892, or one with no task to read)
+        # still drops the late confirm inside the last check: the agent told the owner nothing was ordered.
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = self.lapse_soon(D1)
+        real_spent = grant._spent
+
+        def spent_then_tombstone(waited, key):
+            out = real_spent(waited, key)
+            grant.tombstone(self.home, D1, 'expired')
+            return out
+
+        with patch('time.time', lambda: expires + 1), patch.object(grant, '_spent', side_effect=spent_then_tombstone):
+            self.run_pass()
         self.assertEqual((self.confirms_sent(), self.app.orders, self.sent), ([], {}, []))
-        self.assertFalse(marker.exists())
+        self.assertFalse((self.home / 'forkicks-drafts' / (D1 + '.await')).exists())
         self.assertEqual(self.tombstone_of(D1), {'code': 'expired'})
 
     def test_n5_a_late_confirm_that_gets_no_answer_is_retried_with_the_same_draftid_never_a_second_line(self):
@@ -828,6 +859,385 @@ class SupersedeTest(unittest.TestCase):
         self.assertEqual(self.sent[-1], ('42', grant.SUPERSEDED_LINE))
         self.assertEqual(self.tombstone_of(D2), {'code': 'superseded'})
         self.assertEqual(self.app.orders, {})
+
+    # ---- FK-NEXT-TRAIN: N6 (approval L20892 + release N-a), N10, N13 (review-a ov#468) --------------------------
+
+    UNCONFIRMED_LINE = ("Your For Kicks order couldn't be confirmed from here: the app isn't connected to your agent. "
+                        "Ask For Kicks whether it went through.")
+
+    def lose_the_pass_start_answer(self, draft):
+        """The pass's own start is spent at core but its answer is lost: the marker stays awaiting, nothing confirmed."""
+        real_start = self.daemon.start.side_effect
+
+        def lossy_start(task, key, held):
+            real_start(task, key, held)
+            raise TimeoutError('answer lost')
+
+        self.daemon.start.side_effect = lossy_start
+        self.run_pass()
+        self.daemon.start.side_effect = real_start
+        self.assertEqual(self.daemon.tasks[self.task(draft)]['state'], 'started')
+        self.assertEqual(json.loads((self.home / 'forkicks-drafts' / (draft + '.await')).read_text())['phase'], 'awaiting')
+        self.assertNotIn(draft, self.confirms_sent())  # this draft: no confirm (another draft's may precede it)
+
+    def phase_of(self, draft):
+        marker = self.home / 'forkicks-drafts' / (draft + '.await')
+        return json.loads(marker.read_text())['phase'] if marker.exists() else 'gone'
+
+    def race_the_last_check(self, when):
+        """Patch newest_reason: on the first call for which `when()` is true, a prepare of D2 races it from another
+        thread (set_latest's own lock and write), noting the marker's phase once it holds the lock. The pass waits up to
+        0.3 s for it, then goes on. Returns (workers, seen)."""
+        import threading
+        real_newest = grant.newest_reason
+        workers, seen = [], {}
+
+        def prepare_d2():
+            with grant.drafts_lock(self.home):
+                seen['phase'] = self.phase_of(D1)
+                grant._replace(self.home / 'forkicks-drafts' / grant.LATEST, {'draftId': D2})
+
+        def newest(home, draft_id):
+            out = real_newest(home, draft_id)
+            if not workers and when():
+                worker = threading.Thread(target=prepare_d2)
+                workers.append(worker)
+                worker.start()
+                worker.join(0.3)
+            return out
+
+        p = patch.object(grant, 'newest_reason', side_effect=newest)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(lambda: [w.join(5) for w in workers])
+        return workers, seen
+
+    def test_n6_a_start_landing_between_the_pass_wait_and_its_close_leaves_no_expired_tombstone(self):
+        # Approval L20892: the pass reads D1's wait (granted, not spent) past the quote; the agent's start (and its
+        # confirm, whose answer is lost) lands before the close takes the lock. `expired` would say "nothing started".
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        expires = self.lapse_soon(D1)
+        real_spent = grant._spent
+        fired = []
+
+        def spent_then_the_agent_starts(waited, key):  # inside the pass: after its read, before its close
+            out = real_spent(waited, key)
+            if not fired:
+                fired.append(True)
+                self.daemon.tap(D1, 'started')
+                self.app.orders[D1] = 1  # the agent's confirm reached the app; its answer was lost
+            return out
+
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: expires + 1):
+            with patch.object(grant, '_spent', side_effect=spent_then_the_agent_starts):
+                self.run_pass()
+            self.assertEqual(fired, [True])
+            self.assertIsNone(self.tombstone_of(D1))  # `expired` is NOT written
+            self.assertEqual(self.phase_of(D1), 'awaiting')  # the marker stays for the spent path
+            self.assertEqual((self.sent, self.timeouts(), self.confirms_sent()), ([], [], []))
+            self.run_pass()  # the next pass reads it spent: the late confirm answers the existing order
+            self.assertEqual(self.confirms_sent(), [D1])
+            self.assertEqual(len(self.placed_lines()), 1)
+            self.assertEqual(len(self.sent), 1)
+            self.assertEqual(self.phase_of(D1), 'gone')
+            self.run_pass()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_n6_the_agents_close_that_finds_the_pass_start_adopts_it_never_nothing_was_ordered(self):
+        # The agent's confirm reads D1 granted; the pass's start lands right after that read; the quote is gone, so
+        # the agent closes: its read under the lock finds the start, writes no tombstone and adopts it (same draftId).
+        self.prepare(D1, expires=PAST)
+        self.daemon.tap(D1)
+        expires = fk.quote_expires(fk.load_preview(self.home, D1, self.config))
+        real_wait = self.daemon.wait.side_effect
+        fired = []
+
+        def wait(task):
+            out = real_wait(task)
+            if not fired:
+                fired.append(True)
+                self.daemon.tap(D1, 'started')  # the pass's start, under its lock hold, right after this read
+            return out
+
+        self.transport.side_effect = self.merchant_past(expires)
+        self.daemon.wait.side_effect = wait
+        response = self.confirm(D1)
+        self.daemon.wait.side_effect = real_wait
+        self.assertNotEqual(response.get('instruction'), mini.ORDER_CARD_CLOSED)
+        self.assertIsNone(self.tombstone_of(D1))
+        self.assertEqual(self.timeouts(), [])
+        self.assertEqual(self.confirms_sent(), [D1])  # the adoption: the merchant answers (here a 409, no order)
+        self.assertEqual(self.app.orders, {})
+
+    def test_n6_the_late_confirm_drops_a_draft_a_newer_prepare_replaced_inside_the_window(self):
+        # Release N-a: the late path (N5) never re-checked for a newer draft. D2's prepare lands after the pass's
+        # newest check, while it reads the wait: the confirm is dropped, D1 refused for good, with no line (N8 (i)).
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = self.lapse_soon(D1)
+        real_spent = grant._spent
+
+        def spent_then_d2(waited, key):
+            out = real_spent(waited, key)
+            # set_latest's write without its lock: a regression that read this inside a drafts_lock hold fails, never hangs
+            grant._replace(self.home / 'forkicks-drafts' / grant.LATEST, {'draftId': D2})
+            return out
+
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: expires + 1), patch.object(grant, '_spent', side_effect=spent_then_d2):
+            self.run_pass()
+        self.assertEqual(self.confirms_sent(), [])  # no transport call
+        self.assertEqual(self.tombstone_of(D1), {'code': 'superseded'})
+        self.assertEqual(self.superseded_withdraws(D1), 1)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.phase_of(D1), 'gone')
+        self.assertEqual(self.confirm(D1), {'error': 'approval_card_closed', 'instruction': mini.ORDER_SUPERSEDED})
+
+    def test_n6_a_prepare_racing_the_pass_last_check_lands_before_it_or_after_attempted(self):
+        # The pass path (started_now): the last newest-draft check and the `attempted` write are one lock hold, so a
+        # prepare racing it waits; it never lands between them (where the pass would confirm a replaced draft).
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        workers, seen = self.race_the_last_check(lambda: self.daemon.start.called)
+        self.run_pass()
+        workers[0].join(5)
+        self.assertFalse(workers[0].is_alive())
+        self.assertIn(seen['phase'], ('attempted', 'gone'))  # the prepare got the lock only after the hold
+        self.assertEqual(self.confirms_sent(), [D1])  # an order in flight keeps its confirm
+        self.assertEqual(len(self.sent), 1)
+
+    def test_n6_the_late_confirm_last_check_and_attempted_are_one_lock_hold(self):
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = self.lapse_soon(D1)
+        clock = [expires + 1]
+        workers, seen = self.race_the_last_check(lambda: clock[0] > expires and self.daemon.wait.called)
+        self.daemon.wait.reset_mock()
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: clock[0]):
+            self.run_pass()
+        self.assertEqual(len(workers), 1)  # the late path runs a last check at all
+        workers[0].join(5)
+        self.assertIn(seen['phase'], ('attempted', 'gone'))
+        self.assertEqual(self.confirms_sent(), [D1])
+        self.assertEqual(self.sent, [('42', self.REFUSED_LINE)])
+
+    def test_n6_plain_grants_still_confirm_once(self):
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.run_pass(); self.run_pass()
+        self.assertEqual((self.confirms_sent(), self.app.orders), ([D1], {D1: 1}))
+        self.assertEqual(len(self.placed_lines()), 1)
+        self.prepare(D2, qty=3)
+        self.daemon.tap(D2)
+        self.lose_the_pass_start_answer(D2)
+        expires = self.lapse_soon(D2)
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: expires + 1):
+            self.run_pass(); self.run_pass()
+        self.assertEqual(self.confirms_sent(), [D1, D2])
+        self.assertEqual(self.sent[-1], ('42', self.REFUSED_LINE))
+        self.assertEqual(len(self.sent), 2)
+
+    def test_n10_a_guarded_start_refusal_of_a_draft_the_agent_started_sends_no_nothing_was_ordered_line(self):
+        # Review-a ov#468 Q6: after the pass reads D1 granted, the agent starts it and its order is created, and D2's
+        # prepare lands, all before the pass's guarded_start. The refusal reads the wait first (N8 (i)).
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        real_guarded = grant.guarded_start
+
+        def guarded(home, draft_id, start):  # before the pass takes the lock
+            self.daemon.tap(D1, 'started')
+            self.app.orders[D1] = 1
+            grant.set_latest(self.home, D2)
+            return real_guarded(home, draft_id, start)
+
+        with patch.object(grant, 'guarded_start', side_effect=guarded):
+            self.run_pass()
+        self.assertNotIn(('42', grant.SUPERSEDED_LINE), self.sent)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.tombstone_of(D1), {'code': 'superseded'})
+        self.assertEqual(self.superseded_withdraws(D1), 1)
+        self.assertEqual(self.phase_of(D1), 'gone')
+        self.daemon.start.assert_not_called()
+        self.assertEqual(self.confirms_sent(), [])
+        self.assertEqual(self.app.orders, {D1: 1})
+
+    def test_n10_a_guarded_start_refusal_of_an_unstarted_draft_keeps_its_line(self):
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        real_guarded = grant.guarded_start
+
+        def guarded(home, draft_id, start):
+            grant.set_latest(self.home, D2)
+            return real_guarded(home, draft_id, start)
+
+        self.daemon.wait.reset_mock()
+        with patch.object(grant, 'guarded_start', side_effect=guarded):
+            self.run_pass()
+        self.assertEqual(self.daemon.wait.call_args_list, [call(self.task(D1))] * 2)  # the refusal read it too
+        self.assertEqual(self.sent, [('42', grant.SUPERSEDED_LINE)])
+        self.assertEqual(self.tombstone_of(D1), {'code': 'superseded'})
+        self.daemon.start.assert_not_called()
+        self.assertEqual(self.app.orders, {})
+
+    def test_n13_a_late_spent_grant_while_for_kicks_reads_not_installed_waits_and_then_gets_the_merchants_answer(self):
+        # Release ov#472 S1 (b): P5, then the apps file is unreadable (installed() False for every app) when the quote
+        # lapses. No confirm can go out, and an order may exist: no line, the marker stays. Once it reads installed
+        # again, the late confirm goes out and the merchant answers: one true line.
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = self.lapse_soon(D1)
+        apps = self.home / 'mini-apps.json'
+        good = apps.read_text()
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: expires + 1):
+            apps.write_text('{not json')
+            self.run_pass(); self.run_pass()
+            self.assertEqual((self.sent, self.confirms_sent()), ([], []))
+            self.assertEqual(self.phase_of(D1), 'awaiting')
+            self.assertIsNone(self.tombstone_of(D1))
+            apps.write_text(good)
+            self.run_pass(); self.run_pass()
+        self.assertEqual(self.confirms_sent(), [D1])
+        self.assertEqual(self.sent, [('42', self.REFUSED_LINE)])
+        self.assertEqual(self.phase_of(D1), 'gone')
+        self.assertEqual(self.app.orders, {})
+
+    def test_n13_not_installed_through_the_ttl_ends_with_one_line_that_claims_nothing_about_the_order(self):
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = self.lapse_soon(D1)
+        with patch.object(bridge, 'installed', return_value=False):
+            with patch('time.time', lambda: expires + 1):
+                self.run_pass()
+            self.assertEqual((self.sent, self.phase_of(D1)), ([], 'awaiting'))
+            with patch('time.time', lambda: expires + grant.TTL_S):
+                self.run_pass(); self.run_pass()
+        self.assertEqual(self.sent, [('42', self.UNCONFIRMED_LINE)])
+        self.assertEqual(self.sent[0][1], "Your For Kicks order couldn't be confirmed from here: the app isn't connected to "
+                                          "your agent. Ask For Kicks whether it went through.")
+        self.assertEqual(grant.UNCONFIRMED_NOT_INSTALLED_LINE, self.sent[0][1])
+        self.assertFalse(any('Nothing was ordered' in text for _, text in self.sent))
+        self.assertEqual(self.confirms_sent(), [])
+        self.assertEqual(self.phase_of(D1), 'gone')
+
+    # ---- release ov#472 S2: an unreadable wait inside the close's lock hold closes nothing (approval L20892) ---------
+
+    def unreadable_on_second_read(self):
+        """The first wait read answers; the next one (the close's, inside its lock hold) raises."""
+        real_wait = self.daemon.wait.side_effect
+        calls = []
+
+        def wait(task):
+            calls.append(task)
+            if len(calls) == 2:
+                raise TimeoutError('approval daemon unreachable')
+            return real_wait(task)
+
+        self.daemon.wait.side_effect = wait
+        return calls
+
+    def pass_close_with_an_unreadable_wait(self, state, past):
+        self.prepare(D1)
+        self.daemon.tap(D1, state)
+        expires = self.lapse_soon(D1)
+        calls = self.unreadable_on_second_read()
+        with patch('time.time', lambda: expires + 1 if past else expires - 30):
+            self.run_pass()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.phase_of(D1), 'awaiting')  # approval_unavailable: the next pass reads it again
+        self.assertIsNone(self.tombstone_of(D1))
+        self.assertEqual((self.timeouts(), self.sent, self.confirms_sent()), ([], [], []))
+
+    def test_s2_the_pass_quote_expiry_close_with_an_unreadable_wait_closes_nothing_and_says_nothing(self):
+        self.pass_close_with_an_unreadable_wait('granted', past=True)  # _expired_awaiting's close
+
+    def test_s2_the_pass_expired_wait_close_with_an_unreadable_wait_closes_nothing_and_says_nothing(self):
+        self.pass_close_with_an_unreadable_wait('expired', past=False)  # the wait-answered-expired close
+
+    def test_s2_the_agents_close_with_an_unreadable_wait_gets_approval_unavailable_and_no_tombstone(self):
+        self.prepare(D1, expires=PAST)
+        self.daemon.tap(D1)
+        calls = self.unreadable_on_second_read()
+        response = self.confirm(D1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(response, {'error': 'approval_unavailable', 'instruction': mini.ORDER_APPROVAL_UNAVAILABLE})
+        self.assertIsNone(self.tombstone_of(D1))
+        self.assertEqual((self.timeouts(), self.confirms_sent()), ([], []))
+        self.daemon.start.assert_not_called()
+
+    def test_s2_an_agent_start_racing_the_close_waits_for_its_one_lock_hold(self):
+        """Review-b ov#472 recheck of da6c1f56 (probe P3, mutant M1): the close's wait read and its `expired` write are
+        ONE drafts_lock hold. The agent's guarded_start, fired from another thread while the close reads the wait inside
+        that hold, waits for it and then reads `expired`: it never starts. With the lock released between the read and
+        the write, the start lands in the gap and `expired` is written over a started task."""
+        import threading
+        self.prepare(D1)
+        self.daemon.tap(D1)  # granted, never started
+        expires = self.lapse_soon(D1)
+        real_spent = grant._spent
+        reads, results, workers = [], [], []
+
+        def agent_start():
+            results.append(grant.guarded_start(self.home, D1, lambda: self.daemon.start(self.task(D1), PREFIX + D1, '')))
+
+        def spent(waited, key):
+            reads.append(True)
+            out = real_spent(waited, key)
+            if len(reads) == 2:  # the close's own read, inside its lock hold
+                worker = threading.Thread(target=agent_start)
+                workers.append(worker)
+                worker.start()
+                worker.join(0.3)
+            return out
+
+        self.addCleanup(lambda: [w.join(5) for w in workers])
+        with patch('time.time', lambda: expires + 1), patch.object(grant, '_spent', side_effect=spent):
+            self.run_pass()
+        workers[0].join(5)
+        self.assertFalse(workers[0].is_alive())
+        self.assertEqual(results, [('expired', None)])
+        self.daemon.start.assert_not_called()
+        self.assertEqual(self.tombstone_of(D1), {'code': 'expired'})
+        self.assertEqual(self.sent, [('42', self.EXPIRED_LINE)])
+
+    def test_n13_a_spent_grant_past_the_ttl_gets_the_merchants_answer_as_one_line(self):
+        # Review-a ov#468 N13 (TTL-spent): the pass's own start is spent with its answer lost, and the pass does not
+        # run again for the TTL. One late confirm with the same draftId: the merchant refuses a new create past the
+        # quote, so the true "couldn't take it" line, once.
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        expires = fk.quote_expires(fk.load_preview(self.home, D1, self.config))
+        marker = self.home / 'forkicks-drafts' / (D1 + '.await')
+        doc = json.loads(marker.read_text()); doc['since'] = int(expires - grant.TTL_S - 120); marker.write_text(json.dumps(doc))
+        self.transport.side_effect = self.merchant_past(expires)
+        with patch('time.time', lambda: expires + 1):
+            self.run_pass(); self.run_pass()
+        self.assertEqual(self.confirms_sent(), [D1])
+        self.assertEqual(self.sent, [('42', self.REFUSED_LINE)])
+        self.assertEqual(self.app.orders, {})
+        self.assertEqual(self.phase_of(D1), 'gone')
+        self.assertEqual((self.tombstone_of(D1), self.timeouts()), (None, []))
+
+    def test_n13_a_late_confirm_past_the_ttl_with_no_answer_ends_once_at_uncertain_ttl(self):
+        # The TTL stays the bound: one late confirm, and a lost answer ends at `uncertain_ttl` (the order may exist).
+        self.prepare(D1)
+        self.daemon.tap(D1)
+        self.lose_the_pass_start_answer(D1)
+        self.age(D1)
+        self.transport.side_effect = TimeoutError('no answer')
+        self.run_pass(); self.run_pass(); self.run_pass()
+        self.assertEqual(self.confirms_sent(), [D1])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.phase_of(D1), 'gone')
 
     def test_an_expired_tombstone_keeps_an_order_in_flight_recoverable(self):
         # The grant was spent before the pass closed the draft (a start before the quote lapsed): the confirm is still
