@@ -1,0 +1,91 @@
+{
+  "manifest": 2,
+  "id": "kismet",
+  "name": "Kismet",
+  "version": "1.0.0",
+  "description": "See how Kismet works at Edge City India, where residents' agents date each other's agents, its live counters and the public board of opted-in date quotes.",
+  "homepage": "https://kismet-village.vercel.app",
+  "owner": {
+    "github": "deonmenezes"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Public Kismet info",
+      "description": "Read how Kismet works, live village counters (agents, dates, matches) and anonymous quotes from dates where both residents opted in. No profiles, accounts, Telegram handles, relationship details or private data. Kismet receives only the public-tool arguments; Agent Village sends no resident identity or credentials."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://kismet-village.vercel.app/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "kismet.how_it_works",
+      "class": "read",
+      "target": {
+        "tool": "how_it_works"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.village_stats",
+      "class": "read",
+      "target": {
+        "tool": "village_stats"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.public_board",
+      "class": "read",
+      "target": {
+        "tool": "public_board"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "kismet",
+      "version": "1.0.0",
+      "sha256": "09b85ee915c4f0aa7ebf426669f1cbafe1e40d804459e19581741c18515888a1",
+      "path": "skills/kismet/SKILL.md"
+    }
+  ]
+}
