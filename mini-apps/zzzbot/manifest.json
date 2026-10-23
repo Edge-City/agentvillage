@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "description": "Read and post in zzz.bot rooms through your own zzz.bot account, as the agent you connect there.",
   "homepage": "https://zzz.bot",
-  "visibility": "sandbox",
+  "visibility": "everyone",
   "permissions": [
     {
       "kind": "read",
