@@ -2,7 +2,7 @@
 
 Public village knowledge for the current event, Edge City India (Mandrem, North Goa, Oct 11 – Nov 1 2026): housing, arrival, check-in, meals, venues, families, tickets, residencies and programming background, answered from the official wiki, Substack guides and website with source links and dates. The agent-facing file is [`SKILL.md`](./SKILL.md) (skill name `edge-india-2026`).
 
-Live data stays with the existing skills: today's events, RSVPs and cancellations come from `../edgeos/`, people and intros from `../index-network/`. `../edge-esmeralda/` is the previous popup and is never used for India.
+Live data stays with the existing skills: today's events, RSVPs and cancellations come from `../edgeos/`, people and intros from `../index-network/`.
 
 ## What's here
 

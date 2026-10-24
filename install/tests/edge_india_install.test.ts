@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, test } from "bun:test";
 
-import { EDGE_SKILL_NAMES, REPLACED_SKILL_DIRS } from "../paths";
+import { EDGE_SKILL_NAMES, REPLACED_SKILL_DIRS, RETIRED_SKILL_DIRS } from "../paths";
 import { copySkillBundles } from "../skill_copy";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -52,9 +52,10 @@ function snapshotPaths(): string[] {
   return snapshot.files.map((file: { path: string }) => file.path);
 }
 
-test("edge-india is a registered bundle, separate from the Esmeralda ones", () => {
+test("edge-india is a registered bundle; the previous popup's bundles are retired", () => {
   expect(EDGE_SKILL_NAMES).toContain("edge-india");
-  expect(EDGE_SKILL_NAMES).toContain("edge-esmeralda");
+  expect(EDGE_SKILL_NAMES as readonly string[]).not.toContain("edge-esmeralda");
+  expect(RETIRED_SKILL_DIRS as readonly string[]).toContain("edge-esmeralda");
   expect(REPLACED_SKILL_DIRS).toContain("edge-india/references");
   expect(existsSync(join(SKILLS, "edge-india", "SKILL.md"))).toBe(true);
   const skill = readFileSync(join(SKILLS, "edge-india", "SKILL.md"), "utf8");
@@ -120,7 +121,7 @@ test("copySkillBundles stages the India skill with its nested references into a 
     expect(existsSync(join(target, "edge-india", "references", path))).toBe(true);
   }
   expect(existsSync(join(target, "edge-india", "scripts", "refs.ts"))).toBe(true);
-  expect(existsSync(join(target, "edge-esmeralda", "references", "wiki-content.md"))).toBe(true);
+  expect(existsSync(join(target, "edge-esmeralda"))).toBe(false);
 });
 
 test("an update removes India documents dropped upstream but keeps other skills' extra files", () => {
@@ -128,7 +129,7 @@ test("an update removes India documents dropped upstream but keeps other skills'
   copySkillBundles(SKILLS, target);
   const stale = join(target, "edge-india", "references", "newsletter", "retracted-article.md");
   writeFileSync(stale, "# Retracted\n");
-  const residentNote = join(target, "edge-esmeralda", "local-note.md");
+  const residentNote = join(target, "edgeos", "local-note.md");
   writeFileSync(residentNote, "kept\n");
 
   copySkillBundles(SKILLS, target);

@@ -30,7 +30,6 @@ Village already has the live skills.
 | Who to meet, intros, matching | **`index-network`**, through its own rules and approvals. It cannot look up a named person. |
 | Who is X, tell me about a person | In order: `village` `rolodex.search`, the **`edgeos`** directory, `ask_village` (what they said in the main group), then this skill's website copy. |
 | Rolodex cards, We met or Undo met; Gold Stars; Skylight characters and islands | **`rolodex`**, **`gold-stars`** or **`skylight`**. These skills give the right website links and current capability boundaries. |
-| Edge Esmeralda (the previous popup, Healdsburg CA) | `edge-esmeralda`, only when the person asks about it by name. Never use Esmeralda material for India. |
 
 A programming preview or weekly theme in this guide is background, not a
 schedule. Combine sources when it helps ("what's on this week?": the theme
@@ -216,7 +215,7 @@ indexed change; `refs.ts list` prints the same compactly.
   guide on hand right now, answer from what you already know (AGENTS.md
   "Community context"), and point to the Edge City portal or the organisers
   (primary sources below). Do not fetch anything to fill the gap, and never
-  use Edge Esmeralda details for India.
+  use another village's details for India.
 - If the detail is not in the copy, say it is not in the published guide and
   point to the organisers. Never guess.
 - If `_sync.json`'s `checked_at` is more than a day old (`refs.ts` marks the

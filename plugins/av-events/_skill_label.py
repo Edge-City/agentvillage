@@ -63,7 +63,6 @@ SHIPPED_SKILLS = frozenset({
     "gold-stars",
     "skylight",
     "edge-india",
-    "edge-esmeralda",
     "token-usage-audit",
     "agent-plaza",
     "agent-commons",

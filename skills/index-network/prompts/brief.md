@@ -21,7 +21,7 @@ A short, warm note the user can read in under a minute, written for this user. I
 
 # Rules
 
-- Use only facts from the Script Output and what you already know of the user. Never invent an event, a time, a venue, a person or an announcement, and never fill a gap with Edge Esmeralda (the previous popup) or Healdsburg.
+- Use only facts from the Script Output and what you already know of the user. Never invent an event, a time, a venue, a person or an announcement, and never fill a gap with another Edge City village.
 - The only people you name are those in `connections.names`, written exactly as given.
 - The only links are the `link` fields and `villageLink`, written exactly as given. Write no other URL, domain or address.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, maximize value, act fast, networking, match, Index, signal, intent, opportunity.

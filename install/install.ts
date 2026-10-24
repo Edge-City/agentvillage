@@ -7,9 +7,9 @@
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - `AV_PROFILE=odin` installs `workspace/odin/{SOUL,AGENTS}.md` instead (`profile.ts`, docs/odin-profile.md)
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
- *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
+ *   - retired skill bundles (`RETIRED_SKILL_DIRS`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, no tool-progress message (only the 3-minute heartbeat; `display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
