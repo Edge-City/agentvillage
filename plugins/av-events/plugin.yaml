@@ -67,11 +67,14 @@ optional_env:
   # CONTROL_PLANE_URL (a CP_HOSTS host only) with EDGEOS_API_KEY, as cp#227's directory forward.
   - AV_ASK_VILLAGE
   - EDGEOS_API_KEY
+  # ODIN-ASK: ask_odin, registered only when AV_ASK_ODIN is 1|true|yes|on (the cp writes it from
+  # ODIN_ASK_TENANTS). Same wire as ask_village: CONTROL_PLANE_URL (a CP_HOSTS host only), EDGEOS_API_KEY.
+  - AV_ASK_ODIN
   # VILLAGE SEARCH: search_village and query_village, registered only when AV_SEARCH_VILLAGE is 1|true|yes|on (same wire as ask_village).
   - AV_SEARCH_VILLAGE
   # R-DEON: 0|false|no|off lets Hermes's tool_search defer the village tools and elicitation_record again (default on).
   - AV_VILLAGE_TOOLS_VISIBLE
-  # pray / ask_village: a cron run may use them only when it reports to this DM (fail closed).
+  # pray / ask_village / ask_odin: a cron run may use them only when it reports to this DM (fail closed).
   - TELEGRAM_HOME_CHANNEL
   # F1 PROMPT REFRESH: team (default; on where AV_TEAM_TENANT=1) | 1 | 0; files: memory (default) | all.
   - AV_PROMPT_REFRESH
@@ -92,6 +95,8 @@ provides_tools:
   - pray
   # ASK-VILLAGE, registered only when AV_ASK_VILLAGE is 1|true|yes|on.
   - ask_village
+  # ODIN-ASK, registered only when AV_ASK_ODIN is 1|true|yes|on.
+  - ask_odin
   # VILLAGE SEARCH, registered only when AV_SEARCH_VILLAGE is 1|true|yes|on.
   - search_village
   # VILLAGE QUERY (read-only SQL), on the same switch as search_village.

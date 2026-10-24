@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 
 from . import _approval, _approvals_reminder, _edgeos, _edgeos_guard, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._ask_village import register_ask_village_tool
+from ._ask_odin import register_ask_odin_tool
 from ._search_village import register_search_village_tool
 from ._query_village import register_query_village_tool
 from ._pray import register_pray_tool
@@ -1381,7 +1382,8 @@ def register(ctx) -> None:
     PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
     `AV_SEARCH_VILLAGE`, `search_village` (`_search_village.py`) and `query_village`
     (`_query_village.py`). Those and village-bridge's `village` are kept out of Hermes's
-    `tool_search` bridge (`_village_visible.py`, R-DEON).
+    `tool_search` bridge (`_village_visible.py`, R-DEON). Behind `AV_ASK_ODIN`, `ask_odin`
+    (`_ask_odin.py`, ODIN-ASK), which `tool_search` defers like any plugin tool.
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -1436,6 +1438,13 @@ def register(ctx) -> None:
     # behind `AV_ASK_VILLAGE` (unset: not registered). Not routed through the approval gate.
     try:
         register_ask_village_tool(ctx)
+    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # ODIN-ASK (phase 1b): `ask_odin`, one question to ODIN, the village's constitution agent, through the
+    # control plane, beside `ask_village` on its wire, behind `AV_ASK_ODIN` (unset: not registered). Not
+    # routed through the approval gate.
+    try:
+        register_ask_odin_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
     # VILLAGE SEARCH: `search_village`, scrubbed group messages matching words, next to `ask_village`,

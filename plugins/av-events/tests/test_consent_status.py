@@ -633,7 +633,7 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     lines = [r.getMessage() for r in caplog.records if r.name == "av-events"]
     # DATA-212: `record_intention` logs its own one line (switch off by default); so do `pray` (PRAYER P3)
-    # and `ask_village` (ASK-VILLAGE) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh
+    # and `ask_village` (ASK-VILLAGE) and `ask_odin` (ODIN-ASK) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh
     # and R-DEON's village_visible (no Hermes here to wrap), and MINIAPP-PICKUP's stamp section (no plugin
     # prompt sections on this ctx).
     assert lines == [
@@ -641,6 +641,7 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
         "av-events: record_intention skipped=switch_off",
         "av-events: pray skipped=switch_off",
         "av-events: ask_village skipped=switch_off",
+        "av-events: ask_odin skipped=switch_off",
         "av-events: search_village skipped=switch_off",
         "av-events: query_village skipped=switch_off",
         "av-events: prompt_refresh: agent.conversation_loop not importable; left as is",

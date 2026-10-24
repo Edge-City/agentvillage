@@ -100,6 +100,16 @@ const NOT_GATED: readonly NotGated[] = [
       "registered only with AV_ASK_VILLAGE on; refused in group sessions; per-tenant limits on the cp",
   },
   {
+    name: "ask_odin",
+    plugin: "av-events",
+    reason:
+      "SIDE EFFECT, raised with the lead (ask_village's wire, same reasoning): sends one ≤500-char question with a " +
+      "kind (question, explain, proposal) to the cp, which runs one tool-free completion on ODIN's box over the " +
+      "voted constitution and returns the answer; a proposal is only checked and, when the pool is in intake, " +
+      "forwarded to the app's intake for review, never merged; reads no resident data, grants nothing; registered " +
+      "only with AV_ASK_ODIN on; refused in group sessions; per-tenant and fleet limits on the cp",
+  },
+  {
     name: "search_village",
     plugin: "av-events",
     reason:
@@ -507,12 +517,13 @@ describe("OV-300 S2: every plugin tool is gated or explicitly NOT_GATED", () => 
     // Resolved by reading the source: consent_status (_consent.py TOOL_NAME), record_intention
     // (_record_intention.py TOOL_NAME = RECORD_INTENTION_TOOL, _intentions.py), share_digest and
     // village_vote (_share_vote.py wanted table: SHARE_TOOL, VOTE_TOOL), pray (_pray.py TOOL_NAME),
-    // ask_village (_ask_village.py TOOL_NAME), search_village (_search_village.py TOOL_NAME), query_village
-    // (_query_village.py TOOL_NAME), recall (recall TOOL_NAME), village (village-bridge literal), resident_context
+    // ask_village (_ask_village.py TOOL_NAME), ask_odin (_ask_odin.py TOOL_NAME), search_village
+    // (_search_village.py TOOL_NAME), query_village (_query_village.py TOOL_NAME), recall (recall TOOL_NAME),
+    // village (village-bridge literal), resident_context
     // and resident_profile (village-memory plugin.yaml provides_tools: a memory provider's tools come from
     // get_tool_schemas, which no register_tool scan sees), elicitation_record (av-elicit, GC-ELICIT).
     expect([...inv.tools.keys()].sort()).toEqual([
-      "ask_village", "consent_status", "elicitation_record", "pray", "query_village", "recall", "record_intention",
+      "ask_odin", "ask_village", "consent_status", "elicitation_record", "pray", "query_village", "recall", "record_intention",
       "resident_context", "resident_profile", "search_village", "share_digest", "village", "village_vote",
     ]);
     expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(10);

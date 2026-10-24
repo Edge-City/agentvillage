@@ -82,6 +82,8 @@ AV_ENV_VARS = (
     # ASK-VILLAGE: the `ask_village` tool.
     "AV_ASK_VILLAGE",
     "EDGEOS_API_KEY",
+    # ODIN-ASK: the `ask_odin` tool.
+    "AV_ASK_ODIN",
     # VILLAGE SEARCH: the `search_village` tool.
     "AV_SEARCH_VILLAGE",
     # R-DEON: the village tools kept out of Hermes's tool_search bridge.
