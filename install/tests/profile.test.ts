@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const home = mkdtempSync(join(tmpdir(), "agentvillage-profile-"));
@@ -96,6 +97,45 @@ test("the shipped ODIN files carry no constitution text and one splice point", (
   const soul = readFileSync(join(WORKSPACE, "odin/SOUL.md"), "utf8");
   expect(soul.split("{{CONSTITUTION}}").length).toBe(2);
   expect(soul.trimEnd().endsWith("{{CONSTITUTION}}")).toBe(true);
+});
+
+// ODIN-SOUL-TEMPLATE-v1's fixed sections, in the template's order. "The fixed sections win any conflict"
+// (its "How you resolve conflicts", rule 1), so they must survive every install and roll.
+const TEMPLATE_V1_FIXED_HEADINGS = [
+  "Who you are",
+  "Safety and harm floor",
+  "Privacy and consent floor",
+  "Tools and actions",
+  "Honesty",
+  "How you resolve conflicts",
+];
+// sha256 of ODIN-SOUL-TEMPLATE-v1's text before its "## Village constitution" heading (title + fixed sections).
+const TEMPLATE_V1_FIXED_SHA256 = "444fedd349b764a50beb9544c0d765fa5606e3334d3814f840daf2353cb987b3";
+
+test("installed ODIN SOUL.md carries every template-v1 fixed heading exactly once, in order, then the constitution", () => {
+  const constitution = "<!-- constitution: v1 -->\n\n### Care and wellbeing\n\n1. rule one\n\n### Limits\n\n2. rule two";
+  writeFileSync(join(home, "constitution.md"), `## Village constitution\n\n${constitution}\n`);
+  installProfileIdentity(WORKSPACE, home, "odin");
+  const soul = read("SOUL.md");
+  const headings = [...soul.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  for (const h of TEMPLATE_V1_FIXED_HEADINGS) expect(headings.filter((x) => x === h)).toHaveLength(1);
+  const positions = TEMPLATE_V1_FIXED_HEADINGS.map((h) => headings.indexOf(h));
+  expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  expect(positions[0]).toBe(0); // nothing above the fixed sections
+  // The constitution is the last section and renders unchanged.
+  expect(headings.at(-1)).toBe("Village constitution");
+  expect(Math.max(...positions)).toBeLessThan(headings.length - 1);
+  expect(soul.endsWith(`## Village constitution\n\n${constitution}\n`)).toBe(true);
+});
+
+test("ODIN SOUL.md's fixed sections are template v1 byte for byte (only 'How you speak' sits between them and the constitution)", () => {
+  const soul = readFileSync(join(WORKSPACE, "odin/SOUL.md"), "utf8");
+  const before = soul.slice(0, soul.indexOf("## Village constitution\n"));
+  const speak = before.indexOf("## How you speak\n");
+  expect(speak).toBeGreaterThan(0);
+  expect(before.slice(speak).match(/^## /gm)).toHaveLength(1); // the overlay's own section is the last before the slot
+  const fixed = before.slice(0, speak);
+  expect(createHash("sha256").update(fixed).digest("hex")).toBe(TEMPLATE_V1_FIXED_SHA256);
 });
 
 test("reset removes the same files after an odin install and leaves constitution.md", () => {

@@ -31,6 +31,18 @@ passing the variable. The process environment wins when both are set. An
 unknown value stops the installer. Without either, the box installs as the
 resident.
 
+## The fixed sections
+
+`workspace/odin/SOUL.md` opens with the fixed sections of ODIN-SOUL-TEMPLATE-v1,
+verbatim and in the template's order: who you are, the safety and harm floor, the
+privacy and consent floor, tools and actions, honesty, and how you resolve
+conflicts (the fixed sections win any conflict with the Village constitution).
+The overlay's own "How you speak" follows them, and the Village constitution ends
+the file. Because the installer rebuilds SOUL.md from this file on every install,
+update, reset and roll (except with `--preserve-context`), a roll restores these
+floors rather than losing them; they change only through a PR here (`install/tests/profile.test.ts` pins the headings, their order
+and the template-v1 text).
+
 ## The constitution
 
 No constitution text is in this repo. SOUL.md ends with a `## Village
