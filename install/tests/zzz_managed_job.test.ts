@@ -939,11 +939,26 @@ for (const replaced of MARKER_PATHS) test(`N12: a once-on box's teardown preserv
       expect(Object.fromEntries(Object.entries(lsnapshot(home)).filter(([key]) => key === replaced || key.startsWith(`${replaced}/`)))).toEqual(kept);
       expect(readFileSync(join(home, "zzzbot", "resident.txt"), "utf8")).toBe("mine");
       expect(lsnapshot(elsewhere)).toEqual(outside);
-      // Torn down: no marker left, so the next stage and verify are main's (the notice only), with nothing spawned.
-      for (const args of [[], ["--verify"], [], ["--verify"]]) {
-        const again = spiedStage(home, alone, args);
-        expect(`${row} ${args}: ${again.status} ${again.stderr}|${again.spawns}`).toBe(`${row} ${args}: 0 ${notice([replaced])}|`);
+      // Torn down: the next stage and verify are main's (the notice only), with nothing spawned.
+      // Stage may normalize mini-apps.json after a failed input, so snapshot after that first stage.
+      const again = spiedStage(home, alone);
+      expect(`${row} stage: ${again.status} ${again.stderr}|${again.spawns}`).toBe(`${row} stage: 0 ${notice([replaced])}|`);
+      const settled = lsnapshot(home);
+      const verified = spiedStage(home, alone, ["--verify"]);
+      expect(`${row} verify: ${verified.status} ${verified.stderr}|${verified.spawns}`).toBe(`${row} verify: 0 ${notice([replaced])}|`);
+      expect(lsnapshot(home)).toEqual(settled);
+      // A link to our original bytes following a failed stage is the strongest repeat control at every marker.
+      if (label === "symlink to the original bytes" && typeof input === "string") {
+        const restaged = spiedStage(home, alone);
+        expect(`${row} restage: ${restaged.status} ${restaged.stderr}|${restaged.spawns}`).toBe(`${row} restage: 0 ${notice([replaced])}|`);
+        expect(lsnapshot(home)).toEqual(settled);
+        const reverified = spiedStage(home, alone, ["--verify"]);
+        expect(`${row} reverify: ${reverified.status} ${reverified.stderr}|${reverified.spawns}`).toBe(`${row} reverify: 0 ${notice([replaced])}|`);
+        expect(lsnapshot(home)).toEqual(settled);
       }
+      expect(Object.fromEntries(Object.entries(lsnapshot(home)).filter(([key]) => key === replaced || key.startsWith(`${replaced}/`)))).toEqual(kept);
+      expect(readFileSync(join(home, "zzzbot", "resident.txt"), "utf8")).toBe("mine");
+      expect(lsnapshot(elsewhere)).toEqual(outside);
     }
   }
 }, 30000);
