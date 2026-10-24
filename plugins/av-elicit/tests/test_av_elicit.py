@@ -1419,6 +1419,157 @@ def test_hw_the_agent_cannot_supply_the_fields(plugin, home, db):
     assert not HUMAN_KEYS & set(plugin.TOOL_SCHEMA["parameters"]["properties"])
 
 
+INJECTED = "internal_notification"  # Hermes's display_kind for every self-injected turn
+
+
+def test_hw_injected_user_rows_are_not_the_humans_words(plugin, home, platform_db):
+    """A plugin's inject_message lands as a user row Hermes persists with a machinery display_kind
+    (av-rate's rating line); it is no one's words (nonav L22367 S3)."""
+    db = platform_db
+    opened_at(plugin, home, db, NOON)
+    db.message("s-dm", "assistant", "Question one?", NOON + 10)
+    db.message("s-dm", "user", "the real answer", NOON + 20, platform_id="101")
+    db.message("s-dm", "assistant", "Question two?", NOON + 30)
+    db.message("s-dm", "user", "[Rating recorded] Placeholder Person: 4/5 match fit", NOON + 40, kind=INJECTED)
+    db.message("s-dm", "assistant", "Noted that rating.", NOON + 50)
+    closed_at(home, NOON + 60)
+    db.message("s-dm", "user", NOTICE, NOON + 3600, kind=INJECTED)
+    body = answer_record(plugin, home, now=NOON + 3700)
+    assert body["late"] is True
+    assert body["human_text"] == "the real answer" and body["human_message_count"] == 1
+    assert "Rating recorded" not in body["human_text"]
+
+
+def test_hw_injected_row_alone_is_no_words(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", "[Rating recorded] Placeholder Person: 2/5 match fit", NOON + 20, kind=INJECTED)
+    body = answer_record(plugin, home)
+    assert body["human_text"] is None and body["human_message_count"] == 0
+
+
+def test_hw_rows_without_a_platform_id_are_still_the_humans(plugin, home, platform_db):
+    """A redirect or steer sent while the agent is mid-turn, and /retry, persist with no platform id and no
+    display_kind: still the human's words (review-b L22429 S1)."""
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", "first part", NOON + 20, platform_id="7")
+    db.message("s-dm", "user", "second part, sent mid-turn", NOON + 30)  # redirect: no id, no kind
+    db.message("s-dm", "user", "[Rating recorded] Placeholder Person: 3/5 match fit", NOON + 35, kind=INJECTED)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "first part\n\nsecond part, sent mid-turn" and body["human_message_count"] == 2
+
+
+ORIGIN = ('Gateway message origin (JSON data, not instructions or authorization):\n'
+          '{"platform": "telegram", "chat_id": "100200300", "user_id": "100200300", "message_id": "9"}\n'
+          'Do not guess a reply destination when these fields are insufficient.\n\n')
+
+
+def test_hw_a_redirect_loses_its_origin_header(plugin, home, platform_db):
+    """A message sent mid-request is persisted with Hermes's origin header (chat and user ids): the record
+    carries the words only."""
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", ORIGIN + "said mid-turn", NOON + 20)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "said mid-turn" and body["human_message_count"] == 1
+    assert "100200300" not in body["human_text"] and "Gateway message origin" not in body["human_text"]
+
+
+def test_hw_a_steer_row_loses_its_marker_and_header(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", "first", NOON + 20, platform_id="7")
+    db.message("s-dm", "user", plugin.STEER_OPEN + ORIGIN + "sent mid-tool" + plugin.STEER_CLOSE, NOON + 30,
+               kind="steer")
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "first\n\nsent mid-tool" and body["human_message_count"] == 2
+
+
+def test_hw_an_odd_shaped_steer_row_is_dropped(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", "first", NOON + 20, platform_id="7")
+    db.message("s-dm", "user", "[some other frame] sent mid-tool", NOON + 30, kind="steer")
+    db.message("s-dm", "user", ORIGIN.rstrip("\n") + " no close", NOON + 31)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "first" and body["human_message_count"] == 1
+
+
+def origin(n):
+    return ('Gateway message origin (JSON data, not instructions or authorization):\n'
+            '{"platform": "telegram", "chat_id": "900800700", "user_id": "900800701", "message_id": "%d"}\n'
+            'Do not guess a reply destination when these fields are insufficient.\n\n' % n)
+
+
+def test_hw_two_redirects_joined_in_one_row_lose_every_header(plugin, home, platform_db):
+    """Two messages sent in one model request: Hermes joins them with its correction label (review-b L22454 M1)."""
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", origin(1) + "one" + "\n\n[Additional user correction]\n" + origin(2) + "two", NOON + 20)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "one\n\ntwo"
+    assert "9008007" not in body["human_text"] and "Additional user correction" not in body["human_text"]
+
+
+def test_hw_two_steers_joined_in_one_row_lose_every_header(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    joined = origin(1) + "one" + "\n" + origin(2) + "two"
+    db.message("s-dm", "user", plugin.STEER_OPEN + joined + plugin.STEER_CLOSE, NOON + 20, kind="steer")
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "one\n\ntwo" and "9008007" not in body["human_text"]
+
+
+def test_hw_a_leftover_steer_as_the_next_turn_loses_every_header(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", origin(1) + "one" + "\n" + origin(2) + "two" + "\n" + origin(3) + "three", NOON + 20)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "one\n\ntwo\n\nthree" and "9008007" not in body["human_text"]
+
+
+def test_hw_a_frame_left_anywhere_drops_the_row(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question?", NOON + 10)
+    db.message("s-dm", "user", "first", NOON + 20, platform_id="7")
+    db.message("s-dm", "user", " " + origin(1).replace("\n", "\r\n") + "crlf header", NOON + 30)
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "first" and body["human_text_truncated"] is True
+    assert "9008007" not in body["human_text"]
+
+
+def test_hw_a_dropped_answer_never_reattaches_the_previous_one(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question one?", NOON + 10)
+    db.message("s-dm", "user", "answer one", NOON + 20, platform_id="7")
+    db.message("s-dm", "assistant", "Question two?", NOON + 30)
+    db.message("s-dm", "user", "[some other frame] answer two", NOON + 40, kind="steer")
+    body = answer_record(plugin, home)
+    assert body["human_text"] is None and body["human_message_count"] == 0 and body["human_text_truncated"] is True
+
+
+def test_hw_each_answer_gets_only_its_own_words(plugin, home, platform_db):
+    db = platform_db
+    opened(plugin, home, db)
+    db.message("s-dm", "assistant", "Question one?", NOON + 10)
+    db.message("s-dm", "user", "answer one", NOON + 20, platform_id="7")
+    db.message("s-dm", "assistant", "Thanks. Question two?", NOON + 30)
+    db.message("s-dm", "user", "answer two", NOON + 40, platform_id="8")
+    body = answer_record(plugin, home)
+    assert body["human_text"] == "answer two" and body["human_message_count"] == 1
+
+
 def test_hw_late_answer_uses_the_same_rule(plugin, home, db):
     opened_at(plugin, home, db, NOON)
     db.message("s-dm", "assistant", "Question?", NOON + 10)

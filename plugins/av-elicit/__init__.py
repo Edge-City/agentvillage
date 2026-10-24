@@ -80,6 +80,21 @@ HUMAN_TEXT_MAX = 8000
 HUMAN_TEXT_JOIN = "\n\n"
 #: Newest rows of the window read when looking for the span (it holds at most 10 human messages).
 HUMAN_SCAN_ROWS = 1000
+# Hermes v2026.9.24 frames a message the human sends while a turn runs (agent/prompt_builder.py
+# format_steer_marker; gateway/run_busy.py _steer_text_with_origin). The frames, and the origin ids inside
+# them, are Hermes's and never part of the human's words.
+STEER_KIND = "steer"
+STEER_OPEN = ("[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; "
+              "not tool output and not a new delivery when replayed from conversation history]\n")
+STEER_CLOSE = "\n[/OUT-OF-BAND USER MESSAGE]"
+ORIGIN_OPEN = "Gateway message origin (JSON data, not instructions or authorization):\n"
+ORIGIN_CLOSE = "\nDo not guess a reply destination when these fields are insufficient.\n\n"
+# Hermes joins several mid-turn messages into one row: steers with "\n" (agent/interrupt_control.py:250-252),
+# redirects with this label (:295-300); a leftover steer becomes the next turn's row (turn_finalizer.py:672-674).
+REDIRECT_JOIN = "\n\n[Additional user correction]\n"
+# Any of these left in a row after unframing means a frame we did not parse: the row is dropped, never recorded.
+FRAME_MARKS = ("Gateway message origin (JSON data", "Do not guess a reply destination",
+               "[OUT-OF-BAND USER MESSAGE", "[/OUT-OF-BAND USER MESSAGE]")
 #: The control plane's pass leaves a record file bigger than this unread: ``RECORD_FILE_MAX`` in
 #: agentvillage-controlplane's control-plane/src/godconst-elicit-pass.js, 65536 since its human-words PR
 #: (#397). Never raise this before the control plane does: an older pass drops a bigger record as
@@ -761,13 +776,47 @@ def _filled(content: Any) -> bool:
     return isinstance(content, str) and bool(content.strip())
 
 
+def _unframed(content: str, kind: Any) -> Optional[str]:
+    """The human's own text inside Hermes's mid-turn frames: a steer row loses its out-of-band marker, and
+    every gateway origin header (which carries chat, user and message ids) comes off with the joiner before
+    it; the messages Hermes joined into the row are rejoined with ``HUMAN_TEXT_JOIN``. None (the row is
+    dropped, never recorded) for a steer row of another shape, a header without its closing line, or any
+    frame text left after that (``FRAME_MARKS``)."""
+    if kind == STEER_KIND:
+        if not (content.startswith(STEER_OPEN) and content.endswith(STEER_CLOSE)):
+            return None
+        content = content[len(STEER_OPEN):-len(STEER_CLOSE)]
+    if ORIGIN_OPEN in content:
+        head, *blocks = content.split(ORIGIN_OPEN)
+        pieces = [head]
+        for block in blocks:
+            end = block.find(ORIGIN_CLOSE)
+            if end < 0:
+                return None
+            pieces.append(block[end + len(ORIGIN_CLOSE):])
+        for i in range(len(pieces) - 1):  # the joiner Hermes put before the next header
+            if pieces[i].endswith(REDIRECT_JOIN):
+                pieces[i] = pieces[i][:-len(REDIRECT_JOIN)]
+            elif pieces[i].endswith("\n"):
+                pieces[i] = pieces[i][:-1]
+        content = HUMAN_TEXT_JOIN.join(piece for piece in pieces if _filled(piece))
+    if any(mark in content for mark in FRAME_MARKS):
+        return None
+    return content
+
+
 def human_words(window_ms: int, home: Optional[str] = None) -> Optional[tuple]:
     """The human's own messages for an ``answer`` record (contract §12.1), read verbatim from state.db.
 
     Rows: user and assistant messages of the home DM (every session under the home key with
     ``source = 'telegram'`` and ``chat_type = 'dm'``), ``active = 1`` when the column exists (and never a
     context-compaction summary row), at or after ``window_ms``. Human rows are user rows whose content does
-    not start with ``NOTICE_PREFIX`` (blank ones carry no words and are passed over). The span is the human
+    not start with ``NOTICE_PREFIX`` (blank ones carry no words and are passed over) and, when the store has
+    ``display_kind``, whose kind is NULL or ``steer``: Hermes persists every self-injected turn (a plugin's
+    ``inject_message`` such as av-rate's "[Rating recorded]" line, our own notices, heartbeats) with a
+    machinery kind (``internal_notification``), and never redirects or steers one into a running turn, while
+    what the human typed has none (a Telegram message, a redirect sent mid-request, ``/retry``) or ``steer``
+    (sent mid-tool). Hermes's frames around a mid-turn message come off (``_unframed``). The span is the human
     rows after the latest assistant row with non-empty content that precedes the newest human row (the agent's
     last reply; a tool-call-only row has empty content and does not end it), oldest first. Caps: at most 10
     messages and 8000 characters of joined text, keeping the most recent whole messages; a newest message
@@ -787,9 +836,13 @@ def human_words(window_ms: int, home: Optional[str] = None) -> Optional[tuple]:
         where += " AND m.active = 1"
     if "_compressed_summary" in columns:
         where += " AND m._compressed_summary = 0"  # a context-compaction summary is neither side's words
+    kind = "NULL"
+    if "display_kind" in columns:
+        kind = "m.display_kind"  # an injected user row is not the human's; a steer row is, inside its marker
+        where += " AND (m.role = 'assistant' OR m.display_kind IS NULL OR m.display_kind = '" + STEER_KIND + "')"
     rows = _sqlite_rows(
         path,
-        "SELECT m.role, m.content, m.timestamp FROM messages m JOIN sessions s ON s.id = m.session_id "
+        "SELECT m.role, m.content, m.timestamp, " + kind + " FROM messages m JOIN sessions s ON s.id = m.session_id "
         "WHERE s.source = 'telegram' AND s.chat_type = 'dm' AND s.session_key = ? "
         "AND m.role IN ('user', 'assistant') AND m.timestamp >= ?" + where
         + " ORDER BY m.timestamp DESC, m.id DESC LIMIT ?",
@@ -799,12 +852,18 @@ def human_words(window_ms: int, home: Optional[str] = None) -> Optional[tuple]:
         return None
     span: list = []  # newest first
     more = False
-    for role, content, at in rows:
+    anchored = False  # a human row was seen, kept or dropped: the agent's reply before it ends the span
+    for role, content, at, row_kind in rows:
         if role == "assistant":
-            if span and _filled(content):
+            if anchored and _filled(content):
                 break  # the agent's last reply before the newest human row
             continue  # the current turn's own rows, or a tool-call-only row
         if not _filled(content) or content.startswith(NOTICE_PREFIX):
+            continue
+        anchored = True
+        content = _unframed(content, row_kind)
+        if not _filled(content):
+            more = more or content is None  # a dropped row: the record says words were left out
             continue
         if len(span) == HUMAN_MESSAGES_MAX:
             more = True
