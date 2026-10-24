@@ -19,7 +19,9 @@
  * carries no `$` word at all, as events.ts, directory.ts and profile.ts already do.
  *
  * Request mapping, one request per run (the av-events plugin reads these verbs as the same operations the
- * curl recipes were, `plugins/av-events/_edgeos.py` `script_call`, and must agree with this table):
+ * curl recipes were, `plugins/av-events/_edgeos.py` `script_call`, and must agree with this table). The one
+ * exception (EDGEOS-OCCURRENCE): an `rsvp` WITHOUT `--occurrence` first reads the event, and when the event is
+ * recurring it sends no RSVP at all (below); otherwise its last request is still the one in the table:
  *   list          GET  {base}/events/portal/events?popup_id&event_status=published&start_after[&start_before]
  *                      [&search][&tags...][&kind][&venue_ids...][&track_ids...][&rsvped_only=true]
  *   event         GET  {base}/events/portal/events/{event_id}[?occurrence_start]
@@ -30,6 +32,19 @@
  *
  * Output: EdgeOS's JSON answer, as one line on stdout, exactly as the curl recipes printed it (the
  * plugin reads an RSVP's participant record and a confirming read's `my_rsvp_status` from it).
+ *
+ * Recurring events (EDGEOS-OCCURRENCE). EdgeOS calls an event recurring when its `rrule` is set (the series
+ * master; EdgeOS event_participant/router.py `_resolve_occurrence_start`: `is_recurring = bool(event.rrule)`).
+ *   - `--occurrence` takes the occurrence's start as an instant with its zone, as EdgeOS's `start_time` gives
+ *     it (`2026-10-21T02:30:00Z`, sent unchanged), with an offset (`2026-10-21T08:00:00+05:30`, sent as the
+ *     same instant in UTC, `2026-10-21T02:30:00Z`), or as the portal link's `?occ=` value still percent-encoded
+ *     (`2026-10-21T02%3A30%3A00Z`, decoded once, then as above).
+ *   - `event` on a recurring event prints one line on stderr after the JSON: without `--occurrence`, that the
+ *     answer is the series' FIRST occurrence (EdgeOS reads `my_rsvp_status` and `attendee_count` of the first
+ *     session when no `occurrence_start` is given); with it, `occurrence <ISO>`. stdout stays EdgeOS's JSON.
+ *   - `rsvp` without `--occurrence` on a recurring event books nothing: it lists the series' next sessions
+ *     (their `start`, from a list of the next RECURRING_WINDOW_DAYS days) on stderr and exits 5, so the agent
+ *     asks the person which session and runs `rsvp` again with that `--occurrence`.
  *
  * The key: `EDGEOS_API_KEY`, `AV_POPUP_ID` and `EDGEOS_API_BASE` come from the environment, else from
  * `$HERMES_HOME/.env` (`setting()` from events.ts). The key is never an argument, never printed, never in
@@ -47,7 +62,9 @@
  *   1 EdgeOS unreachable, or it answered an error (the line gives the status and EdgeOS's short reason);
  *   2 not connected: EDGEOS_API_KEY or AV_POPUP_ID not set (the line says which, never a value), or
  *     EDGEOS_API_BASE not an EdgeOS https base;
- *   3 a usage error (the line says which).
+ *   3 a usage error (the line says which);
+ *   5 (rsvp only) a recurring event and no `--occurrence`: nothing was booked; the next sessions are listed
+ *     (not 4, which the profile and directory scripts use for a lapsed sign-in, nor 2, "not connected").
  */
 import { EDGEOS_HOSTS, apiBase, setting } from "./events";
 
@@ -61,6 +78,10 @@ export const MAX_REPEAT = 20;
 export const TIMEOUT_MS = 20_000;
 /** At most this many characters of EdgeOS's own error reason are shown. */
 export const MAX_REASON = 200;
+/** A bare rsvp on a recurring event lists the sessions starting in this many days from now... */
+export const RECURRING_WINDOW_DAYS = 14;
+/** ...at most this many of them. */
+export const MAX_SESSIONS = 10;
 
 export const VERBS = ["list", "event", "rsvp", "cancel", "participants", "venues"] as const;
 export type Verb = (typeof VERBS)[number];
@@ -121,6 +142,53 @@ export function validInstant(value: string): boolean {
   return hh < 24 && mm < 60 && ss < 60;
 }
 
+/**
+ * An `--occurrence` value as the instant EdgeOS expects, or null. A `Z` instant (EdgeOS's own `start_time`
+ * form) is returned unchanged; one with an offset becomes the same instant in UTC, its fraction kept; a value
+ * still percent-encoded as the portal's `?occ=` carries it (`encodeURIComponent(start_time)`) is decoded once.
+ * A year outside 0001-9999 (before or after the shift) is refused. The av-events observer reads the same value
+ * with `script_occurrence` (plugins/av-events/_edgeos.py); `tests/occurrence-parity.json` runs through both,
+ * so the two always name the same occurrence.
+ */
+export function occurrenceInstant(raw: string): string | null {
+  let value = raw;
+  if (value.includes("%")) {
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!validInstant(value) || Number(value.slice(0, 4)) < 1) return null;
+  if (value.endsWith("Z")) return value;
+  const m = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2})(\.\d{1,6})?)?([+-]\d{2}:\d{2})$/);
+  if (!m) return null;
+  const at = new Date(`${m[1]}:${m[2] ?? "00"}${m[4]}`);
+  if (Number.isNaN(at.getTime()) || at.getUTCFullYear() < 1 || at.getUTCFullYear() > 9999) return null;
+  return `${at.toISOString().slice(0, 19)}${m[3] ?? ""}Z`;
+}
+
+/** Whether EdgeOS treats this event as recurring: its `rrule` is set (EdgeOS `bool(event.rrule)`). */
+export function isRecurring(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const rrule = (event as { rrule?: unknown }).rrule;
+  return typeof rrule === "string" && rrule.trim() !== "";
+}
+
+/** An event's `start_time` when it is a valid instant (it is printed back to the agent); "" otherwise. */
+function startOf(event: unknown): string {
+  const start = event && typeof event === "object" ? (event as { start_time?: unknown }).start_time : undefined;
+  return typeof start === "string" && validInstant(start) ? start : "";
+}
+
+/** The one stderr line an `event` read of a recurring event gets ("" for any other event). */
+export function occurrenceNote(event: unknown, occurrence: string): string {
+  if (!isRecurring(event)) return "";
+  if (occurrence) return `occurrence ${occurrence}\n`;
+  const start = startOf(event);
+  return `recurring event: this is the FIRST occurrence (start ${start || "unknown"}); pass --occurrence <ISO> for another session\n`;
+}
+
 export function parseArgs(argv: string[]): Args | { error: string } {
   const verb = argv[0];
   if (!verb) return { error: "a verb is required (list, event, rsvp, cancel, participants or venues)" };
@@ -150,12 +218,21 @@ export function parseArgs(argv: string[]): Args | { error: string } {
     const value = argv[++i];
     if (value === undefined || value.startsWith("--")) return { error: `${flag} needs a value` };
     switch (flag) {
-      case "--occurrence":
+      case "--occurrence": {
+        const occurrence = occurrenceInstant(value);
+        if (!occurrence) {
+          return {
+            error: "--occurrence must be the occurrence's start with its zone, e.g. 2026-10-20T10:00:00Z, " +
+              "2026-10-20T15:30:00+05:30 or a portal link's ?occ= value",
+          };
+        }
+        args.occurrence = occurrence;
+        break;
+      }
       case "--after":
       case "--before":
         if (!validInstant(value)) return { error: `${flag} must be an ISO-8601 time with its zone, e.g. 2026-10-20T10:00:00Z` };
-        if (flag === "--occurrence") args.occurrence = value;
-        else if (flag === "--after") args.after = value;
+        if (flag === "--after") args.after = value;
         else args.before = value;
         break;
       case "--search":
@@ -274,7 +351,97 @@ export interface Result {
 
 const fail = (code: number, err: string): Result => ({ code, out: "", err: `edgeos: ${err}\n` });
 
-export async function run(argv: string[], env: Env = process.env, fetchImpl: typeof fetch = fetch): Promise<Result> {
+/** One EdgeOS request: its JSON answer, or the failure Result the script exits with. */
+async function send(
+  url: string, method: "GET" | "POST", key: string, body: Record<string, string> | null, fetchImpl: typeof fetch,
+): Promise<{ body: object } | { fail: Result }> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${key}`, Accept: "application/json" };
+  if (body !== null) headers["Content-Type"] = "application/json";
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetchImpl(url, {
+      method,
+      headers,
+      body: body === null ? undefined : JSON.stringify(body),
+      redirect: "error",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    text = await res.text();
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "error";
+    return { fail: fail(1, `EdgeOS unreachable (${name})`) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  if (!res.ok) {
+    const why = reason(parsed);
+    const retry = res.status === 429 && /^\d{1,5}$/.test(res.headers.get("retry-after") ?? "")
+      ? ` (retry after ${res.headers.get("retry-after")} s)` : "";
+    const refused = res.status === 401 || res.status === 403 ? " (the key was refused)" : "";
+    return { fail: fail(1, `EdgeOS answered ${res.status}${refused}${retry}${why ? `: ${why}` : ""}`) };
+  }
+  if (parsed === undefined || parsed === null || typeof parsed !== "object") {
+    return { fail: fail(1, "EdgeOS answered something that is not JSON") };
+  }
+  return { body: parsed };
+}
+
+/**
+ * A bare `rsvp` on a recurring event: book nothing, list the series' next sessions (`start` of each, from the
+ * events list of the next RECURRING_WINDOW_DAYS days) and exit 5. A session detached from the series is its
+ * own event and is booked by its own id without `--occurrence` (EdgeOS refuses one for a non-recurring event).
+ */
+async function recurringRefusal(
+  base: string, eventId: string, event: object, env: Env, key: string, fetchImpl: typeof fetch, now: number,
+): Promise<Result> {
+  const own = (event as { popup_id?: unknown }).popup_id;
+  const configured = setting("AV_POPUP_ID", env);
+  const popup = typeof own === "string" && UUID_RE.test(own) ? own : UUID_RE.test(configured) ? configured : "";
+  const lines: string[] = [];
+  let listed = false;
+  if (popup) {
+    const q = new URLSearchParams();
+    q.set("popup_id", popup.toLowerCase());
+    q.set("event_status", "published");
+    q.set("start_after", new Date(now).toISOString());
+    q.set("start_before", new Date(now + RECURRING_WINDOW_DAYS * 86_400_000).toISOString());
+    const answer = await send(`${base}/events/portal/events?${q.toString()}`, "GET", key, null, fetchImpl);
+    const rows = "body" in answer ? (answer.body as { results?: unknown }).results : undefined;
+    if (Array.isArray(rows)) {
+      listed = true;
+      const sessions: [number, string][] = [];
+      for (const row of rows) {
+        if (!row || typeof row !== "object") continue;
+        const { id, recurrence_master_id: master } = row as { id?: unknown; recurrence_master_id?: unknown };
+        const start = startOf(row);
+        if (!start || typeof id !== "string" || !UUID_RE.test(id)) continue;
+        if (id.toLowerCase() === eventId) sessions.push([new Date(start).getTime(), `start ${start}`]);
+        else if (typeof master === "string" && master.toLowerCase() === eventId) {
+          sessions.push([new Date(start).getTime(), `start ${start} (its own event ${id.toLowerCase()}: rsvp it without --occurrence)`]);
+        }
+      }
+      sessions.sort((a, b) => a[0] - b[0]);
+      for (const [, line] of sessions.slice(0, MAX_SESSIONS)) lines.push(line);
+    }
+  }
+  const head = "edgeos: a recurring event: nothing was booked. An RSVP is for one session: ask the person which one, " +
+    "then run rsvp again with --occurrence <its start>.";
+  const tail = lines.length
+    ? `Next sessions (up to ${MAX_SESSIONS}, next ${RECURRING_WINDOW_DAYS} days):\n${lines.join("\n")}`
+    : listed
+      ? `No session starts in the next ${RECURRING_WINDOW_DAYS} days; list the series with a later window and copy the row's start.`
+      : "Its sessions could not be listed; list the series with a window and copy the row's start.";
+  return { code: 5, out: "", err: `${head}\n${tail}\n` };
+}
+
+export async function run(
+  argv: string[], env: Env = process.env, fetchImpl: typeof fetch = fetch, now: number = Date.now(),
+): Promise<Result> {
   const parsed = parseArgs(argv);
   if ("error" in parsed) return { code: 3, out: "", err: `edgeos: ${parsed.error}\n${USAGE}` };
   const key = setting("EDGEOS_API_KEY", env);
@@ -287,42 +454,18 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   if (!base || new URL(base).pathname !== API_PATH) {
     return fail(2, `EDGEOS_API_BASE is not https://${EDGEOS_HOSTS.join(" or ")}${API_PATH}; the key is not sent anywhere else`);
   }
+  if (parsed.verb === "rsvp" && !parsed.occurrence) {
+    // EDGEOS-OCCURRENCE: never book a recurring event without naming the session.
+    const read = await send(`${base}/events/portal/events/${parsed.eventId}`, "GET", key, null, fetchImpl);
+    if ("fail" in read) return read.fail;
+    if (isRecurring(read.body)) return recurringRefusal(base, parsed.eventId, read.body, env, key, fetchImpl, now);
+  }
   const req = request(parsed, popup.toLowerCase());
   const query = req.query.toString();
-  const url = `${base}${req.path}${query ? `?${query}` : ""}`;
-  const headers: Record<string, string> = { Authorization: `Bearer ${key}`, Accept: "application/json" };
-  if (req.body !== null) headers["Content-Type"] = "application/json";
-
-  let res: Response;
-  let text: string;
-  try {
-    res = await fetchImpl(url, {
-      method: req.method,
-      headers,
-      body: req.body === null ? undefined : JSON.stringify(req.body),
-      redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    text = await res.text();
-  } catch (e) {
-    const name = e instanceof Error ? e.name : "error";
-    return fail(1, `EdgeOS unreachable (${name})`);
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = undefined;
-  }
-  if (!res.ok) {
-    const why = reason(body);
-    const retry = res.status === 429 && /^\d{1,5}$/.test(res.headers.get("retry-after") ?? "")
-      ? ` (retry after ${res.headers.get("retry-after")} s)` : "";
-    const refused = res.status === 401 || res.status === 403 ? " (the key was refused)" : "";
-    return fail(1, `EdgeOS answered ${res.status}${refused}${retry}${why ? `: ${why}` : ""}`);
-  }
-  if (body === undefined || body === null || typeof body !== "object") return fail(1, "EdgeOS answered something that is not JSON");
-  return { code: 0, out: `${JSON.stringify(body)}\n`, err: "" };
+  const answer = await send(`${base}${req.path}${query ? `?${query}` : ""}`, req.method, key, req.body, fetchImpl);
+  if ("fail" in answer) return answer.fail;
+  const note = parsed.verb === "event" ? occurrenceNote(answer.body, parsed.occurrence) : "";
+  return { code: 0, out: `${JSON.stringify(answer.body)}\n`, err: note };
 }
 
 if (import.meta.main) {

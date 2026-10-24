@@ -382,7 +382,8 @@ def test_the_verbs_name_the_occurrence_as_the_curl_did(edgeos):
     `parse_query` does for a curl's query."""
     call = edgeos.http_call("terminal", {"command": f"bun skills/edgeos/scripts/edgeos.ts event {EVENT.upper()} --occurrence 2026-10-20T15:30:00+05:30"})
     assert call.path == f"/api/v1/events/portal/events/{EVENT}"
-    assert call.query == {"occurrence_start": "2026-10-20T15:30:00+05:30"}
+    # EDGEOS-OCCURRENCE: the script sends an offset as the same UTC instant, and the observer reads what it sends.
+    assert call.query == {"occurrence_start": "2026-10-20T10:00:00Z"}
     call = edgeos.http_call("terminal", {"command": "bun skills/edgeos/scripts/edgeos.ts list --after 2026-10-11T00:00:00Z --search 'yoga class' --tag AI --tag Privacy\n"})
     assert call.query["search"] == "yoga class" and call.query["tags"] == "AI"
     assert edgeos.http_call("carrier-not-on-the-list", {"command": recipe("Fetch a single event")}) is None

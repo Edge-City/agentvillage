@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseArgs, request, run, validInstant, type Args } from "../edgeos";
+import { MAX_SESSIONS, occurrenceInstant, occurrenceNote, parseArgs, request, run, validInstant, type Args } from "../edgeos";
 
 const KEY = "example-not-a-key";
 const POPUP = "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d";
@@ -112,8 +112,13 @@ describe("every recipe in the skill sends what its v2.1.9 curl sent", () => {
       const f = fakeFetch(legacy.method === "POST" ? { id: "9e9e9e9e-1111-4222-8333-444444444444", event_id: EVENT, status: "registered" } : {});
       const r = await run(argv, ENV(), f.impl);
       expect(r.code).toBe(0);
-      expect(f.calls.length).toBe(1);
-      const { url, init } = f.calls[0];
+      // A bare rsvp first reads the event (EDGEOS-OCCURRENCE: a recurring one is never booked without a session).
+      const bareRsvp = argv[0] === "rsvp" && !argv.includes("--occurrence");
+      expect(f.calls.length).toBe(bareRsvp ? 2 : 1);
+      if (bareRsvp) {
+        expect([f.calls[0].init.method, f.calls[0].url]).toEqual(["GET", `${BASE}/events/portal/events/${EVENT}`]);
+      }
+      const { url, init } = f.calls[f.calls.length - 1];
       expect(init.method).toBe(legacy.method);
       sameRequest(url, legacy.url);
       expect(init.body === undefined ? null : JSON.parse(init.body as string)).toEqual(legacy.body);
@@ -136,9 +141,11 @@ describe("verbs and arguments", () => {
   const bad = (argv: string[]) => expect("error" in parseArgs(argv)).toBe(true);
 
   test("the request table", () => {
+    // An offset is sent as the same instant in UTC, EdgeOS's own start_time form (EDGEOS-OCCURRENCE).
     const occ = "2026-10-20T15:30:00+05:30";
-    expect(request(ok(["event", EVENT, "--occurrence", occ])).query.toString()).toBe(`occurrence_start=${encodeURIComponent(occ)}`);
-    expect(request(ok(["cancel", EVENT, "--occurrence", occ])).body).toEqual({ occurrence_start: occ });
+    const utc = "2026-10-20T10:00:00Z";
+    expect(request(ok(["event", EVENT, "--occurrence", occ])).query.toString()).toBe(`occurrence_start=${encodeURIComponent(utc)}`);
+    expect(request(ok(["cancel", EVENT, "--occurrence", occ])).body).toEqual({ occurrence_start: utc });
     const p = request(ok(["participants", EVENT.toUpperCase(), "--occurrence", occ, "--skip", "100", "--limit", "50"]));
     expect([p.method, p.path, p.query.get("event_id"), p.query.get("skip"), p.query.get("limit")]).toEqual(
       ["GET", "/event-participants/portal/participants", EVENT, "100", "50"]);
@@ -163,6 +170,10 @@ describe("verbs and arguments", () => {
       // Security review 2: only ASCII digits (the av-events observer refuses the others too).
       ["venues", "--limit", "\u0661\u0662"], ["venues", "--skip", "\uff11\uff12"],
       ["rsvp", EVENT, "--occurrence", "2026-10-2\u0660T10:00:00Z"],
+      // EDGEOS-OCCURRENCE: a portal ?occ= value is decoded once, and must then be one of the forms above.
+      ["rsvp", EVENT, "--occurrence", "2026-10-20T10%3A00%3A00"], ["rsvp", EVENT, "--occurrence", "2026-10-20T10%ZZ00Z"],
+      ["rsvp", EVENT, "--occurrence", "2026-10-20T10%253A00%253A00Z"], ["rsvp", EVENT, "--occurrence", "2026-10-20T10:00:00 05:30"],
+      ["rsvp", EVENT, "--occurrence", "?occ=2026-10-20T10%3A00%3A00Z"],
     ]) bad(argv);
     expect(validInstant("2026-10-20T10:00Z")).toBe(true);
     expect(validInstant("2026-10-20T10:00:00.123+05:30")).toBe(true);
@@ -246,4 +257,177 @@ describe("the key, the base and the exit codes", () => {
     const r = await run(["rsvp", EVENT], ENV(), fakeFetch(record).impl);
     expect(r.out).toBe(`${JSON.stringify(record)}\n`);
   });
+});
+
+describe("recurring events name their occurrence (EDGEOS-OCCURRENCE)", () => {
+  const SERIES = { id: EVENT, popup_id: POPUP, title: "x", start_time: "2026-10-14T03:00:00Z", rrule: "FREQ=DAILY;COUNT=20",
+    recurrence_master_id: null, occurrence_id: null, my_rsvp_status: null, attendee_count: 0 };
+  const ONE_OFF = { ...SERIES, rrule: null };
+  const RECORD = { id: "9e9e9e9e-1111-4222-8333-444444444444", event_id: EVENT, status: "registered", occurrence_start: null };
+  const NOW = Date.parse("2026-10-21T00:00:00Z");
+  const DETACHED = "22222222-3333-4444-8555-666666666666";
+  const OTHER = "33333333-4444-4555-8666-777777777777";
+
+  /** fetch by route: the single read answers `event`, the list `list`, an RSVP the participant record. */
+  function routed(event: unknown, list: unknown = { results: [], paging: {} }) {
+    const calls: Call[] = [];
+    const impl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const path = new URL(url).pathname;
+      const body = init.method === "POST" ? { ...RECORD, ...(init.body ? JSON.parse(init.body as string) : {}) }
+        : path.endsWith("/events/portal/events") ? list : event;
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  }
+
+  test("--occurrence takes EdgeOS's start_time unchanged, an offset as the same UTC instant, and a portal ?occ= value", () => {
+    // EdgeOS's own form (and so the schedule line's `start <ISO>`) is sent byte for byte.
+    for (const same of ["2026-10-21T02:30:00Z", "2026-10-21T02:30Z", "2026-10-21T02:30:00.123456Z"]) {
+      expect(occurrenceInstant(same)).toBe(same);
+    }
+    expect(occurrenceInstant("2026-10-21T08:00:00+05:30")).toBe("2026-10-21T02:30:00Z");
+    expect(occurrenceInstant("2026-10-21T02:30:00+00:00")).toBe("2026-10-21T02:30:00Z");
+    expect(occurrenceInstant("2026-10-21T08:00+05:30")).toBe("2026-10-21T02:30:00Z");
+    expect(occurrenceInstant("2026-10-21T08:00:00.5+05:30")).toBe("2026-10-21T02:30:00.5Z");
+    expect(occurrenceInstant("2026-10-21T01:00:00+05:30")).toBe("2026-10-20T19:30:00Z"); // across midnight
+    // The portal's link is `?occ=${encodeURIComponent(start_time)}` (portal-link.ts).
+    expect(occurrenceInstant(encodeURIComponent("2026-10-21T02:30:00Z"))).toBe("2026-10-21T02:30:00Z");
+    expect(occurrenceInstant("2026-10-21T02%3A30%3A00Z")).toBe("2026-10-21T02:30:00Z");
+    expect(occurrenceInstant("2026-10-21T08%3A00%3A00%2B05%3A30")).toBe("2026-10-21T02:30:00Z");
+    for (const refused of ["2026-10-21T02:30:00", "2026-10-21", "2026-10-21T02%3A30%3A00", "%E0%A4%A", "2026-10-21T02:30:00 05:30"]) {
+      expect([refused, occurrenceInstant(refused)]).toEqual([refused, null]);
+    }
+    const parsed = parseArgs(["rsvp", EVENT, "--occurrence", "2026-10-21T08%3A00%3A00%2B05%3A30"]) as Args;
+    expect(request(parsed).body).toEqual({ occurrence_start: "2026-10-21T02:30:00Z" });
+  });
+
+  test("a recurring event read without --occurrence says it is the FIRST occurrence; stdout stays EdgeOS's JSON", async () => {
+    const f = routed(SERIES);
+    const r = await run(["event", EVENT], ENV(), f.impl);
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`${JSON.stringify(SERIES)}\n`);
+    expect(r.err).toBe("recurring event: this is the FIRST occurrence (start 2026-10-14T03:00:00Z); pass --occurrence <ISO> for another session\n");
+    expect(f.calls.length).toBe(1);
+  });
+
+  test("a recurring event read with --occurrence names that occurrence (as sent)", async () => {
+    const f = routed(SERIES);
+    const r = await run(["event", EVENT, "--occurrence", "2026-10-21T08:00:00+05:30"], ENV(), f.impl);
+    expect(r.code).toBe(0);
+    expect(r.err).toBe("occurrence 2026-10-21T02:30:00Z\n");
+    expect(new URL(f.calls[0].url).searchParams.get("occurrence_start")).toBe("2026-10-21T02:30:00Z");
+  });
+
+  test("a one-off event read, or a detached session (no rrule), gets no note", async () => {
+    for (const event of [ONE_OFF, { ...ONE_OFF, recurrence_master_id: OTHER }, { ...ONE_OFF, rrule: "  " }]) {
+      const r = await run(["event", EVENT], ENV(), routed(event).impl);
+      expect([r.code, r.err]).toEqual([0, ""]);
+    }
+    expect(occurrenceNote({ ...SERIES, start_time: "next tuesday" }, "")).toContain("(start unknown)");
+  });
+
+  test("a bare rsvp on a recurring event books nothing: it lists the next sessions and exits 5", async () => {
+    const at = (h: number) => new Date(NOW + h * 3_600_000).toISOString().replace(".000Z", "Z");
+    const rows = [
+      ...Array.from({ length: MAX_SESSIONS + 3 }, (_, i) => ({ id: EVENT, occurrence_id: `${EVENT}_x${i}`, start_time: at(24 * (MAX_SESSIONS + 3 - i)) })),
+      { id: DETACHED, recurrence_master_id: EVENT, start_time: at(2) },
+      { id: OTHER, start_time: at(1) }, { id: EVENT, start_time: "not a time" },
+    ];
+    const f = routed(SERIES, { results: rows, paging: {} });
+    const r = await run(["rsvp", EVENT], ENV(), f.impl, NOW);
+    expect([r.code, r.out]).toEqual([5, ""]);
+    expect(f.calls.every((c) => c.init.method === "GET")).toBe(true);
+    expect(f.calls.length).toBe(2);
+    const list = new URL(f.calls[1].url);
+    expect(list.pathname).toBe("/api/v1/events/portal/events");
+    expect([list.searchParams.get("popup_id"), list.searchParams.get("start_after"), list.searchParams.get("start_before")])
+      .toEqual([POPUP, "2026-10-21T00:00:00.000Z", "2026-11-04T00:00:00.000Z"]);
+    const lines = r.err.trimEnd().split("\n");
+    expect(lines[0]).toStartWith("edgeos: a recurring event: nothing was booked.");
+    expect(lines[0]).toContain("--occurrence <its start>");
+    const sessions = lines.filter((l) => l.startsWith("start "));
+    expect(sessions.length).toBe(MAX_SESSIONS);
+    expect(sessions[0]).toBe(`start ${at(2)} (its own event ${DETACHED}: rsvp it without --occurrence)`);
+    expect(sessions[1]).toBe(`start ${at(24)}`);
+    expect(r.err).not.toContain(OTHER);
+    expect(r.err).not.toContain("not a time");
+    expect(r.err).not.toContain(KEY);
+  });
+
+  test("a bare rsvp on a recurring event whose sessions cannot be listed still books nothing", async () => {
+    const empty = await run(["rsvp", EVENT], ENV(), routed(SERIES).impl, NOW);
+    expect([empty.code, empty.err]).toEqual([5, expect.stringContaining("No session starts in the next 14 days")]);
+    const noPopup = routed({ ...SERIES, popup_id: null });
+    const r = await run(["rsvp", EVENT], { HERMES_HOME: home(), EDGEOS_API_KEY: KEY }, noPopup.impl, NOW);
+    expect([r.code, r.err]).toEqual([5, expect.stringContaining("could not be listed")]);
+    expect(noPopup.calls.length).toBe(1);
+  });
+
+  test("a bare rsvp on a one-off event (or a detached session) reads it, then books it as before", async () => {
+    for (const event of [ONE_OFF, { ...ONE_OFF, recurrence_master_id: OTHER }]) {
+      const f = routed(event);
+      const r = await run(["rsvp", EVENT], ENV(), f.impl, NOW);
+      expect([r.code, r.err]).toEqual([0, ""]);
+      expect(f.calls.map((c) => c.init.method)).toEqual(["GET", "POST"]);
+      expect(f.calls[1].url).toBe(`${BASE}/event-participants/portal/register/${EVENT}`);
+      expect(JSON.parse(f.calls[1].init.body as string)).toEqual({});
+      expect(JSON.parse(r.out).status).toBe("registered");
+    }
+  });
+
+  test("an rsvp with --occurrence is one POST naming it, no read first", async () => {
+    const f = routed(SERIES);
+    const r = await run(["rsvp", EVENT, "--occurrence", "2026-10-21T02%3A30%3A00Z"], ENV(), f.impl, NOW);
+    expect(r.code).toBe(0);
+    expect(f.calls.map((c) => c.init.method)).toEqual(["POST"]);
+    expect(JSON.parse(f.calls[0].init.body as string)).toEqual({ occurrence_start: "2026-10-21T02:30:00Z" });
+  });
+
+  test("a bare rsvp whose read fails exits 1 with EdgeOS's reason and books nothing", async () => {
+    const f = fakeFetch({ detail: "Event not found" }, 404);
+    const r = await run(["rsvp", EVENT], ENV(), f.impl, NOW);
+    expect([r.code, r.err]).toEqual([1, "edgeos: EdgeOS answered 404: Event not found\n"]);
+    expect(f.calls.length).toBe(1);
+  });
+
+  test("EdgeOS's occurrence refusals reach the agent as one line naming the status and the reason", async () => {
+    for (const detail of [
+      "occurrence_start does not match a scheduled occurrence",
+      "occurrence_start is not allowed for non-recurring events",
+      "occurrence_start is required for recurring events",
+    ]) {
+      const r = await run(["rsvp", EVENT, "--occurrence", "2026-10-21T02:30:00Z"], ENV(), fakeFetch({ detail }, 400).impl);
+      expect([r.code, r.out, r.err]).toEqual([1, "", `edgeos: EdgeOS answered 400: ${detail}\n`]);
+    }
+  });
+});
+
+describe("the --occurrence parity table (EDGEOS-OCCURRENCE; the av-events observer runs the same file)", () => {
+  // plugins/av-events/tests/test_edgeos_occurrence_parity.py reads this table through the observer's own
+  // parser (`script_occurrence`, `http_call`): the two sides must name the same occurrence for every input.
+  const table = JSON.parse(readFileSync(join(import.meta.dir, "occurrence-parity.json"), "utf8")) as {
+    cases: { name: string; input: string; sends: string | null }[];
+  };
+
+  test("the table covers the Z, offset, encoded, doubly-encoded and refused forms", () => {
+    const sends = table.cases.map((c) => c.sends);
+    expect(table.cases.length).toBeGreaterThan(30);
+    expect(sends).toContain(null);
+    expect(table.cases.some((c) => c.input.includes("%25") && c.sends === null)).toBe(true);
+    expect(table.cases.some((c) => c.input.includes("%2B05%3A30") && c.sends !== null)).toBe(true);
+  });
+
+  for (const c of table.cases) {
+    test(c.name, () => {
+      expect(occurrenceInstant(c.input)).toBe(c.sends);
+      const parsed = parseArgs(["event", EVENT, "--occurrence", c.input]);
+      if (c.sends === null) {
+        expect("error" in parsed).toBe(true);
+      } else {
+        expect(request(parsed as Args).query.get("occurrence_start")).toBe(c.sends);
+        expect(request(parseArgs(["rsvp", EVENT, "--occurrence", c.input]) as Args).body).toEqual({ occurrence_start: c.sends });
+      }
+    });
+  }
 });

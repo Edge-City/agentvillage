@@ -88,6 +88,7 @@ import shlex
 import time
 import urllib.parse
 from collections import OrderedDict
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from ._core import DIR_MODE, FILE_MODE, hermes_home, iso_from_text
@@ -668,7 +669,56 @@ _SCRIPT_MAX_REPEAT = 20
 
 
 def _script_instant(value: str) -> bool:
-    return _SCRIPT_ISO.fullmatch(value) is not None and iso_from_text(value) is not None
+    """An instant the script's `validInstant` accepts. Python's fromisoformat
+    also takes an offset's minutes up to 99 (`+05:60` is +06:00); the script
+    refuses minutes over 59, and so does this (EDGEOS-OCCURRENCE parity)."""
+    if _SCRIPT_ISO.fullmatch(value) is None or (value[-6] in "+-" and int(value[-2:]) > 59):
+        return False
+    try:
+        return iso_from_text(value) is not None
+    except OverflowError:  # an offset that moves year 1 or 9999 out of range
+        return False
+
+
+#: An offset instant's parts: minute, seconds, fraction, offset (EDGEOS-OCCURRENCE).
+_SCRIPT_OFFSET = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})(?::([0-9]{2})(\.[0-9]{1,6})?)?([+-][0-9]{2}:[0-9]{2})")
+#: A `%` that does not start a two-hex-digit escape (JavaScript's decodeURIComponent throws on it).
+_SCRIPT_BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+def script_occurrence(value: str) -> Optional[str]:
+    """The `occurrence_start` the script sends for this `--occurrence` value, or None when it refuses it.
+
+    Mirrors `occurrenceInstant` in skills/edgeos/scripts/edgeos.ts exactly (the
+    shared table `skills/edgeos/scripts/tests/occurrence-parity.json` runs
+    through both): a value holding `%` is percent-decoded ONCE (the portal's
+    `?occ=` is `encodeURIComponent(start_time)`), strictly, as
+    decodeURIComponent does; the result must be an instant with its zone; a `Z`
+    instant is sent unchanged, one with an offset as the same instant in UTC,
+    `YYYY-MM-DDTHH:MM:SS[.fraction]Z`, its fraction kept; a year outside
+    0001-9999 (before or after the shift) is refused.
+    """
+    if "%" in value:
+        if _SCRIPT_BAD_ESCAPE.search(value):
+            return None
+        try:
+            value = urllib.parse.unquote(value, errors="strict")
+        except UnicodeDecodeError:
+            return None
+    if not _script_instant(value):
+        return None
+    if value.endswith("Z"):
+        return value
+    parts = _SCRIPT_OFFSET.fullmatch(value)
+    if parts is None:
+        return None
+    minute, seconds, fraction, offset = parts.groups()
+    try:
+        stamp = datetime.fromisoformat(f"{minute}:{seconds or '00'}{offset}").astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+    return (f"{stamp.year:04d}-{stamp.month:02d}-{stamp.day:02d}T{stamp.hour:02d}:{stamp.minute:02d}:"
+            f"{stamp.second:02d}{fraction or ''}Z")
 
 
 def _script_cwd_trusted(workdir: Any) -> bool:
@@ -721,7 +771,11 @@ def script_call(command: str, workdir: Any = None) -> Optional[HttpCall]:
     itself, refuses any base that is not https on an EdgeOS host under
     `/api/v1`, makes exactly one request per run and prints EdgeOS's JSON
     answer, so its verb and arguments name the request as a curl's method and
-    URL did. This parser mirrors the script's own `parseArgs` and `request`:
+    URL did. (EDGEOS-OCCURRENCE: an `rsvp` without `--occurrence` reads the
+    event first and, for a recurring one, books nothing and exits non-zero;
+    its last request, when it makes one, is still the POST read here.) An
+    `--occurrence` value is read through `script_occurrence`, the script's own
+    decoding and normalisation. This parser mirrors the script's own `parseArgs` and `request`:
     a run is read only when the script would accept exactly these arguments,
     and the command is nothing but that run (no prefix, no redirect, no second
     command, nothing the shell would expand). When in doubt it is not read; an
@@ -767,7 +821,13 @@ def script_call(command: str, workdir: Any = None) -> Optional[HttpCall]:
             return None
         value = words[i]
         i += 1
-        if flag in ("--occurrence", "--after", "--before"):
+        if flag == "--occurrence":
+            # Read as the script reads it (EDGEOS-OCCURRENCE): decoded once and
+            # normalised to the instant it sends, so both name one occurrence.
+            value = script_occurrence(value)
+            if value is None:
+                return None
+        elif flag in ("--after", "--before"):
             if not _script_instant(value):
                 return None
         elif flag in ("--search", "--kind", "--tag"):
