@@ -1,7 +1,7 @@
 ---
 name: forkicks
-description: Show For Kicks' live café menu as images by default, read its schedule, preview an order with its exact total and shared display name, and place it only after the resident approves. Optional first-party mini-app; UPI and card orders use pay-at-pickup honor rules.
-version: 1.0.6
+description: Show For Kicks' live café menu as images by default, read its schedule, preview an order with its exact total and shared display name, and place it only after the resident approves. Optional first-party mini-app; UPI is paid now through the returned link (the resident shows the confirmation at pickup), card is paid at the counter, and an Edge-sponsored ₹0 order needs no payment.
+version: 1.0.7
 author: Edge City
 ---
 
@@ -73,9 +73,15 @@ an item, change fulfilment or add drinks to evade this restriction.
    Ask about ambiguous or required choices. Select a returned location and
    pickup date; use the returned schedule for the place and time. Do not
    fabricate a pickup slot or promise a preparation time that was not returned.
-   Ask whether the owner wants UPI with a returned payment link (`upi`) or card
-   at pickup (`card_on_pickup`). They'll check UPI payment at pickup; it does not
-   hold the order out of the queue. Delivery needs the intended address and minimum drinks.
+   Ask whether the owner wants UPI (`upi`: paid **now** through the returned link
+   or QR; the resident shows the payment confirmation at the counter when they
+   pick up) or card paid at the counter (`card_on_pickup`). Say this as a payment
+   instruction, never as proof that payment happened: UPI cannot be verified
+   automatically. A UPI order is queued at once; the payment does not hold it out
+   of the queue. An Edge-sponsored order (quote `totalInr: 0` with a positive
+   `discountInr`) needs no payment. Preparing provides no payment link yet: a UPI
+   link arrives only with the receipt of an approved, confirmed order. Delivery
+   needs the intended address and minimum drinks.
    Use only exact options in the returned `optionGroups` as `optionIds`; never
    invent decaf, iced or other options, or claim an absent option is a default.
    Anything the resident wants that is not an exact menu option belongs in the
@@ -158,8 +164,8 @@ an item, change fulfilment or add drinks to evade this restriction.
 
 ## Payment and updates
 
-For UPI, send **only the exact payment URL returned by a successful, validated
-`forkicks.order.confirm`**. The server validates the configured allowed origin,
+For UPI (except an Edge-sponsored receipt, below), send **only the exact payment
+URL returned by a successful, validated `forkicks.order.confirm`**. The server validates the configured allowed origin,
 payee `SWISSDESI`, display name `For Kicks`, amount equal to the approved quote
 and order note reference. Use the returned `payment.url`, `payment.amountInr`
 and `payment.noteRef` exactly; never derive a note from the order number yourself.
@@ -172,26 +178,35 @@ If the receipt says `payment.simulated: true`, show its exact returned
 `payment.label` (**“Test payment, no money moved”**) prominently before any
 link, and say this is a test order/payment. Do not use the real-payment copy
 below, claim money was charged or received, or imply a mock checkout is a real
-UPI transfer. A simulated paid status means only that the test order entered
+UPI prepayment. A simulated paid status means only that the test order entered
 the queue; no money moved.
 
-For a real UPI receipt with `paymentStatus: "upi_at_pickup"`,
-`payment.method: "upi"` and `payment.confirmation: "at_pickup"`, use this exact
-wording, replacing placeholders only from the returned receipt:
+For an Edge-sponsored receipt (`totalInr: 0`, `payment.amountInr: 0`,
+`payment.label: "Edge-sponsored · ₹0"`, no `payment.url`), say exactly
+**“Edge covers your first order. This order is Edge-sponsored; no payment is needed.”**
+Never ask for a payment, construct a link or call such an order paid; it is covered.
 
-> Pay ₹{amountInr} to SWISSDESI (For Kicks' UPI) with note {noteRef}: {exact returned URL}. They'll check it at pickup.
+For a real UPI receipt with `paymentStatus: "upi_at_pickup"`,
+`payment.method: "upi"` and `payment.confirmation: "at_pickup"` (wire values for
+the café's manual confirmation check at the counter, not evidence of payment),
+use this exact wording, replacing placeholders only from the returned receipt:
+
+> Pay ₹{amountInr} to SWISSDESI (For Kicks' UPI) now with note {noteRef}: {exact returned URL}. Show the payment confirmation at the counter when you pick up. Do not claim payment happened; UPI cannot be verified automatically.
 
 For example, a returned amount of ₹220 and note `FK042` means “Pay ₹220 to
-SWISSDESI (For Kicks' UPI) with note FK042: {exact returned URL}. They'll check it at pickup.”
+SWISSDESI (For Kicks' UPI) now with note FK042: {exact returned URL}. Show the
+payment confirmation at the counter when you pick up. Do not claim payment
+happened; UPI cannot be verified automatically.”
 The example is not a price, note or URL to reuse for another order.
 
-This UPI order is queued immediately, before payment is checked. Report the
-returned queued state; never say it is waiting for payment to reach the baristas.
-UPI at pickup is **not already paid**: never claim payment was verified, money
-was received or the order is paid. A sent link, QR scan, browser redirect,
+This UPI order is queued immediately; the link is a request to pay now, and the
+café checks the payment confirmation at the counter. Report the returned queued
+state; never say it is waiting for payment to reach the baristas. A returned UPI
+receipt is **not already paid**: never claim payment was verified, money was
+received or the order is paid. A sent link, QR scan, browser redirect,
 screenshot or “I paid” is not verified payment, and a queued state is not proof
-of payment. The café checks it at pickup; do not promise an automatic paid
-notification for this payment method.
+of payment. The café checks the confirmation at pickup; do not promise an
+automatic paid notification for this payment method.
 
 If a returned expiry is present, state the actual remaining time; never invent
 an expiry. Use `forkicks.order.status` with the returned `orderId` for the
@@ -199,7 +214,8 @@ authoritative order status. The resident's own paired bot sends later
 ready/cancel/expiry updates; do not promise a notification was delivered unless
 its delivery was actually confirmed.
 
-For `card_on_pickup` and a successful queued order, use the design's honor note:
+For a `card_on_pickup` order that is not Edge-sponsored, on a successful queued
+order, use the design's honor note:
 
 > Card it is. Pay at the counter when you pick up.
 > Order {number} is with the baristas now, and I'll tell you when it's ready.

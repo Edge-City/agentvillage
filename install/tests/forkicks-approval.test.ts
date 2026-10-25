@@ -42,17 +42,23 @@ test("For Kicks card refuses controls, missing prices and UTF-8/HTML overflow wi
   expect(summary(changed).stderr).toContain("approval_card_invalid");
 });
 
-test("For Kicks skill uses returned UPI-at-pickup details without claiming payment", () => {
+test("For Kicks skill says UPI is paid now by the returned link, confirmation shown at pickup, without claiming payment", () => {
   const skill = readFileSync(join(import.meta.dir, "../../skills/forkicks/SKILL.md"), "utf8");
-  expect(skill).toContain("version: 1.0.6");
+  expect(skill).toContain("version: 1.0.7");
   expect(skill).toContain('paymentStatus: "upi_at_pickup"');
   expect(skill).toContain('payment.method: "upi"');
   expect(skill).toContain('payment.confirmation: "at_pickup"');
   expect(skill).toContain("`payment.url`, `payment.amountInr`");
   expect(skill).toContain("`payment.noteRef` exactly");
-  expect(skill).toContain("> Pay ₹{amountInr} to SWISSDESI (For Kicks' UPI) with note {noteRef}: {exact returned URL}. They'll check it at pickup.");
-  expect(skill).toContain("This UPI order is queued immediately, before payment is checked.");
-  expect(skill).toContain("UPI at pickup is **not already paid**: never claim payment was verified");
+  expect(skill).toContain("> Pay ₹{amountInr} to SWISSDESI (For Kicks' UPI) now with note {noteRef}: {exact returned URL}. Show the payment confirmation at the counter when you pick up. Do not claim payment happened; UPI cannot be verified automatically.");
+  expect(skill).toContain("This UPI order is queued immediately; the link is a request to pay now");
+  expect(skill).toContain("A returned UPI\nreceipt is **not already paid**: never claim payment was verified");
+  expect(skill).toContain("paid **now** through the returned link");
+  expect(skill).toContain("card paid at the counter (`card_on_pickup`)");
+  expect(skill).toContain("Edge covers your first order. This order is Edge-sponsored; no payment is needed.");
+  expect(skill).not.toContain("first drink");
+  expect(skill).not.toContain("They'll check it at pickup");
+  expect(skill).not.toContain("pay-at-pickup honor rules");
   expect(skill).toContain('`payment.label` (**“Test payment, no money moved”**)');
   expect(skill).toContain("Never embed a VPA, generate a `upi://` link");
   expect(skill).not.toMatch(/[a-z0-9._+-]+@[a-z0-9.-]+/i);
