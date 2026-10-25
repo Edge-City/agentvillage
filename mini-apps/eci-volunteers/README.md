@@ -73,10 +73,33 @@ message to the Edge City Volunteers bot once, which refreshes ECV's record.
 | `eci-volunteers.propose` | `eciv_propose` | read (a check: nothing changes; ECV writes one audit row) |
 | `eci-volunteers.confirm` | `eciv_confirm` | write |
 
-`confirm` is `write`, not `needs-card`: each change is one the volunteer can
-undo or that the volunteer app already lets them make, and the generic approval
-card is not built. On the box it takes the verified-gate path (zzz's), no manual
-grant. Not exposed: `eciv_feedback`, every staff tool and action, and `brief`.
+Not exposed: `eciv_feedback`, every staff tool and action, and `brief`.
+
+## Approval classification
+
+This follows the developer guide, section 7: app actions run on their own by
+default, reads and writes included; only a payment shows a card, and a developer
+marks only a genuinely payment-like operation `needs-card`.
+
+- `propose` is a `read`. It is a check: it returns a summary and a code, and
+  changes nothing.
+- `confirm` is a `write`. It makes the volunteer's own scheduling change in
+  their own volunteer account: claim a shift, move one, ask for cover, take a
+  rest day, set their plan, or ask for extra hours. Each can be undone or
+  changed again. It is not a payment, and it publishes nothing outside Edge City
+  Volunteers.
+- The owner's explicit yes is enforced twice. The skill shows the summary and
+  waits for a later message. The app server's confirm rule (below) refuses a
+  confirm from the propose's own turn, so this is a server rule, not only a
+  prompt.
+- On the box, `confirm` takes the verified-gate path (zzz's), with no manual
+  grant. If Edge City later pins a member row to ask for it, nothing in this
+  manifest needs to change.
+
+This is not a generic app. Section 8 of the guide says token, OAuth and write
+partner apps are mini-apps v3, with per-app app-server code. That is this app's
+shape: its own named operations on the box, and reference app-server code for
+Edge City's app server.
 
 ## Input rules
 
@@ -111,6 +134,11 @@ ECV checks the token and the Telegram id before any tool runs. The app maps:
 | HTTP 403 `{"code":"not_connected"}` | `not_connected`: ECV does not know this Telegram id yet (the owner has not messaged the bot), or the username header does not match ECV's record |
 | HTTP 404 `{"code":"not_found"}` | `not_found`: no volunteer on the current event has this Telegram id |
 | HTTP 403 `{"code":"not_authorized"}` | `not_authorized`: withdrawn, or a coordinator turned Agent Village off for them |
+| HTTP 400 `{"code":"invalid_arguments"}` | `invalid_arguments`: the Telegram id header is not a numeric id (an app bug) |
+
+ECV always answers these as exactly `{code, detail}`. The bodies are recorded
+as conformance fixtures under
+[`scripts/tests/fixtures/eci-volunteers/`](../../scripts/tests/fixtures/eci-volunteers/).
 
 The app answers the box with HTTP 4xx/5xx and `{"code": "<code>"}`. The box
 replaces it with its own text (`_ecv.py` `ECV_ERRORS`), never upstream wording.
@@ -144,8 +172,10 @@ limit is 262,144 bytes; a `plan_view` of 8 busy days fits.
 
 ## ECV side safety
 
-- The token is compared in constant time; ECV can hold two tokens at once, so
-  rotation needs no downtime.
+- ECV needs no environment variable for the link. It pins the token's SHA-256
+  in its code (`AGENT_VILLAGE_TOKEN_SHA256` in `src/server/mcp/agent-village.ts`)
+  and compares the hash of the token it is sent. Rotating the token is one ECV
+  code change plus the staff variable.
 - The token reaches only the volunteer tools above, never a staff tool.
 - Each volunteer gets an "Agent Village" connection record that coordinators see
   and can revoke.
@@ -168,9 +198,17 @@ limit is 262,144 bytes; a `plan_view` of 8 busy days fits.
    sandbox tenant.
 3. The app routes: the operation map, the headers, the refusal mapping and
    the confirm rule (see the reference implementation).
-4. ECV sets the token: Naman generates it, stores it in ECV's Vercel env and
-   gives it to Edge City staff for the Agent Village app server's
-   `MINI_APP_ECI_VOLUNTEERS_TOKEN`. Never in a pull request.
+4. The token. Naman holds it (on serenity, as `ECV_AGENT_VILLAGE_TOKEN`) and
+   gives it to Edge City staff privately for the Agent Village app server's
+   `MINI_APP_ECI_VOLUNTEERS_TOKEN`. ECV pins only its SHA-256 (see above), so
+   ECV sets nothing. Never in a pull request.
+
+### Sandbox test identity
+
+Naman Hajela (Telegram @hiinaman), a rostered Edge City volunteer, is the
+consented sandbox test identity (confirmed 25 Oct); he provides the test token
+privately. Install the app on the Agent Village tenant paired with that
+Telegram account.
 
 ## Reference implementation
 
@@ -183,17 +221,42 @@ tree of manifests and READMEs only.
 
 ## V0 conformance evidence
 
-This PR already uses a v2 manifest and hash-pins the author skill. An actual
-unauthenticated read-only MCP probe from 22 October 2026 is preserved at
-`scripts/tests/fixtures/eci-volunteers/eci-volunteers.initialize/error-unauthenticated.json`.
-The live service answers HTTP 401 with `{error, error_description}`, not the
-documented `{code, detail}`. With #422's runner and that fixture directory,
-v0 therefore fails error-body hygiene. No authenticated success fixture is
-invented; the app token and a consented sandbox volunteer identity are required
-before those reads can be tested.
+The 22 October probe (by jmilldotdev) called the live endpoint without the
+`X-Agent-Village-Telegram-User-Id` header. That reached ECV's OAuth path, which
+answers HTTP 401 `{error, error_description}`. That answer is correct for OAuth
+clients. Agent Village's server never sees it: it always sends the identity
+header.
 
-The reference app-server file remains reference code, not an installed AV
-adapter. Staff must separately review and implement the real app/CP path,
-including trusted identity injection and the proposal/confirmation semantics.
-The manifest and author skill have not been relabelled to imply that generic
-app-token dispatch or an approval card exists today.
+With that header, ECV answers every refusal as exactly `{code, detail}`
+(lucychen0103/Edge-City-Volunteers#112). The fixtures in
+[`scripts/tests/fixtures/eci-volunteers/`](../../scripts/tests/fixtures/eci-volunteers/)
+now record those bodies, taken from #112's code in a local run on 21 October:
+
+| Fixture | HTTP | Body `code` |
+|---|---|---|
+| `eci-volunteers.initialize/error-unauthenticated.json` (wrong or missing token) | 401 | `not_authorized` |
+| `eci-volunteers.initialize/error-not-connected.json` (never messaged the bot) | 403 | `not_connected` |
+| `eci-volunteers.initialize/error-username-out-of-date.json` | 403 | `not_connected` |
+| `eci-volunteers.initialize/error-no-volunteer.json` | 404 | `not_found` |
+| `eci-volunteers.my_shifts/error-withdrawn.json` | 403 | `not_authorized` |
+| `eci-volunteers.my_hours/error-switched-off.json` | 503 | `unavailable` |
+| `eci-volunteers.confirm/error-telegram-id-not-numeric.json` | 400 | `invalid_arguments` |
+
+ECV checks the token and identity before any tool runs, so each refusal is the
+same for every operation; the fixtures are spread across a few. Every code is
+in the generic list. Conformance v0 passes:
+
+```sh
+bun run conformance -- mini-apps/eci-volunteers/manifest.json \
+  --fixtures scripts/tests/fixtures/eci-volunteers --base origin/main \
+  --out "$TMPDIR/conformance.json"
+```
+
+No success fixture is invented. Live evidence (success bodies and the v1
+`--service` checks) follows once #112 is deployed and a test token is
+configured.
+
+The reference app-server file is reference code, not an installed Agent Village
+adapter. Edge City staff implement the real app and CP path, including the
+trusted identity headers and the confirm rule. The manifest and skill do not
+claim that generic app-token dispatch or an approval card exists today.

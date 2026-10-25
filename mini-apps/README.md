@@ -529,8 +529,14 @@ generic codes (`not_connected`, `not_found`, `not_authorized`, `unavailable`,
 `conflict`, `invalid_arguments`, `rate_limited`) map to ECV-only text, for these
 operations only.
 
+`confirm` is a `write`, not `needs-card`: the volunteer's own reversible
+scheduling change, not a payment (developer guide section 7). It is not a
+generic app: a token-auth write app is mini-apps v3, with per-app app-server
+code (guide section 8).
+
 Overlay first, then the CP catalog row and sandbox allowlist, then the app
-routes, then ECV sets the token. The app-server contract is in
+routes, then Edge City staff set `MINI_APP_ECI_VOLUNTEERS_TOKEN` (ECV pins only
+the token's SHA-256 and sets nothing). The app-server contract is in
 [eci-volunteers/README.md](eci-volunteers/README.md); reference app-server code
 is in [docs/reference/eci-volunteers/](../docs/reference/eci-volunteers/app-server.ts).
 

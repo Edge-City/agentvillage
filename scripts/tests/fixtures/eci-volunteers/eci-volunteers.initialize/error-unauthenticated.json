@@ -1,4 +1,4 @@
 {
-  "error": "unauthorized",
-  "error_description": "Connect this server from your AI app to sign in."
+  "code": "not_authorized",
+  "detail": "The Agent Village token was missing or wrong."
 }
