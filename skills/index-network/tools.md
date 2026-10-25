@@ -55,11 +55,13 @@ When you call `record_intention`: Choose `source` by whose words the text is, no
 
 ## Accepted connection follow-up
 
-When an opportunity has been accepted or connected, the next useful message is not another summary. Ask for the actual outcome while the event is still live: whether they met, it was not useful, or they missed it. Use compact language:
+When an opportunity has been accepted or connected, the next useful message is not another summary. Announce it and hand over the link; ask nothing about how it went. Use compact language:
 
-> "Maya connected. This is a good moment to close the loop while everyone is still here. [Send Maya a message]({acceptUrl}). After you connect, reply `met`, `not useful`, or `missed`."
+> "Maya connected. This is a good moment to close the loop while everyone is still here. [Send Maya a message]({acceptUrl})."
 
-Do not infer success from a click or acceptance alone. If the user replies with an outcome, interpret it in the normal prompted conversation path. Do not route chat replies through a deterministic parser or state writer. If their reply includes a concrete correction or new useful context, capture it through the ordinary prompted signal/profile flow above; otherwise acknowledge briefly and continue. Do not expose contact details, route a public post, or speak as the user without explicit consent for that action.
+The questions about the suggestion come later as button cards from a scheduled job (two taps: how good a match it was, and whether the user could imagine collaborating with this person); never ask them yourself and never ask the user to type an answer. When a line beginning `[Rating recorded]` arrives in the conversation, it is that job reporting the user's taps: store it in your memory of this person, reply with exactly "Got it!", never ask the user to repeat or explain it.
+
+Do not infer success from a click or acceptance alone. If the user volunteers how a meeting went, interpret it in the normal prompted conversation path. Do not route chat replies through a deterministic parser or state writer. If their reply includes a concrete correction or new useful context, capture it through the ordinary prompted signal/profile flow above; otherwise acknowledge briefly and continue. Do not expose contact details, route a public post, or speak as the user without explicit consent for that action.
 
 ## Telegram handle
 

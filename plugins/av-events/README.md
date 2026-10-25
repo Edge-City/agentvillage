@@ -31,6 +31,7 @@ plugins/av-events/
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _outcome_ask.py  the evening outcome ask: outcome.asked and the resident's answer (DATA-42)
   _headline_flagged.py  opportunity.headline_flagged from the proactive trigger's hand-off files: ids and codes, no text (DATA-487)
+  _rating_cards.py  opportunity.rating_asked / rated / collab_interest (pre_planned from older cards) from the av-rate plugin's hand-off files: the suggestion rating cards (data docs/design/suggestion-rating.md)
   _approvals_reminder.py  one Connect-approvals reminder per Telegram DM session while the welcome's button is unstarted (DATA-444)
   _clock.py        the Now line on every turn, cron runs and subagents included: `Now: <Wkd YYYY-MM-DD HH:MM> IST (<h:mm AM/PM>)` (CLOCK-1)
   _prompt_refresh.py  a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md / skills: wraps Hermes's build_turn_context (F1)
@@ -41,11 +42,11 @@ plugins/av-events/
   _ask_village.py  the ask_village tool, dark behind AV_ASK_VILLAGE: one question about the main group, answered by the god agents through the control plane
   _search_village.py  the search_village tool, dark behind AV_SEARCH_VILLAGE: the main group's scrubbed messages matching words, through the control plane (no model call)
   _query_village.py   the query_village tool, on the same switch: one read-only SQL SELECT the app runs over the main group's scrubbed messages (in-memory SQLite), through the control plane
-  _village_visible.py  the village tools stay out of Hermes's tool_search bridge: wraps tools.tool_search._core_tool_names (R-DEON)
+  _village_visible.py  the village tools and elicitation_record stay out of Hermes's tool_search bridge: wraps tools.tool_search._core_tool_names (R-DEON)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
-  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v3)
+  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v4)
   outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v5)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
@@ -85,7 +86,7 @@ plugins/av-events/
 | `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
 | `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
 | `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` and `query_village` tools (see "Searching the village group (VILLAGE SEARCH)" and "Querying the village group with SQL (VILLAGE QUERY)"). Unset: neither is registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
-| `AV_VILLAGE_TOOLS_VISIBLE` | *(on)* | `0`, `false`, `no` or `off` lets Hermes's `tool_search` defer the village tools again. Otherwise `ask_village`, `search_village`, `query_village` and village-bridge's `village`, when registered, stay in the model's tool list (see "Village tools never deferred (R-DEON)"). Read once at plugin load. |
+| `AV_VILLAGE_TOOLS_VISIBLE` | *(on)* | `0`, `false`, `no` or `off` lets Hermes's `tool_search` defer the village tools and `elicitation_record` again. Otherwise `ask_village`, `search_village`, `query_village`, village-bridge's `village` and av-elicit's `elicitation_record`, when registered, stay in the model's tool list (see "Village tools never deferred (R-DEON)"). Read once at plugin load. |
 | `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village`, `search_village` and `query_village` (the last three send the key only to a `CP_HOSTS` host). |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
@@ -261,6 +262,10 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
 | `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`), `intention_reason` (null, or `not_linked` \| `ambiguous` \| `not_recorded`; `not_recorded` today); envelope `outcome_id`, `opportunity_id`, `intention_id` (null today) — see "The evening outcome ask" |
 | `opportunity.headline_flagged` | the flusher, from the proactive trigger's hand-off files (`av-events/proactive/headline-flagged/`), one per Index headline the trigger's cleaner, scanner or shape check withheld or flagged | closed, every key required, no text: `opportunity_id` (the Index opportunity id, a UUID, either case: data's door admits UUID only), `counterpart_index_user_id` (the card's other party's Index user id, a UUID), `reason_code` (`cleaner_withheld` \| `scanner_flagged` \| `shape_withheld` \| `length_capped`; `length_capped` is reserved and not emitted: a cut headline was checked whole before the cut), `stage` (`cleaner` \| `scanner` \| `shape`), `headline_length` (int 0..2000); envelope `opportunity_id`, actor `system`; a record or file not exactly that shape is dropped and counted (`flag_dropped_<reason>` in the log line and the counters), every file is consumed once, nothing raises; the ids cannot be verified on the box (same user as the agent), so the event is agent-asserted (`_headline_flagged.py`, DATA-487) |
+| `opportunity.rating_asked` | the flusher, from the av-rate plugin's hand-off files (`av-events/proactive/rating-events/`), one per rating card sent (`plugins/av-rate`; data docs/design/suggestion-rating.md) | closed: `question_version` (`match_fit_5_v1`; `collab_interest_v1` for card 2), `card` (`fit` \| `collab`; `planned` from older releases), `message_hash` (the card text's keyed hash), `window_hours` (24); envelope `opportunity_id`, `intention_id` (null unless the stage named one); actor `system`; event id derived from (type, opportunity, card, revision); off with `rating_cards` in `AV_HOOKS_DISABLED` (`_rating_cards.py`) |
+| `opportunity.rated` | as above, one per tap on card 1 (a re-tap is a revision) | closed: `value` (1..5), `scale` (`match_fit_5_v1`), `channel` (`telegram_button`), `revision`, `rated_at`; `self_report`, actor `participant` |
+| `opportunity.pre_planned` | as above, one per tap on the retired planned card (older releases) | closed: `value` (`yes` \| `no`), `channel`, `revision`, `answered_at`; `self_report`, actor `participant` |
+| `opportunity.collab_interest` | as above, one per tap on card 2 (asked after every card 1 rating) | closed: `value` (`yes` \| `no` \| `unsure`), `scale` (`collab_interest_v1`), `channel`, `revision`, `answered_at`; `self_report`, actor `participant` |
 | `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`), `intention_reason` (the ask's); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `intention_id` (the ask's), `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
@@ -770,7 +775,7 @@ shared by `digest.share` and `village.vote` later through `register_pass`) and
 | `AV_APPROVAL_URL` | The daemon: `http://127.0.0.1:<port>` (or `localhost`, `[::1]`), `unix:<absolute socket path>`, or an `https://` origin (the hosted dogfood). No path, no query, nothing else. |
 | `AV_APPROVAL_TOKEN_FILE` | The agent credential's file. Else `$HERMES_HOME/approval/agent-token` when it exists, else `AV_APPROVAL_TOKEN`: the shim's order. A token file must be absolute, a regular file owned by this uid, mode 0600; a named file that fails never falls back. |
 | `AV_APPROVAL_DAEMON_UID` | The uid that must own the loopback listener or the socket (default 10001). |
-| `AV_APPROVAL_POLL_S` | Seconds between poller passes (default 30, at least 5). |
+| `AV_APPROVAL_POLL_S` | Seconds between poller passes (default 30, at least 5). While a registered busy probe (`register_busy`) reports live work, e.g. a village-bridge approval card waiting for its tap, the poller waits 5 s instead (adaptive polling; core has no push). |
 | `AV_APPROVAL_POLLER` | `1` starts the poller thread in any process; `0` never (session-start passes still run). |
 
 **The calls, exactly as the plugin makes them** (`POST /verb/<name>` with `Authorization: Bearer
@@ -1684,16 +1689,19 @@ tenant the ask confirms and reads answers without waiting for a chat. It reads:
   execution's window (±2 s); otherwise both are null. The last 512 KiB is read, and only when there
   is something to report.
 - `$HERMES_HOME/cron/jobs.json`: `job_name`, **only when it is exactly one of the names the
-  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v3`;
-  `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS`). A prefix check
+  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v4`;
+  `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS` plus the ZZZ managed job). A prefix check
   is not enough: a participant can have the agent schedule a job named `Edge — …` too, and its name
   is then their words. Nor is an exact name (DATA-92): the participant can ask for a job named
   exactly `Edge — daily digest`, so the name is reported only when the job id is also one the
   installer recorded in `$HERMES_HOME/av-events/installed_jobs.json` (`{"ids": [...]}`, rewritten by
-  `install/install_index.ts` on every install and update with the ids of the crons it created or
-  manages). No record, no names: a tenant installed before the record existed reports `job_name:
-  null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
+  `install/install_index.ts` and the ZZZ managed-job reconciler with the ids of the crons they
+  created or manage). The ZZZ id is retained only while its exact installed job shape remains
+  verified. No record, no names: a tenant installed before the record existed reports
+  `job_name: null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
   (spec §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+  The ZZZ job is a `no_agent` script: `cron.run` records Hermes execution status, not proof that a
+  pair post reached the app, and it supplies no generic AIAgent model/tool trajectory.
 - **A missing or stale record drops installer runs, not only their names.** The worker keeps a
   `cron.run` from a tenant without research consent only when it names an installer job; one with
   `job_name: null` is dropped as `cron_participant_job` (`agentvillage-data`
@@ -2243,10 +2251,17 @@ Hermes v2026.9.24's `tool_search` defers every plugin tool behind its bridge (`t
 (17 Oct) a Haiku turn asked about the group chat never searched for `ask_village` and answered that it
 was unable. Hermes's `tools.tool_search` config has no always-visible list (`defer` only adds), so
 `_village_visible.py` rebinds `tools.tool_search._core_tool_names` to Hermes's set plus `ask_village`,
-`search_village`, `query_village` (toolset `av-events`) and village-bridge's `village` (toolset
-`village`), each only while registered under that toolset. They are then listed in full and called
-directly, like a core tool; every other plugin tool still defers, and `toolsets._HERMES_CORE_TOOLS`
-is untouched. `AV_VILLAGE_TOOLS_VISIBLE=0` (read at load) skips it; unload puts Hermes's function back.
+`search_village`, `query_village` (toolset `av-events`), village-bridge's `village` (toolset
+`village`) and av-elicit's `elicitation_record` (toolset `av-elicit`), each only while registered
+under that toolset. They are then listed in full and called directly, like a core tool; every other
+plugin tool still defers, and `toolsets._HERMES_CORE_TOOLS` is untouched. The registry is read on
+every assembly, so plugin load order does not matter: a tool registered after av-events installs
+the wrapper is kept visible from the next assembly. `AV_VILLAGE_TOOLS_VISIBLE=0` (read at load)
+skips it; unload puts Hermes's function back.
+
+`elicitation_record` is the one entry outside the village toolset (GC-ELICIT, 24 Oct): behind the
+bridge, the GODCONST elicitation tool was never called in two live Haiku runs (the agent saved what
+it learned to memory instead), even when the notice told it to use `tool_search` and `tool_call`.
 
 ---
 

@@ -209,6 +209,10 @@ class FakeServe:
 
     def _withdraw(self, pos, flags):
         t = self.tasks.get(pos[0])
+        # As core (gate.ts commandWithdraw, state.ts WITHDRAW_REASONS): no `--action`, another
+        # request's key or a free-text reason is a usage error (exit 2) that changes nothing.
+        if t is not None and (flags.get("--action") != t["key"] or flags.get("--reason") not in ("timeout", "cancelled", "superseded")):
+            return 2, {"ok": False, "error": "usage"}, None
         if t is None or t["state"] != "requested":
             return self._error("not-pending")
         t["state"] = "withdrawn"

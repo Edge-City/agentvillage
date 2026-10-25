@@ -1,4 +1,5 @@
-"""R-DEON: the village tools stay in the model's tool list when Hermes's `tool_search` is on.
+"""R-DEON: the village tools, and av-elicit's `elicitation_record`, stay in the model's tool list
+when Hermes's `tool_search` is on.
 
 Why. Hermes v2026.9.24 (`tools/tool_search.py`) replaces every deferrable tool in the model's
 tool list with three bridge tools (`tool_search`, `tool_describe`, `tool_call`). A tool is
@@ -16,6 +17,11 @@ has `enabled`, `threshold_pct`, `search_default_limit`, `max_search_limit`, `lis
 `listing_max_tokens` and `defer`; `defer` only ADDS tools to the deferred set (it is checked
 before the core test), so no `config.yaml` line the installer could write keeps `ask_village` out
 of the bridge, short of `enabled: off`, which would put all 48 deferred tools back in every turn.
+
+GC-ELICIT (24 Oct) added av-elicit's `elicitation_record`, the one tool not of the village toolset:
+deferred behind the bridge, the GODCONST elicitation tool was never called in two live Haiku runs
+(the agent saved what it learned to memory instead), even when the notice named `tool_search` and
+`tool_call`.
 
 How. `install()` rebinds `tools.tool_search._core_tool_names` (one module attribute, as
 `_prompt_refresh` rebinds `build_turn_context`) to Hermes's own set plus each name in
@@ -53,12 +59,16 @@ WRAPPED_NAME = "_core_tool_names"
 #: The village toolset, by the exact name and toolset each plugin registers it with:
 #: av-events `ask_village` (`_ask_village.py`), `search_village` (`_search_village.py`) and
 #: `query_village` (`_query_village.py`); village-bridge's one `village` tool (rolodex and gold
-#: stars are its operations, `plugins/village-bridge/__init__.py`, `ctx.register_tool`).
+#: stars are its operations, `plugins/village-bridge/__init__.py`, `ctx.register_tool`). Plus
+#: av-elicit's `elicitation_record` (`plugins/av-elicit/__init__.py` TOOL_NAME, TOOLSET; GC-ELICIT),
+#: which Haiku never reached through the bridge. The registry is read on every assembly, so a
+#: plugin that registers after av-events installs the wrapper (av-elicit loads later) still counts.
 VISIBLE_TOOLS: Dict[str, str] = {
     "ask_village": "av-events",
     "search_village": "av-events",
     "query_village": "av-events",
     "village": "village",
+    "elicitation_record": "av-elicit",
 }
 
 _MARK = "__av_village_visible__"

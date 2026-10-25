@@ -1,0 +1,122 @@
+# Mini-apps PR review, bot v0: the deterministic half of the PR-review bot
+# (MINIAPPS-PLATFORM-v2-design.md §6.1, §6.3, §8 Phase 0 item 3). It runs
+# scripts/mini-apps-review.ts over the pull request's diff and writes the §6.3
+# JSON to the job summary and to an artifact named mini-apps-review.
+#
+# Trust (release S1, CLAIMS L14538): the pull request is DATA, never code. The
+# tool (scripts/mini-apps-review.ts, P0-1's validator, P0-5's suite) is the BASE
+# commit's tree, checked out alone into tool/. The pull request head is fetched
+# as git objects only and read with git diff / ls-tree / cat-file on its sha:
+# never checked out, never installed, never executed, its bunfig.toml, .env and
+# tsconfig.json never read. bun runs the tool by explicit path
+# (./tool/scripts/..., which no package.json script name can shadow) with
+# --config=/dev/null --no-env-file --no-install --tsconfig-override=/dev/null,
+# from a workspace that holds only tool/ (review-b N-a: the flags, not an empty
+# cwd, are the guard). The bot judges exactly the head sha it fetched (--head
+# "$HEAD_SHA"), never the merge ref. The base branch's tip is fetched as data
+# too (--base-tip), so what main gained after the fork still counts (N-d).
+#
+# Conformance (release's owner read of P0-5, CLAIMS L14465): the bot runs the
+# TOOL's copy of P0-5's suite, when present, on head's manifest and skill bytes
+# taken from git objects, with --base. A committed conformance.json is never
+# trusted. The suite's output goes into the artifact too. The version-bump rule
+# is reported (N) and not enforced until S2 is settled.
+#
+# Phase 0: dark and advisory. It is not a required check, it posts no comment
+# (jmill's LLM half does that later), it holds no secret and no write token,
+# and it never uses pull_request_target. Exit 0 for PASS and NEEDS_HUMAN, exit
+# 1 for FAIL (the job is red; the check is still not required), exit 2 when the
+# bot cannot judge (the report then says FAIL with bot_error).
+#
+# NON-REQUIRED, by design (review-b N-b, a design item for the lead and release):
+# - on pull_request GitHub runs the pull request's own copy of THIS FILE, so a
+#   pull request that edits it can change what runs (a gate file: the honest
+#   bot classes it core);
+# - a pull request can ADD a workflow of its own with this workflow name, job
+#   name and artifact name, and NEEDS_HUMAN exits 0 (green), so a check that is
+#   required by name is satisfied by a forgery or by a NEEDS_HUMAN alike.
+# Real gating needs a ruleset-required workflow pinned to the base (not
+# pull_request_target alone), with the verdict read from that run's JSON
+# artifact by run id, never from a check's name or colour (design §6.4). Until
+# then this check stays non-required.
+name: mini-apps review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "mini-apps/**"
+      - "skills/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mini-apps-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: mini-apps review (bot v0, advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The tool: the BASE commit's tree, full history (the bot diffs base...head
+      # from their merge base and refuses a shallow or partial clone).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: tool
+          fetch-depth: 0
+          persist-credentials: false
+      # no-cache: never restore bun from the Actions cache. The script needs no
+      # packages (node: built-ins only), so there is no bun install.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+      # The pull request head: objects only, into a ref of the tool's repository.
+      # Nothing is checked out. The event's values go through env, never into the
+      # shell text.
+      # The base branch's current tip too, as data (review-b N-d).
+      - name: Fetch the pull request head (data only)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git -C tool fetch --no-tags --no-recurse-submodules --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+          git -C tool cat-file -e "${HEAD_SHA}^{commit}"
+          git -C tool fetch --no-tags --no-recurse-submodules --quiet origin "+refs/heads/${BASE_REF}:refs/remotes/base/tip"
+      # --pr and --base-ref (ov#477 fold 1): the JSON names the pull request and the base it judged; base_sha in
+      # it is --base, the same event sha the tool tree is checked out at (the checkout step above).
+      - name: Review
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          bun --config=/dev/null --no-env-file --no-install --tsconfig-override=/dev/null ./tool/scripts/mini-apps-review.ts --repo tool \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --base-tip refs/remotes/base/tip --author "$PR_AUTHOR" --pr "$PR_NUMBER" --base-ref "$BASE_REF" \
+            --out "$RUNNER_TEMP/mini-apps-review.json" --summary "$RUNNER_TEMP/mini-apps-review.md" \
+            --conformance-dir "$RUNNER_TEMP/mini-apps-conformance"
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/mini-apps-review.md" ]; then cat "$RUNNER_TEMP/mini-apps-review.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f "$RUNNER_TEMP/mini-apps-review.json" ]; then
+            { echo; echo '```json'; cat "$RUNNER_TEMP/mini-apps-review.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**FAIL** (bot_error): the bot could not run and wrote no report; the Review step failed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: mini-apps-review
+          path: |
+            ${{ runner.temp }}/mini-apps-review.json
+            ${{ runner.temp }}/mini-apps-conformance/
+          if-no-files-found: warn
+          retention-days: 14

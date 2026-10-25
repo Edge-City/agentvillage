@@ -15,7 +15,8 @@ intention: `_intent_approval` does that.
   withdrawn / `not-registered`, 3 expired, 6 still pending, 7 void. Never
   `--withdraw-on-timeout` (core refuses it beside `--timeout 0`);
 - `start <task> --action <key> --payload-json <the proposed bytes> --json`;
-- `withdraw <task> --reason <r> --json`.
+- `withdraw <task> --action <key> --reason <r> --json` (core refuses a withdraw without
+  `--action`, and takes only the reasons `timeout | cancelled | superseded`).
 
 **Configuration.** `AV_APPROVAL_ENABLED` (`1|true|yes|on`) and
 `AV_APPROVAL_URL` (`http://127.0.0.1:<port>`, `http://localhost:<port>`,
@@ -49,7 +50,9 @@ request body or an answer body: codes only.
 **The poller.** One daemon thread per process (`ensure_poller`), started in
 the gateway process (see `_intent_approval.maybe_start`), runs every
 registered pass (`register_pass`) every `AV_APPROVAL_POLL_S` seconds (default
-30, at least 5). A pass is also run once, in its own short-lived thread, on
+30, at least 5), or every MIN_POLL_S (5) while any registered busy probe
+(`register_busy`) says a pass has live work (adaptive polling: an approval card
+waiting for its tap, approval L19771 (c); core has no push). A pass is also run once, in its own short-lived thread, on
 `kick()` (session start, a confirm). Passes are serialised within the process
 and across processes (`flock` on `$HERMES_HOME/av-events/approval-pass.lock`,
 non-blocking: a pass another process is running is skipped, not queued). The
@@ -488,13 +491,19 @@ def start(task: str, key: str, payload_json: str) -> Answer:
                                                     "--json": True})
 
 
-def withdraw(task: str, reason: str) -> Answer:
-    return call("withdraw", positionals=[task], flags={"--reason": reason, "--json": True})
+def withdraw(task: str, reason: str, key: Optional[str] = None) -> Answer:
+    # Core withdraws by action key (0.4.7 commandWithdraw: no `--action` is a usage error, exit 2) and takes a closed
+    # reason (timeout | cancelled | superseded). Callers that know the key pass it; without it the call changes nothing.
+    flags: dict[str, Any] = {"--reason": reason, "--json": True}
+    if key is not None:
+        flags["--action"] = key
+    return call("withdraw", positionals=[task], flags=flags)
 
 
 # ---- The poller -----------------------------------------------------------
 
 _PASSES: "dict[str, Callable[[bool], None]]" = {}
+_BUSY: "dict[str, Callable[[], bool]]" = {}
 _contended_logged = False
 _PASS_LOCK = threading.Lock()
 _POLLER_LOCK = threading.Lock()
@@ -509,6 +518,26 @@ def register_pass(name: str, fn: Callable[[bool], None]) -> None:
     `fn(execute)`: execute is False for a one-shot resume pass outside the
     gateway, which must stop before it acts (refuter S3)."""
     _PASSES[name] = fn
+
+
+def register_busy(name: str, probe: Callable[[], bool]) -> None:
+    """Add a busy probe (adaptive polling). `probe()` is True while its pass has
+    live work, e.g. an approval card younger than its TTL waiting for its tap;
+    the poller then waits MIN_POLL_S between passes instead of poll_interval().
+    A probe that raises counts as not busy."""
+    _BUSY[name] = probe
+
+
+def next_interval() -> float:
+    """Seconds until the next pass: MIN_POLL_S while any busy probe says so,
+    else poll_interval() (AV_APPROVAL_POLL_S, default 30)."""
+    for probe in list(_BUSY.values()):
+        try:
+            if probe() is True:
+                return MIN_POLL_S
+        except Exception:  # noqa: BLE001 - a probe never costs the poll
+            continue
+    return poll_interval()
 
 
 def poll_interval() -> float:
@@ -576,7 +605,7 @@ def _loop(stop: threading.Event, wake: threading.Event) -> None:
             except Exception:  # noqa: BLE001
                 pass
         try:
-            wake.wait(poll_interval())
+            wake.wait(next_interval())
         except BaseException:  # noqa: BLE001
             time.sleep(MIN_POLL_S)
         wake.clear()
@@ -638,9 +667,11 @@ __all__ = [
     "enabled",
     "ensure_poller",
     "kick",
+    "next_interval",
     "parse_endpoint",
     "poller_alive",
     "propose",
+    "register_busy",
     "register_pass",
     "run_pass",
     "start",

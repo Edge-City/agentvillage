@@ -520,7 +520,7 @@ class BridgeTest(unittest.TestCase):
   # No new tool name: both operations go through `village`, the 36th gated tool (exact full-match matcher).
   self.assertEqual(bridge.SCHEMA['name'],'village')
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
-  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|set(mini.FORKICKS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write','slopfolio.prepare','slopfolio.status'}|set(mini.ZZZBOT['operations'])|set(mini.ECI_VOLUNTEERS['operations']))
+  self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|set(mini.FORKICKS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write','slopfolio.prepare','slopfolio.status','zzz.pairs'}|set(mini.ZZZBOT['operations'])|set(mini.ECI_VOLUNTEERS['operations']))
   self.assertEqual(bridge.SCHEMA['parameters']['properties']['met'],{'type':'boolean','description':bridge.SCHEMA['parameters']['properties']['met']['description']})
   self.assertFalse({'humanId','tenantId','userId','ownerTelegramId','requestId','turnId'}&set(bridge.SCHEMA['parameters']['properties']))
   approval=(Path(__file__).parents[2]/'av-approval'/'__init__.py').read_text()
@@ -1306,6 +1306,14 @@ class BridgeTest(unittest.TestCase):
    self.zzz_home()
    for tool in ('reply','create_thread','set_thread_state','doctor'):
     self.assertEqual(self.call({'operation':'mini-app.read','appId':'zzzbot','tool':tool,'arguments':{}}),{'error':'mini_app_not_installed'})
+ def test_pairs_borrows_only_the_list_rooms_install_and_passes_no_arguments(self):
+  self.assertEqual(self.call({'operation':'zzz.pairs'}),{'error':'mini_app_not_installed'})
+  self.zzz_home()
+  out=self.call({'operation':'zzz.pairs'})
+  self.assertEqual(out['data'],{'ok':True})
+  self.transport.assert_called_with(self.config,{'operation':'zzz.pairs'})
+  self.transport.reset_mock()
+  self.assertEqual(self.call({'operation':'zzz.pairs','arguments':{'room':'room_a'}})['error'],'invalid_zzz_arguments')
   self.transport.assert_not_called()
  def test_zzz_reads_forward_only_their_exact_fields_without_the_gate_or_a_turn(self):
   self.zzz_home()
@@ -1566,11 +1574,11 @@ class BridgeTest(unittest.TestCase):
   with self.gate():out=self.call({'operation':'eci-volunteers.confirm','arguments':{'code':self.CODE}})
   self.assertEqual(out['error'],'village_unavailable');self.assertEqual(out['instruction'],ecv.ECV_UNCLEAR);self.assertNotIn('avb_',json.dumps(out))
  def test_the_every_box_enum_carries_zzz_operations_and_registration_never_reads_the_install(self):
-  # MINIAPP-PICKUP (v2.1.5): one fixed schema on every box, zzzbot's five names appended last; the description and
+  # MINIAPP-PICKUP (v2.1.5): one fixed schema on every box; the feature-gated pairs read follows the five
   # properties are as before (no zzz text). Registration no longer depends on the projection.
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
-  # Edge City Volunteers' eleven follow zzzbot's five.
-  self.assertEqual(enum[-16:-11],mini.ZZZBOT['operations']);self.assertEqual(len(enum),len(set(enum)))
+  # Edge City Volunteers' eleven follow zzzbot's five and the feature-gated zzz.pairs.
+  self.assertEqual(enum[-17:-12],mini.ZZZBOT['operations']);self.assertEqual(enum[-12],'zzz.pairs');self.assertEqual(len(enum),len(set(enum)))
   self.assertEqual(enum[-11:],mini.ECI_VOLUNTEERS['operations'])
   self.assertNotIn('zzz',bridge.SCHEMA['description'].lower())
   self.assertFalse(hasattr(bridge,'schema_for'))

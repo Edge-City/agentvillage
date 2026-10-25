@@ -43,6 +43,13 @@ def shown(name: str = "Arjun") -> str:
     return hashlib.sha256(f"did you and {name.lower()} meet? reply met, not useful, or missed".encode("utf-8")).hexdigest()
 IST = timezone(timedelta(hours=5, minutes=30))
 
+
+@pytest.fixture(autouse=True)
+def _text_ask_on(monkeypatch):
+    """Superseded by the suggestion rating cards (test_rating_cards.py): the text ask's arming,
+    answers and pass run only with AV_OUTCOME_TEXT_ASK on."""
+    monkeypatch.setenv("AV_OUTCOME_TEXT_ASK", "1")
+
 #: `cron/executions.py`'s table with the `delivery_outcome` column later tags add.
 SCHEMA = """CREATE TABLE executions (
     id TEXT PRIMARY KEY, job_id TEXT NOT NULL, source TEXT NOT NULL, process_id TEXT NOT NULL,

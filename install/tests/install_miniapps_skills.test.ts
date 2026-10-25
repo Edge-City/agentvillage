@@ -95,7 +95,8 @@ test("a hash mismatch, an oversize file, a bad entry or non-UTF-8 bytes fall bac
 test("an app the cp did not offer (missing from the bundle, e.g. the baseline gold-stars) takes its checkout copy with no code", () => {
   const root = home();
   const receipt = reconcileMiniApps(all, root, undefined, false, bundle(entry("zzzbot", servedText("zzzbot"))));
-  expect(receipt.skills).toEqual({ offer: OFFER, served: ["zzzbot"], fallback: [] });
+  expect(receipt.skills).toEqual({ offer: OFFER, served: [], fallback: [{ id: "zzzbot", code: "mini_apps_skill_baseline" }] });
+  expect(onDisk(root, "zzzbot")).toEqual(checkout("zzzbot"));
   for (const id of ["gold-stars", "dizko", "forkicks", "slopfolio"]) expect(onDisk(root, id)).toEqual(checkout(id));
   // An entry for an app outside the projection is ignored; it never creates a file.
   const one = { version: 1, apps: [REVIEWED_MINI_APPS[0]] };
@@ -134,8 +135,8 @@ test("a bad bundle (unparseable, wrong shape, duplicate id, over the cap) falls 
     const root = home();
     const receipt = reconcileMiniApps(all, root, undefined, false, { offer: OFFER, skills });
     expect(receipt.skills.served).toEqual([]);
-    expect(receipt.skills.fallback).toEqual(REVIEWED_MINI_APPS.map(a => ({ id: a.id, code: "mini_apps_skill_bundle_invalid" })));
-    for (const app of REVIEWED_MINI_APPS) expect(onDisk(root, app.id)).toEqual(checkout(app.id));
+    expect(receipt.skills.fallback).toEqual(REVIEWED_MINI_APPS.filter(a => a.skills.length).map(a => ({ id: a.id, code: "mini_apps_skill_bundle_invalid" })));
+    for (const app of REVIEWED_MINI_APPS.filter(a => a.skills.length)) expect(onDisk(root, app.id)).toEqual(checkout(app.id));
     goldStarsKept(root);
   }
   // The offer is echoed only in its exact form.
@@ -146,16 +147,19 @@ test("a bad bundle (unparseable, wrong shape, duplicate id, over the cap) falls 
 
 test("the CLI reads the two variables; without them its output is the library's no-delivery receipt", () => {
   const delivery = bundle(entry("dizko", servedText("dizko")));
+  // This verifies the skill-delivery CLI path; managed ZZZ job lifecycle has
+  // separate fake-Hermes coverage and needs a real installedness projection.
+  const projection = { version: 1, apps: REVIEWED_MINI_APPS.filter(app => app.id !== "zzzbot") };
   for (const [env, served] of [[{}, []], [{ MINI_APPS_SKILLS_OFFER: delivery.offer, MINI_APPS_SKILLS: delivery.skills }, ["dizko"]]] as const) {
     const root = home();
     const run = spawnSync("bun", ["--no-env-file", "--no-install", "install/install_miniapps.ts"], {
-      cwd: REPO, input: JSON.stringify(all), env: { PATH: process.env.PATH, HOME: root, HERMES_HOME: root, ...env }, encoding: "utf8",
+      cwd: REPO, input: JSON.stringify(projection), env: { PATH: process.env.PATH, HOME: root, HERMES_HOME: root, ...env }, encoding: "utf8",
     });
     expect([run.status, run.stderr]).toEqual([0, ""]);
     const receipt = JSON.parse(run.stdout);
     expect(receipt.skills.served).toEqual(served);
     const verify = spawnSync("bun", ["--no-env-file", "--no-install", "install/install_miniapps.ts", "--verify"], {
-      cwd: REPO, input: JSON.stringify(all), env: { PATH: process.env.PATH, HOME: root, HERMES_HOME: root, ...env }, encoding: "utf8",
+      cwd: REPO, input: JSON.stringify(projection), env: { PATH: process.env.PATH, HOME: root, HERMES_HOME: root, ...env }, encoding: "utf8",
     });
     expect([verify.status, verify.stderr]).toEqual([0, ""]);
     expect(JSON.parse(verify.stdout)).toEqual(receipt);

@@ -70,8 +70,9 @@ describe("expected_plugins.json is the installer's set", () => {
 
   // village-memory (D3) is a memory provider (`kind: exclusive`): Hermes's general manager records it as a
   // placeholder and never loads it, so it can never count as loaded and must not count as missing.
-  test("conditional == recall, the index plugin, village-memory, and village-bridge only while staged", () => {
-    const want = ["recall", INDEX_PLUGIN, "village-memory", ...(NOT_STAGED_PLUGINS.has("village-bridge") ? [] : ["village-bridge"])].sort();
+  // av-elicit (GC-ELICIT) is opt-in like recall (AV_ELICIT_ENABLED): staged on every box, loaded only where listed.
+  test("conditional == recall, av-elicit, the index plugin, village-memory, and village-bridge only while staged", () => {
+    const want = ["recall", "av-elicit", INDEX_PLUGIN, "village-memory", ...(NOT_STAGED_PLUGINS.has("village-bridge") ? [] : ["village-bridge"])].sort();
     expect(expected.conditional).toEqual(want);
     for (const name of expected.conditional) expect([...expected.overlay, INDEX_PLUGIN]).toContain(name);
   });

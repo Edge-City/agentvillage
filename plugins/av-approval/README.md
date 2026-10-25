@@ -93,7 +93,7 @@ What closes the gap, in order:
 
 `_custody.py` keeps the service keys in `FLOOR` (`INDEX_API_KEY`,
 `INDEX_SESSION_TOKEN`, `AV_EVENTS_TOKEN`, `AV_BACKUP_TOKEN`, `ADMIN_TOKEN`,
-`MORALMOD_LLM_API_KEY`), plus
+`MORALMOD_LLM_API_KEY`, `AV_GODCONST_BALLOT_KEY`), plus
 any more `custody_keys.json` marks `strip`, out of every child the agent's code
 runs in, while
 the gateway (the Index MCP client, av-events) keeps them. Three levers, each

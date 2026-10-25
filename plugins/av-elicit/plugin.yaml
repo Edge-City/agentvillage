@@ -1,0 +1,10 @@
+name: av-elicit
+version: 0.1.0
+description: "GC-ELICIT (the agent asks its human a few questions about ODIN's constitution after a closed GODCONST pool; contract v1 sections 1, 3a, 3b, 3c). Watches $HERMES_HOME/av-events/elicit/inject/<unix_ms>-<open|next|replan>.txt, written by the control plane, and injects one file per pass (oldest first, its #trigger= first line stripped) as a user-role turn into the resident's Telegram DM session (agent:main:telegram:dm:<TELEGRAM_HOME_CHANNEL>, or AV_ELICIT_SESSION_KEY) through ctx.inject_message (plugins.entries.av-elicit.allow_gateway_injection), once state.db has that session. Accepted files are renamed .done (mtime = accept time); with the control plane's closed marker, or past a 24 h age cap, pending files are renamed .skipped; nothing is injected 22:00-08:00 IST. Every 60 s while a window is open it writes probe.json (human Telegram user-role messages since the first open injection, notices excluded; state.db read-only). Registers one tool, elicitation_record, which writes records/<unix_ms>-<record_id>.json (0600) with the trigger taken from the last injected file, only in the resident's Telegram DM and only while a window is open. No hooks, fail-open; logs codes and counts only, never text."
+author: Edge City
+kind: backend
+provides_tools:
+  - elicitation_record
+optional_env:
+  - AV_ELICIT_SESSION_KEY
+  - TELEGRAM_HOME_CHANNEL

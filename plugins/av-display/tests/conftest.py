@@ -62,8 +62,23 @@ def fake_display(monkeypatch):
     def verb_drops_preview(name):
         return name in module._TOOL_VERBS_NO_PREVIEW
 
+    # build_tool_preview (agent/display.py:451-469): no arguments -> None before any builder; a builder
+    # wins; else the first of the fallback keys (:361) present, else None.
+    module._PREVIEW_BUILDERS = {"memory": lambda args, max_len: "memory preview"}
+    fallback_keys = ("query", "text", "command", "path", "name", "prompt", "code", "goal")
+
+    def build_tool_preview(name, args, max_len=None):
+        if not args:
+            return None
+        builder = module._PREVIEW_BUILDERS.get(name)
+        if builder is not None:
+            return builder(args, max_len)
+        key = next((k for k in fallback_keys if k in args), None)
+        return (str(args[key]) or None) if key else None
+
     module.get_tool_verb = get_tool_verb
     module.verb_drops_preview = verb_drops_preview
+    module.build_tool_preview = build_tool_preview
     monkeypatch.setitem(sys.modules, "agent.display", module)
     return module
 

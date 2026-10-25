@@ -143,6 +143,11 @@ const NOT_GATED: readonly NotGated[] = [
     plugin: "recall",
     reason: "read: local SQLite FTS5 search over the agent's own notes and the owner's private sessions; no network, refuses in groups; opt-in (AV_RECALL_ENABLED)",
   },
+  {
+    name: "elicitation_record",
+    plugin: "av-elicit",
+    reason: "writes a local 0600 record file only; no network; refused outside the resident's Telegram DM and outside an open window",
+  },
 ];
 
 /**
@@ -505,10 +510,10 @@ describe("OV-300 S2: every plugin tool is gated or explicitly NOT_GATED", () => 
     // ask_village (_ask_village.py TOOL_NAME), search_village (_search_village.py TOOL_NAME), query_village
     // (_query_village.py TOOL_NAME), recall (recall TOOL_NAME), village (village-bridge literal), resident_context
     // and resident_profile (village-memory plugin.yaml provides_tools: a memory provider's tools come from
-    // get_tool_schemas, which no register_tool scan sees).
+    // get_tool_schemas, which no register_tool scan sees), elicitation_record (av-elicit, GC-ELICIT).
     expect([...inv.tools.keys()].sort()).toEqual([
-      "ask_village", "consent_status", "pray", "query_village", "recall", "record_intention", "resident_context",
-      "resident_profile", "search_village", "share_digest", "village", "village_vote",
+      "ask_village", "consent_status", "elicitation_record", "pray", "query_village", "recall", "record_intention",
+      "resident_context", "resident_profile", "search_village", "share_digest", "village", "village_vote",
     ]);
     expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(10);
   });

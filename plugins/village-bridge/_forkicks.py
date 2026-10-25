@@ -5,9 +5,11 @@ import json
 import os
 import re
 import stat
+import time
 import unicodedata
+from datetime import datetime
 from pathlib import Path
-from ._mini_apps import approval_modules, ORDER_APPROVE_IN_BOT
+from ._mini_apps import approval_modules, ORDER_APPROVE_IN_BOT, ORDER_CARD_CLOSED, ORDER_SUPERSEDED, ORDER_NEWEST_UNREADABLE
 
 MAX_PAYLOAD_BYTES = 60000
 SUMMARY_MAX_BYTES = 4096
@@ -24,6 +26,8 @@ SUMMARY_HTML_MAX_BYTES = 3000
 # Both shapes are proposed under the same class and per-draftId key as before (approval L17713: no class change in the
 # v2.1.10 hotfix). Spec + golden vectors: tests/vectors/forkicks-approval-card.{md,json}.
 APPROVAL_CLASS = "marketplace.app.action"
+# A card core will never grant again (wait exit 1 rejected/revoked/withdrawn/not-registered, 3 expired, 7 void).
+CARD_CLOSED_STATES = frozenset({"rejected", "revoked", "withdrawn", "not-registered", "expired", "void"})
 # The card refusals the prepare path answers by preparing once more in the legacy shape (__init__.py, lead L17847).
 CARD_FALLBACK_ERRORS = frozenset({"approval_card_invalid", "approval_card_not_minimal", "approval_card_too_long"})
 LEGACY_KEYS = frozenset({"appId", "operation", "preview"})
@@ -284,7 +288,44 @@ def load_preview(home, draft_id, config):
     checked_payload(record.get("payload"), draft_id, record.get("payloadHash"), record.get("preview"))
     return record
 
-def authorize_order(record, draft_id, on_requested=None):
+def quote_expires(record):
+    """The saved quote's `expiresAt` as a timestamp, or None (missing, unreadable, or without a zone)."""
+    try:
+        moment = datetime.fromisoformat(order_preview(record)["quote"]["expiresAt"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return moment.timestamp() if moment.tzinfo else None
+
+def _quote_gone(record, now):
+    """Past a known `expiresAt` (no start or first confirm after it). An unknown one is left to the app."""
+    expires = quote_expires(record)
+    return expires is not None and float(now if now is not None else time.time()) >= expires
+
+def _adopted(proof, guard_adopt):
+    """An already-started draft's proof, unless its start was refused after the fact (a `.refused` tombstone, read
+    fail-closed under the drafts lock: security review of 5a984408). Every adoption is a started draft, so the
+    newest-draft rule's in-flight exception applies to it exactly when no tombstone exists."""
+    if guard_adopt is not None:
+        reason = guard_adopt()
+        if reason is not None:
+            return None, {"error": "approval_card_closed", "instruction": ORDER_SUPERSEDED}
+    return proof, None
+
+
+def authorize_order(record, draft_id, on_requested=None, known_task=None, on_proposed=None, guard_start=None,
+                    guard_adopt=None, on_quote_expired=None, now=None):
+    """The human grant for this exact saved order, or a refusal. Never places anything itself.
+
+    FK-CARD-AT-PREPARE (approval L19920 (2), one live card per draft): `known_task` is the task this box already
+    proposed for this draft (`_forkicks_grant.card_task`). With it, the daemon is NOT asked again: the task is only
+    read (`wait --timeout 0`), so a looping confirm can never re-file a card (core re-asks a withdrawn or expired
+    request on a repeated propose). Without it, the one propose runs and `on_proposed(task)` records it, only after
+    the daemon answered `requested` for these exact bytes.
+
+    Quote expiry (lead L20310, approval L20313): with `on_quote_expired`, a confirm past the quote's `expiresAt` that
+    would propose, wait for a tap or start answers ORDER_CARD_CLOSED and calls `on_quote_expired(task or None)`
+    (`_forkicks_grant.close_expired`: tombstone + withdraw), never "tap Approve" for a quote that is gone. A spent
+    grant (an order in flight) is still adopted: the app answers its idempotency key."""
     payload = record["payload"]
     held = checked_payload(payload, draft_id, record["payloadHash"], record.get("preview"))
     key = APPROVAL_CLASS + ":forkicks.order.confirm:" + draft_id
@@ -293,22 +334,57 @@ def authorize_order(record, draft_id, on_requested=None):
     except ValueError as error:
         return None, {"error": str(error)}
     ap = approval_modules()
-    # The app's payload, byte for byte (its confirm compares it with the stored one): the box only checks it.
-    answer = ap.propose(APPROVAL_CLASS, key, summary, held)
-    task = answer.doc.get("task")
-    # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy.
-    if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
-        return None, {"error": "approval_refused"}
-    proof = {"taskId": task, "payloadHash": record["payloadHash"], "payload": payload}
-    if answer.doc.get("state") == "executed":
-        return proof, None  # The CP re-reads the direct grant/start; same draft is merchant-idempotent.
+    proof = {"taskId": None, "payloadHash": record["payloadHash"], "payload": payload}
+    if known_task is None:
+        if on_quote_expired is not None and _quote_gone(record, now):
+            on_quote_expired(None)  # no card is raised for a quote that is gone
+            return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+        # The app's payload, byte for byte (its confirm compares it with the stored one): the box only checks it.
+        answer = ap.propose(APPROVAL_CLASS, key, summary, held)
+        task = answer.doc.get("task")
+        # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy.
+        if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
+            return None, {"error": "approval_refused"}
+        if on_proposed is not None:
+            on_proposed(task)
+        proof["taskId"] = task
+        if answer.doc.get("state") == "executed":
+            return _adopted(proof, guard_adopt)  # The CP re-reads the direct grant/start; same draft is merchant-idempotent.
+    else:
+        task = known_task
+        if not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task):
+            return None, {"error": "approval_refused"}
+        proof["taskId"] = task
     granted = ap.wait(task)
+    if known_task is not None and granted.exit_code == 0 and granted.status in ("nothing-to-wait-for", "executed"):
+        # Already started (an earlier confirm, or the on-grant pass): adopt it, as the propose answer's `executed`
+        # path does, only when this draft's own action reads granted (a human's decision; the pass's same check).
+        mine = [a for a in (granted.doc.get("actions") or []) if isinstance(a, dict) and a.get("action_key") == key]
+        if len(mine) == 1 and mine[0].get("state") == "granted":
+            return _adopted(proof, guard_adopt)
+    if granted.exit_code in (1, 3, 7) or granted.status in CARD_CLOSED_STATES:
+        # S2: the card is declined, withdrawn, expired or void (core: wait exit 1/3/7). No start runs, and this draft
+        # gets no second card: nothing was ordered, and only a new preview can be approved.
+        return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+    if on_quote_expired is not None and _quote_gone(record, now):
+        # Quote expiry: neither a tap nor a start can place this draft any more; its card is withdrawn.
+        on_quote_expired(task)
+        return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
     if granted.exit_code != 0 or granted.status != "granted":
         # FK-ON-GRANT: a card still waiting for its tap (wait exit 6) is handed to the on-grant pass
         # (_forkicks_grant.track), which places the order on the resident's grant; it returns the instruction.
         tracked = on_requested(task) if on_requested is not None and granted.exit_code == 6 else None
         return None, {"error": "approval_required", "instruction": tracked or ORDER_APPROVE_IN_BOT}
-    started = ap.start(task, key, held)
+    if guard_start is not None:
+        # S1 + security review: the newest-draft check (fail closed, under the drafts lock) right before the start.
+        # An already-started draft (the adoption paths above) is an order in flight and keeps its confirm.
+        reason, started = guard_start(lambda: ap.start(task, key, held))
+        if reason is not None:
+            # An `expired` tombstone (quote expiry) reads as the closed card, not as a newer preview.
+            return None, {"error": "approval_card_closed", "instruction": ORDER_NEWEST_UNREADABLE if reason == "latest_unreadable"
+                          else ORDER_CARD_CLOSED if reason == "expired" else ORDER_SUPERSEDED}
+    else:
+        started = ap.start(task, key, held)
     if not started.ok or started.doc.get("authorization") != "grant":
         return None, {"error": "approval_not_started"}
     return proof, None

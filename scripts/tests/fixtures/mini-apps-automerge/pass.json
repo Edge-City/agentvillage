@@ -1,0 +1,321 @@
+{
+  "_provenance": "REST responses keyed by the GET path scripts/mini-apps-automerge.ts asks for. Shapes recorded 2026-10-23 from Edge-City/agentvillage (pulls/471, its files and timeline, actions/runs/39983043256 (mini-apps review) and 39983043342 (test) with their jobs and artifacts, artifact 12514640863's zip, a head_ref_force_pushed event on issues/463, collaborators/<login>/permission) and one labeled event from cli/cli issues/11800 (this repository has no labeled event yet). Trimmed to the fields that matter and edited into one mini-app pull request from a fork that should merge; the tests break one condition at a time. Fold 1 (review-b M1, ov#477): the bot's JSON now carries pr, base_ref and base_sha; pulls?state=all&head=<label> and compare/<base_sha>...main answers are added (shapes trimmed from the REST docs' fields: number/state/head.label/base.ref, and status/ahead_by/behind_by).",
+  "_artifact_json": {
+    "12514640863": {
+      "bot": "av-miniapp-review",
+      "version": "0.1",
+      "pr": 901,
+      "base_ref": "main",
+      "base_sha": "a4974244dcd156149fe53cd47f30ceae76876a3f",
+      "manifest": "mini-apps/hello-board/manifest.json",
+      "head": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+      "verdict": "PASS",
+      "lane": "sandbox",
+      "findings": [
+        {
+          "code": "version_bump",
+          "severity": "N",
+          "file": "mini-apps/hello-board/manifest.json",
+          "text": "a new app: no bump to judge"
+        }
+      ],
+      "checked": [
+        "paths",
+        "author",
+        "schema",
+        "hashes",
+        "version_bump",
+        "secrets",
+        "data_context",
+        "approval_classes",
+        "conformance",
+        "lane_rules"
+      ],
+      "not_run": []
+    }
+  },
+  "repos/Edge-City/agentvillage/issues?state=open&labels=mini-app%3Aautomerge&per_page=100": [
+    {
+      "number": 901,
+      "state": "open",
+      "labels": [
+        {
+          "id": 9100000001,
+          "name": "mini-app:automerge",
+          "color": "0e8a16"
+        }
+      ],
+      "pull_request": {
+        "url": "https://api.github.com/repos/Edge-City/agentvillage/pulls/901",
+        "merged_at": null
+      }
+    },
+    {
+      "number": 77,
+      "state": "open",
+      "labels": [
+        {
+          "id": 9100000001,
+          "name": "mini-app:automerge",
+          "color": "0e8a16"
+        }
+      ]
+    }
+  ],
+  "repos/Edge-City/agentvillage/pulls/901": {
+    "url": "https://api.github.com/repos/Edge-City/agentvillage/pulls/901",
+    "id": 4985418999,
+    "number": 901,
+    "state": "open",
+    "locked": false,
+    "title": "mini-apps: hello-board (sandbox)",
+    "user": {
+      "login": "someone-outside",
+      "id": 51234567,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 9100000001,
+        "name": "mini-app:automerge",
+        "color": "0e8a16"
+      }
+    ],
+    "draft": false,
+    "merged": false,
+    "mergeable": true,
+    "changed_files": 2,
+    "head": {
+      "label": "someone-outside:hello-board",
+      "ref": "hello-board",
+      "sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+      "repo": {
+        "id": 1300000001,
+        "name": "agentvillage",
+        "full_name": "someone-outside/agentvillage",
+        "fork": true
+      }
+    },
+    "base": {
+      "label": "Edge-City:main",
+      "ref": "main",
+      "sha": "a4974244dcd156149fe53cd47f30ceae76876a3f",
+      "repo": {
+        "id": 1233259661,
+        "name": "agentvillage",
+        "full_name": "Edge-City/agentvillage",
+        "fork": false
+      }
+    }
+  },
+  "repos/Edge-City/agentvillage/pulls/901/files?per_page=100&page=1": [
+    {
+      "sha": "9a8b7c6d5e4f30211203a4b5c6d7e8f901234567",
+      "filename": "mini-apps/hello-board/manifest.json",
+      "status": "added",
+      "additions": 41,
+      "deletions": 0,
+      "changes": 41
+    },
+    {
+      "sha": "0b1c2d3e4f5061728394a5b6c7d8e9f012345678",
+      "filename": "skills/hello-board/SKILL.md",
+      "status": "added",
+      "additions": 18,
+      "deletions": 0,
+      "changes": 18
+    }
+  ],
+  "repos/Edge-City/agentvillage/issues/901/timeline?per_page=100&page=1": [
+    {
+      "event": "committed",
+      "sha": "1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6",
+      "committer": {
+        "date": "2026-10-23T15:30:02Z"
+      }
+    },
+    {
+      "actor": {
+        "login": "someone-outside",
+        "id": 51234567,
+        "type": "User"
+      },
+      "commit_id": "1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6",
+      "created_at": "2026-10-23T15:40:11Z",
+      "event": "head_ref_force_pushed",
+      "id": 33984092122,
+      "performed_via_github_app": null
+    },
+    {
+      "event": "committed",
+      "sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+      "committer": {
+        "date": "2026-10-23T15:59:40Z"
+      }
+    },
+    {
+      "actor": {
+        "login": "village-maintainer",
+        "id": 47394200,
+        "type": "User"
+      },
+      "commit_id": null,
+      "created_at": "2026-10-23T16:10:00Z",
+      "event": "labeled",
+      "id": 19871658561,
+      "label": {
+        "color": "0e8a16",
+        "name": "mini-app:automerge"
+      },
+      "performed_via_github_app": null
+    }
+  ],
+  "repos/Edge-City/agentvillage/collaborators/village-maintainer/permission": {
+    "permission": "write",
+    "role_name": "write",
+    "user": {
+      "login": "village-maintainer",
+      "id": 47394200,
+      "type": "User"
+    }
+  },
+  "repos/Edge-City/agentvillage/actions/workflows/mini-apps-review.yml": {
+    "id": 389688889,
+    "name": "mini-apps review",
+    "path": ".github/workflows/mini-apps-review.yml",
+    "state": "active"
+  },
+  "repos/Edge-City/agentvillage/actions/workflows/389688889/runs?head_sha=3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345&event=pull_request&per_page=100": {
+    "total_count": 1,
+    "workflow_runs": [
+      {
+        "id": 39983043256,
+        "name": "mini-apps review",
+        "head_branch": "hello-board",
+        "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+        "path": ".github/workflows/mini-apps-review.yml",
+        "run_number": 19,
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+        "workflow_id": 389688889,
+        "pull_requests": [],
+        "created_at": "2026-10-23T15:59:57Z",
+        "run_attempt": 1,
+        "repository": {
+          "id": 1233259661,
+          "full_name": "Edge-City/agentvillage"
+        },
+        "head_repository": {
+          "id": 1300000001,
+          "full_name": "someone-outside/agentvillage"
+        }
+      }
+    ]
+  },
+  "repos/Edge-City/agentvillage/actions/runs/39983043256/jobs?filter=latest&per_page=100": {
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 117000000001,
+        "run_id": 39983043256,
+        "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+        "status": "completed",
+        "conclusion": "success",
+        "name": "mini-apps review (bot v0, advisory)"
+      }
+    ]
+  },
+  "repos/Edge-City/agentvillage/actions/runs/39983043256/artifacts?per_page=100": {
+    "total_count": 1,
+    "artifacts": [
+      {
+        "id": 12514640863,
+        "name": "mini-apps-review",
+        "size_in_bytes": 666,
+        "expired": false,
+        "workflow_run": {
+          "id": 39983043256,
+          "repository_id": 1233259661,
+          "head_repository_id": 1300000001,
+          "head_branch": "hello-board",
+          "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345"
+        }
+      }
+    ]
+  },
+  "repos/Edge-City/agentvillage/actions/workflows/test.yml": {
+    "id": 389000001,
+    "name": "test",
+    "path": ".github/workflows/test.yml",
+    "state": "active"
+  },
+  "repos/Edge-City/agentvillage/actions/workflows/389000001/runs?head_sha=3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345&event=pull_request&per_page=100": {
+    "total_count": 1,
+    "workflow_runs": [
+      {
+        "id": 39983043342,
+        "name": "test",
+        "head_branch": "hello-board",
+        "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+        "path": ".github/workflows/test.yml",
+        "run_number": 2210,
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+        "workflow_id": 389000001,
+        "pull_requests": [],
+        "created_at": "2026-10-23T15:59:57Z",
+        "run_attempt": 1,
+        "repository": {
+          "id": 1233259661,
+          "full_name": "Edge-City/agentvillage"
+        },
+        "head_repository": {
+          "id": 1300000001,
+          "full_name": "someone-outside/agentvillage"
+        }
+      }
+    ]
+  },
+  "repos/Edge-City/agentvillage/actions/runs/39983043342/jobs?filter=latest&per_page=100": {
+    "total_count": 2,
+    "jobs": [
+      {
+        "id": 117000000101,
+        "run_id": 39983043342,
+        "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+        "status": "completed",
+        "conclusion": "success",
+        "name": "bun test (install, scripts, skills)"
+      },
+      {
+        "id": 117000000102,
+        "run_id": 39983043342,
+        "head_sha": "3f1c2b7a9d4e5f60718293a4b5c6d7e8f9012345",
+        "status": "completed",
+        "conclusion": "success",
+        "name": "pytest (plugins)"
+      }
+    ]
+  },
+  "repos/Edge-City/agentvillage/pulls?state=all&head=someone-outside%3Ahello-board&per_page=100": [
+    {
+      "number": 901,
+      "state": "open",
+      "head": {
+        "label": "someone-outside:hello-board",
+        "ref": "hello-board"
+      },
+      "base": {
+        "ref": "main"
+      }
+    }
+  ],
+  "repos/Edge-City/agentvillage/compare/a4974244dcd156149fe53cd47f30ceae76876a3f...main?per_page=1": {
+    "status": "ahead",
+    "ahead_by": 3,
+    "behind_by": 0,
+    "total_commits": 3
+  }
+}

@@ -1,9 +1,12 @@
 {
-  "expected_set_version": "d5582b542bd0",
+  "expected_set_version": "26f6e2cd2b70",
   "overlay": [
     "av-approval",
     "av-display",
+    "av-elicit",
     "av-events",
+    "av-godconst",
+    "av-rate",
     "av-vote",
     "dashboard-auth-edgecity",
     "edgecity-village",
@@ -17,6 +20,7 @@
     "ref": "04d833b840541fedabe78cbdad306c18853d784a"
   },
   "conditional": [
+    "av-elicit",
     "index-network",
     "recall",
     "village-bridge",

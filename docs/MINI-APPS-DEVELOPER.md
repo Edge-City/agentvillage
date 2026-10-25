@@ -4,9 +4,11 @@ This guide is for partners who build a mini-app for Agent Village. It tells you 
 
 Read [mini-apps/README.md](../mini-apps/README.md) first for the rules. This guide does not repeat them.
 
+Adding a generic app (public reads plus its own Context, a control-plane change only)? Start with the one-page [quickstart](MINI-APPS-QUICKSTART.md).
+
 Three things hold for everything below.
 
-- `MINI_APPS_MANIFESTS` is OFF in production. The control plane serves its five reviewed constants today. A manifest in this repo does not change what a resident sees.
+- `MINI_APPS_MANIFESTS` is OFF in production. The control plane serves its six reviewed constants today. A manifest in this repo does not change what a resident sees.
 - A manifest is a review artifact. It is not an upload. Nothing you write here runs code on a resident's box.
 - Where a section says a thing is not built, do not build against it.
 
@@ -44,7 +46,7 @@ The staffer keeps every other app's key and list when they add yours. A malforme
 A sandbox needs an app that already exists in the catalog. Today a new app id is not self-serve. All three of these are Edge City changes:
 
 - The control-plane catalog needs a row for your id (a code constant today, or a vendored manifest once the manifest switch is on).
-- The installer's reviewed table in [install/install_miniapps.ts](../install/install_miniapps.ts) must name your id, version, skill and operations exactly. An unknown id is refused as `mini_apps_unreviewed_bundle`.
+- The installer's reviewed table in [install/install_miniapps.ts](../install/install_miniapps.ts) must name your id, version, skill and operations exactly. An unknown id is refused as `mini_apps_unreviewed_bundle`, unless it is a generic app (see the [quickstart](MINI-APPS-QUICKSTART.md)).
 - The box takes your skill from its pinned overlay checkout. A new app id or a changed skill therefore needs a fleet roll.
 
 A service that needs OAuth, a card or a write also needs app-server code today. Only a public read-only MCP service needs no per-app app-server code.
@@ -83,14 +85,15 @@ Required fields are marked **req**.
 | `manifest` **req** | The number `2`. |
 | `id` **req** | `^[a-z0-9][a-z0-9-]{0,39}$`, and it must start with a letter, because `skills[0].name` must equal it and that name must start with a letter. Some ids are reserved (`village`, `approval`, `rolodex`, `zzz`, names starting `av-`, `core-`, `admin-` and similar). A reserved id is refused. |
 | `name` **req** | 1 to 160 characters. |
-| `version` **req** | Semver, such as `0.1.0`. |
+| `version` **req** | Semver, such as `0.1.0` (a generic app: digits only, no pre-release). |
 | `description` **req** | 1 to 2000 characters. |
 | `homepage` **req** | An `https://` URL. It is shown as a link. The platform never fetches it. |
 | `owner` | `github`: one login or up to 8. `org`: optional name. Not required by the validator. |
-| `credit` | `role` (`app` or `product`), `attendeeId` (a UUID), `name`. It names a reviewed attribution. Leave it out unless Edge City gives you the values. |
+| `credit` | `role` (`app` or `product`), `attendeeId` (a UUID), `name`. It names a reviewed attribution. Leave it out unless Edge City gives you the values. On a pushed manifest the credit names you: residents see "Built by \<your Rolodex name>", linked to your Rolodex entry. Send `credit.name` as "the developer" (any other value is refused: `credit_name_not_allowed`); the name shown comes from the Rolodex, never from the manifest. |
 | `visibility` **req** | `sandbox`, `admins` or `everyone`. |
-| `staff` | Only the Gold Stars app may set `true`. Anyone else is refused. |
+| `staff` | Only the Gold Stars app may set `true`. Anyone else is refused. `"staff": true` is install tier 1, core (section 9). |
 | `listed` | `false` hides the app from discovery: the grid, search, counts, staff lists and offers. A tenant the app's audience admits (the cohort, and for a `sandbox` or `admins` app the allowlist) can still open its direct link, install it and use it; nobody else can. Absent means listed. The schema's own description of this field is older and wrong on this point. Honouring the field is not fully built (section 5). |
+| `default` | Not a field yet. The schema is closed, so a manifest that says `"default": true` is refused today. It is the planned flag for install tier 2, default (section 9), in v2.1.13. |
 | `permissions` **req** | 1 to 32 items of `{kind, label, description}`. `kind` is `read` or `action`. Name every third party that receives data. |
 | `service` **req** | See below. |
 | `operations` **req** | 1 to 32 operations (exactly none for service kind `none`). See below. |
@@ -429,15 +432,15 @@ Do not build against any of these.
 
 Phase 1:
 
-- The generic approval card for any `needs-card` op. Today only two operations have a card: Gold Stars send and For Kicks confirm. Writing `needs-card` in a manifest does not give you a card.
-- Generic OAuth and a generic grants table. Each OAuth app has its own routes and tables today.
-- A generic dispatcher in the app server. Each app has its own code today.
+- The generic approval card for any `needs-card` op. Its overlay half is merged dark (ov#458, after the v2.1.12 tag, so it ships in v2.1.13) and its control-plane half (cp#352) is open; neither is live (section 8). Today only For Kicks confirm shows a card. Writing `needs-card` in a manifest does not give you a card.
+- Generic OAuth and a generic grants table. Merged dark in the app server (app#534), not live: each live OAuth app has its own routes and tables today.
+- A generic dispatcher in the app server. Merged dark and opt-in per app (app#532), not live: each live app has its own code today.
 - Conformance v1: the live service checks, the fake approval daemon, and a bot verdict that is required.
 
 Phase 2:
 
 - The signed projection, and the box building its tool schema from the projection. The box still compares against hand-written constants today.
-- Skills delivered from the catalog.
+- Skills delivered from the catalog. The box side is in v2.1.12 (ov#455, ov#460); the control-plane side (cp#337, dark under `MINI_APPS_SKILL_DELIVERY`) is open (section 8).
 - A route to push a sandbox manifest without a pull request.
 - Budgets read from the catalog by the overlay. The app server reads them from a static table that mirrors the manifest field names. The overlay keeps its own constants.
 
@@ -565,3 +568,58 @@ Source:
 - Switches: cp `control-plane/src/context-sources.js:151-154` (the values the control plane takes), `control-plane/src/mini-apps.js:84-91` (no context operations while the routes are off), `control-plane/src/mini-apps-catalog.js:27` and `:79-82` (Dizko's namespace and its operations), `:363` and `:371-372` (rc44 and later, proven). App `src/lib/server/mini-apps/context.ts:52-55`, `:137`, `:152` (both operations need claims mode), `:72`, `:75-87` (the write's arguments: plain strings, sent on as `{ text }`; `mini_app_context_invalid`, `mini_app_context_full`), `:89-107` (the control plane's refusals as the tool's codes: `mini_app_not_installed`, `mini_app_no_context`, `mini_app_context_full`). App `src/lib/server/mini-apps/catalog.ts:155` (an app not installed: `403 mini_app_not_installed` before any context call). App `src/lib/server/agent/context-apps.ts:27` (the control plane's claims routes off: no app block).
 - cp#341 `control-plane/src/context-app-namespaces.js:145-152` (`namespaceDefinitionOf`, through `catalog.servedDefinition`) and `:177-192` (the gate). The fallback exists only for the five built-in apps: cp `control-plane/src/mini-apps-catalog.js:245-255` (`lastValidSource` is built from the five constants). On cp `main`: `:146-149` (a dropped app has no definition, so `app_no_context`).
 - Proposal: `APP-CONTEXT-MODEL-proposal.md` sections 2, 3 and 5 (private to Edge City; not a repo file).
+
+## 7. Approvals: what your app's actions feel like
+
+The approval layer (approval.md on the box, the policy template on the control plane) is there to be smooth for residents and for you. It never blocks an essential capability, and it never makes the chat awkward. Four rules, in force for every partner app:
+
+1. **Your actions roll into the classes that exist.** The policy template (`control-plane/templates/resident-approval-policy.md` in the control-plane repo) already has a row for everything an app can do: `marketplace.app.read` (a reviewed app's public read, autonomous), `marketplace.app.action` (an installed app acting for the resident) and `marketplace.app.install`. App actions run on their own by default: reads, writes and context lines already do. The parent row `marketplace.app.action` still asks today; the only partner action that reaches it is the For Kicks checkout, which is meant to ask. It turns autonomous, and the "Act through an installed app" setting's label with it, once For Kicks moves to its own member row (v2.1.13). Only a payment such as the For Kicks checkout shows a card, and it will do so through one member row Edge City pins to ask for that exact operation (cp#351, merged, lets the control plane accept that member key; ov#457, in review for v2.1.13, makes the box propose it; today it rides the parent row); a developer never adds one. A developer never adds a class, a row or a gate; a new app's reads and context writes run on their own by default. If your app needs something those rows do not name, say so in the pull request and Edge City decides; do not write policy.
+2. **Only a genuinely gated action shows a card, and that card is first-class.** Today exactly one partner action is gated: a payment, the For Kicks checkout (`forkicks.order.confirm`; today under the parent row `marketplace.app.action`, soon its own member row pinned to ask). A card for such an action must arrive fast and be a simplified friendly card: four plain strings (`order`, `total`, `pickup`, `name`), no technical preview. Each string must fit the minimal card whole (core's quote limit, plain characters; `card_value_fits` in `plugins/village-bridge/_forkicks.py`), or the box falls back to the technical card; long item names are the usual cause. The loop closes in the resident's own chat with their agent: the order is placed within a few seconds of the tap (a 2 s pass while a card waits, `FORKICKS_POLL_S` in `plugins/village-bridge/__init__.py`, since v2.1.12), and the box sends a fixed product line through Hermes's native sender, today "Approved: your For Kicks order is placed. Pickup: {place} · {time}." (`PLACED_LINE` in `plugins/village-bridge/_forkicks_grant.py`). That message is not model text: your app supplies the facts, never the words, and nothing the model writes can claim an order was placed. The resident is never asked to confirm again in chat.
+3. **The For Kicks flow is the reference.** It shipped in overlay v2.1.11 (ov#446, merge `d0c12e5f`). Read it before designing any gated action: the card and its refusals in `plugins/village-bridge/_forkicks.py` (`APPROVAL_CLASS`, `CARD_KEYS`, the golden vectors `plugins/village-bridge/tests/vectors/forkicks-approval-card.{md,json}`); placing the order on the resident's tap and telling them in chat in `plugins/village-bridge/_forkicks_grant.py`; the words the agent uses while the card waits in `plugins/village-bridge/_mini_apps.py` (`ORDER_PLACED_ON_APPROVAL`); the app builds and hashes the card payload at prepare (`forkicks.ts` in the app repo), the box never builds it.
+**How we gate more later.** Today app actions run on their own and only payments show a card. If Edge City later needs to gate a specific action, or wants finer-grained approval for one, it does so the same way as the For Kicks payment: by pinning that exact operation with a member row, which the platform then proposes that operation under (the row alone changes nothing). Edge City decides that, not the developer, and the default for everything else stays on its own. Your part: mark a genuinely payment-like operation `needs-card` in the manifest, and Edge City reviews it.
+
+4. **A generic app never shows a card.** In v2 a generic app is read plus its own context namespace only (section 2 and the [quickstart](MINI-APPS-QUICKSTART.md)), so nothing it does is gated. `needs-card` operations for partner apps arrive with mini-apps v3, and they reuse the For Kicks card and its close-the-loop path; they do not invent a new card, class or gate. That reuse also brings neutral card labels, card fields declared in the manifest and a generic on-grant step, so do not copy the For Kicks labels or its module into your app.
+
+## 8. Mini-apps v2 today: what works, what ships dark, what needs a roll
+
+v2.1.12 is the overlay tag of 22 Oct (`a9cf45c8`). v2.1.13 is the next one. "Dark" means merged, but switched off or not reachable by any partner app yet.
+
+| Piece | State | What it still needs |
+| --- | --- | --- |
+| Generic read app: a public MCP read relay (`service.kind` `mcp`, `auth.mode` `none`, every op `read`, optionally its own context namespace), added to the control plane's pinned catalog in one cp pull request ([quickstart](MINI-APPS-QUICKSTART.md)) | **Works on a box at v2.1.12**: the box installer takes a generic app from the cp's pinned catalog (ov#455) and reads its SKILL.md safely (ov#460). The cp half, serving the reviewed SKILL.md bytes beside the projection (cp#337), is open and dark under `MINI_APPS_SKILL_DELIVERY`. | The v2.1.12 roll on the whole fleet first: no generic app enters the cp catalog before it (quickstart section 5, hard rule). Then cp#337 merged and deployed, and `MINI_APPS_MANIFESTS=1` and `MINI_APPS_SKILL_DELIVERY=1` on the cp. |
+| Phase 1 generic dispatcher (app#532) and generic OAuth with a grants table (app#534), in the app server | **Ships dark**: merged, off, opt-in per app. | No partner app reaches them yet: a box takes only the two generic operation lists (quickstart section 1), so an OAuth, token or write app is refused on the box. Those apps are mini-apps v3, with per-app app-server code (section 1). |
+| The ONE generic approval card: a `needs-card` op gets the For Kicks minimal card, four plain strings `item`, `total`, `when`, `shared`, shown as What, Total, When & where, Shared with, proposed under the op's own member class | **Ships dark**: the overlay half is merged (ov#458) after the v2.1.12 tag; the cp half (cp#352) is an open draft. | **A roll:** v2.1.13 on the fleet. Then the box installer must pass a projection entry's `approval` key through (today it refuses any generic entry key beyond `id`, `operations`, `skills`, `version`), and the cp must send `approval` only to a box at or above its card floor (`CARD_FLOOR_TAG`, v2.1.13, in cp#352). Until all of that is live, section 7's rule 4 holds: a partner app shows no card. |
+| For Kicks checkout on its own member row (`marketplace.app.action.forkicks.order.confirm`) | **Partly merged**: the cp accepts the member key beside the parent's (cp#351). The box still proposes the parent class; ov#457 (draft) moves it to the member class. | **A roll:** v2.1.13 with ov#457 on the fleet, then the member row pinned to ask in the policy template. Only after that may the parent row turn autonomous and the "Act through an installed app" setting offer "on its own". |
+| Install tier 2's flag, `"default": true` (section 9) | **Not built.** | v2.1.13 scope (section 9). Tonight a one-time backfill stands in for it. |
+| Token, OAuth or write partner apps | **Not built** for partners. | Mini-apps v3. |
+
+Source:
+- `release/RC-MANIFEST.md:58` (v2.1.12 = `a9cf45c8`: ov#455, ov#460 and ov#459 on top of v2.1.11; no generic app in the cp catalog until the v2.1.12 fleet roll is done).
+- `install/install_miniapps.ts:120` (the two generic operation lists) and `:307` (a generic entry's keys must be exactly `id`, `operations`, `skills`, `version`; anything else is `bundle_invalid`).
+- `plugins/village-bridge/_mini_app_card.py:1-25` (the generic card: four strings, the member class, no technical-card fallback, the cp's `approval` declaration), `:44` (`SHOWN`) and `:58` (`LABELS`); `plugins/village-bridge/_mini_apps.py:118-123` (the projection entry's `approval` key, absent for every app today).
+- `git log origin/main`: ov#458 is `cb116803`, after `a9cf45c8`.
+- Pull request states read on GitHub on 22 Oct: ov#455, ov#458, ov#460, app#532, app#534 and cp#351 merged; cp#337 open; cp#352 and ov#457 open drafts.
+- `CARD_FLOOR_TAG` and its value v2.1.13: cp#352's fold plan in Edge City's lanes log, 22 Oct (private to Edge City; not a repo file). The parent flip after the v2.1.13 roll: the same log, 22 Oct.
+
+## 9. Install tiers
+
+Every catalog app is in one of three tiers. Edge City picks the tier; a partner app is tier 3.
+
+| Tier | Catalog flag | How it gets installed | Can the resident remove it? | Apps |
+| --- | --- | --- | --- | --- |
+| 1. Core | `"staff": true` | Comes with every agent. | No, never removable. | Platform apps. Today Gold Stars, the only app the validator lets say it; the coming approval.md mini-app will be core too. |
+| 2. Default | `"default": true` (planned for v2.1.13; not in the schema yet) | Installed for every agent. | Yes. An uninstall is respected: the platform never installs the app again over it. | Mosaic and For Kicks. |
+| 3. Optional | Neither flag | The resident installs it from the catalog. | Yes. | Every other app, and every generic app. |
+
+Tonight tier 2 has no flag. Mosaic and For Kicks reach agents through a one-time backfill, run after the v2.1.12 roll, that installs each one exactly as the resident's own install does, for paired residents in the mini-apps cohort, and skips every resident who uninstalled it.
+
+The flag for v2.1.13 is `"default": true`, a catalog boolean beside `"staff"`. It needs three changes, and no pull request makes them yet (cp#352's successor or a small cp pull request):
+
+- The manifest schema and validator: a `default` key, here (`mini-apps/manifest.v2.schema.json`, `scripts/mini-apps-manifests.cjs`) and in the cp's copy. The schema is closed, so `"default": true` is refused today.
+- The cp catalog: serve `default` beside `staff`, and install a default app once for each agent, never over an uninstall.
+- The app's install path: the same install the resident's own install makes, so a default app shows as installed and can be removed like any other.
+
+Source:
+- `mini-apps/README.md:65-68` (`"staff": true`: the app comes with every agent and is never removable) and `mini-apps/manifest.v2.schema.json:112-119` (`staff` and `listed`, no `default`).
+- `scripts/mini-apps-manifests.cjs:50-55` (only the pinned grant may say `staff`: Gold Stars alone) and `:534` (`staff_reserved`).
+- The three tiers, the approval.md mini-app as core, and Mosaic and For Kicks as default: Edge City's ruling in its lanes log, 22 Oct (private to Edge City; not a repo file). The backfill: the same log, 22 Oct.

@@ -35,6 +35,7 @@ from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
 from ._core import (
+    env_flag_on,
     PLUGIN_VERSION,
     hash_obj,
     hash_text,
@@ -231,6 +232,10 @@ OUTCOME_ASK_SWITCH = "outcome_ask"
 
 def _outcome_guarded(collector: Collector, kwargs: dict, hook: str, fn, *args: Any) -> None:
     if not collector.config.active or OUTCOME_ASK_SWITCH in collector.config.disabled_hooks:
+        return
+    # Superseded by the suggestion rating cards (plugins/av-rate, `_rating_cards`): the text ask
+    # arms and parses only with AV_OUTCOME_TEXT_ASK on, for one release, then goes.
+    if not env_flag_on(_outcome_ask.TEXT_ASK_SWITCH):
         return
     try:
         fn(*args)
@@ -1459,8 +1464,9 @@ def register(ctx) -> None:
         _miniapp_epoch.register_section(ctx)
     except Exception:  # noqa: BLE001 - optional; the hooks are not
         pass
-    # R-DEON: the village tools (ask_village, search_village, query_village, village) stay in the
-    # model's tool list when Hermes's tool_search defers plugin tools (`_village_visible.py`).
+    # R-DEON: the village tools (ask_village, search_village, query_village, village) and
+    # av-elicit's elicitation_record (GC-ELICIT) stay in the model's tool list when Hermes's
+    # tool_search defers plugin tools (`_village_visible.py`).
     # Behind AV_VILLAGE_TOOLS_VISIBLE (default on); a missing seam is one log line.
     try:
         _village_visible.install()

@@ -1,5 +1,9 @@
 # The evening outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
 
+**Superseded by the suggestion rating cards** (agentvillage-data `docs/design/suggestion-rating.md`;
+here `plugins/av-rate`, `plugins/av-events/_rating_cards.py`, `skills/index-network/scripts/rating-cards.ts`),
+2026-10-21: the text path below runs only with `AV_OUTCOME_TEXT_ASK` on (default off); removal next release.
+
 Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
 rulings 1 to 7) and fix rounds 1 (F1 to F11), 2 and 3 on PR #198, plus M2b and its fix round 1
 (§8: the plugin can read the intention an ask is about; the trigger's writer is off until a link

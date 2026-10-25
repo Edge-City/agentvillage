@@ -2,6 +2,14 @@
   "version": "av_custody_keys_v1",
   "about": "Every credential-shaped name (a name holding KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, PASSWD, AUTH, DSN, WEBHOOK, CREDS, BEARER or APIKEY, the substrings Hermes's execute_code scrub treats as secret) that the overlay reads, or that the control plane puts on a village sandbox, with the decision taken for it. 'strip': av-approval removes it from every agent-run child (the six in _custody.FLOOR are stripped whatever this file says, since the agent's user can write it) (foreground and background terminal, execute_code, cron and other scripts Hermes spawns); the code that needs it reads $HERMES_HOME/.env itself or runs inside the gateway. 'hermes': Hermes v2026.9.24 (0.21.5) already removes it from terminal and execute_code children (measured against the real builders). 'agent_readable': left in the agent's environment on purpose, for the reason given. 'not_secret': the name has the shape but holds no credential. tests/test_custody.py fails when the overlay starts reading a credential-shaped name that has no entry here, so a new key cannot arrive without a decision.",
   "names": {
+    "AV_ELICIT_SESSION_KEY": {
+      "decision": "not_secret",
+      "reason": "av-elicit (GC-ELICIT, the GODCONST follow-up questions): an optional override of the gateway session key the plugin injects the control plane's staged notices into (default agent:main:telegram:dm:<home chat id>), for a developer testing with their own bot. A session key is a routing label Hermes derives from the platform and chat id, not a credential; nothing authenticates with it."
+    },
+    "AV_RATE_SESSION_KEY": {
+      "decision": "not_secret",
+      "reason": "av-rate (the suggestion rating cards): an optional override of the gateway session key the plugin injects the [Rating recorded] line into (default agent:main:telegram:dm:<home chat id>), for a developer testing with their own bot. A session key is a routing label Hermes derives from the platform and chat id, not a credential; nothing authenticates with it."
+    },
     "INDEX_API_KEY": {
       "decision": "strip",
       "reason": "Index writes are approval-gated (intent.publish.*, opportunity.accept); with the key agent code could call Index around the gate. The Index MCP client and record_intention run inside the gateway; the index-network scripts read $HERMES_HOME/.env (resolveIndexApiKey, envOrDotenv)."
@@ -25,6 +33,10 @@
     "MORALMOD_LLM_API_KEY": {
       "decision": "strip",
       "reason": "The MoralMod OpenRouter key the control plane writes; Agent Village pays for it, not the tenant. Only av-events, inside the gateway, reads it (_negotiator_llm.py: process environment, then $HERMES_HOME/.env, at plugin load and on each Index bridge step behind AV_MORALMOD_OWN_KEY) to give the Index bridge's own agent a client on it. No agent-run code, skill recipe or sidecar child needs it (the MoralMod sidecar's env is an allowlist without it). Hermes does not strip it from terminal children (not on its provider blocklist), so the overlay must; with it agent code could spend the MoralMod credit or carry the key out."
+    },
+    "AV_GODCONST_BALLOT_KEY": {
+      "decision": "strip",
+      "reason": "GC-TELEGRAM-BALLOT: the resident's per-tenant God Constitution ballot credential the control plane writes (godconst-ballot-key.js); it reads, rates and submits that resident's ballot. Only av-godconst, inside the gateway, reads it (process environment, then $HERMES_HOME/.env). With it agent code could cast or change its human's ballot, so it is in _custody.FLOOR too."
     },
     "TURING_FALLS_CLAIM_TOKEN": {
       "decision": "agent_readable",

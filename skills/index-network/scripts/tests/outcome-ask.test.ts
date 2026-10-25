@@ -37,7 +37,7 @@ const OPP2 = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const THIRD_PARTY = "THIRD PARTY WORDS";
 
 let home: string;
-const PLUGIN_ENV = ["AV_EVENTS_TOKEN", "AV_HOOKS_DISABLED", "AV_EVENTS_ENABLED"] as const;
+const PLUGIN_ENV = ["AV_EVENTS_TOKEN", "AV_HOOKS_DISABLED", "AV_EVENTS_ENABLED", "AV_OUTCOME_TEXT_ASK", "AV_RATE_CARDS"] as const;
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -48,6 +48,9 @@ beforeEach(() => {
   process.env.AV_EVENTS_TOKEN = "test-token";
   delete process.env.AV_HOOKS_DISABLED;
   delete process.env.AV_EVENTS_ENABLED;
+  // Superseded by the suggestion rating cards (rating-cards.test.ts): the text ask runs only with this on.
+  process.env.AV_OUTCOME_TEXT_ASK = "1";
+  delete process.env.AV_RATE_CARDS;
 });
 
 afterEach(() => {

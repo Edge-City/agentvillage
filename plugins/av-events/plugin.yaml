@@ -9,6 +9,7 @@ optional_env:
   - AV_EVENTS_ENABLED
   - AV_CAPTURE
   - AV_HOOKS_DISABLED
+  - AV_OUTCOME_TEXT_ASK
   - AV_TENANT_ID
   - TENANT_ID
   - AV_BACKUP_URL
@@ -68,7 +69,7 @@ optional_env:
   - EDGEOS_API_KEY
   # VILLAGE SEARCH: search_village and query_village, registered only when AV_SEARCH_VILLAGE is 1|true|yes|on (same wire as ask_village).
   - AV_SEARCH_VILLAGE
-  # R-DEON: 0|false|no|off lets Hermes's tool_search defer the village tools again (default on).
+  # R-DEON: 0|false|no|off lets Hermes's tool_search defer the village tools and elicitation_record again (default on).
   - AV_VILLAGE_TOOLS_VISIBLE
   # pray / ask_village: a cron run may use them only when it reports to this DM (fail closed).
   - TELEGRAM_HOME_CHANNEL
