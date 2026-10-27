@@ -1,0 +1,4 @@
+{
+  "code": "not_authorized",
+  "detail": "The Agent Village token was missing or wrong."
+}

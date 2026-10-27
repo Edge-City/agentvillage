@@ -64,7 +64,7 @@ DRAFT_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 TASK = re.compile(r"propose:[a-f0-9]{32}")
 HASH = re.compile(r"[0-9a-f]{64}")
 #: Apps with their own reviewed path in this overlay: never routed through the generic card (they flip in a later PR).
-REVIEWED_APPS = frozenset({"gold-stars", "forkicks", "zzzbot", "slopfolio", "mini-app"})
+REVIEWED_APPS = frozenset({"gold-stars", "forkicks", "zzzbot", "eci-volunteers", "slopfolio", "mini-app"})
 MAX_PAYLOAD_BYTES = 60000
 RECORD_MAX_BYTES = 131072
 
