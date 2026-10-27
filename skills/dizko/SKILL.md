@@ -1,7 +1,7 @@
 ---
 name: dizko
 description: Discover public music events, artists, DJs and venues with the installed Dizko mini-app. Public read-only discovery through reviewed tools; no accounts, profiles, purchases or private data.
-version: 1.0.0
+version: 1.0.1
 author: Edge City
 ---
 

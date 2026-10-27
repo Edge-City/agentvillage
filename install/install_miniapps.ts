@@ -20,7 +20,7 @@ import { reconcileZzzManagedJob, verifyZzzManagedJob, zzzShippedFile, type ZzzSh
  */
 export const REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"], skills: ["gold-stars"] },
-  { id: "dizko", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["dizko"] },
+  { id: "dizko", version: "1.0.1", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["dizko"] },
   { id: "forkicks", version: "1.0.0", operations: ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"], skills: ["forkicks"] },
   // P-6 ZZZ-MINIAPP: restricted zzz.bot, five named operations (plugins/village-bridge/_mini_apps.py ZZZBOT, exact).
   { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
@@ -42,13 +42,19 @@ export const REVIEWED_MINI_APPS = [
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
  * projects the context operations), and mosaic's the same way. Remove each after the CP catalog serves a newer
  * list everywhere.
+ * DIZKO 1.0.1 (the skill's patch bump after ov#481): dizko's two 1.0.0 entries, the cp's until its re-vendor serves
+ * 1.0.1, matched by version too (checkApp), so a box on this overlay stages either version and never two at once.
+ * Overlay first, then the cp; remove both after the cp serves 1.0.1 to every box.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"], skills: ["gold-stars"] },
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"], skills: ["gold-stars"] },
-  { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
+  { id: "dizko", version: "1.0.1", operations: ["mini-app.read"], skills: ["dizko"] },
   // MOSAIC: its read alone, the CP's entry for a box that does not take the context entry (as dizko's).
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
+  // DIZKO 1.0.1: the cp re-vendor window (above).
+  { id: "dizko", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["dizko"] },
+  { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
@@ -170,8 +176,8 @@ function regular(path: string): void {
  * change. Per app, in projection order:
  *   1. the id must match GENERIC_ID (^[a-z][a-z0-9-]{0,39}$: the served bundle's id rule AND the bridge's,
  *      plugins/village-bridge/_mini_apps.py, so the box never stages an id its bridge would refuse);
- *   2. a REVIEWED id takes today's path only (exact id + operations + version + skills, else the WHOLE stage
- *      fails as today): a reviewed id is never refused alone and never staged as a generic app;
+ *   2. a REVIEWED id takes today's path only (exact id + operations + version + skills, all of one table entry, else
+ *      the WHOLE stage fails as today): a reviewed id is never refused alone and never staged as a generic app;
  *   3. an id that names a skill something else owns is refused: `shadows_reviewed`. That is a skill the
  *      installer ships (SHIPPED_SKILLS), a retired one (RETIRED_SKILL_DIRS), any skill directory in this
  *      overlay checkout (approval, recall, agent-profile, hooks, ... : every skill another installer step
@@ -421,7 +427,7 @@ function shadowsOnBox(home: string, source: string, ours: (id: string) => string
 function checkApp(app: Record<string, unknown> & { id: string }, served: ReturnType<typeof parseSkillDelivery>, shadows: (id: string) => boolean): Staged | { code: RefusalCode } {
   if (!GENERIC_ID.test(app.id)) throw new Error("mini_apps_invalid_entry");
   if (REVIEWED_IDS.has(app.id)) {
-    const reviewed = ALL_REVIEWED.find(x => x.id === app.id && same(app.operations, x.operations));
+    const reviewed = ALL_REVIEWED.find(x => x.id === app.id && x.version === app.version && same(app.operations, x.operations));
     if (!reviewed || Object.keys(app).sort().join(",") !== "id,operations,skills,version" || app.version !== reviewed.version || !same(app.skills, reviewed.skills)) throw new Error("mini_apps_unreviewed_bundle");
     return { app: reviewed };
   }
