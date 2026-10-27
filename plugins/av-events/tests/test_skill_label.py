@@ -218,6 +218,8 @@ def test_inline_recipes_outside_skill_md_are_labelled(live, ctx, av):
         "python3 skills/my-own-skill/scripts/run.py --flag",
         # Retired from the installer (RETIRED_SKILL_DIRS).
         "bun skills/geo-esmeralda/scripts/geo.ts",
+        # OV426 N2: retired in v2.1.16; an old box sends skill/edge-esmeralda until its roll.
+        "bun skills/edge-esmeralda/scripts/index.ts",
         "bun skills/../scripts/x.ts",
     ],
 )

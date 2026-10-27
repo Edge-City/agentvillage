@@ -26,8 +26,6 @@ export const EDGE_SKILL_NAMES = [
   // local copy the "Edge — knowledge sync" job keeps (K1), with the snapshot
   // installed here as the fallback; never fetched in a turn.
   "edge-india",
-  // The previous popup, background only.
-  "edge-esmeralda",
   "token-usage-audit",
   "agent-plaza",
   "agent-commons",
@@ -58,6 +56,12 @@ export const RETIRED_SKILL_DIRS = [
   // DATA-360: left EDGE_SKILL_NAMES in rc16 (9adff7a6); the Geo CLI it
   // pointed the agent at is unused.
   "geo-esmeralda",
+  // BUG-esmeralda (20 Oct): the previous popup's background skill. Hermes lists
+  // every installed skill's description in the system prompt and tells the
+  // model to load any partly relevant one, so its presence kept the summer
+  // village in front of India residents' agents. The repo keeps the directory
+  // as an archive; boxes stop registering it at the next roll.
+  "edge-esmeralda",
 ] as const;
 
 // A name on both lists would be copied in and removed again on every run.
