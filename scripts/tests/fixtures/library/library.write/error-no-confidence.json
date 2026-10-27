@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "INVALID: op 0 (node.archive): agents must give a confidence between 0 and 1."
+    }
+  ],
+  "structuredContent": {
+    "code": "invalid_arguments",
+    "detail": "op 0 (node.archive): agents must give a confidence between 0 and 1."
+  },
+  "isError": true
+}

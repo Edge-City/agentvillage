@@ -497,6 +497,43 @@ replies are exact-thread reservations and an empty newly enabled pair can receiv
 one fixed introduction per epoch. All writes share a two-per-UTC-day budget. The job does not
 deliver pair content to the resident or copy it into other surfaces.
 
+## Edge Library: the village knowledge graph
+
+The [v2 manifest](library/manifest.json) and the native bundle allowlist
+(`_mini_apps.py` `LIBRARY`, exact equality, in this order) expose eleven named
+operations, each mapped by the app to one Edge Library MCP tool: eight reads
+(`library.initialize`, `.search`, `.get`, `.source`, `.schema`, `.history`,
+`.changes_since`, `.proposals`) and three writes (`library.submit_source`,
+`library.write`, `library.propose`). `mini-app.read` refuses `library`.
+
+There is no per-resident sign-in. The service is `app-token`: the app server
+holds one token for Edge Library (`MINI_APP_LIBRARY_TOKEN`) and sends the owner's
+Telegram user id (from pairing), and their current username when known, with
+each call; Edge Library acts as its Agent Village agent on behalf of that
+resident (an unknown Telegram id creates the person; 60 tool calls a minute per
+resident). The id is `library` because the validator reserves `edge-`.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_library.py` against Edge Library's own tool schemas (the
+manifest's `input` schemas say the same): exact keys, uuids, bounds and the
+operation's request budget, plus the agent rules Edge Library enforces (a
+`confidence` and `rationale` on every graph op, never `how: "confirmed"`).
+Anything else is `invalid_library_arguments` before transport. The three writes
+also need the verified gate (`gate_verified`, zzz's path), no manual grant.
+Results are scrubbed (hidden characters become spaces of the same UTF-16
+length, so Edge Library's JavaScript-string offsets hold) and framed as
+untrusted; v2's generic codes (`not_connected`, `not_authorized`,
+`unavailable`, `invalid_arguments`, `rate_limited`) map to Edge Library-only
+text, for these operations only. A tool's other refusals come back as data,
+`isError` with `{code, detail}`.
+
+The writes are `write`, not `needs-card`: each is one recorded, revertable
+commit or proposal under the owner's name, not a payment. Overlay first, then
+the CP catalog row and sandbox allowlist, then the app routes, then Edge City
+staff set `MINI_APP_LIBRARY_TOKEN`. The app-server contract is in
+[library/README.md](library/README.md); reference app-server code is in
+[docs/reference/library/](../docs/reference/library/app-server.ts).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist

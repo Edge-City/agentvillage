@@ -1,0 +1,4 @@
+{
+  "code": "not_authorized",
+  "detail": "X-Agent-Village-Telegram-Username must be a Telegram username (5-32 letters, digits or _), no @."
+}

@@ -1,0 +1,4 @@
+{
+  "code": "not_authorized",
+  "detail": "Send X-Agent-Village-Telegram-User-Id: the resident's numeric Telegram user id."
+}
