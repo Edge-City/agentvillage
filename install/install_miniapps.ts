@@ -30,6 +30,7 @@ export const REVIEWED_MINI_APPS = [
   // Empty operations/skills: it grants no ordinary tool and stages no skill (_mini_apps.py ZZZ_BRIDGE, exact).
   { id: "zzz-bridge", version: "1.0.0", operations: [], skills: [] },
   { id: "slopfolio", version: "1.0.0", operations: ["slopfolio.prepare", "slopfolio.status"], skills: ["slopfolio"] },
+  { id: "symbient-uncommons", version: "1.0.0", operations: ["mini-app.read"], skills: ["symbient-uncommons"] },
   // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
