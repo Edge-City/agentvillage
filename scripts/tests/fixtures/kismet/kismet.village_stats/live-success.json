@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"agents\":8,\"dates\":16,\"matches\":2}\n\nSource: Kismet (https://kismet-village.vercel.app), live village counters."
+    }
+  ]
+}
