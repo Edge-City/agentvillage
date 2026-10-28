@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "description": "Turn what a resident wrote about themselves into their top 3 dreams with a claim link each; prepare their ElevenLabs Startup Grant application for them to review and submit; and show Goa's local businesses, each owner's problem, the solution designed with them and the link that starts DreamStarter's agents on it. Read-only; nothing is created or sent until the resident opens a link in their own browser.",
   "homepage": "https://dreamstarter.xyz",
-  "visibility": "everyone",
+  "visibility": "sandbox",
   "permissions": [
     {
       "kind": "read",

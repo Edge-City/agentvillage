@@ -20,7 +20,7 @@ describe("manifest (v2)", () => {
     expect(manifest.manifest).toBe(2);
     expect(manifest.id).toBe("dreamstarter");
     expect(manifest.version).toBe("1.1.0");
-    expect(manifest.visibility).toBe("everyone");
+    expect(manifest.visibility).toBe("sandbox");
     expect(manifest.service).toEqual({ kind: "mcp", baseUrl: "https://mcp.dreamstarter.xyz/mcp", auth: { mode: "none" } });
     expect(manifest.skills).toEqual([{ name: "dreamstarter", version: "1.1.0", sha256: createHash("sha256").update(skillBytes).digest("hex"), path: "skills/dreamstarter/SKILL.md" }]);
   });
