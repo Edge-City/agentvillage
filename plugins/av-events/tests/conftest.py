@@ -94,6 +94,8 @@ AV_ENV_VARS = (
     "AV_TEAM_TENANT",
     # MINIAPP-PICKUP: the installed-apps stamp and check.
     "AV_MINIAPP_REFRESH",
+    # HOT-RASOOL-2: the mixed-provider reasoning heal.
+    "AV_HEAL_REASONING_HISTORY",
 )
 
 

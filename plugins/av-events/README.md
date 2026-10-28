@@ -44,6 +44,7 @@ plugins/av-events/
   _search_village.py  the search_village tool, dark behind AV_SEARCH_VILLAGE: the main group's scrubbed messages matching words, through the control plane (no model call)
   _query_village.py   the query_village tool, on the same switch: one read-only SQL SELECT the app runs over the main group's scrubbed messages (in-memory SQLite), through the control plane
   _village_visible.py  the village tools and elicitation_record stay out of Hermes's tool_search bridge: wraps tools.tool_search._core_tool_names (R-DEON)
+  _heal_reasoning.py  dark behind AV_HEAL_REASONING_HISTORY: heals a history that mixes two providers' encrypted reasoning (HOT-RASOOL-2)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -88,6 +89,7 @@ plugins/av-events/
 | `AV_ASK_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_village` tool (see "Asking about the village group (ASK-VILLAGE)"). Unset: not registered. |
 | `AV_ASK_ODIN` | *(off)* | `1`, `true`, `yes` or `on` registers the `ask_odin` tool (see "Asking ODIN about the constitution (ODIN-ASK)"). Unset: not registered. The control plane writes it from `ODIN_ASK_TENANTS` (box-event-flags.js `tenantFlag`). |
 | `AV_SEARCH_VILLAGE` | *(off)* | `1`, `true`, `yes` or `on` registers the `search_village` and `query_village` tools (see "Searching the village group (VILLAGE SEARCH)" and "Querying the village group with SQL (VILLAGE QUERY)"). Unset: neither is registered. The control plane writes it from `VILLAGE_SEARCH_TENANTS`. |
+| `AV_HEAL_REASONING_HISTORY` | *(off)* | `1`, `true`, `yes` or `on` registers the mixed-provider reasoning heal (see "Mixed-provider reasoning history (HOT-RASOOL-2)"). Unset: nothing registered. Read at plugin load (a change needs a gateway restart to register) and again in every callback, so an off in the process environment makes them no-ops at once. |
 | `AV_VILLAGE_TOOLS_VISIBLE` | *(on)* | `0`, `false`, `no` or `off` lets Hermes's `tool_search` defer the village tools and `elicitation_record` again. Otherwise `ask_village`, `search_village`, `query_village`, village-bridge's `village` and av-elicit's `elicitation_record`, when registered, stay in the model's tool list (see "Village tools never deferred (R-DEON)"). Read once at plugin load. |
 | `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read by `pray`, `ask_village`, `ask_odin`, `search_village` and `query_village` (all but `pray` send the key only to a `CP_HOSTS` host). |
 
@@ -2535,6 +2537,35 @@ enum is therefore the same on every box, zzzbot's operations included (v2.1.5); 
 **Rollback.** `AV_MINIAPP_REFRESH=0` or `miniapp_refresh` in `AV_HOOKS_DISABLED`: no check, and new
 prompts carry no stamp; read at the next turn, no restart. Stamped prompts already persisted keep
 their one inert line until their next rebuild.
+
+## Mixed-provider reasoning history (HOT-RASOOL-2)
+
+A luna fallback turn with reasoning on stored OpenRouter `reasoning_details` (encrypted,
+`format: openai-responses-v1`). Hermes replays them verbatim on OpenRouter, so every later call to
+the primary is refused with HTTP 400 "encrypted reasoning or compaction content from multiple
+providers", which Hermes classifies as `format_error` and answers on the fallback every turn. ov#514
+stopped new items being written; this heals the sessions that already hold them. Dark behind
+`AV_HEAL_REASONING_HISTORY` (default off: nothing registered). `_heal_reasoning.py`:
+
+- **`llm_request` middleware.** In a session this module has marked, drops the `reasoning_details`
+  entries another provider minted (an entry whose `format` names another vendor, or an opaque entry
+  with no format) from the outgoing request only. Stored history is never written; the strip repeats
+  on every call of that session (idempotent).
+- **`transform_api_error_classification`.** On exactly this 400 (status 400 and the fixed substring)
+  in a session not yet marked: marks it and answers `thinking_signature`, whose built-in Hermes
+  recovery strips `reasoning_details` from that attempt and retries the primary at once, before any
+  fallback. The same 400 again in a marked session is left to Hermes (`format_error`, the fallback as
+  before) and queues the next step. At most one repair per session per process.
+- **`pre_gateway_dispatch`.** The next DM message of a session whose repair failed: a fresh session
+  through the gateway's own `/new` handler, then one line to the resident (product's, CLAIMS L28664),
+  then the message is dispatched into the fresh session. A resident's own `/` command is left alone.
+
+Logs are `av-events: heal_reasoning code=<code> [<count>=<n>]` lines: codes and counts, never text
+or ids. No event is emitted (the `llm.call` `error_code` for this 400 is ov#516's
+`mixed_provider_history`). Marks live in process memory: after a restart a still-poisoned session
+pays one more 400 and one more in-turn repair.
+
+**Rollback.** `AV_HEAL_REASONING_HISTORY=0` (or unset) and a gateway restart: nothing registered.
 
 ## Fail-open contract
 

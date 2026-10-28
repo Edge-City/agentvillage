@@ -58,6 +58,8 @@ from . import _gate_events
 from . import _code_run
 # MM-INFER-VIS, on its own line for the same reason.
 from . import _negotiator_llm
+# HOT-RASOOL-2, on its own line so it merges beside other lanes' imports.
+from . import _heal_reasoning
 # B-169b, on its own line for the same reason.
 from . import _skill_label
 from ._intentions import IntentionCall, classify_tool, valid_id
@@ -1489,6 +1491,13 @@ def register(ctx) -> None:
     try:
         _negotiator_llm.start(_collector, __name__, _quiet)
     except Exception:  # noqa: BLE001 - the observer is optional; the hooks are not
+        pass
+    # HOT-RASOOL-2: heal a history that mixes two providers' encrypted reasoning (an llm_request
+    # middleware, a classification hook and a pre_gateway_dispatch hook), behind
+    # AV_HEAL_REASONING_HISTORY (default off: nothing registered). `_heal_reasoning.py`.
+    try:
+        _heal_reasoning.register(ctx)
+    except Exception:  # noqa: BLE001 - the heal is optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
