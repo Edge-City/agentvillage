@@ -1,0 +1,372 @@
+{
+  "manifest": 2,
+  "id": "dreamstarter",
+  "name": "DreamStarter",
+  "version": "1.1.0",
+  "description": "Turn what a resident wrote about themselves into their top 3 dreams with a claim link each; prepare their ElevenLabs Startup Grant application for them to review and submit; and show Goa's local businesses, each owner's problem, the solution designed with them and the link that starts DreamStarter's agents on it. Read-only; nothing is created or sent until the resident opens a link in their own browser.",
+  "homepage": "https://dreamstarter.xyz",
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Discover dreams from text the resident shares",
+      "description": "Send only the about-me, interests and goals text the resident agrees to share, and read back up to three suggested dreams with public claim links. No Edge City account, email, phone, Telegram handle or identifier is sent, and nothing is created on DreamStarter until the resident opens a claim link in their own browser."
+    },
+    {
+      "kind": "read",
+      "label": "Read a dream's or a business's execution status",
+      "description": "Read the public, coarse status of a dream or local business the resident's own ref or slug points to: unclaimed, claimed or executing, and which agent workflows have run. No dream content, drafts, credits or account data."
+    },
+    {
+      "kind": "read",
+      "label": "Read the public workflow catalog and the grant's rules",
+      "description": "Static public content: what DreamStarter's agents do after a claim, and the ElevenLabs Startup Grant's eligibility rules, fields and Edge City referral code."
+    },
+    {
+      "kind": "read",
+      "label": "Stage an ElevenLabs grant application the resident chose to share",
+      "description": "Send only the application answers the resident agreed to share (their name, work email, phone, LinkedIn and company details) to DreamStarter, which stages a private draft and returns a review link. Nothing reaches ElevenLabs until the resident accepts the terms and clicks Submit on that page in their own browser. Unsubmitted drafts are deleted after 14 days."
+    },
+    {
+      "kind": "read",
+      "label": "Read the local businesses and their problems",
+      "description": "Read the public write-ups of the Goa businesses in the program: what each does, the problem its owner named, the solution designed with them, a Buildathon build idea and a public claim link. No owner contact details."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://mcp.dreamstarter.xyz/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "dreamstarter.discover",
+      "class": "read",
+      "target": {
+        "tool": "discover_dreams"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "interests": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "maxItems": 12
+          },
+          "goals": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          }
+        },
+        "required": [
+          "about"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 8192,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.dream_status",
+      "class": "read",
+      "target": {
+        "tool": "dream_status"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{20,64}$"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.workflows",
+      "class": "read",
+      "target": {
+        "tool": "list_workflows"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.grant_requirements",
+      "class": "read",
+      "target": {
+        "tool": "grant_requirements"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.grant_prepare",
+      "class": "read",
+      "target": {
+        "tool": "grant_prepare"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "applicant": {
+            "type": "object",
+            "properties": {
+              "first_name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "last_name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "job_title": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "linkedin_url": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "business_email": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "elevenlabs_account_email": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "phone": {
+                "type": "string",
+                "maxLength": 24
+              }
+            },
+            "additionalProperties": false
+          },
+          "company": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "legal_name": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "registration_number": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "website": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "product_description": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "street": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "city": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "country": {
+                "type": "string",
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "eligibility": {
+            "type": "object",
+            "properties": {
+              "full_time_founder": {
+                "type": "boolean"
+              },
+              "team_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "agency_or_consultancy": {
+                "type": "boolean"
+              },
+              "enterprise_customers": {
+                "type": "boolean"
+              },
+              "product_for_minors": {
+                "type": "boolean"
+              },
+              "previous_elevenlabs_grant": {
+                "type": "boolean"
+              },
+              "has_elevenlabs_account": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dream_ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{20,64}$"
+          }
+        },
+        "required": [
+          "company"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 16384,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.grant_status",
+      "class": "read",
+      "target": {
+        "tool": "grant_status"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{20,64}$"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.businesses",
+      "class": "read",
+      "target": {
+        "tool": "list_businesses"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.business_brief",
+      "class": "read",
+      "target": {
+        "tool": "business_brief"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{3,40}$"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "dreamstarter.business_status",
+      "class": "read",
+      "target": {
+        "tool": "business_status"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{3,40}$"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "dreamstarter",
+      "version": "1.1.0",
+      "sha256": "fa491a6a54ef4a0bd3acf67035a601be78bcb6448fd2908ef0284a2ee54a4fa0",
+      "path": "skills/dreamstarter/SKILL.md"
+    }
+  ]
+}
