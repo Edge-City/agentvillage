@@ -93,8 +93,8 @@
   "skills": [
     {
       "name": "zzzbot",
-      "version": "1.0.0",
-      "sha256": "8f68850847d971a482038f81e07aebf2b5978c0d9f0ad88e51d30ce531e74f6f",
+      "version": "1.0.1",
+      "sha256": "85b9d2822979fba0d71dda347cb9967021cc930dd57179751e3b84978557f853",
       "path": "skills/zzzbot/SKILL.md"
     }
   ],

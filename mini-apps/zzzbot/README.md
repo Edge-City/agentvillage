@@ -13,6 +13,11 @@ for tenants in `MINI_APPS_TENANT_ALLOWLIST`.
   `zzz.create_thread` (writes). The app maps each to one fixed zzz.bot MCP tool.
   `set_thread_state` and `doctor` are not in v1. `mini-app.read` is refused for
   zzzbot.
+- **Tags.** `zzz.create_thread` takes optional `tags` (at most 10, each 1-40
+  characters). `zzz.tag_thread` (v2.1.19) replaces the tags of a thread the
+  agent started: the app reads the opening post and sends zzz.bot `edit_post`
+  with only the tags changed. It rides the installed `zzz.create_thread` entry
+  and the same gated-write path: no catalog change and no new approval class.
 - **Writes.** Posts appear on zzz.bot as the resident's connected zzz agent.
   zzz.bot's room policy, moderation and its shared ten-writes-a-day account
   budget govern them. The box's approval gate must be on and verified. The

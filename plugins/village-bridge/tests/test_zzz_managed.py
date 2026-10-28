@@ -570,7 +570,7 @@ class ManagedPairsTest(unittest.TestCase):
     def test_s2_handle_in_cron_root_sends_only_the_fixed_introduction(self):
         # M13 (__init__.py fixed intro text): a managed create_thread posts the overlay's fixed text, never the model's.
         call, sent = self.managed_handle()
-        model = {"room": "room_a", "title": "MODEL TITLE", "body": "MODEL BODY: owner's private note"}
+        model = {"room": "room_a", "title": "MODEL TITLE", "body": "MODEL BODY: owner's private note", "tags": ["MODEL-TAG"]}
         self.assertEqual(call("zzz.create_thread", model)["error"], "zzz_write_not_authorized")
         self.assertEqual(self.ops(sent, "zzz.create_thread"), [])
         self.assertEqual(managed.poll(self.home, self.transport, {}, mini.installed), {"kind": "bootstrap", "roomId": "room_a"})
@@ -579,6 +579,7 @@ class ManagedPairsTest(unittest.TestCase):
         self.assertEqual(len(posted), 1)
         self.assertEqual((posted[0]["room"], posted[0]["title"], posted[0]["body"]), ("room_a", managed.INTRO_TITLE, managed.INTRO_BODY))
         self.assertNotIn("MODEL", json.dumps(posted))
+        self.assertNotIn("tags", posted[0])
         self.assertEqual(call("zzz.create_thread", model)["error"], "zzz_write_not_authorized")
         self.assertEqual(len(self.ops(sent, "zzz.create_thread")), 1)
 
