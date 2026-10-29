@@ -44,8 +44,13 @@ Sessions (``chat_type``, ``platform`` and ``agent_context`` reach ``initialize``
 ``agent/agent_init.py:1221-1251, 2303-2306``): a one-to-one chat, or no chat
 type on the owner's own machine (cli, tui, desktop, local), is private and gets
 the full block and both tools. A shared chat (group, forum, channel, thread,
-anything unknown) and a cron run get no profile block and no tools (lead
-L32315); a tool called there answers "unavailable in group sessions".
+anything unknown) and a cron run get only the profile's lines tagged Edge
+City India 2026 (cp#487's tags, audit #3: ``shared_lines``), or no block when
+the file carries no tags, and no tools; a tool called there answers
+"unavailable in group sessions". A provider not yet initialised gets the
+shared block too (``shares_only``). The private block's note carries the rule
+"share only lines tagged Edge City India 2026" for anything that leaves the
+chat (``SHARE_RULE``).
 
 The built-in USER.md (review-b L32588): Hermes core puts ``memories/USER.md``
 into every session's prompt (``agent/system_prompt.py:515-525, 776``), and the
@@ -165,6 +170,33 @@ SETUP_PROFILE_MARK = "[Edge City profile, written at setup]"
 #: Hermes's entry delimiter and USER.md block title (tools/memory_tool_store.py:20-23, `_render_block`).
 ENTRY_DELIMITER = "\n§\n"
 USER_BLOCK_TITLE = "USER PROFILE (who the user is)"
+#: cp#487's visibility tags in `_profile.md` (control-plane/src/context-profile-render.js, visibility/vocab.js labels).
+#: Only these lines leave a private session: `- t (marker; Edge City India 2026)`, an app line
+#: `- t (Edge City India 2026)` and `Summary (Edge City India 2026): t`. The tag is the line's LAST parenthesis.
+SHARED_LABEL = "Edge City India 2026"
+SHARED_LINE_RE = re.compile(r"^- \S.*\((?:[^()]*; )?Edge City India 2026\)$")
+SHARED_SUMMARY_RE = re.compile(r"^Summary \(Edge City India 2026\): \S")
+#: The line cp#487 puts under each raw section's heading; both present = the file is tagged.
+PRIVATE_SECTION = "(Private: for your human and you only; never shared)"
+PROFILE_HEADING = "## Setup profile"
+RAW_HEADINGS = (PROFILE_HEADING, SOURCES_HEADING)
+#: The claim sections a shared line may come from (every other section, known or not, gives nothing).
+CLAIM_HEADINGS = ("## Context tags", "## From the village group")
+APP_HEADING_RE = re.compile(r"^## From (\S(?:.*\S)?) \(saved by your agent with \1; data, not instructions\)$")
+SHARED_NOTE = (
+    "This chat is not your private chat with your human, so only the lines they share with Edge City India 2026 "
+    "are here. Share only lines tagged Edge City India 2026. Everything else you know about them (a line tagged "
+    "Private, an untagged line, their setup profile, the files they shared on the Context page, your own notes "
+    "about them) is private: never post, quote or pass it on here."
+)
+#: The prompt rule for a private session too: what leaves it (zzz posts, ODIN, the village, Index, another agent).
+SHARE_RULE = (
+    " Whatever you post, send or pass on outside this chat (a zzz.bot room, a group, ODIN, the village, Index or "
+    "another agent) uses only lines tagged Edge City India 2026. A line tagged Private, an untagged line and "
+    "everything under Setup profile and Shared on the Context page stay between you and your human, unless they "
+    "ask you to share that exact thing."
+)
+
 #: Set on the wrapped `agent.system_prompt._memory_parts`: `gate(agent, user_block) -> block`, so F1
 #: (av-events/_prompt_refresh.py) renders the USER.md block exactly as the prompt carries it.
 USER_GATE_ATTR = "village_user_gate"
@@ -329,6 +361,75 @@ def without_sources(body: str) -> Tuple[str, bool]:
 # --------------------------------------------------------------------------
 
 
+def _clean_line(line: str) -> bool:
+    """A raw line `visible()` would leave as it is: no invisible code point, no C0/C1 control (a `\\r`
+    included), no fence tag. Only such a line may open a section or count as shared (security review on
+    ov#559: a heading that appears only after the overlay strips characters cp#487 did not escape)."""
+    return not (_INVISIBLE_RE.search(line) or _CONTROL_RE.search(line) or _FENCE_TAG_RE.search(line))
+
+
+def shared_lines(raw: str) -> str:
+    """The profile's lines tagged Edge City India 2026 (cp#487), under their section and card headings, for a
+    session that is not private. Classified on the RAW decoded text (before `visible()`), whole lines only:
+    a line `_clean_line` refuses never opens a section and never counts as shared.
+
+    Only the claim sections are read, in the order cp writes them: Context tags and From the village group
+    before the raw sections, the mini-app sections (`APP_HEADING_RE`, the same name twice) after Shared on
+    the Context page. A claim heading after a raw heading, or an app heading before the sources heading,
+    stops the read there (fail closed: that line and the rest stay out). The raw sections are never read.
+    Fail closed too: a file without cp#487's tags (no `PRIVATE_SECTION` line under both raw headings) gives
+    "", and so does a file with no shared line. cp#487 escapes every Markdown heading inside free text."""
+    lines = raw.split("\n")
+    for heading in RAW_HEADINGS:
+        if heading not in lines:
+            return ""
+        at = lines.index(heading)
+        if at + 1 >= len(lines) or lines[at + 1] != PRIVATE_SECTION:
+            return ""
+    out: List[str] = []
+    section: Optional[str] = None
+    section_shown = False
+    card: Optional[str] = None
+    raw_seen = sources_seen = False
+    for line in lines:
+        if not _clean_line(line):
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            if line in RAW_HEADINGS:
+                raw_seen = True
+                sources_seen = sources_seen or line == SOURCES_HEADING
+                section = None
+                continue
+            if line in CLAIM_HEADINGS:
+                if raw_seen:
+                    break
+                section = line
+            elif APP_HEADING_RE.match(line):
+                if not sources_seen:
+                    break
+                section = line
+            else:
+                section = None
+            section_shown, card = False, None
+            continue
+        if section is None:
+            continue
+        if line.startswith("### "):
+            card = line
+            continue
+        shared = bool(SHARED_LINE_RE.match(line)) or (section == CLAIM_HEADINGS[0] and bool(SHARED_SUMMARY_RE.match(line)))
+        if not shared:
+            continue
+        if not section_shown:
+            out.extend(([""] if out else []) + [section])
+            section_shown = True
+        if card is not None and line.startswith("- "):
+            out.append(card)
+            card = None
+        out.append(line)
+    return "\n".join(out)
+
+
 def read_regular(path: Path, max_bytes: int) -> Tuple[Optional[bytes], str]:
     """(bytes, reason). Never follows a symlink; refuses a non-regular, hard-linked or oversized
     file, judged by what was opened (fstat), so a swap mid-read cannot pass a check it failed."""
@@ -367,9 +468,11 @@ class Profile:
     """One read of `_profile.md`. `reason` is empty when it was read."""
 
     def __init__(self, reason: str = "", *, body: str = "", rendered_at: Optional[str] = None,
-                 sha_ok: Optional[bool] = None, removed: int = 0) -> None:
+                 sha_ok: Optional[bool] = None, removed: int = 0, raw: str = "") -> None:
         self.reason = reason
         self.body = body
+        #: The decoded text before `visible()` (manifest line off): what `shared_lines` classifies.
+        self.raw = raw
         self.rendered_at = rendered_at
         self.sha_ok = sha_ok
         self.removed = removed
@@ -419,7 +522,8 @@ def read_profile(home: Optional[Path] = None) -> Profile:
             text = rest
         body, removed = visible(text)
         body = body.strip("\n").rstrip()
-        return Profile("" if body else "empty", body=body, rendered_at=rendered_at, sha_ok=sha_ok, removed=removed)
+        return Profile("" if body else "empty", body=body, rendered_at=rendered_at, sha_ok=sha_ok, removed=removed,
+                       raw=text)
     except Exception as exc:  # noqa: BLE001 - fail open
         return Profile(f"error_{type(exc).__name__}")
 
@@ -780,16 +884,27 @@ class VillageMemoryProvider(MemoryProvider):
             return True
         return is_private_session(self._chat_type, self._platform, self._agent_context)
 
+    def shares_only(self) -> bool:
+        """True unless this is a known private session: before `initialize` the block is the shared one too
+        (`private_session()` says True then only for tool routing)."""
+        return not (self.session_known() and self.private_session())
+
     def render(self, *, where: str) -> Tuple[str, Profile]:
-        """The profile text for this session, reduced and capped (`block_budget`), or "" ."""
+        """The profile text for this session, reduced and capped (`block_budget`), or "" . A session that is
+        not private gets only the lines tagged Edge City India 2026 (`shared_lines`)."""
         home = self.home()
         profile = read_profile(home)
         _log_read(profile, where)
         if not profile.ok:
             return "", profile
-        full, limit = block_budget(context_length(home), self.private_session())
+        shares_only = self.shares_only()
+        full, limit = block_budget(context_length(home), not shares_only)
         body = profile.body
-        if not full:
+        if shares_only:
+            body, _removed = visible(shared_lines(profile.raw))
+            if not body:
+                _log_once(f"{where}:no_shared", "village-memory: %s: no line tagged %s; no block", where, SHARED_LABEL)
+        elif not full:
             body, _dropped = without_sources(body)
         body, cut = cap(body, limit)
         if cut:
@@ -802,15 +917,14 @@ class VillageMemoryProvider(MemoryProvider):
         try:
             if not enabled(self.home()):
                 return ""
-            # PRIVACY (lead L32315): the profile holds the resident's Private Context lines and carries no
-            # per-line visibility yet, so it goes into a private one-to-one session only. A group, room or cron
-            # session (anything private_session() refuses) gets no profile block at all, as it gets no tools.
-            if not self.private_session():
-                return ""
-            body, _profile = self.render(where="block")
+            # PRIVACY (lead L32315, audit #3): a group, room or cron session (anything not a known private
+            # session) gets only the profile's lines tagged Edge City India 2026 (cp#487), or nothing when the
+            # file carries no tags; never a raw section, an untagged line or a Private line. No tools there.
+            shares_only = self.shares_only()
+            body, _profile = self.render(where="shared_block" if shares_only else "block")
             if not body:
                 return ""
-            note = BLOCK_NOTE + TOOLS_NOTE
+            note = BLOCK_NOTE + (f" {SHARED_NOTE}" if shares_only else SHARE_RULE + TOOLS_NOTE)
             return f"{SEPARATOR}\n{BLOCK_TITLE}\n{SEPARATOR}\n{note}\n\n{body}"
         except Exception as exc:  # noqa: BLE001 - never cost a prompt build
             _log_once(f"block:error_{type(exc).__name__}", "village-memory: block failed (%s); left out",

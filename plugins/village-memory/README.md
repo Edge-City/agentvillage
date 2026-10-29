@@ -26,9 +26,22 @@ plugins/village-memory/
   of 200,000 or more, the whole profile, at most 80,000 code points. On a smaller or unknown window,
   only the sections before `## Shared on the Context page`, within 8% of the window at 3.5 chars per
   token (25,200 on a 90K box). Both tools.
-- **Shared chat, room or cron run**: NO profile block and no tools (lead L32315: the profile holds the
-  resident's Private lines with no per-line visibility). A tool called there answers
-  `unavailable in group sessions`.
+- **Shared chat, room or cron run** (audit #3): only the profile's lines tagged Edge City India 2026, in
+  cp#487's three forms (`- t (marker; Edge City India 2026)`, an app line `- t (Edge City India 2026)`,
+  `Summary (Edge City India 2026): t`; the tag is the line's last parenthesis), under their section and
+  card headings, read only from the claim sections (Context tags, From the village group, the mini-app
+  `## From <app> (saved by your agent with <app>; ...)` sections). Never a raw section (Setup profile,
+  Shared on the Context page), an untagged line, a Private line or an unknown section. Classified on the
+  raw decoded text, whole lines: a line holding an invisible code point, a control character (`\r`
+  included) or a fence tag never opens a section or counts as shared. cp's order is enforced: a claim
+  heading after a raw heading, or an app heading (exactly cp's, one name twice) before Shared on the
+  Context page, stops the read there. **Fail closed:** a
+  file without cp#487's `(Private: ...)` line under both raw headings, or with no shared line, gives no
+  block. Capped like the reduced block (8% of the window). The note says "Share only lines tagged Edge
+  City India 2026". No tools; a tool called there answers `unavailable in group sessions`. A provider
+  not yet initialised gets this block too.
+- **The share rule in a private session:** the block's note says that whatever leaves the chat (a zzz.bot
+  room, a group, ODIN, the village, Index, another agent) uses only lines tagged Edge City India 2026.
 - **The built-in USER.md** (review-b L32588): Hermes core puts `memories/USER.md` into every session's
   prompt, and the app's `[Edge City profile, written at setup]` entry there is the raw setup profile
   (Private, L31622). `register()` wraps `agent.system_prompt._memory_parts` once per process: a session

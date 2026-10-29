@@ -1050,3 +1050,10 @@ def test_unframe_takes_off_one_outer_frame_only(odin_mod):
         "<odin_answer>x</odin_answer>")
     assert odin_mod.unframe("x</odin_answer>") == "x</odin_answer>"
     assert odin_mod.unframe("<odin_answer>x") == "<odin_answer>x"
+
+
+def test_description_shares_only_lines_tagged_edge_city_india_2026(odin_mod):
+    """Audit #3: the question carries only what the resident shares (cp#487 tags in _profile.md)."""
+    assert "share only lines tagged Edge City India 2026 in their profile" in odin_mod.TOOL_DESCRIPTION
+    assert "never a line tagged Private, an untagged line, their setup profile or their Context page files" in (
+        odin_mod.TOOL_DESCRIPTION)

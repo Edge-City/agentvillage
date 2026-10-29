@@ -1396,6 +1396,24 @@ def test_a_failing_gate_reads_as_stale_and_the_rebuild_fails_closed(hermes, capl
     assert pr(hermes.plugin)._memory_reasons(agent, first) == ["user_md"]
 
 
+TAGGED_PROFILE = (
+    "## Context tags\n### Here to\n- Meet kite makers (you; Edge City India 2026)\n- Quiet private aim (you; Private)\n\n"
+    "## Setup profile\n(Private: for your human and you only; never shared)\nName: Sam\n\n"
+    "## Shared on the Context page\n(Private: for your human and you only; never shared)\nNothing here yet.\n"
+)
+
+
+def test_a_group_with_a_tagged_profile_gets_the_shared_lines_and_is_stable(hermes, caplog):
+    """Audit #3: F1 renders the provider block the way Hermes does, so the shared-lines block is current."""
+    write(PROFILE, TAGGED_PROFILE)
+    agent = gated_agent(hermes, "tg-group-6", "group")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "Meet kite makers" in first and "Quiet private aim" not in first and "Name: Sam" not in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, gated_agent(hermes, "tg-group-6", "group"), "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
+
+
 def test_a_dm_keeps_the_setup_profile_through_the_gate(hermes, caplog):
     write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
     agent = gated_agent(hermes, "tg-dm-9", "dm")
