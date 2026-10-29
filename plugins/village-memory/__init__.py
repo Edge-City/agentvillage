@@ -623,9 +623,12 @@ def _norm(value: Any) -> str:
 #   (`session_is_private_now`): a direct chat or an explicit local surface.
 # - Outside a private session the write check keys only on the call's target and action, never on its
 #   content (review-b ov#563 S1-d): a USER.md replace or remove (or a batch holding one, or any op that is
-#   not an add) is refused with one message; a USER.md add and every MEMORY.md write go through whatever
-#   they hold (review-b ov#565 N1-r3: a group, a cron run and Hermes's background review can add a note
-#   about the human). A call whose target is unknown (args missing or malformed) counts as USER.md.
+#   not an add) is refused with one message; a USER.md add and every MEMORY.md write go through (review-b
+#   ov#565 N1-r3: a group, a cron run and Hermes's background review can add a note about the human),
+#   unless the text it writes (content or new_text, of the call or an op) holds a Private MARK: a public
+#   constant the session itself supplied, so refusing it answers nothing about the Private text, and no
+#   group can forge a setup entry or reproduce a whole marked one to test it (MEMORY_MARK_REFUSAL). A
+#   call whose target is unknown (args missing or malformed) counts as USER.md.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
 #   prompt gate), so text derived from one is still known after its mark has gone. One fingerprint set per
@@ -666,6 +669,9 @@ LEFT_OUT = "[left out: a private USER.md entry; this is not a private chat with 
 #: entry; true for a replace, a remove and a batch holding one, review-b ov#563 N3-d, ov#565 N1-r3).
 MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat "
                         "with them. You can still add a new note here.")
+#: The refusal outside a private session of a write whose text holds a Private mark (any target; the mark
+#: is a public constant, never a fingerprint, so this answers nothing about the Private text).
+MEMORY_MARK_REFUSAL = "That text carries a private-entry mark; only your private chat can write it."
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
@@ -1138,11 +1144,12 @@ def adds_only(args: Any) -> bool:
 def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: Any = "") -> Optional[dict]:
     """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may add
     to USER.md but not change or remove it (a replace, a remove, a batch on USER.md or with an op naming it
-    that holds anything but adds), and may write MEMORY.md whatever the write holds. It decides only on the
-    call's target and action, never on its content (review-b ov#563 S1-d, ov#565 N1-r3): the answer never
-    tells a group whether a guess is in the setup text (no membership oracle). One refusal,
-    MEMORY_WRITE_REFUSAL, true in every case (N3-d). An allowed call's fingerprinted lines are recorded as
-    self-written (S1-r3); if that fails, the call is refused (fail closed). A DM is never refused."""
+    that holds anything but adds), and may write MEMORY.md. It decides on the call's target and action,
+    and on whether the text it writes holds a Private mark (a public constant), never on a fingerprint
+    (review-b ov#563 S1-d, ov#565 N1-r3): the answer never tells a group whether a guess is in the setup
+    text (no membership oracle). MEMORY_WRITE_REFUSAL for a USER.md change (N3-d), MEMORY_MARK_REFUSAL for
+    a marked write. An allowed call's fingerprinted lines are recorded as self-written (S1-r3); if that
+    fails, the call is refused (fail closed). A DM is never refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
@@ -1154,6 +1161,8 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
             return block
         if memory_call_target(args) == "user" and not adds_only(args):
             return block
+        if any(holds_private_mark(text) for text in _call_texts(args, WRITTEN_FIELDS)):
+            return {"action": "block", "message": MEMORY_MARK_REFUSAL}
         remember_self_written(args)
         return None
     except Exception:  # noqa: BLE001 - fail closed

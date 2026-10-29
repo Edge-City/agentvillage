@@ -45,12 +45,17 @@ plugins/village-memory/
     leaves the Private entries out of the USER.md block for EVERY session (the DM still has the setup text
     under `_profile.md` "## Setup profile"). One WARNING.
   - **The memory tool** (av-events hooks), outside a private session only. The write check is keyed on
-    the call's target and action, never its content (review-b ov#563 S1-d): `pre_tool_call` refuses a
-    USER.md change or removal (a replace, a remove, a batch on USER.md or with an op naming it that holds
-    anything but adds) with one message, "Your human's profile notes (USER.md) can only be changed or
-    removed in your private chat with them. You can still add a new note here."; a USER.md add and every
-    MEMORY.md write go through whatever they hold (ov#565 N1-r3: a group, a cron run and Hermes's
-    background review after a group turn can add a note about the human again). `transform_tool_result`
+    the call's target and action and on the Private marks (public constants), never on a fingerprint
+    (review-b ov#563 S1-d): `pre_tool_call` refuses a USER.md change or removal (a replace, a remove, a
+    batch on USER.md or with an op naming it that holds anything but adds) with one message, "Your
+    human's profile notes (USER.md) can only be changed or removed in your private chat with them. You
+    can still add a new note here."; a USER.md add and every MEMORY.md write go through (ov#565 N1-r3: a
+    group, a cron run and Hermes's background review after a group turn can add a note about the human
+    again), unless the text it writes (`content` or `new_text`, of the call or a batch op) holds a Private
+    mark: then "That text carries a private-entry mark; only your private chat can write it." The mark is
+    a constant the session itself supplied, so the refusal answers nothing about the Private text; it
+    stops a forged setup entry and a whole reproduced one (Hermes would answer "Entry already exists").
+    `transform_tool_result`
     leaves Private entries out of every result (`current_entries`, `matches`, `replaced_entry`,
     `removed_entry`, `replaced_entries`, ...), USER.md and MEMORY.md alike, by marks and fingerprints,
     except a self-written line (below). A call whose target is unknown counts as USER.md. A DM keeps
