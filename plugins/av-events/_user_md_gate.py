@@ -39,11 +39,14 @@ from typing import Any, List, Optional
 #   needs positive evidence (`session_is_private_now`): a direct chat or an explicit local surface.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
-#   prompt gate), so text derived from one is still known after its mark has gone. The prompt gate and the
-#   result filter use fingerprints; the write check never does (review-b ov#563 S1-d): it decides only on
-#   what the session cannot vary (the public marks, the target, the action), so a refusal never confirms a
-#   guessed line. One fingerprint set per process, on Hermes's `MemoryStore` class, read by both copies of
-#   this block (review-b ov#563 N4-d).
+#   prompt gate), so text derived from one is still known after its mark has gone. The prompt gate uses
+#   fingerprints. Outside a private session the memory tool's answer never does (review-b ov#563 S1-d):
+#   the write check decides only on what the session cannot vary (the public marks, the target, the
+#   action), and the result of a memory WRITE (add, replace, remove, a batch: every action Hermes's memory
+#   tool has) is judged on the marks only, so neither a refusal nor a redaction confirms a guessed line,
+#   whether the call echoes it or an earlier call stored it. A result whose call is not a known write
+#   keeps the fingerprint test. One fingerprint set per process, on Hermes's `MemoryStore` class, read by
+#   both copies of this block (review-b ov#563 N4-d).
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -76,6 +79,9 @@ MEMORY_WRITE_REFUSAL_ADD = ("Your human's profile notes (USER.md) can only be ch
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
+#: The memory tool's write actions (tools/memory_tool.py `_STORE_ACTIONS`; a non-empty `operations` is a
+#: batch whatever `action` says). Hermes's memory tool has no other action.
+MEMORY_WRITE_ACTIONS = frozenset({"add", "replace", "remove"})
 #: Set on Hermes's `tools.memory_tool_store.MemoryStore` class: the process's one fingerprint set, whichever
 #: copy of this block installed the gates (review-b ov#563 N4-d).
 DIGESTS_ATTR = "village_private_line_digests"
@@ -401,42 +407,55 @@ def session_is_private_now(session_id: Any = "") -> bool:
     return source in GATE_LOCAL_SURFACES
 
 
-def _left_out(value: Any) -> Any:
-    """`value` with every string holding a Private mark left out: a list drops it, a dict keeps the key with
-    LEFT_OUT in its place."""
+def memory_call_is_write(args: Any) -> bool:
+    """Whether a memory-tool call is a write, as Hermes dispatches it (tools/memory_tool.py `memory_tool`: a
+    non-empty `operations` runs a batch whatever `action` says). Unknown or missing args: not known to be one."""
+    return isinstance(args, dict) and (bool(args.get("operations")) or args.get("action") in MEMORY_WRITE_ACTIONS)
+
+
+def _left_out(value: Any, holds: Any = None) -> Any:
+    """`value` with every string `holds` flags (default `holds_private_entry`) left out: a list drops it, a
+    dict keeps the key with LEFT_OUT in its place."""
+    holds = holds or holds_private_entry
     if isinstance(value, str):
-        return LEFT_OUT if holds_private_entry(value) else value
+        return LEFT_OUT if holds(value) else value
     if isinstance(value, list):
-        return [_left_out(v) for v in value if not holds_private_entry(v)]
+        return [_left_out(v, holds) for v in value if not holds(v)]
     if isinstance(value, dict):
-        return {k: _left_out(v) for k, v in value.items()}
+        return {k: _left_out(v, holds) for k, v in value.items()}
     return value
 
 
-def redact_memory_result(result: Any) -> Optional[str]:
+def redact_memory_result(result: Any, fingerprints: bool = True) -> Optional[str]:
     """A memory-tool result without its Private entries (judged value by value, so a fingerprint inside a
     JSON string counts), or None when it holds none. A result that is not JSON but holds a mark or a
-    fingerprint is replaced whole (fail closed)."""
+    fingerprint is replaced whole (fail closed). `fingerprints=False` judges on the marks only (a write's
+    result outside a private session: review-b ov#563 S1-d)."""
     if not isinstance(result, str):
         return None
+    holds = holds_private_entry if fingerprints else holds_private_mark
     try:
         payload = json.loads(result)
     except Exception:  # noqa: BLE001
-        return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False) if holds_private_entry(result) else None
-    redacted = _left_out(payload)
+        return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False) if holds(result) else None
+    redacted = _left_out(payload, holds)
     if redacted == payload:
-        return None if not holds_private_entry(result) else json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
+        return None if not holds(result) else json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
     out = json.dumps(redacted, ensure_ascii=False)
-    return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False) if holds_private_entry(out) else out
+    return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False) if holds(out) else out
 
 
-def transform_memory_result(tool_name: Any = None, result: Any = None, session_id: Any = "", **_kwargs: Any) -> Optional[str]:
-    """Hermes's `transform_tool_result` (model_tools.py:848-865): outside a private session, the memory tool's
-    result never carries a Private USER.md entry. None leaves the result as it is."""
+def transform_memory_result(tool_name: Any = None, result: Any = None, session_id: Any = "", args: Any = None,
+                            **_kwargs: Any) -> Optional[str]:
+    """Hermes's `transform_tool_result` (model_tools.py:848-865, which hands it the call's `args`): outside a
+    private session, the memory tool's result never carries a Private USER.md entry by its mark. A write's
+    result (`memory_call_is_write`) is judged on the marks only, so whether a line the session supplied or
+    stored is in the Private text never changes the answer (review-b ov#563 S1-d); any other result keeps
+    the fingerprint test too. None leaves the result as it is."""
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
             return None
-        out = redact_memory_result(result)
+        out = redact_memory_result(result, fingerprints=not memory_call_is_write(args))
         if out is not None:
             _gate_log_once("user_gate:memory_result", "USER.md gate: private entries left out of a memory result")
         return out

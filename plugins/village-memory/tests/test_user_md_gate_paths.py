@@ -250,16 +250,97 @@ def test_a_right_guess_of_a_setup_line_gets_the_same_answer_as_a_wrong_one(gate_
     assert right == wrong
 
 
-def test_a_guessed_setup_line_may_be_noted_in_a_group_and_the_result_filter_still_redacts(gate_copy, group_session,
-                                                                                            user_md):
+def test_a_guessed_setup_line_may_be_noted_in_a_group(gate_copy, group_session, user_md):
     user_md(SETUP, NOTE)
     gate_copy.shared_user_block(user_block(SETUP, NOTE))
     for target in ("memory", "user"):
         args = {"action": "add", "target": target, "content": RIGHT_GUESS}
         assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
-    out = gate_copy.transform_memory_result(tool_name="memory", result=_result(current_entries=[RIGHT_GUESS, NOTE]),
-                                            session_id="tg-group")
-    assert json.loads(out)["current_entries"] == [NOTE]
+
+
+# The memory tool's result shapes (Hermes v2026.9.24 tools/memory_tool_store.py): a write's success never
+# echoes the entries (`_success_response`); a no-match edit echoes old_text in its error and the target's
+# whole inventory (`_locate`: `current_entries`); an add or replace over the limit echoes the inventory
+# (`_failure_with_entries`); a replace or remove echoes the entry it overwrote (`replaced_entry`,
+# `removed_entry`, batch `replaced_entries` / `removed_entries`). Every memory-tool action is a write.
+def _add_ok(target="memory"):
+    return _result(success=True, done=True, target=target, usage="1% — 120/2,200", entry_count=3,
+                   message="Entry added.", note="Write saved. This update is complete — do not repeat it.")
+
+
+@pytest.mark.parametrize("call", [
+    # an add: nothing echoed
+    lambda g: ({"action": "add", "target": "memory", "content": g}, _add_ok()),
+    lambda g: ({"action": "replace", "target": "memory", "old_text": "kites", "new_text": g},
+               _result(success=True, done=True, target="memory", message="Entry replaced.", replaced_entry="Likes kites.")),
+    # a multi-line old_text echoed by the no-match error, beside an inventory holding the group's own earlier note
+    lambda g: ({"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"},
+               _result(success=False, error=f"No entry matched 'x\n{g}\ny'. Check current_entries below.",
+                       current_entries=[NOTE, g])),
+    # the group's own note, echoed when it is replaced or removed
+    lambda g: ({"action": "remove", "target": "memory", "old_text": "remember"},
+               _result(success=True, done=True, target="memory", message="Entry removed.",
+                       removed_entry=f"remember for later:\n{g}")),
+    # a USER.md add over the limit: the inventory comes back; the marked entries go, the group's note stays
+    lambda g: ({"action": "add", "target": "user", "content": "Likes kites."},
+               _result(success=False, error="Memory at 23,990/24,000 chars.", current_entries=[SETUP, NOTE, g, GODCONST])),
+    # a batch, by `operations` whatever `action` says
+    lambda g: ({"action": "add", "target": "memory", "operations": [{"action": "add", "content": g}]},
+               _result(success=False, error=f"Operation 1 (add): content is required. {g}")),
+    lambda g: ({"action": "batch", "target": "memory", "operations": [{"action": "remove", "old_text": "remember"}]},
+               _result(success=True, done=True, target="memory", removed_entries={"1": g})),
+], ids=["add", "replace", "no-match-echo-and-inventory", "removed-own-note", "user-add-over-limit", "operations-batch",
+        "batch-removed-entries"])
+def test_a_group_write_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md, call):
+    """Review-b ov#563 S1-d, the result half (security review of the first fold): a group may now write a
+    line equal to a setup-profile line, so the result of a write must not redact on fingerprints either, or
+    a right guess would come back as LEFT_OUT where a wrong one comes back whole. Write results are judged
+    on the marks only: the same answer, with the guess in place, for a right and a wrong guess."""
+    user_md(SETUP, NOTE)
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))  # fingerprints taken
+    assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
+    answers = []
+    for guess in (RIGHT_GUESS, WRONG_GUESS):
+        args, raw = call(guess)
+        assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+        out = gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-group")
+        answers.append(None if out is None else out.replace(guess, "<guess>"))
+        shown = raw if out is None else out
+        assert not [mark for mark in gate_copy.PRIVATE_ENTRY_MARKS if mark in shown]  # marked entries never show
+    assert answers[0] == answers[1]
+
+
+@pytest.mark.parametrize("args", [None, {}, {"action": "view"}, {"action": "search", "query": "kelp"},
+                                  {"action": "batch", "operations": []}, {"action": "ADD"}, "not a dict"])
+def test_a_result_whose_call_is_not_a_known_write_keeps_the_fingerprint_test(gate_copy, group_session, args):
+    """A view or search (Hermes's memory tool has none today), or a call whose args are missing or unknown,
+    still loses a fingerprinted line: only a known write is judged on the marks alone."""
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))
+    raw = _result(success=True, results=[RIGHT_GUESS, NOTE], current_entries=[RIGHT_GUESS, NOTE])
+    out = json.loads(gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw,
+                                                       session_id="tg-group"))
+    assert out == {"success": True, "results": [NOTE], "current_entries": [NOTE]}
+
+
+def test_a_write_result_still_loses_every_marked_entry(gate_copy, group_session):
+    args = {"action": "remove", "target": "memory", "old_text": "nothing"}
+    raw = _result(success=False, error="No entry matched 'nothing'.", current_entries=[SETUP, NOTE, GODCONST, VOTE],
+                  replaced_entries={"1": SETUP, "2": NOTE})
+    out = json.loads(gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="g"))
+    assert out["current_entries"] == [NOTE, VOTE]
+    assert out["replaced_entries"] == {"1": gate_copy.LEFT_OUT, "2": NOTE}
+    assert gate_copy.transform_memory_result(tool_name="memory", args=args, result=f"oops {SETUP}") == json.dumps(
+        {"success": False, "error": gate_copy.LEFT_OUT}, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(("args", "write"), [
+    ({"action": "add"}, True), ({"action": "replace"}, True), ({"action": "remove"}, True),
+    ({"action": "batch", "operations": [{}]}, True), ({"action": "add", "operations": [{}]}, True),
+    ({"operations": [{"action": "remove"}]}, True), ({"action": "view"}, False), ({}, False), (None, False),
+    ("add", False), ({"action": "ADD"}, False), ({"action": "batch", "operations": []}, False),
+])
+def test_which_memory_calls_are_writes(gate_copy, args, write):
+    assert gate_copy.memory_call_is_write(args) is write
 
 
 @pytest.mark.parametrize("args", [
