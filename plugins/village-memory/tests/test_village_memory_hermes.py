@@ -117,8 +117,8 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
     assert "lighthouse restoration" in block  # private session, 1M window: the whole profile
     assert report["context"]["status"] == "ok", report["context"]
     assert [hit["ref"] for hit in report["context"]["hits"]] == ["knowledge/agentvillage/upload-1758100000000.md:13"]
+    # PRIVACY (lead L32315): a group or cron session gets NO profile block through real Hermes either.
     for name in ("group", "cron"):
-        reduced = report[name]
-        (part,) = reduced["parts"]
-        assert "courtyard" in part and "lighthouse" not in part, name
-        assert reduced["added"] == 0 and reduced["profile"]["status"] == "unavailable", name
+        shared = report[name]
+        assert shared["parts"] == [], name
+        assert shared["added"] == 0 and shared["profile"]["status"] == "unavailable", name

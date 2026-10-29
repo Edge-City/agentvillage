@@ -26,8 +26,9 @@ plugins/village-memory/
   of 200,000 or more, the whole profile, at most 80,000 code points. On a smaller or unknown window,
   only the sections before `## Shared on the Context page`, within 8% of the window at 3.5 chars per
   token (25,200 on a 90K box). Both tools.
-- **Shared chat or cron run**: the reduced block (no Context page files), no tools. A tool called
-  there answers `unavailable in group sessions`.
+- **Shared chat, room or cron run**: NO profile block and no tools (lead L32315: the profile holds the
+  resident's Private lines with no per-line visibility). A tool called there answers
+  `unavailable in group sessions`.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and

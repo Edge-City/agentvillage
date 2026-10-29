@@ -663,10 +663,15 @@ class VillageMemoryProvider(MemoryProvider):
         try:
             if not enabled(self.home()):
                 return ""
+            # PRIVACY (lead L32315): the profile holds the resident's Private Context lines and carries no
+            # per-line visibility yet, so it goes into a private one-to-one session only. A group, room or cron
+            # session (anything private_session() refuses) gets no profile block at all, as it gets no tools.
+            if not self.private_session():
+                return ""
             body, _profile = self.render(where="block")
             if not body:
                 return ""
-            note = BLOCK_NOTE + (TOOLS_NOTE if self.private_session() else "")
+            note = BLOCK_NOTE + TOOLS_NOTE
             return f"{SEPARATOR}\n{BLOCK_TITLE}\n{SEPARATOR}\n{note}\n\n{body}"
         except Exception as exc:  # noqa: BLE001 - never cost a prompt build
             _log_once(f"block:error_{type(exc).__name__}", "village-memory: block failed (%s); left out",
