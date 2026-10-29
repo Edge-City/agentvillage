@@ -38,7 +38,7 @@ def test_register_wires_every_spec_hook(plugin, ctx):
         assert name in ctx.hooks, f"spec §7.1 hook {name} not registered"
     for name in plugin.EXTRA_HOOKS:
         assert name in ctx.hooks
-    assert set(ctx.hooks) == set(plugin.HOOK_BODIES) | set(plugin.GATE_HOOKS)
+    assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
 
 
 def test_hooks_accept_the_full_additive_payload(plugin, ctx):

@@ -1132,7 +1132,7 @@ def test_without_hermes_register_still_wires_every_hook(plugin, ctx, home, caplo
     monkeypatch.setitem(sys.modules, "agent.conversation_loop", None)  # import raises
     with caplog.at_level(logging.INFO, logger="av-events"):
         plugin.register(ctx)
-    assert set(ctx.hooks) == set(plugin.HOOK_BODIES) | set(plugin.GATE_HOOKS)
+    assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     assert "av-events: prompt_refresh: agent.conversation_loop not importable; left as is" in caplog.text
     ctx.fire("post_tool_call", tool_name="memory", args={}, result="{}", session_id="tg-dm-1")  # no raise
 

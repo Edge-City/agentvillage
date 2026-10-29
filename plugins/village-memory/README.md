@@ -46,8 +46,11 @@ plugins/village-memory/
     under `_profile.md` "## Setup profile"). One WARNING.
   - **The memory tool** (av-events hooks), outside a private session only: `transform_tool_result` leaves
     Private entries out of every result (`current_entries`, `matches`, `replaced_entry`, `removed_entry`,
-    `replaced_entries`, ...), and `pre_tool_call` refuses any write that adds or removes a mark, names one,
-    or replaces or removes a Private entry (one plain refusal, never the entry). A DM keeps Hermes's own tool.
+    `replaced_entries`, ...), and `pre_tool_call` refuses EVERY USER.md replace or remove, and any write
+    holding a mark, with one plain refusal whatever it matches (no membership oracle). A USER.md add with no
+    mark still works there, and MEMORY.md is unchanged. A DM keeps Hermes's own tool. "Private" needs
+    positive evidence: a direct chat type or an explicit local surface from Hermes's session context, else
+    Hermes's own session row for the session id; empty or unknown is not private, and cron never is.
   - **Fingerprints:** an entry this process has seen marked (load_from_disk, the gate, the write check) is
     still Private after its mark is gone: each line of 24 characters or more, by sha256, in memory only.
   - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against

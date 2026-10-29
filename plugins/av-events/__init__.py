@@ -1069,10 +1069,6 @@ def _hook_on_stream_end(collector: Collector, **kwargs: Any) -> None:
     _session(collector, kwargs)
 
 
-#: Hooks registered outside HOOK_BODIES because they return a value Hermes uses: the USER.md gate's
-#: memory-result filter (`_user_md_gate.transform_memory_result`, review-b #558 S2).
-GATE_HOOKS = ("transform_tool_result",)
-
 HOOK_BODIES = {
     "on_session_start": _hook_on_session_start,
     "pre_llm_call": _hook_pre_llm_call,
@@ -1081,6 +1077,9 @@ HOOK_BODIES = {
     "post_api_request": _hook_post_api_request,
     "api_request_error": _hook_api_request_error,
     "pre_tool_call": _hook_pre_tool_call,
+    # USER.md GATE (review-b #558 S2): registered as it is, outside `guarded` (build_hooks): privacy, not
+    # telemetry, so no kill switch turns it off; it never raises.
+    "transform_tool_result": _user_md_gate.transform_memory_result,
     "post_tool_call": _hook_post_tool_call,
     "on_session_end": _hook_on_session_end,
     "on_session_finalize": _hook_on_session_finalize,
@@ -1353,6 +1352,9 @@ def build_hooks(collector_ref=_collector) -> dict:
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
+        if body is _user_md_gate.transform_memory_result:
+            hooks[name] = body  # the USER.md gate's memory-result filter: not telemetry, never guarded
+            continue
         wrapped = guarded(name, collector_ref, quiet=name in QUIET_HOOKS)(body)
         # Hermes decides what to pass by inspecting the callback signature, and
         # `inspect.signature` follows `__wrapped__` through `functools.wraps`.
@@ -1515,10 +1517,6 @@ def register(ctx) -> None:
     try:
         _user_md_gate.install_user_md_gate()
     except Exception:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
-        pass
-    try:
-        ctx.register_hook("transform_tool_result", _user_md_gate.transform_memory_result)
-    except Exception:  # noqa: BLE001 - a Hermes without the hook
         pass
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.

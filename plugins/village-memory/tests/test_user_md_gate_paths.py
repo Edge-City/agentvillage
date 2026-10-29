@@ -186,20 +186,27 @@ def test_a_group_may_not_touch_a_private_entry_or_its_mark(gate, group_session, 
 
 @pytest.mark.parametrize("args", [
     {"action": "replace", "target": "user", "old_text": "Prefers calls", "content": "Prefers calls after noon."},
-    {"action": "add", "target": "user", "content": "Likes kites."},
     {"action": "remove", "target": "user", "old_text": NOTE},
-    {"action": "replace", "target": "memory", "old_text": "Tidepool", "content": "y"},   # MEMORY.md is not USER.md
+    {"action": "remove", "target": "user", "old_text": "no such text anywhere"},
+    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
+                                                         {"action": "remove", "old_text": "nothing"}]},
 ])
-def test_a_group_may_still_edit_its_other_notes(gate, group_session, user_md, args):
+def test_every_group_replace_or_remove_on_user_md_is_refused_the_same_way(gate, group_session, user_md, args):
+    """Security review (membership oracle): a refusal only when old_text hits the setup text would let a group
+    probe it one guess at a time. Every USER.md replace or remove outside a private session gets the same
+    plain refusal, whatever it matches."""
     user_md(SETUP, NOTE, GODCONST)
-    assert gate.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+    assert gate.memory_write_directive(tool_name="memory", args=args) == {
+        "action": "block", "message": gate.MEMORY_WRITE_REFUSAL}
 
 
-def test_an_exact_match_on_another_entry_is_hermess_match(gate, group_session, user_md):
-    """Hermes picks an entry equal to old_text first, so a note that happens to be a substring of the setup
-    entry's text is still editable when it is itself a whole entry."""
-    user_md(SETUP, "Tidepool Bay", NOTE)
-    args = {"action": "remove", "target": "user", "old_text": "Tidepool Bay"}
+@pytest.mark.parametrize("args", [
+    {"action": "add", "target": "user", "content": "Likes kites."},
+    {"action": "replace", "target": "memory", "old_text": "Tidepool", "content": "y"},   # MEMORY.md is not USER.md
+    {"action": "remove", "old_text": "an old note"},                                      # target defaults to memory
+])
+def test_a_group_may_still_add_to_user_md_and_edit_memory_md(gate, group_session, user_md, args):
+    user_md(SETUP, NOTE, GODCONST)
     assert gate.memory_write_directive(tool_name="memory", args=args) is None
 
 
@@ -210,11 +217,9 @@ def test_a_dm_keeps_the_whole_memory_tool(gate, dm_session, user_md):
         assert gate.memory_write_directive(tool_name="memory", args=args) is None
 
 
-def test_an_unreadable_user_md_refuses_a_group_replace(gate, group_session, monkeypatch):
-    monkeypatch.setitem(sys.modules, "tools.memory_tool_store", None)
-    args = {"action": "replace", "target": "user", "old_text": "Prefers", "content": "x"}
-    assert gate.memory_write_directive(tool_name="memory", args=args)["action"] == "block"
+def test_malformed_args_are_refused_outside_a_private_session(gate, group_session):
     assert gate.memory_write_directive(tool_name="memory", args="not a dict")["action"] == "block"
+    assert gate.memory_write_directive(tool_name="memory", args={"action": "batch", "operations": "x"})["action"] == "block"
     assert gate.memory_write_directive(tool_name="terminal", args={"command": "x"}) is None
 
 
@@ -269,3 +274,59 @@ def test_tools_md_says_never_edit_the_setup_entry(h):
     """Review-b #558 N2: the setup entry is matched by its mark, so the agent must never rewrite it."""
     tools = (h.PLUGIN_DIR.parents[1] / "skills" / "index-network" / "tools.md").read_text(encoding="utf-8")
     assert "Never edit, rewrite or remove the entry headed `[Edge City profile, written at setup]` either" in tools
+
+
+# ---- private only on positive evidence (security review: no fail-open default) -----------------------------
+
+
+@pytest.mark.parametrize(("platform", "chat_type", "session_id", "private"), [
+    ("telegram", "dm", "tg-dm", True), ("telegram", "private", "tg-dm", True), ("cli", "", "s", True),
+    ("telegram", "group", "tg-g", False), ("telegram", "", "tg-x", False), ("", "", "", False),
+    ("", "", "unknown-session", False), ("api_server", "", "s", False), ("telegram", "dm", "cron_1", False),
+    ("cron", "", "s", False),
+])
+def test_session_privacy_needs_positive_evidence(gate, monkeypatch, platform, chat_type, session_id, private):
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", platform)
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", chat_type)
+    monkeypatch.delenv("HERMES_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    monkeypatch.setitem(sys.modules, "hermes_state", None)  # no session store either
+    assert gate.session_is_private_now(session_id) is private
+
+
+@pytest.mark.parametrize(("row", "private"), [
+    ({"source": "cli", "chat_type": None}, True), ({"source": "telegram", "chat_type": "dm"}, True),
+    ({"source": "telegram", "chat_type": "group"}, False), ({"source": "telegram", "chat_type": None}, False),
+    ({"source": "cron", "chat_type": "dm"}, False), (None, False),
+])
+def test_with_no_session_context_hermess_session_row_decides(gate, monkeypatch, row, private):
+    for name in ("HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_TYPE", "HERMES_PLATFORM", "HERMES_CRON_SESSION"):
+        monkeypatch.delenv(name, raising=False)
+
+    class SessionDB:
+        def __init__(self, read_only=False):
+            assert read_only is True
+
+        def get_session(self, session_id):
+            return row if session_id == "s-1" else None
+
+        def close(self):
+            pass
+
+    module = types.ModuleType("hermes_state")
+    module.SessionDB = SessionDB
+    monkeypatch.setitem(sys.modules, "hermes_state", module)
+    assert gate.session_is_private_now("s-1") is private
+    assert gate.session_is_private_now("") is False
+
+
+def test_an_empty_gateway_session_gets_the_group_treatment(gate, monkeypatch, user_md):
+    """The fail-open default the review found: empty platform and chat type are not private."""
+    for name in ("HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_TYPE", "HERMES_PLATFORM", "HERMES_CRON_SESSION"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(sys.modules, "hermes_state", None)
+    user_md(SETUP, NOTE)
+    raw = _result(current_entries=[SETUP, NOTE])
+    assert "kelp" not in gate.transform_memory_result(tool_name="memory", result=raw, session_id="")
+    args = {"action": "remove", "target": "user", "old_text": "x"}
+    assert gate.memory_write_directive(tool_name="memory", args=args)["action"] == "block"

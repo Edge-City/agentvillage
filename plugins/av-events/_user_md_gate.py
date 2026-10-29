@@ -33,8 +33,9 @@ from typing import Any, List, Optional
 # - The memory tool (review-b #558 S2): its results carry whole entries (`current_entries`, `matches`,
 #   `replaced_entry`, `removed_entry`, ...). `transform_memory_result` (av-events' `transform_tool_result`)
 #   leaves Private entries out of them outside a private session, and `memory_write_directive` (av-events'
-#   `pre_tool_call`) refuses there any write that touches one or adds or removes a mark, so a group cannot
-#   strip a mark and then read the raw text back. A DM keeps Hermes's own memory tool, unchanged.
+#   `pre_tool_call`) refuses there every USER.md replace or remove and any write holding a mark, so a group
+#   can neither strip a mark nor probe the text. A DM keeps Hermes's own memory tool, unchanged. "Private"
+#   needs positive evidence (`session_is_private_now`): a direct chat or an explicit local surface.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
 #   prompt gate, the write check), so text derived from one is still known after its mark has gone.
@@ -61,8 +62,8 @@ GATE_LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 #: What a memory-tool result holds in place of a Private entry outside a private session.
 LEFT_OUT = "[left out: a private USER.md entry; this is not a private chat with your human]"
 #: The memory tool's refusal outside a private session (never echoes an entry).
-MEMORY_WRITE_REFUSAL = ("That entry of your human's profile notes is private: change it only in your private chat "
-                        "with them.")
+MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat with "
+                        "them. You can still add a new note here.")
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
@@ -309,14 +310,45 @@ def _session_value(name: str) -> str:
         return os.environ.get(name, "")
 
 
+def _store_session(session_id: str) -> Optional[dict]:
+    """Hermes's own session row (hermes_state.SessionDB, read only): `source` and `chat_type`, or None."""
+    try:
+        db = importlib.import_module("hermes_state").SessionDB(read_only=True)
+        try:
+            row = db.get_session(session_id)
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
+        return dict(row) if row else None
+    except Exception:  # noqa: BLE001 - no evidence
+        return None
+
+
 def session_is_private_now(session_id: Any = "") -> bool:
-    """The current tool call's session, from Hermes's session context (gateway/session_context.py): a DM or
-    the owner's own machine; never a cron run (`cron_` session ids, HERMES_CRON_SESSION, platform cron)."""
+    """Whether the current tool call's session is private, on POSITIVE evidence only (security review):
+    a direct chat type, or a local surface (cli, tui, desktop, local) set explicitly, from Hermes's session
+    context (gateway/session_context.py) or, when that says nothing, Hermes's own session row for
+    `session_id`. Empty or unknown is NOT private, and a cron run never is (`cron_` ids, HERMES_CRON_SESSION,
+    platform or source cron)."""
     sid = str(session_id or "")
     platform = _gate_norm(_session_value("HERMES_SESSION_PLATFORM") or os.environ.get("HERMES_PLATFORM", ""))
+    chat_type = _gate_norm(_session_value("HERMES_SESSION_CHAT_TYPE"))
     if sid.startswith("cron_") or _session_value("HERMES_CRON_SESSION").strip() == "1" or platform == "cron":
         return False
-    return is_private_session(_gate_norm(_session_value("HERMES_SESSION_CHAT_TYPE")), platform, "primary")
+    if chat_type:
+        return chat_type in GATE_DIRECT_CHAT_TYPES
+    if platform:
+        return platform in GATE_LOCAL_SURFACES
+    row = _store_session(sid) if sid else None
+    if not row:
+        return False
+    source, row_chat = _gate_norm(row.get("source")), _gate_norm(row.get("chat_type"))
+    if source == "cron":
+        return False
+    if row_chat:
+        return row_chat in GATE_DIRECT_CHAT_TYPES
+    return source in GATE_LOCAL_SURFACES
 
 
 def _left_out(value: Any) -> Any:
@@ -362,25 +394,13 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
         return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
 
 
-def _user_entries_on_disk() -> Optional[List[str]]:
-    """The current USER.md entries as Hermes parses them (stripped, split on ENTRY_DELIMITER), or None when
-    the file cannot be read (the write check then refuses: fail closed)."""
-    try:
-        path = importlib.import_module("tools.memory_tool_store").MemoryStore._path_for("user")
-        if not path.exists():
-            return []
-        entries = [e.strip() for e in path.read_text(encoding="utf-8-sig").split(ENTRY_DELIMITER) if e.strip()]
-    except Exception:  # noqa: BLE001
-        return None
-    remember_private_entries(entries)
-    return entries
-
-
 def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: Any = "") -> Optional[dict]:
-    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may not
-    write anything that holds a Private mark or fingerprint (an add or a new text), name one in old_text, or
-    replace or remove a USER.md entry that is Private (Hermes's own match: an exact entry first, else every
-    entry holding old_text). The refusal never echoes an entry. A DM is never refused."""
+    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may
+    not write anything that holds a Private mark or fingerprint (a content, a new text, an old_text), and
+    may not replace or remove ANY USER.md entry: one plain refusal whatever old_text matches, so the answer
+    never tells a group whether a guess is in the setup text (no membership oracle). An add to USER.md that
+    holds no mark still works (the agent may note group facts), and MEMORY.md is unchanged. A DM is never
+    refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
@@ -390,24 +410,12 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
         ops = args.get("operations") if args.get("action") == "batch" else [args]
         if not isinstance(ops, list):
             return block
-        entries: Optional[List[str]] = None
         for op in ops:
             if not isinstance(op, dict):
                 return block
-            content = op.get("content") or op.get("new_text") or ""
-            old = op.get("old_text") or ""
-            if holds_private_entry(content) or holds_private_entry(old):
+            if any(holds_private_entry(op.get(key)) for key in ("content", "new_text", "old_text")):
                 return block
-            if op.get("target", args.get("target", "memory")) != "user" or op.get("action") not in ("replace", "remove"):
-                continue
-            if entries is None:
-                entries = _user_entries_on_disk()
-                if entries is None:
-                    return block
-            old = str(old).strip()
-            exact = [e for e in entries if e == old]
-            matched = exact or ([e for e in entries if old in e] if old else [])
-            if any(holds_private_entry(e) for e in matched):
+            if op.get("target", args.get("target", "memory")) == "user" and op.get("action") != "add":
                 return block
         return None
     except Exception:  # noqa: BLE001 - fail closed
