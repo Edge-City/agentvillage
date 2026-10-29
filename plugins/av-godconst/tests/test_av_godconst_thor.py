@@ -189,7 +189,8 @@ class Query:
 
 @pytest.fixture
 def thor(home, monkeypatch):
-    monkeypatch.setenv("THOR_NUDGES_ENABLED", "1")
+    # No box flag: the box switch is AV_THOR_KEY alone (Server writes it to the .env); THOR_NUDGES_ENABLED is the cp's.
+    monkeypatch.delenv("THOR_NUDGES_ENABLED", raising=False)
     monkeypatch.setenv("AV_GODCONST_BALLOT", "0")
     return home
 
@@ -283,33 +284,31 @@ def test_a_long_card_is_trimmed_at_a_sentence_and_fits_telegram(plugin, thor):
 # --------------------------------------------------------------------------- the switch, the day, the window
 
 
-@pytest.mark.parametrize("value", [None, "", "0", "false", "off", "no", "2"])
-def test_switch_off_no_read_no_card(plugin, home, monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv("THOR_NUDGES_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("THOR_NUDGES_ENABLED", value)
+def test_the_mode_is_on_with_only_the_key(plugin, thor):
     bot, server = Bot(), Server(plugin)
-    assert pass_(plugin, bot, server) == {}
-    assert server.calls == [] and bot.sent == []
-    assert not os.path.exists(os.path.join(home, "av-godconst", "thor.json"))
+    dotenv = open(os.path.join(thor, ".env"), encoding="utf-8").read()
+    assert "THOR_NUDGES_ENABLED" not in os.environ and "THOR_NUDGES_ENABLED" not in dotenv and "AV_THOR_KEY=" in dotenv
+    pass_(plugin, bot, server)
+    assert len(bot.cards()) == 1 and len(server.reads()) == 1
 
 
-def test_the_switch_can_come_from_the_dotenv(plugin, home, monkeypatch):
-    monkeypatch.delenv("THOR_NUDGES_ENABLED", raising=False)
+@pytest.mark.parametrize("value", ["0", "false", "off", ""])
+def test_the_box_never_reads_the_cps_flag(plugin, thor, monkeypatch, value):
+    monkeypatch.setenv("THOR_NUDGES_ENABLED", value)  # the cp's flag: the cp answers empty while it is off
     bot, server = Bot(), Server(plugin)
-    with open(os.path.join(home, ".env"), "a", encoding="utf-8") as handle:
-        handle.write("THOR_NUDGES_ENABLED=1\n")
     pass_(plugin, bot, server)
     assert len(bot.cards()) == 1
 
 
-def test_a_tap_with_the_switch_off_sends_nothing(plugin, thor, monkeypatch):
+def test_the_other_on_conditions_still_hold(plugin, thor, monkeypatch):
     bot, server = Bot(), Server(plugin)
+    pass_(plugin, bot, server, now=NIGHT)  # outside 08:00-21:30 IST
+    monkeypatch.setenv("CONTROL_PLANE_URL", "https://evil.example.com")  # not a pinned host
     pass_(plugin, bot, server)
-    monkeypatch.setenv("THOR_NUDGES_ENABLED", "0")
-    q = tap(plugin, server, bot.cards()[0], 0)
-    assert q.answers == ["This card has closed."] and server.answers() == []
+    monkeypatch.setenv("CONTROL_PLANE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("AV_TENANT_ID", "not-a-uuid")
+    pass_(plugin, bot, server)
+    assert server.calls == [] and bot.sent == []
 
 
 def test_one_card_max_per_utc_day(plugin, thor):
@@ -393,7 +392,7 @@ def test_a_card_that_expires_before_its_retried_send_is_dropped(plugin, thor):
 
 
 @pytest.mark.parametrize("bad", [
-    {"title": ""}, {"title": None}, {"draft": ""}, {"draft": 5}, {"item_key": "x/y"}, {"item_key": ""}, {"channel": "Room!"},
+    {"title": ""}, {"title": None}, {"draft": ""}, {"draft": 5}, {"item_key": "x/y"}, {"item_key": ""}, {"channel": "x" * 65},
 ])
 def test_an_unusable_item_is_never_rendered(plugin, thor, bad):
     body = item()
@@ -506,15 +505,52 @@ def test_a_card_on_a_cards_intro_says_asked_with_the_other_first_name(plugin, th
     assert_nothing_private_on_disk(thor)
 
 
-def test_bs_mirror_card_renders_the_cps_text_and_says_noted(plugin, thor):
-    mirror = item(intro=True, role="b", other_first_name="Asha", title="Asha would like an intro.",
-                  draft="Asha builds sensor rigs and asked to meet builders.")
+A_PRIVATE = "Asha mentioned a private reason that only her own card may show."
+
+
+@pytest.mark.parametrize("fields", [
+    {"title": None, "draft": None, "show_evidence": False},           # cp#493's role-b item, as data sends it
+    {"title": None, "draft": None, "channel": None},                  # a null channel too
+    {"title": "Coffee about sensor rigs", "draft": A_PRIVATE, "show_evidence": True, "evidence": "Asha's evidence line."},
+])
+def test_bs_mirror_card_is_only_the_mirror_line(plugin, thor, fields):
+    mirror = item(intro=True, role="b", other_first_name="Asha")
+    mirror.update(fields)
     bot, server = Bot(), Server(plugin, [mirror])
     pass_(plugin, bot, server)
-    card = bot.cards()[0]
-    assert card.text.startswith("Asha would like an intro.\n\nAsha builds sensor rigs")  # the cp's title and draft
+    (card,) = bot.cards()
+    assert card.text == "Asha would like an intro."
+    assert A_PRIVATE not in card.text and "evidence" not in card.text and "Coffee" not in card.text
+    assert [b.text for b in card.reply_markup.inline_keyboard[0]] == ["Do it", "Not now", "Not for me"]
     assert tap(plugin, server, card, 0).answers == ["Noted."]
     assert not any(line.startswith("Asked.") for line in bot.lines())
+    assert server.answers()[0][3] == {"answer": "do_it"}
+
+
+@pytest.mark.parametrize("name", [None, "", "  "])
+def test_a_role_b_card_with_no_first_name_is_skipped(plugin, thor, caplog, name):
+    caplog.set_level(logging.DEBUG)
+    extra = {} if name is None else {"other_first_name": name}
+    bot, server = Bot(), Server(plugin, [item(intro=True, role="b", draft=A_PRIVATE, **extra)])
+    assert pass_(plugin, bot, server) == {"mirror_no_name": 1}
+    pass_(plugin, bot, server, now=LATER_SAME_DAY)
+    assert bot.sent == [] and len(server.reads()) == 1
+    lines = "\n".join(r.getMessage() for r in caplog.records)
+    assert "outcome=thor_mirror_no_name" in lines and A_PRIVATE not in lines and TITLE not in lines
+
+
+@pytest.mark.parametrize("channel", ["Telegram", "in person", "1:1 intro", "room", "x" * 64, "Café ☕"])
+def test_any_non_empty_channel_up_to_64_characters_is_accepted(plugin, thor, channel):
+    bot, server = Bot(), Server(plugin, [item(channel=channel)])
+    pass_(plugin, bot, server)
+    (card,) = bot.cards()
+    assert channel not in card.text or channel == "room" and "room" not in card.text  # never rendered
+
+
+@pytest.mark.parametrize("channel", ["", "   ", "x" * 65, None, 7])
+def test_an_empty_long_or_non_string_channel_is_refused(plugin, thor, channel):
+    bot, server = Bot(), Server(plugin, [item(channel=channel)])
+    assert pass_(plugin, bot, server) == {"read_invalid": 1}
 
 
 @pytest.mark.parametrize("fields", [
@@ -557,8 +593,8 @@ def test_the_intro_asked_line_needs_role_a_and_a_given_first_name(plugin):
 # --------------------------------------------------------------------------- 401 / 403 while the key rolls out
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_an_unauthorized_read_is_no_card_and_not_one_of_the_days_reads(plugin, thor, caplog, status):
+@pytest.mark.parametrize("status,code", [(401, "unauthorized"), (403, "unauthorized"), (404, "route_dark")])
+def test_an_unauthorized_or_dark_read_is_no_card_and_not_one_of_the_days_reads(plugin, thor, caplog, status, code):
     caplog.set_level(logging.DEBUG)
     bot, server = Bot(), Server(plugin)
     server.read_refuse = status
@@ -566,14 +602,14 @@ def test_an_unauthorized_read_is_no_card_and_not_one_of_the_days_reads(plugin, t
     times = [DAY + i * 60 for i in range(60)] + [DAY + 3600 + i * plugin.THOR_RETRY_S for i in range(1, 2 * plugin.THOR_READS_PER_DAY)]
     for now in times:
         before = len(server.reads())
-        assert pass_(plugin, bot, server, now=now) in ({}, {"unauthorized": 1})
+        assert pass_(plugin, bot, server, now=now) in ({}, {code: 1})
         if len(server.reads()) > before:
             read_at.append(now)
     assert bot.sent == []  # no resident-facing text
     assert len(read_at) > plugin.THOR_READS_PER_DAY  # never spent the day's reads
     assert all(b - a >= plugin.THOR_RETRY_S for a, b in zip(read_at, read_at[1:]))
     lines = [r.getMessage() for r in caplog.records if "thor" in r.getMessage()]
-    assert lines and set(lines) == {"av-godconst: tenant=0190a5b2 outcome=thor_unauthorized"}
+    assert lines == [f"av-godconst: tenant=0190a5b2 outcome=thor_{code}"]  # once a UTC day, not per attempt
     assert ledger(thor)["reads"] == 0 and ledger(thor)["done"] is False
     # The key lands later that day: the card arrives that same day.
     server.read_refuse = None
@@ -597,8 +633,8 @@ def test_a_network_failure_retries_after_the_backoff_and_reads_are_capped(plugin
 
 def test_a_refused_read_waits_for_the_next_day(plugin, thor):
     bot, server = Bot(), Server(plugin)
-    server.read_refuse = 404
-    assert pass_(plugin, bot, server) == {"read_refused_not_found": 1}
+    server.read_refuse = 400
+    assert pass_(plugin, bot, server) == {"read_refused_unavailable": 1}
     pass_(plugin, bot, server, now=LATER_SAME_DAY)
     assert len(server.reads()) == 1
     server.read_refuse = None
@@ -674,12 +710,16 @@ def test_no_custody_key_no_read_no_card_one_code_line(plugin, thor, monkeypatch,
     bot, server = Bot(), Server(plugin, no_key=True)
     if blank:
         monkeypatch.setenv("AV_THOR_KEY", "")
-    for now in (DAY, DAY + 60, LATER_SAME_DAY, NEXT_DAY):
+    for now in [DAY + i * 60 for i in range(60)] + [LATER_SAME_DAY]:
         assert pass_(plugin, bot, server, now=now) == {}
+    lines = [r.getMessage() for r in caplog.records if "thor" in r.getMessage()]
+    assert lines == ["av-godconst: tenant=0190a5b2 outcome=thor_no_key"]  # once a UTC day, not per pass
+    for now in (NEXT_DAY, NEXT_DAY + 60, NIGHT + 86400):
+        assert pass_(plugin, bot, server, now=now) == {}
+    lines = [r.getMessage() for r in caplog.records if "thor" in r.getMessage()]
+    assert lines == ["av-godconst: tenant=0190a5b2 outcome=thor_no_key"] * 2  # and once again the next UTC day
     assert server.calls == [] and bot.sent == []
     assert not os.path.exists(os.path.join(thor, "av-godconst", "thor.json"))
-    lines = [r.getMessage() for r in caplog.records if "thor" in r.getMessage()]
-    assert lines == ["av-godconst: tenant=0190a5b2 outcome=thor_no_key"]
 
 
 def test_a_tap_after_the_key_is_gone_posts_nothing(plugin, thor, monkeypatch):

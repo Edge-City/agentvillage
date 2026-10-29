@@ -100,7 +100,7 @@ def follow_up(choice: str, intro: bool, other_first_name: Optional[str] = None, 
 # --------------------------------------------------------------------------- the read's checks
 
 _ITEM_KEY = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_CHANNEL = re.compile(r"^[a-z0-9_-]{1,64}$")
+CHANNEL_MAX = 64  # any non-empty channel up to this length: it is never rendered (review-b S1)
 TITLE_MAX_IN = 2000
 DRAFT_MAX_IN = 16000
 EVIDENCE_MAX_IN = 4000
@@ -122,32 +122,40 @@ def utc_day(now: float) -> str:
 
 def valid_item(raw: Any) -> Optional[dict]:
     """One item, checked; None when unusable. Only the fields the card needs are kept: item_key, title, draft, channel,
-    intro (exactly true), role ("a"/"b", else None), other_first_name (a short non-empty string, else None; used only
-    for A's follow-up line, never rendered on the card), expires_at (epoch), and evidence ONLY when ``show_evidence`` is exactly true and the text is there (while it
-    is false the route sends no evidence at all: no "Why you:" line). Other keys are ignored, never rendered."""
+    intro (exactly true), role ("a"/"b", else None), other_first_name (a short non-empty string, else None), expires_at
+    (epoch), and evidence ONLY when ``show_evidence`` is exactly true and the text is there (while it is false the route
+    sends no evidence at all: no "Why you:" line). Other keys are ignored, never rendered.
+
+    A role-b item (B's mirror card, cp#493) carries title null and draft null: B never gets A's surfacing text. Its
+    title, draft, channel and evidence are not read at all (stored as empty), so null or present they can neither break
+    nor reach the card; it renders from ``other_first_name`` only (``mirror_text``). Every other item needs a non-empty
+    title and draft and a non-empty channel of at most CHANNEL_MAX characters (never rendered)."""
     if not isinstance(raw, dict):
         return None
-    key, title, draft, channel = raw.get("item_key"), raw.get("title"), raw.get("draft"), raw.get("channel")
+    key = raw.get("item_key")
     if not isinstance(key, str) or not _ITEM_KEY.fullmatch(key):
-        return None
-    if not isinstance(title, str) or not title.strip() or len(title) > TITLE_MAX_IN:
-        return None
-    if not isinstance(draft, str) or not draft.strip() or len(draft) > DRAFT_MAX_IN:
-        return None
-    if not isinstance(channel, str) or not _CHANNEL.fullmatch(channel):
         return None
     expires = epoch_from_iso(raw.get("expires_at"))
     if expires is None:
         return None
+    intro = raw.get("intro") is True
+    role = raw.get("role") if raw.get("role") in ROLES else None
+    other = raw.get("other_first_name")
+    other = other.strip() if isinstance(other, str) and 0 < len(other.strip()) <= FIRST_NAME_MAX else None
+    base = {"item_key": key, "intro": intro, "role": role, "other_first_name": other, "expires_at": expires}
+    if role == "b":
+        return {**base, "title": "", "draft": "", "channel": "", "evidence": ""}
+    title, draft, channel = raw.get("title"), raw.get("draft"), raw.get("channel")
+    if not isinstance(title, str) or not title.strip() or len(title) > TITLE_MAX_IN:
+        return None
+    if not isinstance(draft, str) or not draft.strip() or len(draft) > DRAFT_MAX_IN:
+        return None
+    if not isinstance(channel, str) or not channel.strip() or len(channel) > CHANNEL_MAX:
+        return None
     show = raw.get("show_evidence") is True
     evidence = raw.get("evidence")
     evidence = evidence.strip() if show and isinstance(evidence, str) and len(evidence) <= EVIDENCE_MAX_IN else ""
-    intro = raw.get("intro") is True
-    role = raw.get("role") if intro and raw.get("role") in ROLES else None
-    other = raw.get("other_first_name")
-    other = other.strip() if intro and isinstance(other, str) and 0 < len(other.strip()) <= FIRST_NAME_MAX else None
-    return {"item_key": key, "title": title.strip(), "draft": draft.strip(), "channel": channel, "intro": intro,
-            "role": role, "other_first_name": other, "expires_at": expires, "evidence": evidence}
+    return {**base, "title": title.strip(), "draft": draft.strip(), "channel": channel, "evidence": evidence}
 
 
 def today_item(data: Any, now: float) -> tuple:
@@ -195,7 +203,7 @@ def trim(text: str, limit: int) -> str:
 
 
 def card_text(item: dict, limit: int = TELEGRAM_MAX) -> str:
-    """The card (the copy file's shape, HTML-escaped for parse_mode HTML):
+    """The card (the copy file's shape, HTML-escaped for parse_mode HTML). A role-b card is ``mirror_text``.
 
         {title}
 
@@ -206,6 +214,8 @@ def card_text(item: dict, limit: int = TELEGRAM_MAX) -> str:
         From ODIN, one a day at most. Do it · Not now · Not for me
 
     Each field is trimmed at a sentence boundary so the whole message fits Telegram's 4096 characters."""
+    if item.get("role") == "b":
+        return mirror_text(item)
     title_cap, evidence_cap, draft_cap = 300, 600, limit
     while True:
         parts = [trim(item["title"], title_cap), trim(item["draft"], draft_cap)]
@@ -217,3 +227,12 @@ def card_text(item: dict, limit: int = TELEGRAM_MAX) -> str:
             return text
         draft_cap = int(draft_cap * 0.8)
         evidence_cap = max(80, int(evidence_cap * 0.8))
+
+
+def mirror_text(item: dict) -> str:
+    """B's mirror card (role b): ONLY the copy file's mirror line with ``other_first_name`` (A's first name), with the
+    same three taps as buttons. Never a title, draft or evidence: those are A's surfacing text and reasons (review-b
+    S3; the control plane sends title and draft null on role b). The caller skips a role-b item with no name.
+
+        {a} would like an intro."""
+    return html.escape(THOR_NUDGE_INTRO_MIRROR.format(a=item.get("other_first_name") or ""), quote=False)

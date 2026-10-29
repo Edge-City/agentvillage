@@ -46,7 +46,8 @@ and tombstones); each tap saves one rating on the elicitation's own ratings via 
 It never touches the ballot, and the shared page-open marker stays while either mode has an open page.
 
 **THOR nudge card** (third, independent mode; data's ODIN-THOR-NUDGES design section 5, product copy
-THOR-NUDGE-CARD-COPY-2026-10-29): behind ``THOR_NUDGES_ENABLED`` (off: no read, no card), the same pass reads
+THOR-NUDGE-CARD-COPY-2026-10-29): on while the box holds its ``AV_THOR_KEY`` (absent: no read, no card;
+``THOR_NUDGES_ENABLED`` is the control plane's flag, enforced there by an empty answer), the same pass reads
 ``GET /tenants/<own tenant>/thor/today`` at most once per UTC day in village daytime and sends at most one card from the
 resident's own bot (Do it / Not now / Not for me, ``avt:`` buttons, its own handler and ledger ``av-godconst/thor.json``);
 a tap posts the answer to ``.../thor/<item_key>/answer`` and shows the copy file's follow-up line. No approval class, no
@@ -1773,8 +1774,11 @@ async def _elicit_merge(query: Any, message: Any, nonce: str, field: str, positi
 #
 # The resident's daily THOR nudge (data's ODIN-THOR-NUDGES design section 5; product copy THOR-NUDGE-CARD-COPY): at most
 # one card per UTC day, from the resident's own bot in their own DM, three taps (Do it / Not now / Not for me). It rides
-# this plugin's existing pass (no poller of its own) and Telegram factory (its own ``^avt:`` handler). Dark unless
-# ``THOR_NUDGES_ENABLED`` is on: off = no read, no card, and a tap is answered "This card has closed." with nothing sent.
+# this plugin's existing pass (no poller of its own) and Telegram factory (its own ``^avt:`` handler). The box switch
+# is ``AV_THOR_KEY`` alone (present and non-blank = on; absent: no read, no card, a tap is answered "This card has
+# closed." with nothing sent). ``THOR_NUDGES_ENABLED`` is the control plane's flag: it answers empty while off, so the
+# box needs no flag of its own. Every other ON condition stays: a pinned CONTROL_PLANE_URL, the tenant uuid, the home
+# chat, 08:00-21:30 IST.
 #
 # The wire: ``GET {CONTROL_PLANE_URL}/tenants/<own tenant>/thor/today`` and ``POST .../thor/<item_key>/answer
 # {"answer": "do_it"|"not_now"|"not_for_me"}``, both with ``Authorization: Bearer $AV_THOR_KEY``: a per-tenant key the
@@ -1782,7 +1786,8 @@ async def _elicit_merge(query: Any, message: Any, nonce: str, field: str, positi
 # as AV_GODCONST_BALLOT_KEY), so agent-run code gets no copy of it through the tool and environment surface custody
 # controls; the residual is the ballot key's ($HERMES_HOME/.env stays readable by the agent's user). Never EDGEOS_API_KEY
 # (the agent can read that one) and no fallback to it: with no AV_THOR_KEY on the box the card mode is off (no read, no
-# card; one code-only log line, ``thor_no_key``). CP_HOSTS-pinned, no redirects, no proxies. The control plane is the
+# card; one code-only log line a UTC day, ``thor_no_key``; a 401/403 read logs ``thor_unauthorized`` and the dark
+# route's 404 ``thor_route_dark``, each once a UTC day; neither spends one of the day's reads). CP_HOSTS-pinned, no redirects, no proxies. The control plane is the
 # authority for everything else (approved run, consent, double opt-in for intros, expiry, one per day, the B mirror
 # card); this box renders only what the route returns and never names or contacts anyone.
 #
@@ -1794,10 +1799,9 @@ async def _elicit_merge(query: Any, message: Any, nonce: str, field: str, positi
 # it for that day (logged ``thor_send_lost``).
 #
 # Nothing private on disk: the ledger ``av-godconst/thor.json`` (0600) holds the day, read counters and, per card, its
-# nonce, the opaque item_key, the intro flag, message id, the day and the answer value; never a title, draft, evidence
+# nonce, the opaque item_key, the intro flag and role, message id, the day and the answer value; never a title, draft, evidence
 # or name. Logs: ``av-godconst: tenant=<id8> outcome=thor_<code> [k=v]``, codes and counts only.
 
-THOR_SWITCH = "THOR_NUDGES_ENABLED"
 THOR_CREDENTIAL_ENV = "AV_THOR_KEY"
 THOR_READ_PATH = "/tenants/{tenant}/thor/today"
 THOR_ANSWER_PATH = "/tenants/{tenant}/thor/{item_key}/answer"
@@ -1810,9 +1814,10 @@ THOR_CARDS_KEPT = 14
 #: A refused answer whose code means the card can no longer be answered.
 THOR_CLOSED_CODES = frozenset({"thor_unknown_item", "thor_not_yours", "thor_item_expired", "thor_already_answered",
                                "thor_nudges_off"})
-#: A read refused for the credential (the box's AV_THOR_KEY not written yet, or not accepted): no card, no text, retry
-#: after THOR_RETRY_S, and NOT one of the day's reads, so the card can still arrive that day once the key lands.
-THOR_AUTH_STATUSES = frozenset({401, 403})
+#: A read refused for the credential (the box's AV_THOR_KEY not written yet, or not accepted: 401/403) or answered by
+#: the dark control plane's unknown-route 404: no card, no text, retry after THOR_RETRY_S, and NOT one of the day's
+#: reads, so the card can still arrive that day once the key or the route lands. Each logs once a UTC day by code.
+THOR_NO_CARD_STATUSES = {401: "unauthorized", 403: "unauthorized", 404: "route_dark"}
 
 _THOR_LEDGER_LOCK = threading.RLock()
 _THOR_PASS_LOCK: Optional[asyncio.Lock] = None
@@ -1822,7 +1827,8 @@ _THOR_PENDING: dict = {}
 #: a restart the line is the plain "Noted.".
 _THOR_NAMES: dict = {}
 _thor_in_flight: set = set()
-_THOR_NO_KEY_LOGGED = False
+#: code -> the UTC day it was last logged: ``no_key`` and ``unauthorized`` log once a UTC day per box, not per attempt.
+_THOR_LOGGED_DAY: dict = {}
 #: (tenant, UTC day) -> {"reads", "done", "next_read_at"}: the day's read state in memory, so an unwritable ledger
 #: never lifts the reads-per-day cap (each GET can spend the day's item at the control plane). Today's key only.
 _THOR_DAY: dict = {}
@@ -1835,25 +1841,25 @@ def _thor_day_state(tenant: str, day: str) -> dict:
     return _THOR_DAY.setdefault(key, {"reads": 0, "done": False, "next_read_at": None})
 
 
-def thor_on(home: Optional[str] = None) -> bool:
-    return env(THOR_SWITCH, home).lower() in TRUTHY
-
-
 def thor_key(home: Optional[str] = None) -> str:
     """The custody-held THOR key, read as the ballot key is (process environment, then ``$HERMES_HOME/.env``)."""
     return env(THOR_CREDENTIAL_ENV, home)
 
 
-def thor_active(home: Optional[str] = None) -> bool:
-    """The card mode runs only with the switch on AND the custody key present; no key = off, logged once by code."""
-    global _THOR_NO_KEY_LOGGED
-    if not thor_on(home):
-        return False
+def _thor_log_daily(code: str, now: Optional[float] = None) -> None:
+    """Log `code` at most once per UTC day for this box (a condition that repeats every pass, e.g. no key)."""
+    day = T.utc_day(time.time() if now is None else now)
+    if _THOR_LOGGED_DAY.get(code) != day:
+        _THOR_LOGGED_DAY[code] = day
+        _thor_log(code)
+
+
+def thor_active(home: Optional[str] = None, now: Optional[float] = None) -> bool:
+    """The box switch is the custody key alone: present and non-blank = the card mode is on. Absent: off, logged once
+    a UTC day by code (``thor_no_key``). THOR_NUDGES_ENABLED is never read here: the control plane enforces it."""
     if thor_key(home):
         return True
-    if not _THOR_NO_KEY_LOGGED:
-        _THOR_NO_KEY_LOGGED = True
-        _thor_log("no_key")
+    _thor_log_daily("no_key", now)
     return False
 
 
@@ -1964,14 +1970,15 @@ async def thor_pass_once(bot: Any, adapter: Any, make_button: Callable, make_mar
     code -> count; never raises."""
     codes: dict = {}
 
-    def count(code: str) -> None:
+    def count(code: str, log: bool = True) -> None:
         codes[code] = codes.get(code, 0) + 1
-        _thor_log(code)
+        if log:
+            _thor_log(code)
 
     try:
-        if not thor_active(home):
-            return codes
         stamp = time.time() if now is None else now
+        if not thor_active(home, stamp):
+            return codes
         if not L.in_send_window(stamp):
             return codes
         chat = home_chat_id(adapter)
@@ -2014,10 +2021,11 @@ async def thor_pass_once(bot: Any, adapter: Any, make_button: Callable, make_mar
             ledger["reads"] = mem["reads"] = reads + 1
             reply = await asyncio.to_thread(call, "GET", THOR_READ_PATH, None, home)
             if not reply.ok:
-                if reply.status in THOR_AUTH_STATUSES:
+                if reply.status in THOR_NO_CARD_STATUSES:
                     ledger["reads"] = mem["reads"] = reads  # not one of the day's reads
                     ledger["next_read_at"] = mem["next_read_at"] = stamp + THOR_RETRY_S
-                    count("unauthorized")
+                    count(THOR_NO_CARD_STATUSES[reply.status], log=False)
+                    _thor_log_daily(THOR_NO_CARD_STATUSES[reply.status], stamp)
                 elif _thor_retryable(reply):
                     ledger["next_read_at"] = mem["next_read_at"] = stamp + THOR_RETRY_S
                     count(f"read_retry_{reply.code}")
@@ -2034,11 +2042,18 @@ async def thor_pass_once(bot: Any, adapter: Any, make_button: Callable, make_mar
                 with _THOR_LEDGER_LOCK:
                     save_thor_ledger(_merge_thor(ledger, home), home)
                 return codes
+            if item["role"] == "b" and not item["other_first_name"]:
+                # B's mirror card names A; without A's first name there is nothing safe to show (review-b S3).
+                count("mirror_no_name")
+                with _THOR_LEDGER_LOCK:
+                    save_thor_ledger(_merge_thor(ledger, home), home)
+                return codes
             nonce = secrets.token_urlsafe(6)[: T.NONCE_CHARS].replace("=", "A")
             if item["other_first_name"]:
                 _THOR_NAMES[nonce] = item["other_first_name"]
             card = {"nonce": nonce, "item_key": item["item_key"], "intro": item["intro"], "role": item["role"],
-                    "day": today, "status": "pending", "message_id": None, "chat": None, "sent_at": None, "send_failures": 0, "answer": None, "answered_at": None}
+                    "day": today, "status": "pending", "message_id": None, "chat": None, "sent_at": None,
+                    "send_failures": 0, "answer": None, "answered_at": None}
             ledger["cards"].append(card)
             _THOR_PENDING[nonce] = (T.card_text(item), item["expires_at"])
             with _THOR_LEDGER_LOCK:  # write-ahead: the card is on the ledger before the send
@@ -2095,7 +2110,7 @@ def make_thor_handler(adapter: Any = None, *, make_button: Callable, make_markup
                 return
             choice, tapped = parsed
             if not thor_active(home):
-                _thor_log("tap_switch_off")
+                _thor_log("tap_no_key")
                 await _answer(query, T.CLOSED)
                 return
             with _THOR_LEDGER_LOCK:
@@ -2226,6 +2241,6 @@ __all__ = [
     "Reply", "ballot_on", "cp_call", "cp_origin", "elicit_on", "elicit_pass_once", "home_chat_id", "is_owner_tap",
     "ledger_path", "load_elicit_ledger", "load_ledger", "make_elicit_handler", "make_handler", "mark_keyboard",
     "new_session", "pass_once", "register", "save_ledger", "sync",
-    "load_thor_ledger", "make_thor_handler", "save_thor_ledger", "thor_active", "thor_cp_call", "thor_key", "thor_on",
+    "load_thor_ledger", "make_thor_handler", "save_thor_ledger", "thor_active", "thor_cp_call", "thor_key",
     "thor_pass_once",
 ]
