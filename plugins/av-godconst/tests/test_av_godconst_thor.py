@@ -443,6 +443,9 @@ def test_a_failed_answer_keeps_the_card_and_a_retap_posts_again(plugin, thor):
     ((410, {"error": "thor_already_answered"}), "This card has closed."),
     ((410, {"error": "thor_nudges_off"}), "This card has closed."),
     ((404, {"error": "thor_unknown_item"}), "This card has closed."),
+    ((404, {"error": "not_found"}), "This card has closed."),           # the dark cp's unknown-route 404
+    ((404, {}), "This card has closed."),
+    ((400, {"error": "bad_request"}), "Could not save that. Tap again in a moment."),
     ((403, {"error": "thor_not_yours"}), "This card has closed."),
     ((401, {"error": "unauthorized"}), "Could not save that. Tap again in a moment."),
     ((400, {"error": "body_invalid"}), "Could not save that. Tap again in a moment."),
@@ -853,3 +856,17 @@ def test_two_taps_at_once_on_one_card_post_exactly_once(plugin, thor):
     assert time.monotonic() - start < 5
     assert second.answers == ["Still saving\u2026"] and first.answers == ["Noted."]
     assert server.answers() == [("POST", f"/tenants/{TENANT}/thor/{KEY1}/answer", f"Bearer {THOR_KEY}", {"answer": "do_it"})]
+
+
+def test_a_404_answer_is_closed_never_a_retry_prompt_and_logs_once_a_day(plugin, thor, caplog):
+    caplog.set_level(logging.DEBUG)
+    bot, server = Bot(), Server(plugin)
+    pass_(plugin, bot, server)
+    card = bot.cards()[0]
+    server.answer_refuse = (404, {"error": "not_found"})
+    answers = [tap(plugin, server, card, i % 3).answers for i in range(5)]
+    assert answers == [["This card has closed."]] * 5
+    assert all("Tap again" not in a[0] for a in answers)
+    assert len(card.reply_markup.inline_keyboard[0]) == 3 and ledger(thor)["cards"][0]["answer"] is None
+    lines = [r.getMessage() for r in caplog.records if "answer_" in r.getMessage()]
+    assert lines == ["av-godconst: tenant=0190a5b2 outcome=thor_answer_404"]

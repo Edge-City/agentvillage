@@ -2134,6 +2134,12 @@ def make_thor_handler(adapter: Any = None, *, make_button: Callable, make_markup
             path = THOR_ANSWER_PATH.replace("{item_key}", urllib.parse.quote(card["item_key"], safe=""))
             reply = await asyncio.to_thread(call, "POST", path, {THOR_ANSWER_FIELD: value}, home)
             if not reply.ok:
+                # ANY 404 is closed: thor_unknown_item, or the dark/absent route's unknown-route 404 (the card can never
+                # be saved there), logged once a UTC day and never answered with a retry prompt (review-b L33153).
+                if reply.status == 404:
+                    _thor_log_daily("answer_404", clock())
+                    await _answer(query, T.CLOSED)
+                    return
                 closed = reply.status is not None and 400 <= reply.status < 500 and reply.code in THOR_CLOSED_CODES
                 _thor_log("answer_closed" if closed else f"answer_failed_{reply.code}")
                 await _answer(query, T.CLOSED if closed else T.FAILED)
