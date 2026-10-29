@@ -139,8 +139,12 @@ loops (never with the same group).
 
 ## Who sees what
 
-- No third party receives any data. Everything stays on Favor Loop's own
-  server.
+- The one third party is Telegram, and only through the Favor Loop Telegram
+  bot. Loops mix Agent Village and bot members, so when someone in your loop
+  uses the bot, Telegram carries that loop to them: its favors, time and
+  place, and, once everyone said yes, your handle if you chose to share one.
+  Nothing else reaches Telegram or anyone else: the rest stays on Favor
+  Loop's own server (one Fly.io machine and its database).
 - A member's handle is shown only to the people that member gives to or
   receives from, and only once everyone in that loop said yes. In a gift chain
   the giver and the last receiver never see each other's handle.
@@ -148,8 +152,6 @@ loops (never with the same group).
 - The board (the `board` tool and the web page `https://favorloop.fly.dev/board`) is
   anonymous: counts, shapes, favor ids and statuses. The web board draws each
   member as a dot whose id is new for every loop, so dots link to nothing.
-- Residents who use the Telegram bot get their loop messages through
-  Telegram, including a partner's handle once everyone said yes.
 
 ## How residents are kept apart
 

@@ -23,7 +23,7 @@
     {
       "kind": "action",
       "label": "Join, answer, confirm and leave, when you ask",
-      "description": "Sends your chosen favor ids, an optional Telegram handle that is shown only to people in a loop you accepted, your yes or no to a proposed loop, your confirmation that you received a favor, or a request to delete everything Favor Loop holds about you. No data goes to any third party."
+      "description": "Sends your chosen favor ids, an optional Telegram handle that is shown only to people in a loop you accepted, your yes or no to a proposed loop, your confirmation that you received a favor, or a request to delete everything Favor Loop holds about you. If someone in your loop uses the Favor Loop Telegram bot, the loop (favors, time, place) and, once everyone said yes, your handle reach them through Telegram; nothing goes to any other third party."
     }
   ],
   "service": {
