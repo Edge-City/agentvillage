@@ -44,24 +44,25 @@ plugins/village-memory/
   - **Fail closed:** a Hermes without that seam gets the store gate instead: `MemoryStore.format_for_system_prompt`
     leaves the Private entries out of the USER.md block for EVERY session (the DM still has the setup text
     under `_profile.md` "## Setup profile"). One WARNING.
-  - **The memory tool** (av-events hooks), outside a private session only: `transform_tool_result` leaves
+  - **The memory tool** (av-events hooks), outside a private session only, keyed on the call's target and
+    action, never its content (review-b ov#563 S1-d): `pre_tool_call` refuses EVERY USER.md write (an add,
+    a replace, a remove, a batch on USER.md or with an op naming it) with one message, "Your human's
+    profile notes (USER.md) can only be changed in your private chat with them. You can still note this
+    in MEMORY.md."; a MEMORY.md write goes through whatever it holds. `transform_tool_result` leaves
     Private entries out of every result (`current_entries`, `matches`, `replaced_entry`, `removed_entry`,
-    `replaced_entries`, ...), and `pre_tool_call` refuses EVERY USER.md replace or remove, and any write
-    holding a mark. The write check decides only on what the session cannot vary (the public marks, the
-    target, the action), never on the Private text, so a refusal never confirms a guessed line (no
-    membership oracle; review-b ov#563 S1-d). For the same reason the result of a memory write (add,
-    replace, remove, a batch: every action Hermes's memory tool has) is judged on the marks only there,
-    so a line the session supplied or stored earlier reads the same whether or not it is in the setup
-    text; a result whose call is not a known write keeps the fingerprint test. A refused add is told so
-    without being offered an add (`MEMORY_WRITE_REFUSAL_ADD`). A USER.md add with no mark still works
-    there, and MEMORY.md is unchanged.
-    A DM keeps Hermes's own tool. "Private" needs positive evidence: a direct chat type or an explicit local
-    surface from Hermes's session context, else Hermes's own session row for the session id; empty or
-    unknown (`thread`, `forum`, `supergroup`, anything else) is not private, and cron never is.
+    `replaced_entries`, ...): a USER.md call's result by marks and fingerprints, a MEMORY.md call's result
+    by marks only, so a group's own MEMORY.md note reads back the same whether or not it equals a Private
+    line (no membership oracle). A call whose target is unknown counts as USER.md. A DM keeps Hermes's own
+    tool. "Private" needs positive evidence: a direct chat type or an explicit local surface from Hermes's
+    session context, else Hermes's own session row for the session id; empty or unknown (`thread`,
+    `forum`, `supergroup`, anything else) is not private, and cron never is.
+    Before ov#563's fold a group could still add a USER.md note with no mark; it now notes it in MEMORY.md
+    (a step past L33367, for the lead and Carter to rule; review-b N6-d covers the replace/remove half).
   - **Fingerprints:** an entry this process has seen marked (load_from_disk, the prompt gate) is still
-    Private after its mark is gone, for the prompt gate (not the write check, not a write's result): each
-    line of 24 characters or more, by sha256, in memory only. One set per process, on Hermes's
-    `MemoryStore` class (`village_private_line_digests`), read by both copies of the gate (ov#563 N4-d).
+    Private after its mark is gone, for the prompt gate and USER.md results (not MEMORY.md results, not
+    the write check): each line of 24 characters or more, by sha256, in memory only. One set per process,
+    on Hermes's `MemoryStore` class (`village_private_line_digests`), read by both copies of the gate
+    (ov#563 N4-d).
   - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
     the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
     when both are `seam`.

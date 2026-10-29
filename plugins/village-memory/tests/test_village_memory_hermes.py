@@ -114,9 +114,10 @@ report["strip_block"] = av_gate.memory_write_directive(tool_name="memory", args=
 os.environ["HERMES_SESSION_CHAT_TYPE"] = "dm"
 report["miss_dm"] = av_gate.transform_memory_result(tool_name="memory", result=miss, session_id="tg-dm")
 
-# Review-b ov#563 S1-d on Hermes's own tool and result shapes: a group writes a right guess of a setup line
-# and a wrong one of the same length; the write check lets both through and every answer reads the same
-# with the guess swapped. The probe copy sees the provider's load-time fingerprints (N4-d: one set).
+# Review-b ov#563 S1-d on Hermes's own tool and result shapes: a group notes a right guess of a setup line
+# in MEMORY.md and a wrong one of the same length; the write check lets both through and every answer reads
+# the same with the guess swapped; a USER.md add is refused whatever it holds; a USER.md read-back still
+# loses the fingerprinted line. The probe copy sees the provider's load-time fingerprints (N4-d: one set).
 os.environ["HERMES_SESSION_CHAT_TYPE"] = "group"
 right, wrong = "Synthetic Resident, Tidepool Bay. Builds kelp sensors.", "Synthetic Resident, Tidepool Bay. Builds kelp sensers."
 report["s1d_fingerprints"] = [av_gate.holds_private_entry(right), av_gate.holds_private_entry(wrong)]
@@ -135,8 +136,11 @@ for name, guess in (("right", right), ("wrong", wrong)):
         seen.append([directive, (raw if out is None else out).replace(guess, "<guess>")])
     answers[name] = seen
 report["s1d_answers"] = answers
-report["s1d_view"] = av_gate.transform_memory_result(tool_name="memory", args={"action": "view"},
-                                                     result=json.dumps({"current_entries": [right]}), session_id="tg-group")
+report["s1d_user_add"] = [av_gate.memory_write_directive(tool_name="memory", session_id="tg-group",
+                                                         args={"action": "add", "target": "user", "content": g})
+                          for g in (right, wrong)]
+report["s1d_user_view"] = av_gate.transform_memory_result(tool_name="memory", args={"action": "view", "target": "user"},
+                                                          result=json.dumps({"current_entries": [right]}), session_id="tg-group")
 print(json.dumps(report))
 '''
 
@@ -206,14 +210,16 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
     assert "Prefers calls before noon." in report["miss_group"]
     assert report["miss_dm"] is None
     assert report["strip_block"]["action"] == "block"
-    # S1-d on Hermes's own memory tool: a right and a wrong guess get the same answers, the write results are
-    # judged on the marks only, and a result whose call is not a write still loses the fingerprinted line.
+    # S1-d on Hermes's own memory tool: a right and a wrong MEMORY.md guess get the same answers (MEMORY.md
+    # results are judged on the marks only), a USER.md add is refused either way, and a USER.md read-back
+    # still loses the fingerprinted line.
     assert report["s1d_fingerprints"] == [True, False]
     right, wrong = report["s1d_answers"]["right"], report["s1d_answers"]["wrong"]
     assert right == wrong, (right, wrong)
     assert [directive for directive, _ in right] == [None] * 4
     assert '"Entry added."' in right[0][1] and "No entry matched" in right[1][1] and "<guess>" in right[2][1]
-    assert json.loads(report["s1d_view"])["current_entries"] == []
+    assert report["s1d_user_add"][0] == report["s1d_user_add"][1] and report["s1d_user_add"][0]["action"] == "block"
+    assert json.loads(report["s1d_user_view"])["current_entries"] == []
 
 
 _CANARY = Path(__file__).resolve().parents[3] / "scripts" / "check-user-md-gate.py"

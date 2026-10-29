@@ -1209,8 +1209,8 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
                 pass
             return guard
         # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d): outside a private session the memory tool may not
-        # replace or remove a USER.md entry or write a Private mark (marks, target and action only, never the
-        # Private text). A block beats anything but the EdgeOS guard.
+        # write USER.md at all (target only, never the content); MEMORY.md is unchanged. A block beats
+        # anything but the EdgeOS guard.
         memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
                                                            kwargs.get("session_id"))
         if memory_block is not None:

@@ -61,13 +61,17 @@ def test_register_wires_the_memory_result_filter(plugin, ctx, hermes_seams):
     assert ctx.fire("transform_tool_result", tool_name="terminal", args={}, result=raw, session_id="tg-group") == []
 
 
-def test_pre_tool_call_refuses_a_group_user_md_edit_and_lets_an_add_through(plugin, ctx, hermes_seams, monkeypatch):
+def test_pre_tool_call_refuses_a_group_user_md_write_and_lets_a_memory_md_note_through(plugin, ctx, hermes_seams,
+                                                                                         monkeypatch):
     plugin.register(ctx)
     gate = sys.modules[f"{plugin.__name__}._user_md_gate"]
     args = {"action": "replace", "target": "user", "old_text": "Tidepool Bay", "content": "Harbour"}
     results = ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-group", task_id="t")
     assert {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL} in results
-    ok = {"action": "add", "target": "user", "content": "Brings snacks to the Friday meetup."}
+    add_user = {"action": "add", "target": "user", "content": "Brings snacks to the Friday meetup."}
+    results = ctx.fire("pre_tool_call", tool_name="memory", args=add_user, session_id="tg-group", task_id="t")
+    assert {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL} in results
+    ok = {"action": "add", "target": "memory", "content": "Brings snacks to the Friday meetup."}
     assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=ok, session_id="tg-group", task_id="t")
                 if isinstance(r, dict) and r.get("action") == "block"]
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")

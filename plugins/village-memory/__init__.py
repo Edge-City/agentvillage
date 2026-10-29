@@ -618,19 +618,20 @@ def _norm(value: Any) -> str:
 # - The memory tool (review-b #558 S2): its results carry whole entries (`current_entries`, `matches`,
 #   `replaced_entry`, `removed_entry`, ...). `transform_memory_result` (av-events' `transform_tool_result`)
 #   leaves Private entries out of them outside a private session, and `memory_write_directive` (av-events'
-#   `pre_tool_call`) refuses there every USER.md replace or remove and any write holding a mark, so a group
-#   can neither strip a mark nor probe the text. A DM keeps Hermes's own memory tool, unchanged. "Private"
-#   needs positive evidence (`session_is_private_now`): a direct chat or an explicit local surface.
+#   `pre_tool_call`) refuses there every USER.md write, so a group can neither strip a mark nor probe the
+#   text. A DM keeps Hermes's own memory tool, unchanged. "Private" needs positive evidence
+#   (`session_is_private_now`): a direct chat or an explicit local surface.
+# - Outside a private session the memory tool's answers key only on the call's target and action, never on
+#   its content (review-b ov#563 S1-d): every USER.md write (add, replace, remove, a batch op on USER.md)
+#   is refused with one message, every MEMORY.md write goes through whatever it holds; a USER.md result is
+#   redacted on marks and fingerprints, a MEMORY.md result on marks only. So no answer differs between a
+#   right and a wrong guess of a Private line, whether the call carries the guess or an earlier call stored
+#   it in MEMORY.md. A call whose target is unknown (args missing or malformed) counts as USER.md.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
-#   prompt gate), so text derived from one is still known after its mark has gone. The prompt gate uses
-#   fingerprints. Outside a private session the memory tool's answer never does (review-b ov#563 S1-d):
-#   the write check decides only on what the session cannot vary (the public marks, the target, the
-#   action), and the result of a memory WRITE (add, replace, remove, a batch: every action Hermes's memory
-#   tool has) is judged on the marks only, so neither a refusal nor a redaction confirms a guessed line,
-#   whether the call echoes it or an earlier call stored it. A result whose call is not a known write
-#   keeps the fingerprint test. One fingerprint set per process, on Hermes's `MemoryStore` class, read by
-#   both copies of this block (review-b ov#563 N4-d).
+#   prompt gate), so text derived from one is still known after its mark has gone (the prompt gate and
+#   USER.md results). One fingerprint set per process, on Hermes's `MemoryStore` class, read by both copies
+#   of this block (review-b ov#563 N4-d).
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -653,19 +654,13 @@ GATE_DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
 GATE_LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 #: What a memory-tool result holds in place of a Private entry outside a private session.
 LEFT_OUT = "[left out: a private USER.md entry; this is not a private chat with your human]"
-#: The memory tool's refusal of a replace or remove outside a private session (never echoes an entry); an
-#: add without a mark still works there, so it says so.
-MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat with "
-                        "them. You can still add a new note here.")
-#: The refusal of an add (one holding a Private mark): no "you can still add" (review-b ov#563 N3-d).
-MEMORY_WRITE_REFUSAL_ADD = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat "
-                            "with them. That note holds a private entry mark.")
+#: The memory tool's one refusal outside a private session: any USER.md write (never echoes an entry; true
+#: for an add, a replace and a remove alike, review-b ov#563 N3-d).
+MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed in your private chat with them. "
+                        "You can still note this in MEMORY.md.")
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
-#: The memory tool's write actions (tools/memory_tool.py `_STORE_ACTIONS`; a non-empty `operations` is a
-#: batch whatever `action` says). Hermes's memory tool has no other action.
-MEMORY_WRITE_ACTIONS = frozenset({"add", "replace", "remove"})
 #: Set on Hermes's `tools.memory_tool_store.MemoryStore` class: the process's one fingerprint set, whichever
 #: copy of this block installed the gates (review-b ov#563 N4-d).
 DIGESTS_ATTR = "village_private_line_digests"
@@ -749,14 +744,14 @@ def remember_private_entries(entries: Any) -> None:
 
 
 def holds_private_mark(text: Any) -> bool:
-    """A Private mark (a public constant) in `text`. What the write check decides on: the session cannot learn
-    anything from it that it did not already know."""
+    """A Private mark (a public constant) in `text`: what a MEMORY.md result is judged on outside a private
+    session (the session cannot learn anything from it that it did not already know)."""
     return isinstance(text, str) and any(mark in text for mark in PRIVATE_ENTRY_MARKS)
 
 
 def holds_private_entry(text: Any) -> bool:
-    """A Private mark in `text`, or a line of an entry this process has seen marked (the prompt gate and the
-    result filter; never the write check)."""
+    """A Private mark in `text`, or a line of an entry this process has seen marked (the prompt gate and
+    USER.md results; never a MEMORY.md result or the write check)."""
     if not isinstance(text, str):
         return False
     if holds_private_mark(text):
@@ -991,10 +986,17 @@ def session_is_private_now(session_id: Any = "") -> bool:
     return source in GATE_LOCAL_SURFACES
 
 
-def memory_call_is_write(args: Any) -> bool:
-    """Whether a memory-tool call is a write, as Hermes dispatches it (tools/memory_tool.py `memory_tool`: a
-    non-empty `operations` runs a batch whatever `action` says). Unknown or missing args: not known to be one."""
-    return isinstance(args, dict) and (bool(args.get("operations")) or args.get("action") in MEMORY_WRITE_ACTIONS)
+def memory_call_target(args: Any) -> str:
+    """The store a memory-tool call reaches, as Hermes runs it (tools/memory_tool.py `memory_tool`: `target`
+    None is memory; a batch, a non-empty `operations` whatever `action` says, lands on the call's own
+    target). "memory" only when the call says so; "user" for anything else, an op of a batch naming
+    `target: user` and missing or malformed args included (fail closed)."""
+    if not isinstance(args, dict):
+        return "user"
+    ops = args.get("operations")
+    if isinstance(ops, list) and any(not isinstance(op, dict) or op.get("target") == "user" for op in ops):
+        return "user"
+    return "memory" if args.get("target") in (None, "memory") else "user"
 
 
 def _left_out(value: Any, holds: Any = None) -> Any:
@@ -1032,14 +1034,14 @@ def redact_memory_result(result: Any, fingerprints: bool = True) -> Optional[str
 def transform_memory_result(tool_name: Any = None, result: Any = None, session_id: Any = "", args: Any = None,
                             **_kwargs: Any) -> Optional[str]:
     """Hermes's `transform_tool_result` (model_tools.py:848-865, which hands it the call's `args`): outside a
-    private session, the memory tool's result never carries a Private USER.md entry by its mark. A write's
-    result (`memory_call_is_write`) is judged on the marks only, so whether a line the session supplied or
-    stored is in the Private text never changes the answer (review-b ov#563 S1-d); any other result keeps
-    the fingerprint test too. None leaves the result as it is."""
+    private session, the memory tool's result never carries a Private USER.md entry. A USER.md call's result
+    (`memory_call_target`; args missing count as one) is judged on marks and fingerprints; a MEMORY.md
+    call's result on the marks only, so a group's own MEMORY.md note reads back the same whether or not it
+    equals a Private line (review-b ov#563 S1-d). None leaves the result as it is."""
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
             return None
-        out = redact_memory_result(result, fingerprints=not memory_call_is_write(args))
+        out = redact_memory_result(result, fingerprints=memory_call_target(args) == "user")
         if out is not None:
             _gate_log_once("user_gate:memory_result", "USER.md gate: private entries left out of a memory result")
         return out
@@ -1048,38 +1050,22 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
 
 
 def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: Any = "") -> Optional[dict]:
-    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may
-    not write anything that holds a Private mark (a content, a new text, an old_text), and may not replace
-    or remove ANY USER.md entry. It decides only on what the session cannot vary: the marks (public
-    constants), the target and the action, never on the Private text itself (no fingerprints here: review-b
-    ov#563 S1-d), so the answer never tells a group whether a guess is in the setup text (no membership
-    oracle). An add to USER.md that holds no mark still works (the agent may note group facts), and
-    MEMORY.md is unchanged. A refused add gets MEMORY_WRITE_REFUSAL_ADD, which does not offer an add
-    (N3-d). A DM is never refused."""
+    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may not
+    write USER.md at all (an add, a replace, a remove, a batch on USER.md or with an op naming it), and may
+    write MEMORY.md whatever the write holds. It decides only on the call's target and action, never on its
+    content (review-b ov#563 S1-d): the answer never tells a group whether a guess is in the setup text (no
+    membership oracle). One refusal, MEMORY_WRITE_REFUSAL, true in every case (N3-d). A DM is never
+    refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
             return None
         if not isinstance(args, dict):
             return block
-        # As Hermes runs the call (tools/memory_tool.py `memory_tool`): a non-empty `operations` is a batch
-        # whatever `action` says, and every op of it lands on the call's own target (an op's `target` is
-        # not read; a USER.md one is still refused here, fail closed).
-        batch = bool(args.get("operations")) or args.get("action") == "batch"
-        ops = args.get("operations") if batch else [args]
-        if not isinstance(ops, list):
+        ops = args.get("operations")
+        if (ops or args.get("action") == "batch") and not isinstance(ops, list):
             return block
-        target = "memory" if args.get("target") is None else args.get("target")
-        for op in ops:
-            if not isinstance(op, dict):
-                return block
-            if any(holds_private_mark(op.get(key)) for key in ("content", "new_text", "old_text")):
-                if op.get("action") == "add":
-                    return {"action": "block", "message": MEMORY_WRITE_REFUSAL_ADD}
-                return block
-            if "user" in (target, op.get("target")) and op.get("action") != "add":
-                return block
-        return None
+        return block if memory_call_target(args) == "user" else None
     except Exception:  # noqa: BLE001 - fail closed
         return block
 

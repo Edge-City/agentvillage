@@ -173,53 +173,62 @@ def test_a_result_that_is_not_json_is_replaced_whole(gate, group_session):
     assert out == {"success": False, "error": gate.LEFT_OUT}
 
 
-# ---- the memory tool's writes ---------------------------------------------------------------------------
+# ---- the memory tool's writes: target only, never content (review-b ov#563 S1-d) -----------------------
 
-
-@pytest.mark.parametrize(("args", "refusal"), [
-    ({"action": "replace", "target": "user", "old_text": "Builds kelp sensors", "content": "Builds kelp sensors"},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"action": "remove", "target": "user", "old_text": "Tidepool Bay"}, "MEMORY_WRITE_REFUSAL"),
-    ({"action": "remove", "target": "user", "old_text": "one question at a time"}, "MEMORY_WRITE_REFUSAL"),
-    ({"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
-     "MEMORY_WRITE_REFUSAL_ADD"),
-    ({"action": "add", "target": "memory",
-      "content": "[God Constitution conversation, kept by the Agent Village control plane]"}, "MEMORY_WRITE_REFUSAL_ADD"),
-    ({"action": "replace", "target": "memory", "old_text": "x", "content": "[Edge City profile, written at setup]"},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
-                                                          {"action": "replace", "old_text": "Tidepool", "content": "y"}]},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"action": "batch", "target": "memory", "operations": [
-        {"action": "add", "content": "fine"}, {"action": "add", "content": "[Edge City profile, written at setup]"}]},
-     "MEMORY_WRITE_REFUSAL_ADD"),
-    ({"action": "replace", "target": "user", "old_text": "", "content": "y"} | {"old_text": "Synthetic Resident"},
-     "MEMORY_WRITE_REFUSAL"),
-])
-def test_a_group_may_not_touch_a_private_entry_or_its_mark(gate_copy, group_session, user_md, args, refusal):
-    user_md(SETUP, NOTE, GODCONST)
-    block = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
-    assert block == {"action": "block", "message": getattr(gate_copy, refusal)}
-    assert "kelp" not in block["message"] and "Tidepool" not in block["message"]
-
-
-def test_a_refused_add_is_not_told_to_add(gate_copy):
-    """Review-b ov#563 N3-d: the replace/remove refusal offers an add; the refusal of an add (a marked one)
-    does not, and neither echoes an entry."""
-    assert gate_copy.MEMORY_WRITE_REFUSAL.endswith("You can still add a new note here.")
-    assert "add" not in gate_copy.MEMORY_WRITE_REFUSAL_ADD.lower()
-    assert gate_copy.MEMORY_WRITE_REFUSAL_ADD.startswith(gate_copy.MEMORY_WRITE_REFUSAL.split(". ")[0])
-    for mark in gate_copy.PRIVATE_ENTRY_MARKS:
-        assert mark not in gate_copy.MEMORY_WRITE_REFUSAL_ADD
-
-
-# ---- the write check is no oracle (review-b ov#563 S1-d) -------------------------------------------------
-
-#: A whole line of SETUP (fingerprinted once seen marked), and a wrong guess of the same length class.
+#: A whole line of SETUP (fingerprinted once seen marked), and a wrong guess of the same length.
 RIGHT_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the harbour."
 WRONG_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the estuary."
+REFUSAL_TEXT = ("Your human's profile notes (USER.md) can only be changed in your private chat with them. "
+                "You can still note this in MEMORY.md.")
+
+
+@pytest.mark.parametrize("args", [
+    {"action": "add", "target": "user", "content": "Likes kites."},
+    {"action": "add", "target": "user", "content": RIGHT_GUESS},
+    {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
+    {"action": "replace", "target": "user", "old_text": "Builds kelp sensors", "content": "Builds kelp sensors"},
+    {"action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"},
+    {"action": "replace", "target": "user", "old_text": "Prefers calls", "content": "Prefers calls after noon."},
+    {"action": "remove", "target": "user", "old_text": "Tidepool Bay"},
+    {"action": "remove", "target": "user", "old_text": "one question at a time"},
+    {"action": "remove", "target": "user", "old_text": NOTE},
+    {"action": "remove", "target": "user", "old_text": "no such text anywhere"},
+    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"}]},
+    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
+                                                         {"action": "replace", "old_text": "Tidepool", "content": "y"}]},
+    {"action": "batch", "target": "memory", "operations": [{"action": "add", "target": "user", "content": "x"}]},
+])
+def test_a_group_may_not_write_user_md_at_all(gate_copy, group_session, user_md, args):
+    """Every USER.md write outside a private session (an add too, a step past L33367) gets the same plain
+    refusal, whatever it holds or matches, so no answer probes the setup text."""
+    user_md(SETUP, NOTE, GODCONST)
+    block = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
+    assert block == {"action": "block", "message": REFUSAL_TEXT}
+
+
+@pytest.mark.parametrize("args", [
+    {"action": "add", "target": "memory", "content": "Likes kites."},
+    {"action": "add", "target": "memory", "content": RIGHT_GUESS},
+    {"action": "add", "target": "memory", "content": "[God Constitution conversation, kept by the Agent Village control plane]"},
+    {"action": "replace", "target": "memory", "old_text": "[Edge City profile, written at setup]", "content": "y"},
+    {"action": "replace", "target": "memory", "old_text": "Tidepool", "new_text": RIGHT_GUESS},
+    {"action": "remove", "old_text": "an old note"},                                     # target defaults to memory
+    {"action": "add", "target": None, "content": "Likes kites."},
+    {"action": "batch", "target": "memory", "operations": [{"action": "add", "content": RIGHT_GUESS},
+                                                           {"action": "remove", "old_text": "old"}]},
+])
+def test_a_group_may_write_memory_md_whatever_it_holds(gate_copy, group_session, user_md, args):
+    """MEMORY.md is unchanged: a mark is a public constant, and a group's own marked MEMORY.md note only
+    ever redacts for that group."""
+    user_md(SETUP, NOTE, GODCONST)
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+
+
+def test_the_one_refusal_is_true_for_every_user_md_write(gate_copy):
+    """Review-b ov#563 N3-d: one message, true for an add, a replace and a remove alike; it names no entry."""
+    assert gate_copy.MEMORY_WRITE_REFUSAL == REFUSAL_TEXT
+    assert not hasattr(gate_copy, "MEMORY_WRITE_REFUSAL_ADD")
+    assert not [mark for mark in gate_copy.PRIVATE_ENTRY_MARKS if mark in REFUSAL_TEXT]
 
 
 @pytest.mark.parametrize("make_args", [
@@ -239,9 +248,8 @@ WRONG_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the est
         "replace-memory-new_text", "remove-memory", "remove-default-target", "replace-user", "remove-user", "batch"])
 def test_a_right_guess_of_a_setup_line_gets_the_same_answer_as_a_wrong_one(gate_copy, group_session, user_md,
                                                                             make_args):
-    """Review-b ov#563 S1-d: outside a private session the write check decides only on the marks, the target
-    and the action. A group that guesses a whole setup-profile line exactly gets the answer a wrong guess
-    gets, so the refusal confirms nothing (the fingerprints still filter results)."""
+    """Review-b ov#563 S1-d: a group that guesses a whole setup-profile line exactly gets the answer a wrong
+    guess gets, so the write check confirms nothing."""
     user_md(SETUP, NOTE)
     gate_copy.shared_user_block(user_block(SETUP, NOTE))  # this process saw the entry marked: fingerprints taken
     assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
@@ -250,52 +258,50 @@ def test_a_right_guess_of_a_setup_line_gets_the_same_answer_as_a_wrong_one(gate_
     assert right == wrong
 
 
-def test_a_guessed_setup_line_may_be_noted_in_a_group(gate_copy, group_session, user_md):
+def test_a_guessed_setup_line_goes_to_memory_md_not_user_md(gate_copy, group_session, user_md):
     user_md(SETUP, NOTE)
     gate_copy.shared_user_block(user_block(SETUP, NOTE))
-    for target in ("memory", "user"):
-        args = {"action": "add", "target": target, "content": RIGHT_GUESS}
-        assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+    note = {"action": "add", "target": "memory", "content": RIGHT_GUESS}
+    assert gate_copy.memory_write_directive(tool_name="memory", args=note, session_id="tg-group") is None
+    profile = {"action": "add", "target": "user", "content": RIGHT_GUESS}
+    assert gate_copy.memory_write_directive(tool_name="memory", args=profile, session_id="tg-group") == {
+        "action": "block", "message": REFUSAL_TEXT}
 
 
 # The memory tool's result shapes (Hermes v2026.9.24 tools/memory_tool_store.py): a write's success never
 # echoes the entries (`_success_response`); a no-match edit echoes old_text in its error and the target's
 # whole inventory (`_locate`: `current_entries`); an add or replace over the limit echoes the inventory
 # (`_failure_with_entries`); a replace or remove echoes the entry it overwrote (`replaced_entry`,
-# `removed_entry`, batch `replaced_entries` / `removed_entries`). Every memory-tool action is a write.
+# `removed_entry`, batch `replaced_entries` / `removed_entries`). A view stands for any read-back.
 def _add_ok(target="memory"):
     return _result(success=True, done=True, target=target, usage="1% — 120/2,200", entry_count=3,
                    message="Entry added.", note="Write saved. This update is complete — do not repeat it.")
 
 
 @pytest.mark.parametrize("call", [
-    # an add: nothing echoed
     lambda g: ({"action": "add", "target": "memory", "content": g}, _add_ok()),
+    lambda g: ({"action": "view", "target": "memory"}, _result(success=True, current_entries=[NOTE, g])),
     lambda g: ({"action": "replace", "target": "memory", "old_text": "kites", "new_text": g},
                _result(success=True, done=True, target="memory", message="Entry replaced.", replaced_entry="Likes kites.")),
-    # a multi-line old_text echoed by the no-match error, beside an inventory holding the group's own earlier note
     lambda g: ({"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"},
                _result(success=False, error=f"No entry matched 'x\n{g}\ny'. Check current_entries below.",
                        current_entries=[NOTE, g])),
-    # the group's own note, echoed when it is replaced or removed
     lambda g: ({"action": "remove", "target": "memory", "old_text": "remember"},
                _result(success=True, done=True, target="memory", message="Entry removed.",
                        removed_entry=f"remember for later:\n{g}")),
-    # a USER.md add over the limit: the inventory comes back; the marked entries go, the group's note stays
-    lambda g: ({"action": "add", "target": "user", "content": "Likes kites."},
-               _result(success=False, error="Memory at 23,990/24,000 chars.", current_entries=[SETUP, NOTE, g, GODCONST])),
-    # a batch, by `operations` whatever `action` says
+    lambda g: ({"action": "add", "target": "memory", "content": "Likes kites."},
+               _result(success=False, error="Memory at 2,190/2,200 chars.", current_entries=[NOTE, g])),
     lambda g: ({"action": "add", "target": "memory", "operations": [{"action": "add", "content": g}]},
                _result(success=False, error=f"Operation 1 (add): content is required. {g}")),
-    lambda g: ({"action": "batch", "target": "memory", "operations": [{"action": "remove", "old_text": "remember"}]},
+    lambda g: ({"action": "batch", "operations": [{"action": "remove", "old_text": "remember"}]},
                _result(success=True, done=True, target="memory", removed_entries={"1": g})),
-], ids=["add", "replace", "no-match-echo-and-inventory", "removed-own-note", "user-add-over-limit", "operations-batch",
-        "batch-removed-entries"])
-def test_a_group_write_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md, call):
-    """Review-b ov#563 S1-d, the result half (security review of the first fold): a group may now write a
-    line equal to a setup-profile line, so the result of a write must not redact on fingerprints either, or
-    a right guess would come back as LEFT_OUT where a wrong one comes back whole. Write results are judged
-    on the marks only: the same answer, with the guess in place, for a right and a wrong guess."""
+], ids=["add", "view", "replace", "no-match-echo-and-inventory", "removed-own-note", "add-over-limit",
+        "operations-batch", "batch-removed-entries"])
+def test_a_group_memory_md_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md,
+                                                                             call):
+    """Review-b ov#563 S1-d, the result half: a group's own MEMORY.md note reads back unchanged even when it
+    equals a setup-profile line (MEMORY.md results are judged on the marks only), so the answer is the same,
+    with the guess in place, for a right and a wrong guess."""
     user_md(SETUP, NOTE)
     gate_copy.shared_user_block(user_block(SETUP, NOTE))  # fingerprints taken
     assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
@@ -305,25 +311,27 @@ def test_a_group_write_result_is_the_same_for_a_right_and_a_wrong_guess(gate_cop
         assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
         out = gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-group")
         answers.append(None if out is None else out.replace(guess, "<guess>"))
-        shown = raw if out is None else out
-        assert not [mark for mark in gate_copy.PRIVATE_ENTRY_MARKS if mark in shown]  # marked entries never show
-    assert answers[0] == answers[1]
+    assert answers == [None, None]
 
 
-@pytest.mark.parametrize("args", [None, {}, {"action": "view"}, {"action": "search", "query": "kelp"},
-                                  {"action": "batch", "operations": []}, {"action": "ADD"}, "not a dict"])
-def test_a_result_whose_call_is_not_a_known_write_keeps_the_fingerprint_test(gate_copy, group_session, args):
-    """A view or search (Hermes's memory tool has none today), or a call whose args are missing or unknown,
-    still loses a fingerprinted line: only a known write is judged on the marks alone."""
+@pytest.mark.parametrize("args", [
+    None, "not a dict", {"action": "view", "target": "user"}, {"target": "user"},
+    {"action": "add", "target": "memory", "operations": [{"action": "add", "target": "user"}]},
+    {"target": "MEMORY"}, {"target": "memory", "operations": ["not a dict"]},
+])
+def test_a_user_md_or_unknown_call_result_still_loses_a_fingerprinted_line(gate_copy, group_session, args):
+    """A USER.md read-back (or a call whose target is unknown: fail closed) still loses a mark-stripped line
+    this process has seen marked."""
     gate_copy.shared_user_block(user_block(SETUP, NOTE))
-    raw = _result(success=True, results=[RIGHT_GUESS, NOTE], current_entries=[RIGHT_GUESS, NOTE])
+    raw = _result(success=True, current_entries=[RIGHT_GUESS, NOTE])
     out = json.loads(gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw,
                                                        session_id="tg-group"))
-    assert out == {"success": True, "results": [NOTE], "current_entries": [NOTE]}
+    assert out == {"success": True, "current_entries": [NOTE]}
 
 
-def test_a_write_result_still_loses_every_marked_entry(gate_copy, group_session):
-    args = {"action": "remove", "target": "memory", "old_text": "nothing"}
+@pytest.mark.parametrize("target", ["memory", "user"])
+def test_a_group_result_always_loses_every_marked_entry(gate_copy, group_session, target):
+    args = {"action": "remove", "target": target, "old_text": "nothing"}
     raw = _result(success=False, error="No entry matched 'nothing'.", current_entries=[SETUP, NOTE, GODCONST, VOTE],
                   replaced_entries={"1": SETUP, "2": NOTE})
     out = json.loads(gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="g"))
@@ -333,52 +341,37 @@ def test_a_write_result_still_loses_every_marked_entry(gate_copy, group_session)
         {"success": False, "error": gate_copy.LEFT_OUT}, ensure_ascii=False)
 
 
-@pytest.mark.parametrize(("args", "write"), [
-    ({"action": "add"}, True), ({"action": "replace"}, True), ({"action": "remove"}, True),
-    ({"action": "batch", "operations": [{}]}, True), ({"action": "add", "operations": [{}]}, True),
-    ({"operations": [{"action": "remove"}]}, True), ({"action": "view"}, False), ({}, False), (None, False),
-    ("add", False), ({"action": "ADD"}, False), ({"action": "batch", "operations": []}, False),
+@pytest.mark.parametrize(("args", "target"), [
+    ({"action": "add", "target": "memory"}, "memory"), ({"action": "add"}, "memory"), ({}, "memory"),
+    ({"action": "add", "target": None}, "memory"), ({"action": "add", "target": "user"}, "user"),
+    ({"target": "memory", "operations": [{"action": "add"}, {"action": "remove", "target": "user"}]}, "user"),
+    ({"target": "memory", "operations": [{"action": "add", "target": "memory"}]}, "memory"),
+    ({"target": "memory", "operations": [None]}, "user"), ({"target": "USER"}, "user"), (None, "user"),
+    ("memory", "user"),
 ])
-def test_which_memory_calls_are_writes(gate_copy, args, write):
-    assert gate_copy.memory_call_is_write(args) is write
+def test_which_store_a_memory_call_reaches(gate_copy, args, target):
+    assert gate_copy.memory_call_target(args) == target
 
 
-@pytest.mark.parametrize("args", [
-    {"action": "replace", "target": "user", "old_text": "Prefers calls", "content": "Prefers calls after noon."},
-    {"action": "remove", "target": "user", "old_text": NOTE},
-    {"action": "remove", "target": "user", "old_text": "no such text anywhere"},
-    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
-                                                         {"action": "remove", "old_text": "nothing"}]},
-])
-def test_every_group_replace_or_remove_on_user_md_is_refused_the_same_way(gate, group_session, user_md, args):
-    """Security review (membership oracle): a refusal only when old_text hits the setup text would let a group
-    probe it one guess at a time. Every USER.md replace or remove outside a private session gets the same
-    plain refusal, whatever it matches."""
-    user_md(SETUP, NOTE, GODCONST)
-    assert gate.memory_write_directive(tool_name="memory", args=args) == {
-        "action": "block", "message": gate.MEMORY_WRITE_REFUSAL}
-
-
-@pytest.mark.parametrize("args", [
-    {"action": "add", "target": "user", "content": "Likes kites."},
-    {"action": "replace", "target": "memory", "old_text": "Tidepool", "content": "y"},   # MEMORY.md is not USER.md
-    {"action": "remove", "old_text": "an old note"},                                      # target defaults to memory
-])
-def test_a_group_may_still_add_to_user_md_and_edit_memory_md(gate, group_session, user_md, args):
-    user_md(SETUP, NOTE, GODCONST)
-    assert gate.memory_write_directive(tool_name="memory", args=args) is None
-
-
-def test_a_dm_keeps_the_whole_memory_tool(gate, dm_session, user_md):
+def test_a_dm_keeps_the_whole_memory_tool(gate_copy, dm_session, user_md):
+    """DM unchanged on all of it: every write goes through and no result is touched, fingerprinted or not."""
     user_md(SETUP, NOTE)
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))
     for args in ({"action": "replace", "target": "user", "old_text": "Tidepool", "content": "Harbour Bay"},
-                 {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nx"}):
-        assert gate.memory_write_directive(tool_name="memory", args=args) is None
+                 {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nx"},
+                 {"action": "add", "target": "user", "content": RIGHT_GUESS},
+                 {"action": "remove", "target": "user", "old_text": NOTE},
+                 {"action": "batch", "target": "user", "operations": [{"action": "remove", "old_text": "x"}]},
+                 {"action": "add", "target": "memory", "content": RIGHT_GUESS}):
+        assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-dm") is None
+        raw = _result(success=False, current_entries=[SETUP, RIGHT_GUESS, NOTE])
+        assert gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-dm") is None
 
 
 def test_malformed_args_are_refused_outside_a_private_session(gate, group_session):
     assert gate.memory_write_directive(tool_name="memory", args="not a dict")["action"] == "block"
     assert gate.memory_write_directive(tool_name="memory", args={"action": "batch", "operations": "x"})["action"] == "block"
+    assert gate.memory_write_directive(tool_name="memory", args={"target": "memory", "operations": {"a": 1}})["action"] == "block"
     assert gate.memory_write_directive(tool_name="terminal", args={"command": "x"}) is None
 
 
@@ -433,6 +426,9 @@ def test_tools_md_says_never_edit_the_setup_entry(h):
     """Review-b #558 N2: the setup entry is matched by its mark, so the agent must never rewrite it."""
     tools = (h.PLUGIN_DIR.parents[1] / "skills" / "index-network" / "tools.md").read_text(encoding="utf-8")
     assert "Never edit, rewrite or remove the entry headed `[Edge City profile, written at setup]` either" in tools
+    # ov#563 S1-d: outside the private chat USER.md is not writable at all; group facts go to MEMORY.md.
+    assert ("Outside your private chat with them (a group, a cron run) `memories/USER.md` cannot be written at all: "
+            "note a group fact in MEMORY.md (`target: memory`) instead") in tools
 
 
 # ---- private only on positive evidence (security review: no fail-open default) -----------------------------
@@ -528,7 +524,7 @@ def test_a_raising_result_filter_fails_closed(gate_copy, group_session, monkeypa
     assert out is not None and json.loads(out) == {"success": False, "error": gate_copy.LEFT_OUT}
 
 
-@pytest.mark.parametrize("broken", ["session_is_private_now", "holds_private_mark"])
+@pytest.mark.parametrize("broken", ["session_is_private_now", "memory_call_target"])
 def test_a_raising_write_check_fails_closed(gate_copy, group_session, monkeypatch, broken):
     """An add the check would allow is blocked when a helper raises (fail closed, never None)."""
     args = {"action": "add", "target": "memory", "content": "Likes kites."}
@@ -616,36 +612,27 @@ def test_a_prompt_module_that_raises_on_import_is_logged_once_and_never_raises(g
 # ---- the write check reads a call the way Hermes dispatches it ------------------------------------------
 
 
-@pytest.mark.parametrize(("args", "refusal"), [
+@pytest.mark.parametrize("args", [
     # Hermes runs a batch whenever `operations` is non-empty, whatever `action` says (tools/memory_tool.py)
-    ({"action": "add", "target": "user", "operations": [{"action": "remove", "old_text": "Tidepool"}]},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"target": "user", "operations": [{"action": "replace", "old_text": "Tidepool", "new_text": "Harbour"}]},
-     "MEMORY_WRITE_REFUSAL"),
-    ({"action": "add", "target": "memory", "content": "fine",
-      "operations": [{"action": "add", "content": "[Edge City profile, written at setup]"}]}, "MEMORY_WRITE_REFUSAL_ADD"),
+    {"action": "add", "target": "user", "operations": [{"action": "remove", "old_text": "Tidepool"}]},
+    {"target": "user", "operations": [{"action": "replace", "old_text": "Tidepool", "new_text": "Harbour"}]},
     # and applies every op to the call's own target; an op's `target` is not read (memory_tool_store._batch)
-    ({"action": "batch", "target": "user", "operations": [{"action": "remove", "target": "memory", "old_text": "Tidepool"}]},
-     "MEMORY_WRITE_REFUSAL"),
+    {"action": "batch", "target": "user", "operations": [{"action": "remove", "target": "memory", "old_text": "Tidepool"}]},
+    # an op naming USER.md inside a MEMORY.md batch: refused all the same (fail closed)
+    {"action": "batch", "target": "memory", "operations": [{"action": "remove", "target": "user", "old_text": "x"}]},
 ])
-def test_the_write_check_reads_a_batch_the_way_hermes_runs_it(gate_copy, group_session, user_md, args, refusal):
-    """Every USER.md replace or remove is refused outside a private session (kept by S1-d): a batch Hermes
-    runs on USER.md is one, however the call spells it."""
+def test_the_write_check_reads_a_batch_the_way_hermes_runs_it(gate_copy, group_session, user_md, args):
+    """A batch Hermes runs on USER.md is a USER.md write, however the call spells it."""
     user_md(SETUP, NOTE)
     assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") == {
-        "action": "block", "message": getattr(gate_copy, refusal)}
+        "action": "block", "message": gate_copy.MEMORY_WRITE_REFUSAL}
 
 
 @pytest.mark.parametrize("args", [
-    {"action": "batch", "target": "memory", "operations": [{"action": "remove", "target": "user", "old_text": "x"}]},
-    {"action": "add", "target": None, "content": "Likes kites."},
+    {"action": "add", "target": "memory", "content": "fine",
+     "operations": [{"action": "add", "content": "[Edge City profile, written at setup]"}]},
     {"target": "memory", "operations": [{"action": "add", "content": "fine"}, {"action": "remove", "old_text": "old"}]},
 ])
 def test_a_memory_md_batch_still_works_in_a_group(gate_copy, group_session, user_md, args):
-    """An op's own `target: user` inside a MEMORY.md batch is still refused (fail closed), the rest goes."""
     user_md(SETUP, NOTE)
-    out = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
-    if any(op.get("target") == "user" for op in args.get("operations") or []):
-        assert out == {"action": "block", "message": gate_copy.MEMORY_WRITE_REFUSAL}
-    else:
-        assert out is None
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
