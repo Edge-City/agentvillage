@@ -1,0 +1,124 @@
+{
+  "manifest": 2,
+  "id": "curator",
+  "name": "Curator",
+  "version": "1.0.0",
+  "description": "Read public human-curated lists: places, music, people, rooms and groups, reading and watch lists, each with the curator's note.",
+  "homepage": "https://qlist1.vercel.app",
+  "visibility": "everyone",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Read public curated lists",
+      "description": "Read public curators, their public lists and the items on them. No accounts, private lists, follows or writes."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://qlist1.vercel.app/api/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "curator.list_curators",
+      "class": "read",
+      "target": {
+        "tool": "list_curators"
+      },
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "curator.list_lists",
+      "class": "read",
+      "target": {
+        "tool": "list_lists"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "curator": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "curator.get_list",
+      "class": "read",
+      "target": {
+        "tool": "get_list"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "curator": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "curator",
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "curator.search_curations",
+      "class": "read",
+      "target": {
+        "tool": "search_curations"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 2
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 25
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "curator",
+      "version": "1.0.0",
+      "sha256": "13f0b3dea1f920b8829b82ed1e1b998b7937144a1a0014041d7764077ebc4885",
+      "path": "skills/curator/SKILL.md"
+    }
+  ]
+}
