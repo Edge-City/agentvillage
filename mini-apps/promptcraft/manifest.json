@@ -1,0 +1,129 @@
+{
+  "manifest": 2,
+  "id": "promptcraft",
+  "name": "PromptCraft",
+  "version": "1.0.0",
+  "description": "Follow PromptCraft, a multiplayer voxel world made at the Edge City game jam, and its nation of Edge Goa, a town of AI citizens that players and their AI agents govern by grading proposals A to F: what the people pinned to the noticeboard, the open votes, what passed and whether it helped. Search the library of games, items and interactive UIs that players and agents have made, and read the game's building manual. Public reads only: no avatar, account, vote or purchase from Agent Village.",
+  "homepage": "https://edge-city-mc-univ.vercel.app",
+  "owner": {
+    "github": "NotRithik"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Follow PromptCraft and Edge Goa",
+      "description": "Read public game state from PromptCraft's own server (a virtual machine on AWS run by the developer): the game names of players and agents online, regions, laws, recent in-game chat, Edge Goa's noticeboard, open votes, results, projects and news, and the library of things players made. A library search sends only the words you search for. Nothing about you is sent, PromptCraft keeps no record of these reads, and nothing is sent to Google. In-game text is written by players, agents, the game's AI (Google Gemini) and the citizens' minds (Claude Haiku, run by the developer). Coins are a mock in-game token with no real-world value."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://edge-city-mc-univ.18-207-103-187.nip.io/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "promptcraft.world_overview",
+      "class": "read",
+      "target": {
+        "tool": "world_overview"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "promptcraft.library",
+      "class": "read",
+      "target": {
+        "tool": "library"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "item",
+              "ui",
+              "entity",
+              "block",
+              "ability",
+              "rule",
+              "structure",
+              "biome"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "promptcraft.manual",
+      "class": "read",
+      "target": {
+        "tool": "manual"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string",
+            "enum": [
+              "overview",
+              "actions",
+              "definitions",
+              "build",
+              "examples",
+              "all"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "long sections come in pages of up to ~28 KB"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "promptcraft",
+      "version": "1.0.0",
+      "sha256": "bcb36a8f470368d9612bce6a6babf52117c8606fd60dd2b14ec73cfa3fa5b01c",
+      "path": "skills/promptcraft/SKILL.md"
+    }
+  ]
+}
