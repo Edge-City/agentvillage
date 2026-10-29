@@ -3,9 +3,10 @@
 - One block, byte-identical in village-memory and av-events (`_user_md_gate.py`).
 - PRIVATE_ENTRY_MARKS: the setup profile and the GODCONST conversation note, pinned to cp's CP_ENTRY_MARKS;
   the vote note is village data and stays.
-- The memory tool outside a private session: results leave Private entries out (`transform_memory_result`)
-  and writes that touch one, or add or remove a mark, are refused (`memory_write_directive`), on the marks,
-  target and action only (review-b ov#563 S1-d: no guess-confirm oracle).
+- The memory tool outside a private session: results leave Private entries out (`transform_memory_result`),
+  except a line a non-private session wrote itself or the call carries (review-b ov#565 S1-r3), and a USER.md
+  change or removal is refused while an add goes through (`memory_write_directive`, ov#565 N1-r3), on the
+  target and action only (review-b ov#563 S1-d: no guess-confirm oracle; the matrix below).
 - Fingerprints: an entry this process has seen marked is still known after its mark has gone, with one set
   per process that both copies read (ov#563 N4-d).
 - Both copies fail closed and treat an unknown chat type as not private (ov#563 N1-d); a failed install is
@@ -178,14 +179,11 @@ def test_a_result_that_is_not_json_is_replaced_whole(gate, group_session):
 #: A whole line of SETUP (fingerprinted once seen marked), and a wrong guess of the same length.
 RIGHT_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the harbour."
 WRONG_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the estuary."
-REFUSAL_TEXT = ("Your human's profile notes (USER.md) can only be changed in your private chat with them. "
-                "You can still note this in MEMORY.md.")
+REFUSAL_TEXT = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat with "
+                "them. You can still add a new note here.")
 
 
 @pytest.mark.parametrize("args", [
-    {"action": "add", "target": "user", "content": "Likes kites."},
-    {"action": "add", "target": "user", "content": RIGHT_GUESS},
-    {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
     {"action": "replace", "target": "user", "old_text": "Builds kelp sensors", "content": "Builds kelp sensors"},
     {"action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"},
     {"action": "replace", "target": "user", "old_text": "Prefers calls", "content": "Prefers calls after noon."},
@@ -193,17 +191,40 @@ REFUSAL_TEXT = ("Your human's profile notes (USER.md) can only be changed in you
     {"action": "remove", "target": "user", "old_text": "one question at a time"},
     {"action": "remove", "target": "user", "old_text": NOTE},
     {"action": "remove", "target": "user", "old_text": "no such text anywhere"},
-    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"}]},
     {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
                                                          {"action": "replace", "old_text": "Tidepool", "content": "y"}]},
-    {"action": "batch", "target": "memory", "operations": [{"action": "add", "target": "user", "content": "x"}]},
+    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"}, {"content": "no action"}]},
+    {"target": "user", "operations": [{"action": "add", "content": "fine"}, "not a dict"]},
+    {"action": "batch", "target": "user", "operations": []},
+    {"action": "view", "target": "user"},
+    {"target": "user", "content": "no action"},
+    {"action": "batch", "target": "memory", "operations": [{"action": "remove", "target": "user", "old_text": "x"}]},
 ])
-def test_a_group_may_not_write_user_md_at_all(gate_copy, group_session, user_md, args):
-    """Every USER.md write outside a private session (an add too, a step past L33367) gets the same plain
-    refusal, whatever it holds or matches, so no answer probes the setup text."""
+def test_a_group_may_not_change_or_remove_user_md(gate_copy, group_session, user_md, args):
+    """Every USER.md change or removal outside a private session (anything but an add, or a batch holding
+    anything but adds) gets the same plain refusal, whatever it holds or matches, so no answer probes the
+    setup text."""
     user_md(SETUP, NOTE, GODCONST)
     block = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
     assert block == {"action": "block", "message": REFUSAL_TEXT}
+
+
+@pytest.mark.parametrize("args", [
+    {"action": "add", "target": "user", "content": "Likes kites."},
+    {"action": "add", "target": "user", "content": RIGHT_GUESS},
+    {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
+    {"target": "user", "operations": [{"action": "add", "content": "fine"}, {"action": "add", "content": RIGHT_GUESS}]},
+    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"}]},
+    {"action": "add", "target": "user", "content": "x", "operations": [{"action": "add", "content": "fine"}]},
+    {"action": "batch", "target": "memory", "operations": [{"action": "add", "target": "user", "content": "x"}]},
+    {"action": "add", "target": "user", "operations": []},
+])
+def test_a_group_may_add_to_user_md_whatever_it_holds(gate_copy, group_session, user_md, args):
+    """Review-b ov#565 N1-r3: a group, a cron run and Hermes's background review fork after a group turn
+    (agent/background_review.py:341) can add a note about the human to USER.md again, content-blind,
+    exactly like a MEMORY.md write."""
+    user_md(SETUP, NOTE, GODCONST)
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
 
 
 @pytest.mark.parametrize("args", [
@@ -225,7 +246,8 @@ def test_a_group_may_write_memory_md_whatever_it_holds(gate_copy, group_session,
 
 
 def test_the_one_refusal_is_true_for_every_user_md_write(gate_copy):
-    """Review-b ov#563 N3-d: one message, true for an add, a replace and a remove alike; it names no entry."""
+    """Review-b ov#563 N3-d: one message, true for a replace, a remove and a batch holding one alike (an add
+    is never refused now, ov#565 N1-r3, so "you can still add" is true); it names no entry."""
     assert gate_copy.MEMORY_WRITE_REFUSAL == REFUSAL_TEXT
     assert not hasattr(gate_copy, "MEMORY_WRITE_REFUSAL_ADD")
     assert not [mark for mark in gate_copy.PRIVATE_ENTRY_MARKS if mark in REFUSAL_TEXT]
@@ -258,13 +280,14 @@ def test_a_right_guess_of_a_setup_line_gets_the_same_answer_as_a_wrong_one(gate_
     assert right == wrong
 
 
-def test_a_guessed_setup_line_goes_to_memory_md_not_user_md(gate_copy, group_session, user_md):
+def test_a_guessed_setup_line_may_be_added_to_either_store(gate_copy, group_session, user_md):
     user_md(SETUP, NOTE)
     gate_copy.shared_user_block(user_block(SETUP, NOTE))
-    note = {"action": "add", "target": "memory", "content": RIGHT_GUESS}
-    assert gate_copy.memory_write_directive(tool_name="memory", args=note, session_id="tg-group") is None
-    profile = {"action": "add", "target": "user", "content": RIGHT_GUESS}
-    assert gate_copy.memory_write_directive(tool_name="memory", args=profile, session_id="tg-group") == {
+    for target in ("memory", "user"):
+        note = {"action": "add", "target": target, "content": RIGHT_GUESS}
+        assert gate_copy.memory_write_directive(tool_name="memory", args=note, session_id="tg-group") is None
+    change = {"action": "replace", "target": "user", "old_text": "Tidepool", "content": RIGHT_GUESS}
+    assert gate_copy.memory_write_directive(tool_name="memory", args=change, session_id="tg-group") == {
         "action": "block", "message": REFUSAL_TEXT}
 
 
@@ -278,36 +301,53 @@ def _add_ok(target="memory"):
                    message="Entry added.", note="Write saved. This update is complete — do not repeat it.")
 
 
+def _own(g, target="memory", content=None):
+    """The group's own earlier write of the guess (recorded as self-written by the write check)."""
+    return {"action": "add", "target": target, "content": g if content is None else content}
+
+
 @pytest.mark.parametrize("call", [
-    lambda g: ({"action": "add", "target": "memory", "content": g}, _add_ok()),
-    lambda g: ({"action": "view", "target": "memory"}, _result(success=True, current_entries=[NOTE, g])),
-    lambda g: ({"action": "replace", "target": "memory", "old_text": "kites", "new_text": g},
+    lambda g: (None, {"action": "add", "target": "memory", "content": g}, _add_ok()),
+    lambda g: (_own(g), {"action": "view", "target": "memory"}, _result(success=True, current_entries=[NOTE, g])),
+    lambda g: (None, {"action": "replace", "target": "memory", "old_text": "kites", "new_text": g},
                _result(success=True, done=True, target="memory", message="Entry replaced.", replaced_entry="Likes kites.")),
-    lambda g: ({"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"},
+    lambda g: (_own(g), {"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"},
                _result(success=False, error=f"No entry matched 'x\n{g}\ny'. Check current_entries below.",
                        current_entries=[NOTE, g])),
-    lambda g: ({"action": "remove", "target": "memory", "old_text": "remember"},
+    lambda g: (None, {"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"},
+               _result(success=False, error=f"No entry matched 'x\n{g}\ny'. Check current_entries below.",
+                       current_entries=[NOTE])),
+    lambda g: (_own(g, content=f"remember for later:\n{g}"), {"action": "remove", "target": "memory", "old_text": "remember"},
                _result(success=True, done=True, target="memory", message="Entry removed.",
                        removed_entry=f"remember for later:\n{g}")),
-    lambda g: ({"action": "add", "target": "memory", "content": "Likes kites."},
+    lambda g: (_own(g), {"action": "add", "target": "memory", "content": "Likes kites."},
                _result(success=False, error="Memory at 2,190/2,200 chars.", current_entries=[NOTE, g])),
-    lambda g: ({"action": "add", "target": "memory", "operations": [{"action": "add", "content": g}]},
+    lambda g: (None, {"action": "add", "target": "memory", "operations": [{"action": "add", "content": g}]},
                _result(success=False, error=f"Operation 1 (add): content is required. {g}")),
-    lambda g: ({"action": "batch", "operations": [{"action": "remove", "old_text": "remember"}]},
+    lambda g: (_own(g), {"action": "batch", "operations": [{"action": "remove", "old_text": "remember"}]},
                _result(success=True, done=True, target="memory", removed_entries={"1": g})),
-], ids=["add", "view", "replace", "no-match-echo-and-inventory", "removed-own-note", "add-over-limit",
-        "operations-batch", "batch-removed-entries"])
-def test_a_group_memory_md_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md,
-                                                                             call):
-    """Review-b ov#563 S1-d, the result half: a group's own MEMORY.md note reads back unchanged even when it
-    equals a setup-profile line (MEMORY.md results are judged on the marks only), so the answer is the same,
-    with the guess in place, for a right and a wrong guess."""
+    lambda g: (None, {"action": "add", "target": "user", "content": g}, _add_ok("user")),
+    lambda g: (_own(g, "user"), {"action": "add", "target": "user", "content": "Likes kites."},
+               _result(success=False, error="Memory at 23,990/24,000 chars.", current_entries=[NOTE, g])),
+    lambda g: (_own(g, "user"), {"action": "add", "target": "user", "content": g},
+               _result(success=True, done=True, target="user", message="Entry already exists (no duplicate added).")),
+], ids=["add", "view", "replace", "no-match-echo-and-inventory", "no-match-echo-only", "removed-own-note",
+        "add-over-limit", "operations-batch", "batch-removed-entries", "add-user", "add-user-over-limit",
+        "add-user-again"])
+def test_a_group_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md, call):
+    """Review-b ov#563 S1-d and ov#565 S1-r3, the result half: a group's own note (USER.md or MEMORY.md)
+    reads back unchanged even when it equals a setup-profile line (a fingerprint does not count for a line
+    a non-private session wrote itself or the call carries), so the answer is the same, with the guess in
+    place, for a right and a wrong guess."""
     user_md(SETUP, NOTE)
-    gate_copy.shared_user_block(user_block(SETUP, NOTE))  # fingerprints taken
-    assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
     answers = []
     for guess in (RIGHT_GUESS, WRONG_GUESS):
-        args, raw = call(guess)
+        gate_copy._gate_reset_for_tests()
+        gate_copy.shared_user_block(user_block(SETUP, NOTE))  # fingerprints taken
+        assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
+        prior, args, raw = call(guess)
+        if prior is not None:
+            assert gate_copy.memory_write_directive(tool_name="memory", args=prior, session_id="tg-group") is None
         assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
         out = gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-group")
         answers.append(None if out is None else out.replace(guess, "<guess>"))
@@ -318,10 +358,13 @@ def test_a_group_memory_md_result_is_the_same_for_a_right_and_a_wrong_guess(gate
     None, "not a dict", {"action": "view", "target": "user"}, {"target": "user"},
     {"action": "add", "target": "memory", "operations": [{"action": "add", "target": "user"}]},
     {"target": "MEMORY"}, {"target": "memory", "operations": ["not a dict"]},
+    {"action": "view", "target": "memory"}, {"action": "remove", "target": "memory", "old_text": "no such note"},
+    {"action": "add", "content": "Likes kites."}, {"target": "memory", "operations": [{"action": "add", "content": "x"}]},
 ])
-def test_a_user_md_or_unknown_call_result_still_loses_a_fingerprinted_line(gate_copy, group_session, args):
-    """A USER.md read-back (or a call whose target is unknown: fail closed) still loses a mark-stripped line
-    this process has seen marked."""
+def test_a_line_nobody_outside_a_private_session_wrote_is_lost_on_either_target(gate_copy, group_session, args):
+    """A read-back on either store (or a call whose target is unknown: fail closed) still loses a mark-stripped
+    line this process has seen marked, when no session that is not private wrote it (review-b ov#565 S1-r3:
+    MEMORY.md results are fingerprinted again)."""
     gate_copy.shared_user_block(user_block(SETUP, NOTE))
     raw = _result(success=True, current_entries=[RIGHT_GUESS, NOTE])
     out = json.loads(gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw,
@@ -426,9 +469,10 @@ def test_tools_md_says_never_edit_the_setup_entry(h):
     """Review-b #558 N2: the setup entry is matched by its mark, so the agent must never rewrite it."""
     tools = (h.PLUGIN_DIR.parents[1] / "skills" / "index-network" / "tools.md").read_text(encoding="utf-8")
     assert "Never edit, rewrite or remove the entry headed `[Edge City profile, written at setup]` either" in tools
-    # ov#563 S1-d: outside the private chat USER.md is not writable at all; group facts go to MEMORY.md.
-    assert ("Outside your private chat with them (a group, a cron run) `memories/USER.md` cannot be written at all: "
-            "note a group fact in MEMORY.md (`target: memory`) instead") in tools
+    # ov#565 N1-r3: outside the private chat USER.md takes a new note but no change or removal.
+    assert ("Outside your private chat with them (a group, a cron run) you can add a new note to `memories/USER.md`, "
+            "but you cannot change or remove one there: change or remove a USER.md note only in your private "
+            "chat") in tools
 
 
 # ---- private only on positive evidence (security review: no fail-open default) -----------------------------
@@ -524,7 +568,7 @@ def test_a_raising_result_filter_fails_closed(gate_copy, group_session, monkeypa
     assert out is not None and json.loads(out) == {"success": False, "error": gate_copy.LEFT_OUT}
 
 
-@pytest.mark.parametrize("broken", ["session_is_private_now", "memory_call_target"])
+@pytest.mark.parametrize("broken", ["session_is_private_now", "memory_call_target", "remember_self_written"])
 def test_a_raising_write_check_fails_closed(gate_copy, group_session, monkeypatch, broken):
     """An add the check would allow is blocked when a helper raises (fail closed, never None)."""
     args = {"action": "add", "target": "memory", "content": "Likes kites."}
@@ -636,3 +680,345 @@ def test_the_write_check_reads_a_batch_the_way_hermes_runs_it(gate_copy, group_s
 def test_a_memory_md_batch_still_works_in_a_group(gate_copy, group_session, user_md, args):
     user_md(SETUP, NOTE)
     assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+
+
+# ---- review-b ov#565 S1-r3 + N1-r3: self-written lines, the oracle matrix ---------------------------------
+
+#: Hermes v2026.9.24's entry delimiter.
+DELIM = "\n§\n"
+FILLER = "Filler note about the harbour garden rota. " * 12
+
+
+class FakeMemoryTool:
+    """Hermes v2026.9.24's memory tool, its dispatch and result shapes (tools/memory_tool.py `memory_tool`,
+    tools/memory_tool_store.py `add`, `_edit`, `_locate`, `_batch`, `_success_response`,
+    `_failure_with_entries`, `_batch_failure`), on two in-memory stores with small limits. The real tool is
+    driven in test_village_memory_hermes.py; this keeps the matrix in CI."""
+
+    def __init__(self, user, memory, limits=(600, 400)):
+        self.entries = {"user": list(user), "memory": list(memory)}
+        self.limits = {"user": limits[0], "memory": limits[1]}
+
+    def _usage(self, target):
+        return f"{len(DELIM.join(self.entries[target])):,}/{self.limits[target]:,}"
+
+    def _ok(self, target, message, **extra):
+        return {"success": True, "done": True, "target": target, "usage": self._usage(target),
+                "entry_count": len(self.entries[target]), "message": message, **extra}
+
+    def _with_entries(self, target, message):
+        return {"success": False, "error": message, "current_entries": list(self.entries[target]),
+                "usage": self._usage(target)}
+
+    def _find(self, entries, old_text):
+        exact = [i for i, e in enumerate(entries) if e == old_text]
+        hits = exact or [i for i, e in enumerate(entries) if old_text in e]
+        return (hits[0] if len(hits) == 1 else None), len(hits) > 1
+
+    def __call__(self, action=None, target="memory", content=None, old_text=None, new_text=None, operations=None):
+        if content is None and new_text is not None:
+            content = new_text
+        target = "memory" if target is None else target
+        if target not in ("memory", "user"):
+            return json.dumps({"success": False, "error": f"Invalid memory target '{target}'. Use 'memory' or 'user'."})
+        if operations:
+            return json.dumps(self._batch(target, operations), ensure_ascii=False)
+        if action == "add":
+            return json.dumps(self._add(target, (content or "").strip()), ensure_ascii=False)
+        if action in ("replace", "remove"):
+            if not (old_text or "").strip():
+                return json.dumps({"success": False, "error": "old_text cannot be empty."})
+            if action == "replace" and not (content or "").strip():
+                return json.dumps({"success": False, "error": "new_content cannot be empty. Use 'remove' to delete entries."})
+            new = (content or "").strip() if action == "replace" else None
+            return json.dumps(self._edit(target, old_text.strip(), new), ensure_ascii=False)
+        return json.dumps({"success": False, "error": f"Unknown action '{action}'. Use: add, replace, remove"})
+
+    def _add(self, target, content):
+        entries = self.entries[target]
+        if not content:
+            return {"success": False, "error": "Content cannot be empty."}
+        if content in entries:
+            return self._ok(target, "Entry already exists (no duplicate added).")
+        if len(DELIM.join(entries + [content])) > self.limits[target]:
+            return self._with_entries(target, f"Memory at {self._usage(target)} chars. Adding this entry "
+                                              f"({len(content)} chars) would exceed the limit.")
+        entries.append(content)
+        return self._ok(target, "Entry added.")
+
+    def _edit(self, target, old_text, new):
+        entries = self.entries[target]
+        idx, ambiguous = self._find(entries, old_text)
+        if ambiguous:
+            return {"success": False, "error": f"Multiple entries matched '{old_text}'. Be more specific.",
+                    "matches": [e[:80] for e in entries if old_text in e]}
+        if idx is None:
+            verb = "replace" if new else "remove"
+            return {"success": False, "error": f"No entry matched '{old_text}'. Check current_entries below and retry "
+                                               f"with the exact text of the entry you want to {verb}.",
+                    "current_entries": list(entries)}
+        previous = entries[idx]
+        changed = entries[:idx] + ([] if new is None else [new]) + entries[idx + 1:]
+        if new is not None and len(DELIM.join(changed)) > self.limits[target]:
+            return self._with_entries(target, "Replacement would put memory over the limit.")
+        self.entries[target] = changed
+        if new is None:
+            return self._ok(target, "Entry removed.", removed_entry=previous)
+        return self._ok(target, "Entry replaced.", replaced_entry=previous)
+
+    def _batch(self, target, operations):
+        working, matched = list(self.entries[target]), []
+        for i, op in enumerate(op or {} for op in operations):
+            act, pos = op.get("action"), f"Operation {i + 1} ({op.get('action') or 'unknown'})"
+            content = (op.get("content") or op.get("new_text") or "").strip()
+            old_text = (op.get("old_text") or "").strip()
+            previous, msg = None, None
+            if act == "add":
+                if not content:
+                    msg = f"{pos}: content is required."
+                elif content not in working:
+                    working.append(content)
+            elif act not in ("replace", "remove"):
+                msg = f"{pos}: unknown action. Use add, replace, or remove."
+            elif not old_text:
+                msg = f"{pos}: old_text is required."
+            else:
+                idx, ambiguous = self._find(working, old_text)
+                if idx is None:
+                    msg = f"{pos}: no entry matched '{old_text}'." if not ambiguous else f"{pos}: ambiguous."
+                else:
+                    previous = working[idx]
+                    working[idx:idx + 1] = [content] if act == "replace" else []
+            if msg:
+                return {"success": False, "error": msg + " No operations were applied (batch is all-or-nothing).",
+                        "usage": self._usage(target)}
+            matched.append((act, previous))
+        if len(DELIM.join(working)) > self.limits[target]:
+            return {"success": False, "error": "Over the limit. No operations were applied (batch is all-or-nothing).",
+                    "usage": self._usage(target)}
+        self.entries[target] = working
+        extra = {}
+        for i, (act, previous) in enumerate(matched, 1):
+            if previous is not None:
+                extra.setdefault("replaced_entries" if act == "replace" else "removed_entries", {})[str(i)] = previous
+        return self._ok(target, f"Applied {len(operations)} operation(s).", **extra)
+
+
+#: Session kinds that are not private: a group, a cron run, an unknown chat type, no session metadata at all.
+SESSION_KINDS = {
+    "group": ({"HERMES_SESSION_PLATFORM": "telegram", "HERMES_SESSION_CHAT_TYPE": "group"}, "tg-group"),
+    "cron": ({"HERMES_SESSION_PLATFORM": "telegram", "HERMES_CRON_SESSION": "1"}, "cron_abc123"),
+    "unknown": ({"HERMES_SESSION_PLATFORM": "discord", "HERMES_SESSION_CHAT_TYPE": "forum"}, "dc-forum"),
+    "no-metadata": ({}, ""),
+}
+
+
+@pytest.fixture(params=sorted(SESSION_KINDS))
+def outside(request, monkeypatch):
+    """Each non-private session kind in turn: its session id."""
+    for name in ("HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFORM"):
+        monkeypatch.delenv(name, raising=False)
+    env, session_id = SESSION_KINDS[request.param]
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setitem(sys.modules, "hermes_state", None)
+    return session_id
+
+
+NO_SUCH = "no such note anywhere in here"
+
+#: Review-b's 16 call shapes (ROUND 3 Q1) plus the round-3 fold's own (USER.md adds and their read-backs),
+#: each a list of calls built from the guess. The guess equals a setup-profile line (right) or not (wrong).
+MATRIX = {
+    "add-memory": lambda g: [{"action": "add", "target": "memory", "content": g}],
+    "add-user": lambda g: [{"action": "add", "target": "user", "content": g}],
+    "replace-memory": lambda g: [{"action": "replace", "target": "memory", "old_text": g, "content": "Likes kites a lot."}],
+    "remove-memory": lambda g: [{"action": "remove", "target": "memory", "old_text": g}],
+    "remove-memory-multiline": lambda g: [{"action": "remove", "target": "memory", "old_text": f"x\n{g}\ny"}],
+    "replace-user": lambda g: [{"action": "replace", "target": "user", "old_text": g, "content": "Likes kites a lot."}],
+    "remove-user": lambda g: [{"action": "remove", "target": "user", "old_text": g}],
+    "missing-old_text-memory": lambda g: [{"action": "replace", "target": "memory", "content": g}],
+    "batch-user": lambda g: [{"target": "user", "operations": [{"action": "add", "content": g},
+                                                                {"action": "remove", "old_text": g}]}],
+    "add-shape-batch-user": lambda g: [{"action": "add", "target": "user",
+                                        "operations": [{"action": "remove", "old_text": g}]}],
+    "batch-op-memory-call-user": lambda g: [{"action": "batch", "target": "user", "operations": [
+        {"action": "replace", "target": "memory", "old_text": g, "content": "x"}]}],
+    "batch-memory": lambda g: [{"target": "memory", "operations": [{"action": "add", "content": g},
+                                                                  {"action": "replace", "old_text": "kites",
+                                                                   "content": "Likes kites a lot."}]}],
+    "batch-memory-op-user": lambda g: [{"target": "memory", "operations": [
+        {"action": "remove", "target": "user", "old_text": g}]}],
+    "target-null": lambda g: [{"action": "add", "target": None, "content": g}],
+    "read-back-memory": lambda g: [{"action": "add", "target": "memory", "content": g},
+                                   {"action": "remove", "target": "memory", "old_text": NO_SUCH}],
+    "read-back-in-batch": lambda g: [{"target": "memory", "operations": [{"action": "add", "content": g}]},
+                                     {"action": "replace", "target": "memory", "old_text": NO_SUCH, "content": "y"}],
+    "over-limit-memory": lambda g: [{"action": "add", "target": "memory", "content": g},
+                                    {"action": "add", "target": "memory", "content": FILLER}],
+    "own-note-removed": lambda g: [{"action": "add", "target": "memory", "content": f"remember for later:\n{g}"},
+                                   {"action": "remove", "target": "memory", "old_text": "remember for later"}],
+    "own-note-replaced": lambda g: [{"action": "add", "target": "memory", "content": g},
+                                    {"action": "replace", "target": "memory", "old_text": g, "content": "Likes kites a lot."}],
+    "batch-user-adds": lambda g: [{"target": "user", "operations": [{"action": "add", "content": g}]}],
+    "over-limit-user": lambda g: [{"action": "add", "target": "user", "content": g},
+                                  {"action": "add", "target": "user", "content": FILLER}],
+    "add-user-twice": lambda g: [{"action": "add", "target": "user", "content": g},
+                                 {"action": "add", "target": "user", "content": g}],
+    "memory-batch-add-op-user": lambda g: [{"target": "memory", "operations": [
+        {"action": "add", "target": "user", "content": g}]}, {"action": "remove", "old_text": NO_SUCH}],
+}
+#: The shapes the write check refuses (a USER.md change or removal); every other call runs.
+REFUSED = {"replace-user", "remove-user", "batch-user", "add-shape-batch-user", "batch-op-memory-call-user",
+           "batch-memory-op-user"}
+
+
+def _run(gate_mod, session_id, calls, store):
+    """Each call through the write check, then the tool, then the result filter: what the model sees, and
+    the USER.md block a group prompt carries at the next load."""
+    seen = []
+    for args in calls:
+        directive = gate_mod.memory_write_directive(tool_name="memory", args=args, session_id=session_id)
+        if directive is not None:
+            seen.append(["blocked", directive])
+            continue
+        raw = store(**args)
+        out = gate_mod.transform_memory_result(tool_name="memory", args=args, result=raw, session_id=session_id)
+        seen.append(["ran", raw if out is None else out])
+    prompt = gate_mod.shared_user_block(user_block(*store.entries["user"]))
+    return seen, prompt
+
+
+@pytest.mark.parametrize("shape", sorted(MATRIX))
+def test_the_oracle_matrix_a_right_guess_gets_what_a_wrong_one_gets(gate_copy, outside, shape):
+    """Review-b ov#565 Q1 and the round-3 fold: in a group, a cron run, an unknown chat type and with no
+    session metadata, a right guess of a setup line and a same-length wrong one get byte-identical write
+    checks, results and next-load USER.md prompt blocks (the guess normalised out), on every call shape."""
+    transcripts = []
+    for guess in (RIGHT_GUESS, WRONG_GUESS):
+        gate_copy._gate_reset_for_tests()
+        gate_copy.shared_user_block(user_block(SETUP, NOTE))  # the process saw the entry marked
+        assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
+        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites."])
+        seen, prompt = _run(gate_copy, outside, MATRIX[shape](guess), store)
+        transcripts.append(json.dumps([seen, prompt], ensure_ascii=False).replace(json.dumps(guess)[1:-1], "<guess>"))
+    assert transcripts[0] == transcripts[1]
+    first = json.loads(transcripts[0])[0][0]
+    assert first[0] == ("blocked" if shape in REFUSED else "ran")
+    if shape in REFUSED:
+        assert first[1] == {"action": "block", "message": REFUSAL_TEXT}
+    assert "kelp sensors for the harbour" not in transcripts[0] and "Tidepool" not in transcripts[0]
+
+
+def test_the_matrix_reads_back_the_guess_on_both_stores(gate, group_session):
+    """The matrix is not vacuous: the read-back shapes return the group's own right-guess line in
+    `current_entries`, a removed or replaced entry, and the next group prompt's USER.md block."""
+    for shape, where in (("read-back-memory", "current_entries"), ("over-limit-memory", "current_entries"),
+                         ("over-limit-user", "current_entries"), ("own-note-removed", "removed_entry"),
+                         ("own-note-replaced", "replaced_entry")):
+        gate._gate_reset_for_tests()
+        gate.shared_user_block(user_block(SETUP, NOTE))
+        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites."])
+        seen, _ = _run(gate, "tg-group", MATRIX[shape](RIGHT_GUESS), store)
+        assert RIGHT_GUESS in json.dumps(json.loads(seen[-1][1])[where], ensure_ascii=False), shape
+    _, prompt = _run(gate, "tg-group", MATRIX["add-user"](RIGHT_GUESS), FakeMemoryTool([SETUP, NOTE], []))
+    assert prompt == user_block(NOTE, RIGHT_GUESS)
+
+
+@pytest.mark.parametrize("copied_to", ["memory", "user"])
+def test_s1_r3_a_private_line_a_dm_copied_stays_hidden_from_a_group(gate_copy, monkeypatch, copied_to):
+    """Review-b ov#565 S1-r3: a DM copies an unmarked setup line into MEMORY.md (or USER.md); a group's
+    no-match edit, over-limit add and next prompt never carry it, since no non-private session wrote it."""
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))
+    store = FakeMemoryTool([SETUP, NOTE], ["Likes kites."])
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "telegram")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    copy = {"action": "add", "target": copied_to, "content": RIGHT_GUESS}
+    seen, _ = _run(gate_copy, "tg-dm", [copy], store)
+    assert json.loads(seen[0][1])["message"] == "Entry added."
+    assert not gate_copy._self_written_digests()  # a DM's write is never recorded
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "group")
+    seen, prompt = _run(gate_copy, "tg-group", [
+        {"action": "remove", "target": copied_to, "old_text": NO_SUCH} if copied_to == "memory"
+        else {"action": "add", "target": "user", "content": FILLER},
+        {"target": "memory", "operations": [{"action": "add", "content": FILLER}]},
+    ], store)
+    assert RIGHT_GUESS not in json.dumps(seen, ensure_ascii=False)
+    assert "Likes kites." in json.dumps(seen) if copied_to == "memory" else NOTE in json.dumps(seen)
+    assert RIGHT_GUESS not in prompt and NOTE in prompt
+
+
+def test_the_restart_residual_a_groups_own_right_guess_is_hidden_again_after_a_restart(gate, group_session):
+    """The stated residual (review-b ov#565 S1-r3 fold): the self-written set lives in memory. After a
+    restart (the set cleared, fingerprints retaken at load) a line the group wrote earlier that equals a
+    setup line is hidden again, and a wrong guess is not: one bit per restart, only for a line that group
+    already wrote."""
+    reads = {}
+    for guess in (RIGHT_GUESS, WRONG_GUESS):
+        gate._gate_reset_for_tests()
+        gate.shared_user_block(user_block(SETUP, NOTE))
+        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites."])
+        before, before_prompt = _run(gate, "tg-group", MATRIX["read-back-memory"](guess) + MATRIX["add-user"](guess),
+                                     store)
+        gate._gate_reset_for_tests()  # the restart: nothing in memory survives ...
+        gate.shared_user_block(user_block(SETUP, NOTE))  # ... and the load fingerprints the setup entry again
+        after, after_prompt = _run(gate, "tg-group", [{"action": "remove", "target": "memory", "old_text": NO_SUCH}],
+                                   store)
+        reads[guess] = (guess in json.dumps(before, ensure_ascii=False), guess in before_prompt,
+                        guess in json.dumps(after, ensure_ascii=False), guess in after_prompt)
+    assert reads[WRONG_GUESS] == (True, True, True, True)
+    assert reads[RIGHT_GUESS] == (True, True, False, False)
+
+
+def test_only_an_allowed_non_private_write_of_a_fingerprinted_line_is_recorded(gate, group_session, monkeypatch):
+    gate.shared_user_block(user_block(SETUP, NOTE))
+    right = gate._line_digest(RIGHT_GUESS)
+    calls = (
+        {"action": "add", "target": "memory", "content": WRONG_GUESS},              # not a fingerprint
+        {"action": "remove", "target": "memory", "old_text": RIGHT_GUESS},          # old_text only locates
+        {"action": "replace", "target": "user", "old_text": "x", "content": RIGHT_GUESS},  # refused
+    )
+    for args in calls:
+        gate.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
+    assert not gate._self_written_digests()
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
+    gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": RIGHT_GUESS}, session_id="tg-dm")
+    assert not gate._self_written_digests()
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "group")
+    for args in ({"action": "add", "content": f"note:\n{RIGHT_GUESS}"},
+                 {"action": "replace", "old_text": "kites", "new_text": RIGHT_GUESS},
+                 {"target": "user", "operations": [{"action": "add", "new_text": RIGHT_GUESS}]}):
+        gate._self_written_digests().clear()
+        assert gate.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+        assert list(gate._self_written_digests()) == [right]
+
+
+def test_the_self_written_set_is_bounded_and_drops_the_oldest(gate, group_session, monkeypatch):
+    lines = [f"Synthetic line number {i} of the setup profile text." for i in range(4)]
+    gate.shared_user_block(user_block("[Edge City profile, written at setup]\n" + "\n".join(lines), NOTE))
+    monkeypatch.setattr(gate, "SELF_WRITTEN_MAX", 2)
+    for line in lines[:3]:
+        gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": line}, session_id="g")
+    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in lines[1:3]]
+    gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": lines[1]}, session_id="g")
+    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in (lines[2], lines[1])]
+    # Lines that are no fingerprint never take a place, however many a group writes.
+    for i in range(50):
+        gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": f"A chatty group note, number {i}."},
+                                    session_id="g")
+    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in (lines[2], lines[1])]
+
+
+def test_both_copies_read_one_self_written_set(vm, gate, group_session, user_md):
+    """Like the fingerprints (N4-d): a line one copy's write check recorded is exempt in the other copy's
+    result filter, through one dict on Hermes's MemoryStore class."""
+    user_md(SETUP, NOTE)
+    store = sys.modules["tools.memory_tool_store"].MemoryStore
+    vm.shared_user_block(user_block(SETUP, NOTE))
+    raw = _result(success=True, current_entries=[RIGHT_GUESS, NOTE])
+    assert json.loads(gate.transform_memory_result(tool_name="memory", args={}, result=raw))["current_entries"] == [NOTE]
+    assert vm.memory_write_directive(tool_name="memory", args={"action": "add", "content": RIGHT_GUESS}) is None
+    assert gate.transform_memory_result(tool_name="memory", args={}, result=raw) is None
+    assert getattr(store, gate.SELF_WRITTEN_ATTR) is gate._self_written_digests() is vm._self_written_digests()
+    assert not gate._SELF_WRITTEN_DIGESTS and not vm._SELF_WRITTEN_DIGESTS

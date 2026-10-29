@@ -618,20 +618,28 @@ def _norm(value: Any) -> str:
 # - The memory tool (review-b #558 S2): its results carry whole entries (`current_entries`, `matches`,
 #   `replaced_entry`, `removed_entry`, ...). `transform_memory_result` (av-events' `transform_tool_result`)
 #   leaves Private entries out of them outside a private session, and `memory_write_directive` (av-events'
-#   `pre_tool_call`) refuses there every USER.md write, so a group can neither strip a mark nor probe the
-#   text. A DM keeps Hermes's own memory tool, unchanged. "Private" needs positive evidence
+#   `pre_tool_call`) refuses there every USER.md change or removal, so a group can neither strip a mark nor
+#   probe the text. A DM keeps Hermes's own memory tool, unchanged. "Private" needs positive evidence
 #   (`session_is_private_now`): a direct chat or an explicit local surface.
-# - Outside a private session the memory tool's answers key only on the call's target and action, never on
-#   its content (review-b ov#563 S1-d): every USER.md write (add, replace, remove, a batch op on USER.md)
-#   is refused with one message, every MEMORY.md write goes through whatever it holds; a USER.md result is
-#   redacted on marks and fingerprints, a MEMORY.md result on marks only. So no answer differs between a
-#   right and a wrong guess of a Private line, whether the call carries the guess or an earlier call stored
-#   it in MEMORY.md. A call whose target is unknown (args missing or malformed) counts as USER.md.
+# - Outside a private session the write check keys only on the call's target and action, never on its
+#   content (review-b ov#563 S1-d): a USER.md replace or remove (or a batch holding one, or any op that is
+#   not an add) is refused with one message; a USER.md add and every MEMORY.md write go through whatever
+#   they hold (review-b ov#565 N1-r3: a group, a cron run and Hermes's background review can add a note
+#   about the human). A call whose target is unknown (args missing or malformed) counts as USER.md.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
-#   prompt gate), so text derived from one is still known after its mark has gone (the prompt gate and
-#   USER.md results). One fingerprint set per process, on Hermes's `MemoryStore` class, read by both copies
-#   of this block (review-b ov#563 N4-d).
+#   prompt gate), so text derived from one is still known after its mark has gone. One fingerprint set per
+#   process, on Hermes's `MemoryStore` class, read by both copies of this block (review-b ov#563 N4-d).
+# - Self-written lines (review-b ov#565 S1-r3): when a session that is not private writes a line (an
+#   allowed call's content or new_text) whose digest is a fingerprint, the write check records that digest
+#   (`remember_self_written`, one set per process on the same class, at most SELF_WRITTEN_MAX). The prompt
+#   gate and every memory-tool result outside a private session (USER.md and MEMORY.md alike) redact on
+#   marks and on fingerprints, but a fingerprint is ignored for a line a non-private session wrote itself,
+#   or that the call itself carries (content, new_text, old_text). So a group's own note reads back the
+#   same whether or not it equals a Private line (no guess-confirm oracle), while a Private line a DM copied
+#   into MEMORY.md or USER.md stays hidden. Residual: the set lives in memory, so after a restart a line a
+#   group wrote earlier that equals a Private line is hidden again (one bit per restart, only for a line
+#   that group already wrote).
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -654,10 +662,10 @@ GATE_DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
 GATE_LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 #: What a memory-tool result holds in place of a Private entry outside a private session.
 LEFT_OUT = "[left out: a private USER.md entry; this is not a private chat with your human]"
-#: The memory tool's one refusal outside a private session: any USER.md write (never echoes an entry; true
-#: for an add, a replace and a remove alike, review-b ov#563 N3-d).
-MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed in your private chat with them. "
-                        "You can still note this in MEMORY.md.")
+#: The memory tool's one refusal outside a private session: a USER.md change or removal (never echoes an
+#: entry; true for a replace, a remove and a batch holding one, review-b ov#563 N3-d, ov#565 N1-r3).
+MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat "
+                        "with them. You can still add a new note here.")
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
@@ -666,6 +674,15 @@ FINGERPRINT_MIN_CHARS = 24
 DIGESTS_ATTR = "village_private_line_digests"
 #: This copy's own set, only while Hermes's store is not loaded (outside Hermes: the tests).
 _PRIVATE_LINE_DIGESTS: set = set()
+#: Set on the same class: the digests of the fingerprinted lines a session that is not private wrote itself
+#: (review-b ov#565 S1-r3), insertion-ordered (a dict), the oldest dropped past SELF_WRITTEN_MAX.
+SELF_WRITTEN_ATTR = "village_self_written_digests"
+SELF_WRITTEN_MAX = 4096
+#: This copy's own self-written digests, only while Hermes's store is not loaded (outside Hermes: the tests).
+_SELF_WRITTEN_DIGESTS: dict = {}
+#: The text fields of a memory call (and of each batch op) that land in a store, and the one that only locates.
+WRITTEN_FIELDS = ("content", "new_text")
+CALL_TEXT_FIELDS = ("content", "new_text", "old_text")
 
 _GATE_LATCHED: set = set()
 _GATE_LATCH_LOCK = threading.Lock()
@@ -685,30 +702,42 @@ def _gate_log_once(key: str, message: str, *args: Any) -> None:
 
 def _gate_reset_for_tests() -> None:
     _private_line_digests().clear()
+    _self_written_digests().clear()
     with _GATE_LATCH_LOCK:
         _GATE_LATCHED.clear()
         _PRIVATE_LINE_DIGESTS.clear()
+        _SELF_WRITTEN_DIGESTS.clear()
 
 
-def _private_line_digests() -> set:
-    """The process's fingerprint set: one set on Hermes's `MemoryStore` class, so the village-memory and
-    av-events copies of this block fill and read the same one; this copy's own set only while that class is
-    not loaded (folded into the shared one as soon as it is)."""
+def _shared_on_store(attr: str, own: Any) -> Any:
+    """One container per process on Hermes's `MemoryStore` class (`attr`), of `own`'s type, so the
+    village-memory and av-events copies of this block fill and read the same one; `own` (this copy's)
+    only while that class is not loaded, folded into the shared one as soon as it is."""
     try:
         store = getattr(sys.modules.get("tools.memory_tool_store"), "MemoryStore", None)
         if not isinstance(store, type):
-            return _PRIVATE_LINE_DIGESTS
+            return own
         with _GATE_LATCH_LOCK:
-            shared = getattr(store, DIGESTS_ATTR, None)
-            if not isinstance(shared, set):
-                setattr(store, DIGESTS_ATTR, set())
-                shared = getattr(store, DIGESTS_ATTR)
-            if _PRIVATE_LINE_DIGESTS:
-                shared.update(_PRIVATE_LINE_DIGESTS)
-                _PRIVATE_LINE_DIGESTS.clear()
+            shared = getattr(store, attr, None)
+            if type(shared) is not type(own):
+                setattr(store, attr, type(own)())
+                shared = getattr(store, attr)
+            if own:
+                shared.update(own)
+                own.clear()
         return shared
-    except Exception:  # noqa: BLE001 - this copy's own set; the marks still hold
-        return _PRIVATE_LINE_DIGESTS
+    except Exception:  # noqa: BLE001 - this copy's own; the marks still hold
+        return own
+
+
+def _private_line_digests() -> set:
+    """The process's fingerprint set (review-b ov#563 N4-d)."""
+    return _shared_on_store(DIGESTS_ATTR, _PRIVATE_LINE_DIGESTS)
+
+
+def _self_written_digests() -> dict:
+    """The process's self-written digests, a dict used as an ordered set (review-b ov#565 S1-r3)."""
+    return _shared_on_store(SELF_WRITTEN_ATTR, _SELF_WRITTEN_DIGESTS)
 
 
 def _gate_norm(value: Any) -> str:
@@ -749,9 +778,11 @@ def holds_private_mark(text: Any) -> bool:
     return isinstance(text, str) and any(mark in text for mark in PRIVATE_ENTRY_MARKS)
 
 
-def holds_private_entry(text: Any) -> bool:
-    """A Private mark in `text`, or a line of an entry this process has seen marked (the prompt gate and
-    USER.md results; never a MEMORY.md result or the write check)."""
+def holds_private_entry(text: Any, exempt: Any = frozenset()) -> bool:
+    """A Private mark in `text`, or a line of an entry this process has seen marked, unless a session that
+    is not private wrote that line itself (`remember_self_written`) or it is in `exempt` (the digests of
+    the lines the call itself carries). The prompt gate and every memory-tool result; never the write
+    check."""
     if not isinstance(text, str):
         return False
     if holds_private_mark(text):
@@ -759,7 +790,49 @@ def holds_private_entry(text: Any) -> bool:
     digests = _private_line_digests()
     if not digests:
         return False
-    return any(_line_digest(line) in digests for line in _fingerprint_lines(text))
+    written = _self_written_digests()
+    for line in _fingerprint_lines(text):
+        digest = _line_digest(line)
+        if digest in digests and digest not in written and digest not in exempt:
+            return True
+    return False
+
+
+def _call_texts(args: Any, fields: Any) -> List[str]:
+    """The string `fields` of a memory call and of each dict op of its `operations`."""
+    if not isinstance(args, dict):
+        return []
+    ops = args.get("operations")
+    calls = [args] + ([op for op in ops if isinstance(op, dict)] if isinstance(ops, list) else [])
+    return [call[name] for call in calls for name in fields if isinstance(call.get(name), str)]
+
+
+def call_line_digests(args: Any) -> frozenset:
+    """The digests of the fingerprint-length lines a call carries (content, new_text, old_text): Hermes
+    echoes them back (an error naming old_text), so they never count against the call's own result."""
+    return frozenset(_line_digest(line) for text in _call_texts(args, CALL_TEXT_FIELDS)
+                     for line in _fingerprint_lines(text))
+
+
+def remember_self_written(args: Any) -> None:
+    """Record the lines an allowed write outside a private session puts in a store (content, new_text, of
+    the call and of each op) whose digest is a fingerprint: only those can ever be redacted, so the set
+    grows only with lines equal to a Private line (a chatty group cannot push a recorded one out). Oldest
+    dropped past SELF_WRITTEN_MAX."""
+    private = _private_line_digests()
+    if not private:
+        return
+    digests = [_line_digest(line) for text in _call_texts(args, WRITTEN_FIELDS) for line in _fingerprint_lines(text)]
+    digests = [digest for digest in digests if digest in private]
+    if not digests:
+        return
+    written = _self_written_digests()
+    with _GATE_LATCH_LOCK:
+        for digest in digests:
+            written.pop(digest, None)
+            written[digest] = None
+        while len(written) > SELF_WRITTEN_MAX:
+            del written[next(iter(written))]
 
 
 def shared_user_block(block: Any) -> Any:
@@ -1012,14 +1085,17 @@ def _left_out(value: Any, holds: Any = None) -> Any:
     return value
 
 
-def redact_memory_result(result: Any, fingerprints: bool = True) -> Optional[str]:
+def redact_memory_result(result: Any, exempt: Any = frozenset()) -> Optional[str]:
     """A memory-tool result without its Private entries (judged value by value, so a fingerprint inside a
     JSON string counts), or None when it holds none. A result that is not JSON but holds a mark or a
-    fingerprint is replaced whole (fail closed). `fingerprints=False` judges on the marks only (a write's
-    result outside a private session: review-b ov#563 S1-d)."""
+    fingerprint is replaced whole (fail closed). A fingerprint in `exempt` (the call's own lines) or
+    self-written does not count (review-b ov#565 S1-r3)."""
     if not isinstance(result, str):
         return None
-    holds = holds_private_entry if fingerprints else holds_private_mark
+
+    def holds(text: Any) -> bool:
+        return holds_private_entry(text, exempt)
+
     try:
         payload = json.loads(result)
     except Exception:  # noqa: BLE001
@@ -1034,14 +1110,15 @@ def redact_memory_result(result: Any, fingerprints: bool = True) -> Optional[str
 def transform_memory_result(tool_name: Any = None, result: Any = None, session_id: Any = "", args: Any = None,
                             **_kwargs: Any) -> Optional[str]:
     """Hermes's `transform_tool_result` (model_tools.py:848-865, which hands it the call's `args`): outside a
-    private session, the memory tool's result never carries a Private USER.md entry. A USER.md call's result
-    (`memory_call_target`; args missing count as one) is judged on marks and fingerprints; a MEMORY.md
-    call's result on the marks only, so a group's own MEMORY.md note reads back the same whether or not it
-    equals a Private line (review-b ov#563 S1-d). None leaves the result as it is."""
+    private session, the memory tool's result never carries a Private USER.md entry. Every result, USER.md
+    or MEMORY.md, is judged on marks and fingerprints, a fingerprint not counting for a line a non-private
+    session wrote itself or the call itself carries; so a group's own note reads back the same whether or
+    not it equals a Private line, and a Private line a DM copied into MEMORY.md stays hidden (review-b
+    ov#565 S1-r3). None leaves the result as it is."""
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
             return None
-        out = redact_memory_result(result, fingerprints=memory_call_target(args) == "user")
+        out = redact_memory_result(result, call_line_digests(args))
         if out is not None:
             _gate_log_once("user_gate:memory_result", "USER.md gate: private entries left out of a memory result")
         return out
@@ -1049,13 +1126,23 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
         return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
 
 
+def adds_only(args: Any) -> bool:
+    """The call only adds, as Hermes runs it: a batch (a non-empty `operations`, whatever `action` says)
+    whose every op is a dict with action add, else `action` add."""
+    ops = args.get("operations")
+    if ops:
+        return isinstance(ops, list) and all(isinstance(op, dict) and op.get("action") == "add" for op in ops)
+    return args.get("action") == "add"
+
+
 def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: Any = "") -> Optional[dict]:
-    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may not
-    write USER.md at all (an add, a replace, a remove, a batch on USER.md or with an op naming it), and may
-    write MEMORY.md whatever the write holds. It decides only on the call's target and action, never on its
-    content (review-b ov#563 S1-d): the answer never tells a group whether a guess is in the setup text (no
-    membership oracle). One refusal, MEMORY_WRITE_REFUSAL, true in every case (N3-d). A DM is never
-    refused."""
+    """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may add
+    to USER.md but not change or remove it (a replace, a remove, a batch on USER.md or with an op naming it
+    that holds anything but adds), and may write MEMORY.md whatever the write holds. It decides only on the
+    call's target and action, never on its content (review-b ov#563 S1-d, ov#565 N1-r3): the answer never
+    tells a group whether a guess is in the setup text (no membership oracle). One refusal,
+    MEMORY_WRITE_REFUSAL, true in every case (N3-d). An allowed call's fingerprinted lines are recorded as
+    self-written (S1-r3); if that fails, the call is refused (fail closed). A DM is never refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
@@ -1065,7 +1152,10 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
         ops = args.get("operations")
         if (ops or args.get("action") == "batch") and not isinstance(ops, list):
             return block
-        return block if memory_call_target(args) == "user" else None
+        if memory_call_target(args) == "user" and not adds_only(args):
+            return block
+        remember_self_written(args)
+        return None
     except Exception:  # noqa: BLE001 - fail closed
         return block
 

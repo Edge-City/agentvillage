@@ -61,19 +61,17 @@ def test_register_wires_the_memory_result_filter(plugin, ctx, hermes_seams):
     assert ctx.fire("transform_tool_result", tool_name="terminal", args={}, result=raw, session_id="tg-group") == []
 
 
-def test_pre_tool_call_refuses_a_group_user_md_write_and_lets_a_memory_md_note_through(plugin, ctx, hermes_seams,
-                                                                                         monkeypatch):
+def test_pre_tool_call_refuses_a_group_user_md_change_and_lets_adds_through(plugin, ctx, hermes_seams, monkeypatch):
+    """ov#565 N1-r3: a group's USER.md add and MEMORY.md note go through; a USER.md change is refused."""
     plugin.register(ctx)
     gate = sys.modules[f"{plugin.__name__}._user_md_gate"]
     args = {"action": "replace", "target": "user", "old_text": "Tidepool Bay", "content": "Harbour"}
     results = ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-group", task_id="t")
     assert {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL} in results
-    add_user = {"action": "add", "target": "user", "content": "Brings snacks to the Friday meetup."}
-    results = ctx.fire("pre_tool_call", tool_name="memory", args=add_user, session_id="tg-group", task_id="t")
-    assert {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL} in results
-    ok = {"action": "add", "target": "memory", "content": "Brings snacks to the Friday meetup."}
-    assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=ok, session_id="tg-group", task_id="t")
-                if isinstance(r, dict) and r.get("action") == "block"]
+    for target in ("user", "memory"):
+        ok = {"action": "add", "target": target, "content": "Brings snacks to the Friday meetup."}
+        assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=ok, session_id="tg-group", task_id="t")
+                    if isinstance(r, dict) and r.get("action") == "block"]
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-dm", task_id="t")
                 if isinstance(r, dict) and r.get("action") == "block"]

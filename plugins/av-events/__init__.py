@@ -1208,9 +1208,10 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return guard
-        # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d): outside a private session the memory tool may not
-        # write USER.md at all (target only, never the content); MEMORY.md is unchanged. A block beats
-        # anything but the EdgeOS guard.
+        # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d, ov#565 N1-r3): outside a private session the memory
+        # tool may add to USER.md but not change or remove it (target and action only, never the content);
+        # MEMORY.md is unchanged; an allowed write's fingerprinted lines are recorded as self-written (S1-r3).
+        # A block beats anything but the EdgeOS guard.
         memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
                                                            kwargs.get("session_id"))
         if memory_block is not None:
