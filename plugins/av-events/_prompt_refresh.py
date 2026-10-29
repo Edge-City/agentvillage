@@ -120,7 +120,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import _miniapp_epoch, _skill_change_note
+from . import _miniapp_epoch, _skill_change_note, _user_md_gate
 from ._core import env
 
 logger = logging.getLogger("av-events")
@@ -151,11 +151,10 @@ MINIAPPS = "miniapps"
 #: BLOCK_TITLE). A prompt holding them while the provider renders nothing still shows a removed profile.
 PROFILE_PROVIDER = "village-memory"
 PROFILE_BLOCK_MARK = "═" * 46 + "\nRESIDENT PROFILE (village-memory: knowledge/agentvillage/_profile.md)"
-#: village-memory's USER.md gate on `agent.system_prompt._memory_parts` (plugins/village-memory USER_GATE_ATTR).
-USER_GATE_ATTR = "village_user_gate"
-#: The app's setup-profile entry and Hermes's entry delimiter (village-memory SETUP_PROFILE_MARK, ENTRY_DELIMITER).
-SETUP_PROFILE_MARK = "[Edge City profile, written at setup]"
-ENTRY_DELIMITER = "\n§\n"
+#: The USER.md gate's attribute on `agent.system_prompt._memory_parts` and its Private entry marks
+#: (`_user_md_gate.py`, the same block as plugins/village-memory).
+USER_GATE_ATTR = _user_md_gate.USER_GATE_ATTR
+PRIVATE_ENTRY_MARKS = _user_md_gate.PRIVATE_ENTRY_MARKS
 MEMORY_SOURCES = ("user_md", "memory_md")
 #: Hermes's names: the module whose global the turn loop calls, and the seams the refresh uses.
 LOOP_MODULE = "agent.conversation_loop"
@@ -431,7 +430,8 @@ def _setup_profile_left(prompt: str, gated: str) -> bool:
     entry."""
     header = _memory_header("user")
     at = prompt.find(header) if header else -1
-    if SETUP_PROFILE_MARK in (prompt[at:] if at >= 0 else ""):
+    region = prompt[at:] if at >= 0 else ""
+    if any(mark in region for mark in PRIVATE_ENTRY_MARKS):
         return True
     found = prompt.find(gated) if gated else -1
     return found >= 0 and prompt.startswith(ENTRY_DELIMITER, found + len(gated))

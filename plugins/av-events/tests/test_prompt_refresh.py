@@ -1132,7 +1132,7 @@ def test_without_hermes_register_still_wires_every_hook(plugin, ctx, home, caplo
     monkeypatch.setitem(sys.modules, "agent.conversation_loop", None)  # import raises
     with caplog.at_level(logging.INFO, logger="av-events"):
         plugin.register(ctx)
-    assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
+    assert set(ctx.hooks) == set(plugin.HOOK_BODIES) | set(plugin.GATE_HOOKS)
     assert "av-events: prompt_refresh: agent.conversation_loop not importable; left as is" in caplog.text
     ctx.fire("post_tool_call", tool_name="memory", args={}, result="{}", session_id="tg-dm-1")  # no raise
 
@@ -1351,6 +1351,7 @@ def test_a_group_prompt_stored_before_the_gate_is_refreshed_once(hermes, caplog)
     write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
     old = FakeAgent(hermes.db, "tg-group-2")
     old._memory_manager = FakeMemoryManager()
+    old._chat_type = "dm"  # its prompt was built as before the gate: whole
     assert "kelp sensors" in run_turn(hermes.loop, old, "hello", [])["system"]
     agent = gated_agent(hermes, "tg-group-2", "group")
     pr(hermes.plugin).reset()  # a new process after the roll
@@ -1371,6 +1372,7 @@ def test_a_stored_group_prompt_whose_gated_block_is_a_substring_is_still_refresh
     write("memories/USER.md", "\n§\n".join(entries))
     old = FakeAgent(hermes.db, "tg-group-4")
     old._memory_manager = FakeMemoryManager()
+    old._chat_type = "dm"  # its prompt was built as before the gate: whole
     stored = run_turn(hermes.loop, old, "hello", [])["system"]
     assert "kelp sensors" in stored
     agent = gated_agent(hermes, "tg-group-4", "group")

@@ -32,6 +32,7 @@ from ._clock import with_clock_line
 from . import _miniapp_epoch
 from . import _skill_change_note
 from . import _prompt_refresh
+from . import _user_md_gate
 from . import _village_visible
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -1068,6 +1069,10 @@ def _hook_on_stream_end(collector: Collector, **kwargs: Any) -> None:
     _session(collector, kwargs)
 
 
+#: Hooks registered outside HOOK_BODIES because they return a value Hermes uses: the USER.md gate's
+#: memory-result filter (`_user_md_gate.transform_memory_result`, review-b #558 S2).
+GATE_HOOKS = ("transform_tool_result",)
+
 HOOK_BODIES = {
     "on_session_start": _hook_on_session_start,
     "pre_llm_call": _hook_pre_llm_call,
@@ -1204,6 +1209,16 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return guard
+        # USER.md GATE (review-b #558 S2 fold): outside a private session the memory tool may not touch a
+        # Private USER.md entry or add or remove its mark. A block beats anything but the EdgeOS guard.
+        memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
+                                                           kwargs.get("session_id"))
+        if memory_block is not None:
+            try:
+                logger.info("av-events: user_md_gate refused a memory write outside a private session")
+            except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
+                pass
+            return memory_block
         if result is not None:
             return result
         fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
@@ -1493,6 +1508,17 @@ def register(ctx) -> None:
     try:
         register_query_village_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # USER.md GATE (review-b #558 S1, S2): the same idempotent gate village-memory installs, so the
+    # built-in USER.md never carries the Private entries outside a private session even when the provider
+    # never loads; and the memory tool's results leave them out there too (`_user_md_gate.py`).
+    try:
+        _user_md_gate.install_user_md_gate()
+    except Exception:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
+        pass
+    try:
+        ctx.register_hook("transform_tool_result", _user_md_gate.transform_memory_result)
+    except Exception:  # noqa: BLE001 - a Hermes without the hook
         pass
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.

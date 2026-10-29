@@ -215,7 +215,7 @@ def test_a_failing_gate_never_costs_the_build_and_fails_closed(vm, hermes_sp, se
         raise RuntimeError("resident text must not be logged")
 
     monkeypatch.setattr(vm, "agent_is_private", boom)
-    with caplog.at_level("DEBUG", logger="village-memory"):
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
         parts = hermes_sp._memory_parts(fake_agent(session, "group"))
     assert parts == [MEMORY_BLOCK]  # the part holding the mark is left out whole
     assert "RuntimeError" in caplog.text and "resident text" not in caplog.text
@@ -229,8 +229,9 @@ def test_f1_renders_through_the_same_gate(vm, hermes_sp, session, h):
     block = user_block(SETUP, NOTE, TAGS)
     assert gate(fake_agent(session, "group"), block) == user_block(NOTE, TAGS)
     assert gate(fake_agent(session, "dm"), block) is block
-    f1 = (h.AV_EVENTS_DIR / "_prompt_refresh.py").read_text(encoding="utf-8")
-    assert f'USER_GATE_ATTR = "{vm.USER_GATE_ATTR}"' in f1
+    av_gate = (h.AV_EVENTS_DIR / "_user_md_gate.py").read_text(encoding="utf-8")
+    assert f'USER_GATE_ATTR = "{vm.USER_GATE_ATTR}"' in av_gate
+    assert "USER_GATE_ATTR = _user_md_gate.USER_GATE_ATTR" in (h.AV_EVENTS_DIR / "_prompt_refresh.py").read_text(encoding="utf-8")
 
 
 def test_without_hermes_register_installs_nothing_and_logs_no_warning(vm, h, caplog, monkeypatch):
@@ -241,11 +242,42 @@ def test_without_hermes_register_installs_nothing_and_logs_no_warning(vm, h, cap
     assert not caplog.records
 
 
-def test_a_hermes_without_the_seam_warns_once(vm, h, caplog, monkeypatch):
+def test_a_hermes_without_the_seam_fails_closed_for_every_session(vm, h, caplog, monkeypatch):
+    """Review-b #558 S1: no `_memory_parts` seam means the store's USER.md block leaves the Private entries
+    out for EVERY session (the DM keeps the setup text under _profile.md), with one WARNING."""
+
+    class Store:
+        def __init__(self, user):
+            self.user = user
+
+        def format_for_system_prompt(self, target):
+            return self.user if target == "user" else MEMORY_BLOCK
+
+    store_mod = types.ModuleType("tools.memory_tool_store")
+    store_mod.MemoryStore = Store
     monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
     monkeypatch.setitem(sys.modules, "agent.system_prompt", types.ModuleType("agent.system_prompt"))
-    with caplog.at_level("DEBUG", logger="village-memory"):
+    monkeypatch.setitem(sys.modules, "tools", types.ModuleType("tools"))
+    monkeypatch.setitem(sys.modules, "tools.memory_tool_store", store_mod)
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
         vm.register(h.FakeCtx())
         vm.register(h.FakeCtx())
+    levels = [r.levelname for r in caplog.records if "no _memory_parts" in r.getMessage()]
+    assert levels == ["WARNING", "DEBUG"]
+    assert vm.gate_state() == "snapshot"
+    block = Store(user_block(SETUP, NOTE, TAGS))
+    assert block.format_for_system_prompt("user") == user_block(NOTE, TAGS)  # whatever the session
+    assert Store(user_block(SETUP)).format_for_system_prompt("user") is None
+    assert block.format_for_system_prompt("memory") == MEMORY_BLOCK
+
+
+def test_a_hermes_with_neither_seam_warns_once_and_says_none(vm, h, caplog, monkeypatch):
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.system_prompt", types.ModuleType("agent.system_prompt"))
+    monkeypatch.setitem(sys.modules, "tools.memory_tool_store", None)
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
+        assert vm.install_user_md_gate() is False
+        assert vm.install_user_md_gate() is False
     levels = [r.levelname for r in caplog.records if "USER.md gate not installed" in r.getMessage()]
     assert levels == ["WARNING", "DEBUG"]
+    assert vm.gate_state() == "none"

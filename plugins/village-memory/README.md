@@ -29,19 +29,38 @@ plugins/village-memory/
 - **Shared chat, room or cron run**: NO profile block and no tools (lead L32315: the profile holds the
   resident's Private lines with no per-line visibility). A tool called there answers
   `unavailable in group sessions`.
-- **The built-in USER.md** (review-b L32588): Hermes core puts `memories/USER.md` into every session's
-  prompt, and the app's `[Edge City profile, written at setup]` entry there is the raw setup profile
-  (Private, L31622). `register()` wraps `agent.system_prompt._memory_parts` once per process: a session
-  that is not private gets the USER.md block without that entry (the header and the agent's other entries
-  stay; a block left with nothing is dropped; a block holding the entry in a shape it does not know is
-  dropped whole). A private session gets it byte for byte. The provider decides only once `initialize` bound the
-  session (`session_known()`; before that its `private_session()` says True for tool routing). An agent
-  with no initialised provider (a subagent, a review fork) is judged on Hermes's own init facts. `AV_VILLAGE_MEMORY` does not turn it
-  off. F1 renders through the same gate (`village_user_gate` on the wrapper), so a group turn is not
-  stale; for a filtered session it also reads the prompt as stale while the mark is still in or after its
-  USER.md block, or another entry follows the gated block (the gated block can be a prefix of the old one),
-  and a gate that raises reads as stale; a group prompt stored before the roll is rebuilt at its next turn where F1 is on (team tenants),
-  elsewhere at its next compaction or `/new`.
+- **The built-in USER.md** (review-b L32588, ov#558 S1/S2, the context seat on N3): Hermes core puts
+  `memories/USER.md` into every session's prompt. Two of its entries are Private (`PRIVATE_ENTRY_MARKS`, cp
+  memory-entry.js CP_ENTRY_MARKS): the app's raw setup profile `[Edge City profile, written at setup]`
+  (L31622) and the control plane's `[God Constitution conversation, kept by the Agent Village control plane]`
+  note. The `[Village vote, ...]` note is village data and stays. The gate is ONE block of code, byte-identical
+  here and in `av-events/_user_md_gate.py` (a test holds them together), installed by both plugins'
+  `register()`, so it never depends on this provider loading:
+  - **The seam:** it wraps `agent.system_prompt._memory_parts` once per process. A session that is not
+    private gets the USER.md block without the Private entries (the header and the other entries stay; a
+    block left with nothing is dropped; a block holding a mark in a shape it does not know is dropped
+    whole). A private session gets it byte for byte. The provider decides only once `initialize` bound the
+    session (`session_known()`); an agent with no initialised provider is judged on Hermes's own init facts.
+  - **Fail closed:** a Hermes without that seam gets the store gate instead: `MemoryStore.format_for_system_prompt`
+    leaves the Private entries out of the USER.md block for EVERY session (the DM still has the setup text
+    under `_profile.md` "## Setup profile"). One WARNING.
+  - **The memory tool** (av-events hooks), outside a private session only: `transform_tool_result` leaves
+    Private entries out of every result (`current_entries`, `matches`, `replaced_entry`, `removed_entry`,
+    `replaced_entries`, ...), and `pre_tool_call` refuses any write that adds or removes a mark, names one,
+    or replaces or removes a Private entry (one plain refusal, never the entry). A DM keeps Hermes's own tool.
+  - **Fingerprints:** an entry this process has seen marked (load_from_disk, the gate, the write check) is
+    still Private after its mark is gone: each line of 24 characters or more, by sha256, in memory only.
+  - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
+    the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
+    when both are `seam`.
+  - `AV_VILLAGE_MEMORY` does not turn any of it off. F1 renders USER.md through the same gate
+    (`village_user_gate`), and for a filtered session reads the prompt as stale while a Private mark is in or
+    after its USER.md block, or another entry follows the gated block.
+  - **Limits:** a group prompt stored before the roll keeps the entries until it is rebuilt (its next turn
+    where F1 is on, team tenants; elsewhere its next compaction or `/new`: review-b #558 S3, a roll decision).
+    Fingerprints do not survive a restart, so a mark stripped in a DM and a restart later leave that text
+    unknown to the gate. The agent's own notes and the tags entry's Private-marked lines are not filtered
+    here (ov#560).
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and
