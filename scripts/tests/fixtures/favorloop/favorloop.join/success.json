@@ -1,0 +1,28 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Saved: you offer Code review and would like Portrait photo, and Favor Loop will propose a loop as soon as it finds one.\",\"member\":{\"offers\":[\"code_review\"],\"wants\":[\"portrait_photo\"],\"giftOnly\":false,\"contactHandle\":\"@fixture_alice\",\"availability\":[\"fri_morning\",\"sat\"],\"paused\":false},\"openLoops\":0,\"newProposal\":false}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Saved: you offer Code review and would like Portrait photo, and Favor Loop will propose a loop as soon as it finds one.",
+    "member": {
+      "offers": [
+        "code_review"
+      ],
+      "wants": [
+        "portrait_photo"
+      ],
+      "giftOnly": false,
+      "contactHandle": "@fixture_alice",
+      "availability": [
+        "fri_morning",
+        "sat"
+      ],
+      "paused": false
+    },
+    "openLoops": 0,
+    "newProposal": false
+  }
+}

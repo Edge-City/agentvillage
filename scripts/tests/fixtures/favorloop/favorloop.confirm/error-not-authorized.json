@@ -1,0 +1,4 @@
+{
+  "code": "not_authorized",
+  "detail": "Only the person who received a favor can confirm it, and in this loop you only give."
+}

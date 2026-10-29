@@ -1,0 +1,12 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Done: everything Favor Loop held about you is deleted.\",\"deleted\":true}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Done: everything Favor Loop held about you is deleted.",
+    "deleted": true
+  }
+}

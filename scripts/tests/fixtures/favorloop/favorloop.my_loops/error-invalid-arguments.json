@@ -1,0 +1,4 @@
+{
+  "code": "invalid_arguments",
+  "detail": "Favor Loop never takes identity in the arguments, so remove \"residentId\"; Agent Village tells Favor Loop who is calling."
+}
