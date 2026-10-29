@@ -80,6 +80,21 @@ for name, args in (("group", ("group",)), ("cron", (None, "cron"))):
     _p, other_manager, other_agent, other_added = agent_for(*args)
     report[name] = {"added": other_added, "parts": _memory_parts(other_agent),
                     "profile": json.loads(other_manager.handle_tool_call("resident_profile", {}))}
+
+# The built-in USER.md (review-b L32588): Hermes's real MemoryStore, through the seam the prompt build
+# calls by bare name (system_prompt.py:776), which register() wrapped.
+import agent.system_prompt as sp
+from tools.memory_tool import MemoryStore
+report["seam_is_module_global"] = sp.build_system_prompt.__globals__ is vars(sp)
+report["user_gate"] = callable(getattr(sp._memory_parts, "village_user_gate", None))
+users = {}
+for name, args in (("dm", ("dm",)), ("group", ("group",)), ("cron", (None, "cron"))):
+    _p, _m, user_agent, _a = agent_for(*args)
+    store = MemoryStore(memory_char_limit=2200, user_char_limit=24000)
+    store.load_from_disk()
+    user_agent._memory_store, user_agent._user_profile_enabled = store, True
+    users[name] = sp._memory_parts(user_agent)
+report["user_parts"] = users
 print(json.dumps(report))
 '''
 
@@ -93,6 +108,10 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
     shutil.copytree(h.KNOWLEDGE_FIXTURE, home / "knowledge")
     (home / "knowledge" / "agentvillage" / "_profile.md").write_text(h.profile_text(), encoding="utf-8")
     (home / "config.yaml").write_text("model:\n  context_length: 1000000\nmemory:\n  provider: village-memory\n  user_char_limit: 24000\n", encoding="utf-8")
+    (home / "memories").mkdir()
+    (home / "memories" / "USER.md").write_text(
+        "[Edge City profile, written at setup]\nSynthetic Resident, Tidepool Bay. Builds kelp sensors.\n§\n"
+        "Prefers calls before noon.", encoding="utf-8")
 
     env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_"))}
     env.update(PYTHONPATH=str(_SRC), PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
@@ -122,3 +141,13 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
         shared = report[name]
         assert shared["parts"] == [], name
         assert shared["added"] == 0 and shared["profile"]["status"] == "unavailable", name
+    # The built-in USER.md: whole in the DM; without the raw setup profile in a group or cron run.
+    assert report["seam_is_module_global"] and report["user_gate"]
+    users = report["user_parts"]
+    (dm_user,) = [p for p in users["dm"] if "USER PROFILE" in p]
+    assert "kelp sensors" in dm_user and "Prefers calls before noon." in dm_user
+    for name in ("group", "cron"):
+        (user,) = users[name]
+        assert user.startswith("═" * 46 + "\nUSER PROFILE (who the user is) ["), name
+        assert "Prefers calls before noon." in user, name
+        assert "kelp sensors" not in user and "written at setup" not in user, name

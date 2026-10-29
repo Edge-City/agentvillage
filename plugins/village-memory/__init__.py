@@ -44,8 +44,17 @@ Sessions (``chat_type``, ``platform`` and ``agent_context`` reach ``initialize``
 ``agent/agent_init.py:1221-1251, 2303-2306``): a one-to-one chat, or no chat
 type on the owner's own machine (cli, tui, desktop, local), is private and gets
 the full block and both tools. A shared chat (group, forum, channel, thread,
-anything unknown) and a cron run get the reduced block (no Context page files)
-and no tools; a tool called there answers "unavailable in group sessions".
+anything unknown) and a cron run get no profile block and no tools (lead
+L32315); a tool called there answers "unavailable in group sessions".
+
+The built-in USER.md (review-b L32588): Hermes core puts ``memories/USER.md``
+into every session's prompt (``agent/system_prompt.py:515-525, 776``), and the
+app's ``[Edge City profile, written at setup]`` entry there is the raw setup
+profile (Private). ``register()`` wraps ``system_prompt._memory_parts`` once per
+process: a session that is not private (the same ``private_session()``) gets
+the USER.md block without that entry; a private one gets it byte for byte. F1
+renders through the same gate (``village_user_gate`` on the wrapper). Not
+behind ``AV_VILLAGE_MEMORY``: it is privacy, not the profile feature.
 
 Every output is folded to visible text: Hermes's ``INVISIBLE_CHARS``
 (``tools/threat_patterns.py:110-112``) and C0/C1 controls other than newline and
@@ -62,6 +71,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -148,6 +158,16 @@ DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
 LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 REFUSAL = "unavailable in group sessions"
 OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+#: The app's raw setup-profile entry in the built-in `memories/USER.md` (Private, L31622). Same text as
+#: the Index scripts' SETUP_PROFILE_MARK (skills/index-network/scripts/context-tags.ts, memory_signal_gate.py).
+SETUP_PROFILE_MARK = "[Edge City profile, written at setup]"
+#: Hermes's entry delimiter and USER.md block title (tools/memory_tool_store.py:20-23, `_render_block`).
+ENTRY_DELIMITER = "\n§\n"
+USER_BLOCK_TITLE = "USER PROFILE (who the user is)"
+#: Set on the wrapped `agent.system_prompt._memory_parts`: `gate(agent, user_block) -> block`, so F1
+#: (av-events/_prompt_refresh.py) renders the USER.md block exactly as the prompt carries it.
+USER_GATE_ATTR = "village_user_gate"
 SWITCH_VAR = "AV_VILLAGE_MEMORY"
 
 # resident_context
@@ -587,6 +607,122 @@ def _norm(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def is_private_session(chat_type: str, platform: str, agent_context: str) -> bool:
+    """A one-to-one chat, or no chat type on the owner's own machine; never a cron run (normalised
+    values, as `initialize` stores them)."""
+    if agent_context == "cron" or platform == "cron":
+        return False
+    if chat_type in DIRECT_CHAT_TYPES:
+        return True
+    return not chat_type and (not platform or platform in LOCAL_SURFACES)
+
+
+# --------------------------------------------------------------------------
+# The built-in USER.md outside a private session (review-b L32588)
+# --------------------------------------------------------------------------
+#
+# Hermes core puts `memories/USER.md` into EVERY session's prompt (agent/system_prompt.py:515-525, 776:
+# `_memory_parts` -> `MemoryStore.format_for_system_prompt("user")`, a snapshot frozen at
+# `load_from_disk`). The app's first entry there is the raw setup profile, untagged and Private. So
+# `register()` wraps `_memory_parts` (looked up by bare name at :776, so the module attribute is the
+# seam): a session that is not private gets the USER.md block without that entry. A private session is
+# untouched, byte for byte. The agent's other entries (its own notes, the app's tags entry) stay.
+
+
+def shared_user_block(block: Any) -> Any:
+    """Hermes's USER.md block for a session that is not private: the setup-profile entry left out,
+    the header (and its usage figure, which is the file's) kept. "" when nothing else is left.
+    Fail closed: a block that holds the mark in a shape this does not know is dropped whole."""
+    if not isinstance(block, str) or SETUP_PROFILE_MARK not in block:
+        return block
+    lines = block.split("\n", 3)
+    if len(lines) < 4 or lines[0] != SEPARATOR or lines[2] != SEPARATOR or not lines[1].startswith(USER_BLOCK_TITLE):
+        return ""
+    kept = [entry for entry in lines[3].split(ENTRY_DELIMITER) if SETUP_PROFILE_MARK not in entry]
+    if not [entry for entry in kept if entry.strip()]:
+        return ""
+    return "\n".join(lines[:3]) + "\n" + ENTRY_DELIMITER.join(kept)
+
+
+def _village_provider(agent: Any) -> Any:
+    manager = getattr(agent, "_memory_manager", None)
+    for provider in list(getattr(manager, "providers", None) or []) if manager is not None else []:
+        if getattr(provider, "name", None) == PROVIDER_NAME and callable(getattr(provider, "private_session", None)):
+            return provider
+    return None
+
+
+def agent_is_private(agent: Any) -> bool:
+    """The agent's own village-memory provider decides (`private_session`). An agent without one in
+    this process (a subagent, a review fork) is judged on the same facts Hermes hands a provider
+    (agent/agent_init.py:1221-1248: platform defaults to cli, agent_context from platform)."""
+    provider = _village_provider(agent)
+    if provider is not None:
+        return bool(provider.private_session())
+    platform = _norm(getattr(agent, "platform", None)) or "cli"
+    context = platform if platform in ("cron", "subagent") else "primary"
+    return is_private_session(_norm(getattr(agent, "_chat_type", None)), platform, context)
+
+
+def user_block_for(agent: Any, block: Any) -> Any:
+    """The USER.md block as this agent's prompt carries it (F1 renders through this too)."""
+    return block if agent_is_private(agent) else shared_user_block(block)
+
+
+def _is_user_part(agent: Any, part: Any) -> bool:
+    if not isinstance(part, str):
+        return False
+    if part.startswith(f"{SEPARATOR}\n{USER_BLOCK_TITLE}"):
+        return True
+    store = getattr(agent, "_memory_store", None)
+    try:
+        return store is not None and part == store.format_for_system_prompt("user")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def gate_memory_parts(original: Any) -> Any:
+    """`_memory_parts` with the USER.md block passed through `user_block_for`."""
+
+    def _memory_parts(agent: Any) -> List[str]:
+        parts = original(agent)
+        try:
+            if agent_is_private(agent):
+                return parts
+            gated = [shared_user_block(p) if _is_user_part(agent, p) else p for p in parts]
+            return [p for p in gated if p]
+        except Exception as exc:  # noqa: BLE001 - never cost a prompt build; fail closed on the entry
+            _log_once(f"user_gate:error_{type(exc).__name__}",
+                      "village-memory: USER.md gate failed (%s); setup profile left out", type(exc).__name__)
+            return [p for p in parts if not (isinstance(p, str) and SETUP_PROFILE_MARK in p)]
+
+    _memory_parts.__wrapped__ = original  # type: ignore[attr-defined]
+    setattr(_memory_parts, USER_GATE_ATTR, user_block_for)
+    return _memory_parts
+
+
+_GATE_LOCK = threading.Lock()
+
+
+def install_user_md_gate() -> bool:
+    """Wrap `agent.system_prompt._memory_parts` once per process. False when the seam is missing
+    (a renamed Hermes: one WARNING, the USER.md block is then Hermes's own)."""
+    try:
+        sp = importlib.import_module("agent.system_prompt")
+    except ImportError:  # outside Hermes (the plugin's own tests): nothing to gate
+        logger.debug("village-memory: USER.md gate not installed (no agent.system_prompt)")
+        return False
+    with _GATE_LOCK:
+        current = getattr(sp, "_memory_parts", None)
+        if not callable(current):
+            _log_once("user_gate:no_seam", "village-memory: USER.md gate not installed (no _memory_parts)")
+            return False
+        if callable(getattr(current, USER_GATE_ATTR, None)):
+            return True
+        sp._memory_parts = gate_memory_parts(current)
+    return True
+
+
 # --------------------------------------------------------------------------
 # The provider
 # --------------------------------------------------------------------------
@@ -635,11 +771,7 @@ class VillageMemoryProvider(MemoryProvider):
         Before `initialize` (Hermes reads tool schemas then, to route names) it counts as private."""
         if not self._initialized:
             return True
-        if self._agent_context == "cron" or self._platform == "cron":
-            return False
-        if self._chat_type in DIRECT_CHAT_TYPES:
-            return True
-        return not self._chat_type and (not self._platform or self._platform in LOCAL_SURFACES)
+        return is_private_session(self._chat_type, self._platform, self._agent_context)
 
     def render(self, *, where: str) -> Tuple[str, Profile]:
         """The profile text for this session, reduced and capped (`block_budget`), or "" ."""
@@ -751,6 +883,11 @@ def register(ctx: Any) -> None:
     hook = getattr(ctx, "register_memory_provider", None)
     if callable(hook):
         hook(VillageMemoryProvider())
+        try:
+            install_user_md_gate()  # the built-in USER.md outside a private session (see above)
+        except Exception as exc:  # noqa: BLE001 - never cost the provider
+            _log_once(f"user_gate:install_{type(exc).__name__}", "village-memory: USER.md gate install failed (%s)",
+                      type(exc).__name__)
 
 
 def _reset_for_tests() -> None:
@@ -769,10 +906,15 @@ __all__ = [
     "PROFILE_TOOL",
     "PROVIDER_NAME",
     "SEPARATOR",
+    "SETUP_PROFILE_MARK",
     "VillageMemoryProvider",
+    "agent_is_private",
     "block_budget",
+    "install_user_md_gate",
     "read_profile",
     "register",
     "search",
+    "shared_user_block",
+    "user_block_for",
     "visible",
 ]

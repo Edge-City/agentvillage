@@ -206,11 +206,9 @@ def build_system_prompt(agent, system_message=None):
     if HERMES.get("bot_chat"):  # tools/bot_mode_probe.py epoch_line, stamped on a Bot Chat prompt
         stable += f"\n\nCapability epoch: {HERMES['capability']}"
     context = "\n\n".join(p for p in [system_message, *_context_files_part(agent, None, False)] if p)
-    memory = [agent._memory_store.format_for_system_prompt(t) for t in ("memory", "user")]
-    manager = getattr(agent, "_memory_manager", None)  # system_prompt._memory_parts: the provider block
-    provider = manager.build_system_prompt() if manager is not None else ""
+    memory = sys.modules["agent.system_prompt"]._memory_parts(agent)  # by bare name, as system_prompt.py:776
     sections = format_system_prompt_sections(frozen_sections(agent))
-    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, provider, sections,
+    volatile = "\n\n".join(p for p in [_skills_prompt(agent), *memory, sections,
                                          "Conversation started: Thursday"] if p)
     agent._cached_system_prompt_static = stable
     for warning in list(TRUNCATION.get() or []):
@@ -218,6 +216,14 @@ def build_system_prompt(agent, system_message=None):
     if TRUNCATION.get() is not None:
         TRUNCATION.get().clear()
     return "\n\n".join(p for p in (stable, context, volatile) if p)
+
+
+def _memory_parts(agent):
+    """agent/system_prompt.py:515-540: the built-in MEMORY.md and USER.md blocks, then the provider block."""
+    parts = [b for b in (agent._memory_store.format_for_system_prompt(t) for t in ("memory", "user")) if b]
+    manager = getattr(agent, "_memory_manager", None)
+    provider = manager.build_system_prompt() if manager is not None else ""
+    return parts + ([provider] if provider else [])
 
 
 def invalidate_system_prompt(agent):
@@ -363,7 +369,7 @@ def install_hermes(monkeypatch, *, loop_attrs=None):
         "agent.system_prompt": _module(
             "agent.system_prompt", _identity_parts=_identity_parts, _context_files_part=_context_files_part,
             _skills_prompt=_skills_prompt, restore_plugin_prompt_sections=restore_plugin_prompt_sections,
-            reconstruct_static_prefix=reconstruct_static_prefix),
+            reconstruct_static_prefix=reconstruct_static_prefix, _memory_parts=_memory_parts),
         "agent.prompt_builder": _module("agent.prompt_builder", _truncation_warnings=TRUNCATION,
                                         clear_skills_system_prompt_cache=clear_skills_system_prompt_cache),
         "agent.runtime_cwd": _module("agent.runtime_cwd", resolve_context_cwd=_home),
@@ -1300,6 +1306,79 @@ def test_an_unreadable_profile_never_blocks_and_never_holds_back_user_md(hermes,
     finally:
         if bad == "mode_000":
             path.chmod(0o600)
+
+
+
+# ---- review-b L32588: the built-in USER.md outside a private session ----------------------------------
+
+SETUP_ENTRY = "[Edge City profile, written at setup]\nSynthetic Resident, Tidepool Bay. Builds kelp sensors."
+
+
+def gated_agent(h, session_id, chat_type):
+    """An agent whose village-memory provider sits in a `chat_type` session, with village-memory's USER.md
+    gate installed on the stand-in `agent.system_prompt._memory_parts` (its register() does that)."""
+    module, _dm = village_memory_provider()
+    module.install_user_md_gate()
+    provider = module.VillageMemoryProvider()
+    provider.initialize(session_id, hermes_home=str(_home()), platform="telegram", chat_type=chat_type)
+    agent = FakeAgent(h.db, session_id)
+    agent._chat_type = chat_type
+    agent._memory_manager = FakeMemoryManager(provider)
+    return agent
+
+
+def test_a_group_session_without_the_setup_profile_is_not_stale_every_turn(hermes, caplog):
+    """F1's exact test renders USER.md through the same gate, so the gated group prompt is current."""
+    write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
+    agent = gated_agent(hermes, "tg-group-1", "group")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "Name: Test Resident" in first and "kelp sensors" not in first and "written at setup" not in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, gated_agent(hermes, "tg-group-1", "group")):
+            assert run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog) and hermes.db.writes == 1
+    # An external USER.md write still reaches the group, still without the setup profile.
+    write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident\n§\nVote note: theme closes Friday")
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "and now?", HISTORY)["system"]
+    assert "Vote note: theme closes Friday" in got and "kelp sensors" not in got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+def test_a_group_prompt_stored_before_the_gate_is_refreshed_once(hermes, caplog):
+    """A group session whose stored prompt still holds the setup profile (built before the roll) is
+    rebuilt at its next turn, then stays put."""
+    write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
+    old = FakeAgent(hermes.db, "tg-group-2")
+    old._memory_manager = FakeMemoryManager()
+    assert "kelp sensors" in run_turn(hermes.loop, old, "hello", [])["system"]
+    agent = gated_agent(hermes, "tg-group-2", "group")
+    pr(hermes.plugin).reset()  # a new process after the roll
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+        again = run_turn(hermes.loop, agent, "hi again", HISTORY)["system"]
+    assert "kelp sensors" not in got and "Name: Test Resident" in got and again == got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+def test_a_dm_keeps_the_setup_profile_through_the_gate(hermes, caplog):
+    write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
+    agent = gated_agent(hermes, "tg-dm-9", "dm")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "kelp sensors" in first and "Name: Test Resident" in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
+
+
+def test_a_group_whose_user_md_is_only_the_setup_profile_has_no_user_block_and_is_stable(hermes, caplog):
+    write("memories/USER.md", SETUP_ENTRY)
+    agent = gated_agent(hermes, "tg-group-3", "group")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "USER PROFILE" not in first and "kelp sensors" not in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
 
 
 

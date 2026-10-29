@@ -82,7 +82,10 @@ does (`MemoryManager.build_system_prompt`, behind the same `memory_provider_tool
 empty now while the prompt still holds its marker lines (the cp removed the file). Reason
 `profile_md`. A profile the provider cannot read is an empty block, never "no verdict": it never
 holds back a USER.md / MEMORY.md change (a vote note). The refresh is the same rebuild + persist, so
-the provider block and the built-in snapshot move together.
+the provider block and the built-in snapshot move together. Outside a private session village-memory's
+USER.md gate (review-b L32588) leaves the setup-profile entry out of the prompt's USER.md block; the exact
+test renders USER.md through the same gate (`village_user_gate` on the wrapped `_memory_parts`), so a
+group turn is not stale, and a group prompt stored before the gate is rebuilt once (reason `user_md`).
 
 MINIAPP-PICKUP (v2.1.5, `_miniapp_epoch.py`): the same wrapper also runs for every resident while
 `AV_MINIAPP_REFRESH` is on (the default; independent of `AV_PROMPT_REFRESH`). The pre-filter adds the
@@ -148,6 +151,8 @@ MINIAPPS = "miniapps"
 #: BLOCK_TITLE). A prompt holding them while the provider renders nothing still shows a removed profile.
 PROFILE_PROVIDER = "village-memory"
 PROFILE_BLOCK_MARK = "═" * 46 + "\nRESIDENT PROFILE (village-memory: knowledge/agentvillage/_profile.md)"
+#: village-memory's USER.md gate on `agent.system_prompt._memory_parts` (plugins/village-memory USER_GATE_ATTR).
+USER_GATE_ATTR = "village_user_gate"
 MEMORY_SOURCES = ("user_md", "memory_md")
 #: Hermes's names: the module whose global the turn loop calls, and the seams the refresh uses.
 LOOP_MODULE = "agent.conversation_loop"
@@ -404,6 +409,17 @@ def _memory_header(target: str) -> Optional[str]:
         return None
 
 
+def _user_gate() -> Optional[Callable[[Any, str], str]]:
+    """village-memory's USER.md gate (`village_user_gate` on the wrapped `system_prompt._memory_parts`):
+    outside a private session the prompt carries USER.md without the setup-profile entry, so the exact
+    test renders it the same way (else every group turn would read as stale). None when not installed."""
+    try:
+        gate = getattr(importlib.import_module("agent.system_prompt")._memory_parts, USER_GATE_ATTR, None)
+    except Exception:  # noqa: BLE001
+        return None
+    return gate if callable(gate) else None
+
+
 def _memory_reasons(agent: Any, prompt: str) -> list:
     store = getattr(agent, "_memory_store", None)
     if store is None:
@@ -414,11 +430,14 @@ def _memory_reasons(agent: Any, prompt: str) -> list:
         user_profile_enabled=getattr(store, "user_profile_enabled", True),
     )
     fresh.load_from_disk()
+    gate = _user_gate()
     reasons = []
     for target, flag, reason in (("user", "_user_profile_enabled", "user_md"), ("memory", "_memory_enabled", "memory_md")):
         if not getattr(agent, flag, False):
             continue
         block = (fresh.format_for_system_prompt(target) or "").strip()
+        if target == "user" and block and gate is not None:
+            block = (gate(agent, block) or "").strip()
         if block:
             if block not in prompt:
                 reasons.append(reason)

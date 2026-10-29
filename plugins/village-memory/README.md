@@ -29,6 +29,16 @@ plugins/village-memory/
 - **Shared chat, room or cron run**: NO profile block and no tools (lead L32315: the profile holds the
   resident's Private lines with no per-line visibility). A tool called there answers
   `unavailable in group sessions`.
+- **The built-in USER.md** (review-b L32588): Hermes core puts `memories/USER.md` into every session's
+  prompt, and the app's `[Edge City profile, written at setup]` entry there is the raw setup profile
+  (Private, L31622). `register()` wraps `agent.system_prompt._memory_parts` once per process: a session
+  that is not private gets the USER.md block without that entry (the header and the agent's other entries
+  stay; a block left with nothing is dropped; a block holding the entry in a shape it does not know is
+  dropped whole). A private session gets it byte for byte. An agent with no village-memory provider (a
+  subagent, a review fork) is judged on Hermes's own init facts. `AV_VILLAGE_MEMORY` does not turn it
+  off. F1 renders through the same gate (`village_user_gate` on the wrapper), so a group turn is not
+  stale; a group prompt stored before the roll is rebuilt at its next turn where F1 is on (team tenants),
+  elsewhere at its next compaction or `/new`.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and
@@ -53,5 +63,8 @@ plugins/village-memory/
 - Tools: schemas read before and after `initialize` (`memory_manager.py:363-405, 112-158`), dispatched
   by the manager (`agent/tool_executor.py:1634-1641`), never deferred by `tool_search`
   (`tools/tool_search.py:149-162`).
+- USER.md reaches the prompt only through `agent/system_prompt.py` `_memory_parts` (:515-525), called by
+  bare name at :776; the block is `MemoryStore._render_block` (`tools/memory_tool_store.py:20-23`):
+  separator, `USER PROFILE (who the user is) [usage]`, separator, entries joined by `\n§\n`.
 - Hermes executes every top-level `*.py` of the directory (`plugins/plugin_loader.py:117-125`): keep
   the runtime in `__init__.py`.
