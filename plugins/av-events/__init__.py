@@ -32,6 +32,7 @@ from ._clock import with_clock_line
 from . import _miniapp_epoch
 from . import _skill_change_note
 from . import _prompt_refresh
+from . import _user_md_gate
 from . import _village_visible
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -1076,6 +1077,9 @@ HOOK_BODIES = {
     "post_api_request": _hook_post_api_request,
     "api_request_error": _hook_api_request_error,
     "pre_tool_call": _hook_pre_tool_call,
+    # USER.md GATE (review-b #558 S2): registered as it is, outside `guarded` (build_hooks): privacy, not
+    # telemetry, so no kill switch turns it off; it never raises.
+    "transform_tool_result": _user_md_gate.transform_memory_result,
     "post_tool_call": _hook_post_tool_call,
     "on_session_end": _hook_on_session_end,
     "on_session_finalize": _hook_on_session_finalize,
@@ -1204,6 +1208,16 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return guard
+        # USER.md GATE (review-b #558 S2 fold): outside a private session the memory tool may not touch a
+        # Private USER.md entry or add or remove its mark. A block beats anything but the EdgeOS guard.
+        memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
+                                                           kwargs.get("session_id"))
+        if memory_block is not None:
+            try:
+                logger.info("av-events: user_md_gate refused a memory write outside a private session")
+            except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
+                pass
+            return memory_block
         if result is not None:
             return result
         fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
@@ -1338,6 +1352,9 @@ def build_hooks(collector_ref=_collector) -> dict:
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
+        if body is _user_md_gate.transform_memory_result:
+            hooks[name] = body  # the USER.md gate's memory-result filter: not telemetry, never guarded
+            continue
         wrapped = guarded(name, collector_ref, quiet=name in QUIET_HOOKS)(body)
         # Hermes decides what to pass by inspecting the callback signature, and
         # `inspect.signature` follows `__wrapped__` through `functools.wraps`.
@@ -1493,6 +1510,13 @@ def register(ctx) -> None:
     try:
         register_query_village_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # USER.md GATE (review-b #558 S1, S2): the same idempotent gate village-memory installs, so the
+    # built-in USER.md never carries the Private entries outside a private session even when the provider
+    # never loads; and the memory tool's results leave them out there too (`_user_md_gate.py`).
+    try:
+        _user_md_gate.install_user_md_gate()
+    except Exception:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
         pass
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.

@@ -82,7 +82,10 @@ does (`MemoryManager.build_system_prompt`, behind the same `memory_provider_tool
 empty now while the prompt still holds its marker lines (the cp removed the file). Reason
 `profile_md`. A profile the provider cannot read is an empty block, never "no verdict": it never
 holds back a USER.md / MEMORY.md change (a vote note). The refresh is the same rebuild + persist, so
-the provider block and the built-in snapshot move together.
+the provider block and the built-in snapshot move together. Outside a private session village-memory's
+USER.md gate (review-b L32588) leaves the setup-profile entry out of the prompt's USER.md block; the exact
+test renders USER.md through the same gate (`village_user_gate` on the wrapped `_memory_parts`), so a
+group turn is not stale, and a group prompt stored before the gate is rebuilt once (reason `user_md`).
 
 MINIAPP-PICKUP (v2.1.5, `_miniapp_epoch.py`): the same wrapper also runs for every resident while
 `AV_MINIAPP_REFRESH` is on (the default; independent of `AV_PROMPT_REFRESH`). The pre-filter adds the
@@ -117,7 +120,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import _miniapp_epoch, _skill_change_note
+from . import _miniapp_epoch, _skill_change_note, _user_md_gate
 from ._core import env
 
 logger = logging.getLogger("av-events")
@@ -148,6 +151,10 @@ MINIAPPS = "miniapps"
 #: BLOCK_TITLE). A prompt holding them while the provider renders nothing still shows a removed profile.
 PROFILE_PROVIDER = "village-memory"
 PROFILE_BLOCK_MARK = "═" * 46 + "\nRESIDENT PROFILE (village-memory: knowledge/agentvillage/_profile.md)"
+#: The USER.md gate's attribute on `agent.system_prompt._memory_parts` and its Private entry marks
+#: (`_user_md_gate.py`, the same block as plugins/village-memory).
+USER_GATE_ATTR = _user_md_gate.USER_GATE_ATTR
+PRIVATE_ENTRY_MARKS = _user_md_gate.PRIVATE_ENTRY_MARKS
 MEMORY_SOURCES = ("user_md", "memory_md")
 #: Hermes's names: the module whose global the turn loop calls, and the seams the refresh uses.
 LOOP_MODULE = "agent.conversation_loop"
@@ -404,6 +411,32 @@ def _memory_header(target: str) -> Optional[str]:
         return None
 
 
+def _user_gate() -> Optional[Callable[[Any, str], str]]:
+    """village-memory's USER.md gate (`village_user_gate` on the wrapped `system_prompt._memory_parts`):
+    outside a private session the prompt carries USER.md without the setup-profile entry, so the exact
+    test renders it the same way (else every group turn would read as stale). None when not installed."""
+    try:
+        gate = getattr(importlib.import_module("agent.system_prompt")._memory_parts, USER_GATE_ATTR, None)
+    except Exception:  # noqa: BLE001
+        return None
+    return gate if callable(gate) else None
+
+
+def _setup_profile_left(prompt: str, gated: str) -> bool:
+    """A session whose USER.md block the gate filtered: is the setup-profile entry still in the prompt?
+    A substring test alone is not enough: with the entry last, the gated block is a prefix of the old one
+    (same header, same usage figure). So: the mark anywhere from the USER.md block on (MEMORY.md comes
+    before it, the provider block after it never holds the mark), or the gated block followed by another
+    entry."""
+    header = _memory_header("user")
+    at = prompt.find(header) if header else -1
+    region = prompt[at:] if at >= 0 else ""
+    if any(mark in region for mark in PRIVATE_ENTRY_MARKS):
+        return True
+    found = prompt.find(gated) if gated else -1
+    return found >= 0 and prompt.startswith(ENTRY_DELIMITER, found + len(gated))
+
+
 def _memory_reasons(agent: Any, prompt: str) -> list:
     store = getattr(agent, "_memory_store", None)
     if store is None:
@@ -414,11 +447,22 @@ def _memory_reasons(agent: Any, prompt: str) -> list:
         user_profile_enabled=getattr(store, "user_profile_enabled", True),
     )
     fresh.load_from_disk()
+    gate = _user_gate()
     reasons = []
     for target, flag, reason in (("user", "_user_profile_enabled", "user_md"), ("memory", "_memory_enabled", "memory_md")):
         if not getattr(agent, flag, False):
             continue
         block = (fresh.format_for_system_prompt(target) or "").strip()
+        if target == "user" and block and gate is not None:
+            try:
+                gated = (gate(agent, block) or "").strip()
+            except Exception:  # noqa: BLE001 - the gate's verdict is unknown: rebuild (the build fails closed)
+                reasons.append(reason)
+                continue
+            if gated != block and _setup_profile_left(prompt, gated):
+                reasons.append(reason)
+                continue
+            block = gated
         if block:
             if block not in prompt:
                 reasons.append(reason)

@@ -80,6 +80,39 @@ for name, args in (("group", ("group",)), ("cron", (None, "cron"))):
     _p, other_manager, other_agent, other_added = agent_for(*args)
     report[name] = {"added": other_added, "parts": _memory_parts(other_agent),
                     "profile": json.loads(other_manager.handle_tool_call("resident_profile", {}))}
+
+# The built-in USER.md (review-b L32588): Hermes's real MemoryStore, through the seam the prompt build
+# calls by bare name (system_prompt.py:776), which register() wrapped.
+import agent.system_prompt as sp
+from tools.memory_tool import MemoryStore
+report["seam_is_module_global"] = sp.build_system_prompt.__globals__ is vars(sp)
+report["user_gate"] = callable(getattr(sp._memory_parts, "village_user_gate", None))
+users = {}
+for name, args in (("dm", ("dm",)), ("group", ("group",)), ("cron", (None, "cron"))):
+    _p, _m, user_agent, _a = agent_for(*args)
+    store = MemoryStore(memory_char_limit=2200, user_char_limit=24000)
+    store.load_from_disk()
+    user_agent._memory_store, user_agent._user_profile_enabled = store, True
+    users[name] = sp._memory_parts(user_agent)
+report["user_parts"] = users
+
+# The memory tool (review-b #558 S2): Hermes's own no-match result carries every USER.md entry; through the
+# gate's transform_tool_result in a group it carries no Private one, in a DM it is Hermes's own.
+import os, importlib.util
+from tools.memory_tool import memory_tool
+store = MemoryStore(memory_char_limit=2200, user_char_limit=24000)
+store.load_from_disk()
+miss = memory_tool(action="replace", target="user", old_text="no such text", content="x", store=store)
+spec = importlib.util.spec_from_file_location("av_user_md_gate_probe", home + "/plugins/av-events/_user_md_gate.py")
+av_gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(av_gate)
+os.environ["HERMES_SESSION_PLATFORM"] = "telegram"
+os.environ["HERMES_SESSION_CHAT_TYPE"] = "group"
+report["miss_raw_has_setup"] = "kelp sensors" in miss
+report["miss_group"] = av_gate.transform_memory_result(tool_name="memory", result=miss, session_id="tg-group")
+report["strip_block"] = av_gate.memory_write_directive(tool_name="memory", args={
+    "action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"})
+os.environ["HERMES_SESSION_CHAT_TYPE"] = "dm"
+report["miss_dm"] = av_gate.transform_memory_result(tool_name="memory", result=miss, session_id="tg-dm")
 print(json.dumps(report))
 '''
 
@@ -93,6 +126,15 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
     shutil.copytree(h.KNOWLEDGE_FIXTURE, home / "knowledge")
     (home / "knowledge" / "agentvillage" / "_profile.md").write_text(h.profile_text(), encoding="utf-8")
     (home / "config.yaml").write_text("model:\n  context_length: 1000000\nmemory:\n  provider: village-memory\n  user_char_limit: 24000\n", encoding="utf-8")
+    (home / "memories").mkdir()
+    (home / "memories" / "USER.md").write_text(
+        "[Edge City profile, written at setup]\nSynthetic Resident, Tidepool Bay. Builds kelp sensors.\n§\n"
+        "Prefers calls before noon.\n§\n"
+        "[God Constitution conversation, kept by the Agent Village control plane]\nA ballot was submitted.\n§\n"
+        "[Village vote, kept by the Agent Village app]\nThe weekly theme vote closes Friday.", encoding="utf-8")
+    staged_av = home / "plugins" / "av-events"
+    staged_av.mkdir(parents=True)
+    shutil.copy(h.AV_EVENTS_DIR / "_user_md_gate.py", staged_av / "_user_md_gate.py")
 
     env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_"))}
     env.update(PYTHONPATH=str(_SRC), PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
@@ -122,3 +164,46 @@ def test_real_hermes_discovers_activates_and_serves_the_provider(tmp_path, h):
         shared = report[name]
         assert shared["parts"] == [], name
         assert shared["added"] == 0 and shared["profile"]["status"] == "unavailable", name
+    # The built-in USER.md: whole in the DM; without the raw setup profile in a group or cron run.
+    assert report["seam_is_module_global"] and report["user_gate"]
+    users = report["user_parts"]
+    (dm_user,) = [p for p in users["dm"] if "USER PROFILE" in p]
+    assert "kelp sensors" in dm_user and "Prefers calls before noon." in dm_user
+    for name in ("group", "cron"):
+        (user,) = users[name]
+        assert user.startswith("═" * 46 + "\nUSER PROFILE (who the user is) ["), name
+        assert "Prefers calls before noon." in user, name
+        assert "kelp sensors" not in user and "written at setup" not in user, name
+        assert "A ballot was submitted." not in user and "weekly theme vote closes Friday" in user, name
+    assert "A ballot was submitted." in dm_user
+    # The memory tool through the gate's hooks, on Hermes's own store and tool.
+    assert report["miss_raw_has_setup"] is True
+    assert "kelp sensors" not in report["miss_group"] and "A ballot" not in report["miss_group"]
+    assert "Prefers calls before noon." in report["miss_group"]
+    assert report["miss_dm"] is None
+    assert report["strip_block"]["action"] == "block"
+
+
+_CANARY = Path(__file__).resolve().parents[3] / "scripts" / "check-user-md-gate.py"
+
+
+@pytest.mark.skipif(not ((_SRC / "plugins" / "memory" / "__init__.py").is_file() and _PY),
+                    reason="no Hermes source tree + interpreter (AV_HERMES_SRC / AV_HERMES_PYTHON)")
+def test_the_release_canary_finds_the_gate_by_both_paths(tmp_path, h):
+    """Review-b #558 S1: the roll's check. Both paths (the provider, av-events) put the per-session gate on
+    the seam the prompt build reaches by bare name: exit 0, `provider=seam av-events=seam`."""
+    home = tmp_path / ".hermes"
+    shutil.copytree(h.PLUGIN_DIR, home / "plugins" / "village-memory", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (home / "plugins" / "av-events").mkdir(parents=True)
+    shutil.copy(h.AV_EVENTS_DIR / "_user_md_gate.py", home / "plugins" / "av-events" / "_user_md_gate.py")
+    (home / "config.yaml").write_text("memory:\n  provider: village-memory\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_"))}
+    env.update(PYTHONPATH=str(_SRC), PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
+    out = subprocess.run([_PY, str(_CANARY)], capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
+    assert out.stdout.strip().splitlines()[-1] == "user_md_gate provider=seam av-events=seam", out.stderr[-2000:]
+    assert out.returncode == 0
+    # Without the plugins staged, both paths say none: exit 2.
+    shutil.rmtree(home / "plugins")
+    out = subprocess.run([_PY, str(_CANARY)], capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
+    assert out.stdout.strip().splitlines()[-1] == "user_md_gate provider=none av-events=none"
+    assert out.returncode == 2
