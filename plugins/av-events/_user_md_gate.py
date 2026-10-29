@@ -478,9 +478,14 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
             return None
         if not isinstance(args, dict):
             return block
-        ops = args.get("operations") if args.get("action") == "batch" else [args]
+        # As Hermes runs the call (tools/memory_tool.py `memory_tool`): a non-empty `operations` is a batch
+        # whatever `action` says, and every op of it lands on the call's own target (an op's `target` is
+        # not read; a USER.md one is still refused here, fail closed).
+        batch = bool(args.get("operations")) or args.get("action") == "batch"
+        ops = args.get("operations") if batch else [args]
         if not isinstance(ops, list):
             return block
+        target = "memory" if args.get("target") is None else args.get("target")
         for op in ops:
             if not isinstance(op, dict):
                 return block
@@ -488,7 +493,7 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
                 if op.get("action") == "add":
                     return {"action": "block", "message": MEMORY_WRITE_REFUSAL_ADD}
                 return block
-            if op.get("target", args.get("target", "memory")) == "user" and op.get("action") != "add":
+            if "user" in (target, op.get("target")) and op.get("action") != "add":
                 return block
         return None
     except Exception:  # noqa: BLE001 - fail closed

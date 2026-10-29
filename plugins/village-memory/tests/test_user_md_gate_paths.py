@@ -611,3 +611,41 @@ def test_a_prompt_module_that_raises_on_import_is_logged_once_and_never_raises(g
     records = [r for r in caplog.records if r.name == "av-user-md-gate"]
     assert [r.levelname for r in records] == ["WARNING", "DEBUG"]
     assert all("RuntimeError" in r.getMessage() and str(tmp_path) not in r.getMessage() for r in records)
+
+
+# ---- the write check reads a call the way Hermes dispatches it ------------------------------------------
+
+
+@pytest.mark.parametrize(("args", "refusal"), [
+    # Hermes runs a batch whenever `operations` is non-empty, whatever `action` says (tools/memory_tool.py)
+    ({"action": "add", "target": "user", "operations": [{"action": "remove", "old_text": "Tidepool"}]},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"target": "user", "operations": [{"action": "replace", "old_text": "Tidepool", "new_text": "Harbour"}]},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"action": "add", "target": "memory", "content": "fine",
+      "operations": [{"action": "add", "content": "[Edge City profile, written at setup]"}]}, "MEMORY_WRITE_REFUSAL_ADD"),
+    # and applies every op to the call's own target; an op's `target` is not read (memory_tool_store._batch)
+    ({"action": "batch", "target": "user", "operations": [{"action": "remove", "target": "memory", "old_text": "Tidepool"}]},
+     "MEMORY_WRITE_REFUSAL"),
+])
+def test_the_write_check_reads_a_batch_the_way_hermes_runs_it(gate_copy, group_session, user_md, args, refusal):
+    """Every USER.md replace or remove is refused outside a private session (kept by S1-d): a batch Hermes
+    runs on USER.md is one, however the call spells it."""
+    user_md(SETUP, NOTE)
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") == {
+        "action": "block", "message": getattr(gate_copy, refusal)}
+
+
+@pytest.mark.parametrize("args", [
+    {"action": "batch", "target": "memory", "operations": [{"action": "remove", "target": "user", "old_text": "x"}]},
+    {"action": "add", "target": None, "content": "Likes kites."},
+    {"target": "memory", "operations": [{"action": "add", "content": "fine"}, {"action": "remove", "old_text": "old"}]},
+])
+def test_a_memory_md_batch_still_works_in_a_group(gate_copy, group_session, user_md, args):
+    """An op's own `target: user` inside a MEMORY.md batch is still refused (fail closed), the rest goes."""
+    user_md(SETUP, NOTE)
+    out = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
+    if any(op.get("target") == "user" for op in args.get("operations") or []):
+        assert out == {"action": "block", "message": gate_copy.MEMORY_WRITE_REFUSAL}
+    else:
+        assert out is None
