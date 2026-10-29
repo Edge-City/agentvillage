@@ -4,8 +4,12 @@
 - PRIVATE_ENTRY_MARKS: the setup profile and the GODCONST conversation note, pinned to cp's CP_ENTRY_MARKS;
   the vote note is village data and stays.
 - The memory tool outside a private session: results leave Private entries out (`transform_memory_result`)
-  and writes that touch one, or add or remove a mark, are refused (`memory_write_directive`).
-- Fingerprints: an entry this process has seen marked is still known after its mark has gone.
+  and writes that touch one, or add or remove a mark, are refused (`memory_write_directive`), on the marks,
+  target and action only (review-b ov#563 S1-d: no guess-confirm oracle).
+- Fingerprints: an entry this process has seen marked is still known after its mark has gone, with one set
+  per process that both copies read (ov#563 N4-d).
+- Both copies fail closed and treat an unknown chat type as not private (ov#563 N1-d); a failed install is
+  logged once (N7-d).
 Synthetic fixtures only. Hermes is not imported here (stand-ins); the real-Hermes paths are in
 test_village_memory_hermes.py.
 """
@@ -48,6 +52,12 @@ def gate(h):
     spec.loader.exec_module(module)
     module._gate_reset_for_tests()
     return module
+
+
+@pytest.fixture(params=["av-events", "village-memory"])
+def gate_copy(request):
+    """Each copy of the block in turn (they are byte-identical; a mutant in either must die)."""
+    return request.getfixturevalue("gate" if request.param == "av-events" else "vm")
 
 
 @pytest.fixture()
@@ -166,22 +176,90 @@ def test_a_result_that_is_not_json_is_replaced_whole(gate, group_session):
 # ---- the memory tool's writes ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("args", [
-    {"action": "replace", "target": "user", "old_text": "Builds kelp sensors", "content": "Builds kelp sensors"},
-    {"action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"},
-    {"action": "remove", "target": "user", "old_text": "Tidepool Bay"},
-    {"action": "remove", "target": "user", "old_text": "one question at a time"},
-    {"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
-    {"action": "add", "target": "memory", "content": "[God Constitution conversation, kept by the Agent Village control plane]"},
-    {"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
-                                                         {"action": "replace", "old_text": "Tidepool", "content": "y"}]},
-    {"action": "replace", "target": "user", "old_text": "", "content": "y"} | {"old_text": "Synthetic Resident"},
+@pytest.mark.parametrize(("args", "refusal"), [
+    ({"action": "replace", "target": "user", "old_text": "Builds kelp sensors", "content": "Builds kelp sensors"},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"action": "replace", "target": "user", "old_text": "[Edge City profile, written at setup]", "content": "x"},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"action": "remove", "target": "user", "old_text": "Tidepool Bay"}, "MEMORY_WRITE_REFUSAL"),
+    ({"action": "remove", "target": "user", "old_text": "one question at a time"}, "MEMORY_WRITE_REFUSAL"),
+    ({"action": "add", "target": "user", "content": "[Edge City profile, written at setup]\nforged"},
+     "MEMORY_WRITE_REFUSAL_ADD"),
+    ({"action": "add", "target": "memory",
+      "content": "[God Constitution conversation, kept by the Agent Village control plane]"}, "MEMORY_WRITE_REFUSAL_ADD"),
+    ({"action": "replace", "target": "memory", "old_text": "x", "content": "[Edge City profile, written at setup]"},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"action": "batch", "target": "user", "operations": [{"action": "add", "content": "fine"},
+                                                          {"action": "replace", "old_text": "Tidepool", "content": "y"}]},
+     "MEMORY_WRITE_REFUSAL"),
+    ({"action": "batch", "target": "memory", "operations": [
+        {"action": "add", "content": "fine"}, {"action": "add", "content": "[Edge City profile, written at setup]"}]},
+     "MEMORY_WRITE_REFUSAL_ADD"),
+    ({"action": "replace", "target": "user", "old_text": "", "content": "y"} | {"old_text": "Synthetic Resident"},
+     "MEMORY_WRITE_REFUSAL"),
 ])
-def test_a_group_may_not_touch_a_private_entry_or_its_mark(gate, group_session, user_md, args):
+def test_a_group_may_not_touch_a_private_entry_or_its_mark(gate_copy, group_session, user_md, args, refusal):
     user_md(SETUP, NOTE, GODCONST)
-    block = gate.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
-    assert block == {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL}
+    block = gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group")
+    assert block == {"action": "block", "message": getattr(gate_copy, refusal)}
     assert "kelp" not in block["message"] and "Tidepool" not in block["message"]
+
+
+def test_a_refused_add_is_not_told_to_add(gate_copy):
+    """Review-b ov#563 N3-d: the replace/remove refusal offers an add; the refusal of an add (a marked one)
+    does not, and neither echoes an entry."""
+    assert gate_copy.MEMORY_WRITE_REFUSAL.endswith("You can still add a new note here.")
+    assert "add" not in gate_copy.MEMORY_WRITE_REFUSAL_ADD.lower()
+    assert gate_copy.MEMORY_WRITE_REFUSAL_ADD.startswith(gate_copy.MEMORY_WRITE_REFUSAL.split(". ")[0])
+    for mark in gate_copy.PRIVATE_ENTRY_MARKS:
+        assert mark not in gate_copy.MEMORY_WRITE_REFUSAL_ADD
+
+
+# ---- the write check is no oracle (review-b ov#563 S1-d) -------------------------------------------------
+
+#: A whole line of SETUP (fingerprinted once seen marked), and a wrong guess of the same length class.
+RIGHT_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the harbour."
+WRONG_GUESS = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the estuary."
+
+
+@pytest.mark.parametrize("make_args", [
+    lambda g: {"action": "add", "target": "memory", "content": g},
+    lambda g: {"action": "add", "target": "memory", "content": f"remember for later:\n{g}\n"},
+    lambda g: {"action": "add", "target": "user", "content": g},
+    lambda g: {"action": "replace", "target": "memory", "old_text": g, "content": "x"},
+    lambda g: {"action": "replace", "target": "memory", "old_text": "x", "content": g},
+    lambda g: {"action": "replace", "target": "memory", "old_text": "x", "new_text": g},
+    lambda g: {"action": "remove", "target": "memory", "old_text": g},
+    lambda g: {"action": "remove", "old_text": g},
+    lambda g: {"action": "replace", "target": "user", "old_text": g, "content": "y"},
+    lambda g: {"action": "remove", "target": "user", "old_text": g},
+    lambda g: {"action": "batch", "target": "memory", "operations": [{"action": "add", "content": g},
+                                                                     {"action": "remove", "old_text": g}]},
+], ids=["add-memory", "add-memory-multiline", "add-user", "replace-memory-old", "replace-memory-content",
+        "replace-memory-new_text", "remove-memory", "remove-default-target", "replace-user", "remove-user", "batch"])
+def test_a_right_guess_of_a_setup_line_gets_the_same_answer_as_a_wrong_one(gate_copy, group_session, user_md,
+                                                                            make_args):
+    """Review-b ov#563 S1-d: outside a private session the write check decides only on the marks, the target
+    and the action. A group that guesses a whole setup-profile line exactly gets the answer a wrong guess
+    gets, so the refusal confirms nothing (the fingerprints still filter results)."""
+    user_md(SETUP, NOTE)
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))  # this process saw the entry marked: fingerprints taken
+    assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
+    right = gate_copy.memory_write_directive(tool_name="memory", args=make_args(RIGHT_GUESS), session_id="tg-group")
+    wrong = gate_copy.memory_write_directive(tool_name="memory", args=make_args(WRONG_GUESS), session_id="tg-group")
+    assert right == wrong
+
+
+def test_a_guessed_setup_line_may_be_noted_in_a_group_and_the_result_filter_still_redacts(gate_copy, group_session,
+                                                                                            user_md):
+    user_md(SETUP, NOTE)
+    gate_copy.shared_user_block(user_block(SETUP, NOTE))
+    for target in ("memory", "user"):
+        args = {"action": "add", "target": target, "content": RIGHT_GUESS}
+        assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+    out = gate_copy.transform_memory_result(tool_name="memory", result=_result(current_entries=[RIGHT_GUESS, NOTE]),
+                                            session_id="tg-group")
+    assert json.loads(out)["current_entries"] == [NOTE]
 
 
 @pytest.mark.parametrize("args", [
@@ -298,6 +376,8 @@ def test_session_privacy_needs_positive_evidence(gate, monkeypatch, platform, ch
     ({"source": "cli", "chat_type": None}, True), ({"source": "telegram", "chat_type": "dm"}, True),
     ({"source": "telegram", "chat_type": "group"}, False), ({"source": "telegram", "chat_type": None}, False),
     ({"source": "cron", "chat_type": "dm"}, False), (None, False),
+    ({"source": "telegram", "chat_type": "thread"}, False), ({"source": "discord", "chat_type": "forum"}, False),
+    ({"source": "telegram", "chat_type": "supergroup"}, False), ({"source": "cli", "chat_type": "x-unknown"}, False),
 ])
 def test_with_no_session_context_hermess_session_row_decides(gate, monkeypatch, row, private):
     for name in ("HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_TYPE", "HERMES_PLATFORM", "HERMES_CRON_SESSION"):
@@ -330,3 +410,123 @@ def test_an_empty_gateway_session_gets_the_group_treatment(gate, monkeypatch, us
     assert "kelp" not in gate.transform_memory_result(tool_name="memory", result=raw, session_id="")
     args = {"action": "remove", "target": "user", "old_text": "x"}
     assert gate.memory_write_directive(tool_name="memory", args=args)["action"] == "block"
+
+
+# ---- review-b ov#563 N1-d: the three surviving mutants --------------------------------------------------
+
+
+@pytest.mark.parametrize("platform", ["telegram", "discord", "cli"])
+@pytest.mark.parametrize("chat_type", ["thread", "forum", "supergroup", "topic", "x-unknown-7"])
+def test_an_unknown_chat_type_is_not_private(gate_copy, monkeypatch, user_md, platform, chat_type):
+    """Only a direct chat type is private; a thread, forum, supergroup or any value this gate does not know
+    is not, whatever the platform."""
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", platform)
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", chat_type)
+    monkeypatch.delenv("HERMES_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    monkeypatch.setitem(sys.modules, "hermes_state", None)
+    user_md(SETUP, NOTE)
+    assert gate_copy.session_is_private_now("s-1") is False
+    out = gate_copy.transform_memory_result(tool_name="memory", result=_result(current_entries=[SETUP, NOTE]),
+                                            session_id="s-1")
+    assert json.loads(out)["current_entries"] == [NOTE]
+    args = {"action": "remove", "target": "user", "old_text": NOTE}
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="s-1") == {
+        "action": "block", "message": gate_copy.MEMORY_WRITE_REFUSAL}
+
+
+def _boom(*_args, **_kwargs):
+    raise RuntimeError("helper failed")
+
+
+@pytest.mark.parametrize("broken", ["session_is_private_now", "redact_memory_result"])
+def test_a_raising_result_filter_fails_closed(gate_copy, group_session, monkeypatch, broken):
+    monkeypatch.setattr(gate_copy, broken, _boom)
+    out = gate_copy.transform_memory_result(tool_name="memory", result=_result(current_entries=[SETUP, NOTE]),
+                                            session_id="tg-group")
+    assert out is not None and json.loads(out) == {"success": False, "error": gate_copy.LEFT_OUT}
+
+
+@pytest.mark.parametrize("broken", ["session_is_private_now", "holds_private_mark"])
+def test_a_raising_write_check_fails_closed(gate_copy, group_session, monkeypatch, broken):
+    """An add the check would allow is blocked when a helper raises (fail closed, never None)."""
+    args = {"action": "add", "target": "memory", "content": "Likes kites."}
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
+    monkeypatch.setattr(gate_copy, broken, _boom)
+    assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") == {
+        "action": "block", "message": gate_copy.MEMORY_WRITE_REFUSAL}
+
+
+# ---- review-b ov#563 N4-d: one fingerprint set per process ----------------------------------------------
+
+STRIPPED = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the harbour."
+
+
+def test_both_copies_read_one_fingerprint_set(vm, gate, group_session, user_md):
+    """Fingerprints taken by either copy (the one whose hooks installed first) are seen by the other: the set
+    lives on Hermes's MemoryStore class (here the stand-in), not in each module."""
+    user_md(SETUP, NOTE)
+    store = sys.modules["tools.memory_tool_store"].MemoryStore
+    assert not gate.holds_private_entry(STRIPPED) and not vm.holds_private_entry(STRIPPED)
+    vm.shared_user_block(user_block(SETUP, NOTE))  # the provider's copy sees the entry marked
+    assert gate.holds_private_entry(STRIPPED)
+    out = gate.transform_memory_result(tool_name="memory", result=_result(current_entries=[STRIPPED, NOTE]))
+    assert json.loads(out)["current_entries"] == [NOTE]
+    assert getattr(store, gate.DIGESTS_ATTR) is gate._private_line_digests() is vm._private_line_digests()
+    assert not gate._PRIVATE_LINE_DIGESTS and not vm._PRIVATE_LINE_DIGESTS
+    gate._gate_reset_for_tests()
+    assert not vm.holds_private_entry(STRIPPED)
+    gate.shared_user_block(user_block(SETUP, NOTE))  # and the other way round
+    assert vm.holds_private_entry(STRIPPED)
+
+
+def test_fingerprints_taken_at_load_by_one_copy_reach_the_other(vm, gate, monkeypatch):
+    """village-memory installs the load gate; av-events' result filter (never installed here) still knows the
+    stripped line."""
+
+    class MemoryStore:
+        def load_from_disk(self):
+            self.user_entries = [SETUP, NOTE]
+
+    module = types.ModuleType("tools.memory_tool_store")
+    module.MemoryStore = MemoryStore
+    system_prompt = types.ModuleType("agent.system_prompt")
+    system_prompt._memory_parts = lambda agent: []
+    for name, value in (("tools", types.ModuleType("tools")), ("tools.memory_tool_store", module),
+                        ("agent", types.ModuleType("agent")), ("agent.system_prompt", system_prompt)):
+        monkeypatch.setitem(sys.modules, name, value)
+    assert vm.install_user_md_gate() is True
+    MemoryStore().load_from_disk()
+    assert gate.holds_private_entry(STRIPPED)
+
+
+def test_fingerprints_taken_before_hermess_store_loads_are_kept(gate, monkeypatch):
+    monkeypatch.delitem(sys.modules, "tools.memory_tool_store", raising=False)
+    gate.shared_user_block(user_block(SETUP, NOTE))
+    assert gate.holds_private_entry(STRIPPED) and gate._PRIVATE_LINE_DIGESTS
+    module = types.ModuleType("tools.memory_tool_store")
+    module.MemoryStore = type("MemoryStore", (), {})
+    monkeypatch.setitem(sys.modules, "tools.memory_tool_store", module)
+    assert gate.holds_private_entry(STRIPPED)
+    assert not gate._PRIVATE_LINE_DIGESTS and getattr(module.MemoryStore, gate.DIGESTS_ATTR)
+
+
+# ---- review-b ov#563 N7-d: an install that fails on import is logged once ------------------------------
+
+
+def test_a_prompt_module_that_raises_on_import_is_logged_once_and_never_raises(gate_copy, tmp_path, monkeypatch,
+                                                                                caplog):
+    pkg = tmp_path / "fakehermes" / "agent"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "system_prompt.py").write_text("raise RuntimeError('import-time failure')\n", encoding="utf-8")
+    agent = types.ModuleType("agent")
+    agent.__path__ = [str(pkg)]  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "agent", agent)
+    monkeypatch.delitem(sys.modules, "agent.system_prompt", raising=False)
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
+        assert gate_copy.install_user_md_gate() is False
+        assert gate_copy.install_user_md_gate() is False
+    records = [r for r in caplog.records if r.name == "av-user-md-gate"]
+    assert [r.levelname for r in records] == ["WARNING", "DEBUG"]
+    assert all("RuntimeError" in r.getMessage() and str(tmp_path) not in r.getMessage() for r in records)

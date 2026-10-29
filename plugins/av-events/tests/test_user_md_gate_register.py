@@ -73,3 +73,20 @@ def test_pre_tool_call_refuses_a_group_user_md_edit_and_lets_an_add_through(plug
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-dm", task_id="t")
                 if isinstance(r, dict) and r.get("action") == "block"]
+
+
+def test_a_failed_gate_install_is_logged_once_and_never_costs_the_hooks(plugin, ctx, monkeypatch, caplog):
+    """Review-b ov#563 N7-d: register() no longer swallows an install failure silently: one WARNING naming
+    the exception class (no text, no path), and the memory hooks are wired all the same."""
+    gate = sys.modules[f"{plugin.__name__}._user_md_gate"]
+
+    def boom():
+        raise RuntimeError("install failed")
+
+    monkeypatch.setattr(gate, "install_user_md_gate", boom)
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
+        plugin.register(ctx)
+    records = [r for r in caplog.records if "USER.md gate install failed" in r.getMessage()]
+    assert [r.levelname for r in records] == ["WARNING"]
+    assert records[0].getMessage() == "av-events: USER.md gate install failed (RuntimeError)"
+    assert gate.transform_memory_result in ctx.hooks.get("transform_tool_result", [])

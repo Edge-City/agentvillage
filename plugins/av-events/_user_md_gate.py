@@ -12,6 +12,7 @@ import importlib
 import json
 import logging
 import os
+import sys
 import threading
 from typing import Any, List, Optional
 
@@ -38,7 +39,11 @@ from typing import Any, List, Optional
 #   needs positive evidence (`session_is_private_now`): a direct chat or an explicit local surface.
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
-#   prompt gate, the write check), so text derived from one is still known after its mark has gone.
+#   prompt gate), so text derived from one is still known after its mark has gone. The prompt gate and the
+#   result filter use fingerprints; the write check never does (review-b ov#563 S1-d): it decides only on
+#   what the session cannot vary (the public marks, the target, the action), so a refusal never confirms a
+#   guessed line. One fingerprint set per process, on Hermes's `MemoryStore` class, read by both copies of
+#   this block (review-b ov#563 N4-d).
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -61,12 +66,20 @@ GATE_DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
 GATE_LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 #: What a memory-tool result holds in place of a Private entry outside a private session.
 LEFT_OUT = "[left out: a private USER.md entry; this is not a private chat with your human]"
-#: The memory tool's refusal outside a private session (never echoes an entry).
+#: The memory tool's refusal of a replace or remove outside a private session (never echoes an entry); an
+#: add without a mark still works there, so it says so.
 MEMORY_WRITE_REFUSAL = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat with "
                         "them. You can still add a new note here.")
+#: The refusal of an add (one holding a Private mark): no "you can still add" (review-b ov#563 N3-d).
+MEMORY_WRITE_REFUSAL_ADD = ("Your human's profile notes (USER.md) can only be changed or removed in your private chat "
+                            "with them. That note holds a private entry mark.")
 #: Set on the wrapped `MemoryStore.load_from_disk` (fingerprints taken at load).
 LOAD_GATE_ATTR = "village_user_load_gate"
 FINGERPRINT_MIN_CHARS = 24
+#: Set on Hermes's `tools.memory_tool_store.MemoryStore` class: the process's one fingerprint set, whichever
+#: copy of this block installed the gates (review-b ov#563 N4-d).
+DIGESTS_ATTR = "village_private_line_digests"
+#: This copy's own set, only while Hermes's store is not loaded (outside Hermes: the tests).
 _PRIVATE_LINE_DIGESTS: set = set()
 
 _GATE_LATCHED: set = set()
@@ -86,9 +99,31 @@ def _gate_log_once(key: str, message: str, *args: Any) -> None:
 
 
 def _gate_reset_for_tests() -> None:
+    _private_line_digests().clear()
     with _GATE_LATCH_LOCK:
         _GATE_LATCHED.clear()
         _PRIVATE_LINE_DIGESTS.clear()
+
+
+def _private_line_digests() -> set:
+    """The process's fingerprint set: one set on Hermes's `MemoryStore` class, so the village-memory and
+    av-events copies of this block fill and read the same one; this copy's own set only while that class is
+    not loaded (folded into the shared one as soon as it is)."""
+    try:
+        store = getattr(sys.modules.get("tools.memory_tool_store"), "MemoryStore", None)
+        if not isinstance(store, type):
+            return _PRIVATE_LINE_DIGESTS
+        with _GATE_LATCH_LOCK:
+            shared = getattr(store, DIGESTS_ATTR, None)
+            if not isinstance(shared, set):
+                setattr(store, DIGESTS_ATTR, set())
+                shared = getattr(store, DIGESTS_ATTR)
+            if _PRIVATE_LINE_DIGESTS:
+                shared.update(_PRIVATE_LINE_DIGESTS)
+                _PRIVATE_LINE_DIGESTS.clear()
+        return shared
+    except Exception:  # noqa: BLE001 - this copy's own set; the marks still hold
+        return _PRIVATE_LINE_DIGESTS
 
 
 def _gate_norm(value: Any) -> str:
@@ -118,19 +153,28 @@ def remember_private_entries(entries: Any) -> None:
     for entry in list(entries or []):
         if isinstance(entry, str) and any(mark in entry for mark in PRIVATE_ENTRY_MARKS):
             digests = {_line_digest(line) for line in _fingerprint_lines(entry) if line.strip() not in PRIVATE_ENTRY_MARKS}
+            shared = _private_line_digests()
             with _GATE_LATCH_LOCK:
-                _PRIVATE_LINE_DIGESTS.update(digests)
+                shared.update(digests)
+
+
+def holds_private_mark(text: Any) -> bool:
+    """A Private mark (a public constant) in `text`. What the write check decides on: the session cannot learn
+    anything from it that it did not already know."""
+    return isinstance(text, str) and any(mark in text for mark in PRIVATE_ENTRY_MARKS)
 
 
 def holds_private_entry(text: Any) -> bool:
-    """A Private mark in `text`, or a line of an entry this process has seen marked."""
+    """A Private mark in `text`, or a line of an entry this process has seen marked (the prompt gate and the
+    result filter; never the write check)."""
     if not isinstance(text, str):
         return False
-    if any(mark in text for mark in PRIVATE_ENTRY_MARKS):
+    if holds_private_mark(text):
         return True
-    if not _PRIVATE_LINE_DIGESTS:
+    digests = _private_line_digests()
+    if not digests:
         return False
-    return any(_line_digest(line) in _PRIVATE_LINE_DIGESTS for line in _fingerprint_lines(text))
+    return any(_line_digest(line) in digests for line in _fingerprint_lines(text))
 
 
 def shared_user_block(block: Any) -> Any:
@@ -258,11 +302,17 @@ def _install_load_gate() -> None:
 def install_user_md_gate() -> bool:
     """Wrap `agent.system_prompt._memory_parts` once per process. A Hermes without that seam gets the
     snapshot gate on `MemoryStore` instead (one WARNING). True when either gate is in place; False only
-    when neither seam exists (one WARNING) or Hermes is not importable (outside Hermes: the tests)."""
+    when neither seam exists (one WARNING), Hermes is not importable (outside Hermes: the tests), or its
+    prompt module fails to import for any other reason (one WARNING naming the exception class; review-b
+    ov#563 N7-d)."""
     try:
         sp = importlib.import_module("agent.system_prompt")
     except ImportError:  # outside Hermes: nothing to gate
         GATE_LOGGER.debug("USER.md gate not installed (no agent.system_prompt)")
+        return False
+    except Exception as exc:  # noqa: BLE001 - never raise into register(); say so once
+        _gate_log_once(f"user_gate:import_{type(exc).__name__}",
+                       "USER.md gate not installed (agent.system_prompt import failed: %s)", type(exc).__name__)
         return False
     with _GATE_INSTALL_LOCK:
         _install_load_gate()
@@ -396,11 +446,13 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
 
 def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: Any = "") -> Optional[dict]:
     """Hermes's `pre_tool_call` block directive, or None. Outside a private session the memory tool may
-    not write anything that holds a Private mark or fingerprint (a content, a new text, an old_text), and
-    may not replace or remove ANY USER.md entry: one plain refusal whatever old_text matches, so the answer
-    never tells a group whether a guess is in the setup text (no membership oracle). An add to USER.md that
-    holds no mark still works (the agent may note group facts), and MEMORY.md is unchanged. A DM is never
-    refused."""
+    not write anything that holds a Private mark (a content, a new text, an old_text), and may not replace
+    or remove ANY USER.md entry. It decides only on what the session cannot vary: the marks (public
+    constants), the target and the action, never on the Private text itself (no fingerprints here: review-b
+    ov#563 S1-d), so the answer never tells a group whether a guess is in the setup text (no membership
+    oracle). An add to USER.md that holds no mark still works (the agent may note group facts), and
+    MEMORY.md is unchanged. A refused add gets MEMORY_WRITE_REFUSAL_ADD, which does not offer an add
+    (N3-d). A DM is never refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
@@ -413,7 +465,9 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
         for op in ops:
             if not isinstance(op, dict):
                 return block
-            if any(holds_private_entry(op.get(key)) for key in ("content", "new_text", "old_text")):
+            if any(holds_private_mark(op.get(key)) for key in ("content", "new_text", "old_text")):
+                if op.get("action") == "add":
+                    return {"action": "block", "message": MEMORY_WRITE_REFUSAL_ADD}
                 return block
             if op.get("target", args.get("target", "memory")) == "user" and op.get("action") != "add":
                 return block

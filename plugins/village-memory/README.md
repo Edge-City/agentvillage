@@ -47,12 +47,17 @@ plugins/village-memory/
   - **The memory tool** (av-events hooks), outside a private session only: `transform_tool_result` leaves
     Private entries out of every result (`current_entries`, `matches`, `replaced_entry`, `removed_entry`,
     `replaced_entries`, ...), and `pre_tool_call` refuses EVERY USER.md replace or remove, and any write
-    holding a mark, with one plain refusal whatever it matches (no membership oracle). A USER.md add with no
-    mark still works there, and MEMORY.md is unchanged. A DM keeps Hermes's own tool. "Private" needs
-    positive evidence: a direct chat type or an explicit local surface from Hermes's session context, else
-    Hermes's own session row for the session id; empty or unknown is not private, and cron never is.
-  - **Fingerprints:** an entry this process has seen marked (load_from_disk, the gate, the write check) is
-    still Private after its mark is gone: each line of 24 characters or more, by sha256, in memory only.
+    holding a mark. The write check decides only on what the session cannot vary (the public marks, the
+    target, the action), never on the Private text, so a refusal never confirms a guessed line (no
+    membership oracle; review-b ov#563 S1-d). A refused add is told so without being offered an add
+    (`MEMORY_WRITE_REFUSAL_ADD`). A USER.md add with no mark still works there, and MEMORY.md is unchanged.
+    A DM keeps Hermes's own tool. "Private" needs positive evidence: a direct chat type or an explicit local
+    surface from Hermes's session context, else Hermes's own session row for the session id; empty or
+    unknown (`thread`, `forum`, `supergroup`, anything else) is not private, and cron never is.
+  - **Fingerprints:** an entry this process has seen marked (load_from_disk, the prompt gate) is still
+    Private after its mark is gone, for the prompt gate and the result filter (not the write check): each
+    line of 24 characters or more, by sha256, in memory only. One set per process, on Hermes's
+    `MemoryStore` class (`village_private_line_digests`), read by both copies of the gate (ov#563 N4-d).
   - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
     the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
     when both are `seam`.
