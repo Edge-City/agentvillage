@@ -103,7 +103,11 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   const v2122=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v2122.py.fixture"));
   expect(digest(v2122)).toBe("e6edc00f2b8f02ab87787f0592645fa134c6bbfa68de36a349f34c0f6113c498");
   expect(v2122.equals(current)).toBe(false);
-  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(current)]);
+  // ov#553's bytes (main before this change, the v2.1.23 rider); ODIN's seat_answer posted as given (data L32206) appended an eighth.
+  const ov553=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.ov553.py.fixture"));
+  expect(digest(ov553)).toBe("06607497360fc59bd9507eccab0a40280a321f9bab6bf6e31e6c574f1dee8ef5");
+  expect(ov553.equals(current)).toBe(false);
+  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(current)]);
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const shim=join(home,"scripts",AUTONOMY_JOB_SCRIPT);
@@ -129,8 +133,8 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   expect(readFileSync(shim).equals(current)).toBe(true);
   expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
-  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's and ov#550's first head.
-  for (const older of [v2121,ov548,ov550]) {
+  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's, ov#550's first head and ov#553's.
+  for (const older of [v2121,ov548,ov550,ov553]) {
     writeFileSync(shim,older,{mode:0o700});
     if (existsSync(skillCopy)) writeFileSync(skillCopy,older);
     expect(stage([zzzbot,autonomy]).status).toBe(0);
