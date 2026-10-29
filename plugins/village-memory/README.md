@@ -72,7 +72,12 @@ plugins/village-memory/
     guess-confirm oracle), and a Private line a DM copied into MEMORY.md or USER.md stays out of group
     and cron results. Residual: the record is in memory only, so after a restart a line a group wrote
     earlier that equals a Private line is hidden again, from its results and its next prompt (one bit
-    per restart, and only for a line that group already wrote).
+    per restart, and only for a line that group already wrote). The record is process-wide, not per
+    session (the memory files are shared by all the agent's chats), so once a non-private session writes
+    a line that already sits unmarked in MEMORY.md (a DM-made copy of a Private line, round-1 S4: in every
+    group prompt already), that older copy is no longer redacted for any session in the process, and a
+    read-back shows two copies where a wrong guess shows one. The marked USER.md entry stays hidden by
+    its mark.
   - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
     the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
     when both are `seam`.

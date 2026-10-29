@@ -1022,3 +1022,25 @@ def test_both_copies_read_one_self_written_set(vm, gate, group_session, user_md)
     assert gate.transform_memory_result(tool_name="memory", args={}, result=raw) is None
     assert getattr(store, gate.SELF_WRITTEN_ATTR) is gate._self_written_digests() is vm._self_written_digests()
     assert not gate._SELF_WRITTEN_DIGESTS and not vm._SELF_WRITTEN_DIGESTS
+
+
+def test_the_process_wide_residual_a_group_write_unhides_an_older_unmarked_copy(gate, group_session, monkeypatch):
+    """Stated residual (commit-time security review): the self-written set is process-wide, not per session
+    (an agent's memory files are shared by all its chats; a per-session key would redact one group's own
+    note from another group, itself a reply difference). So when a group writes a line that already sits
+    UNMARKED in MEMORY.md (a DM-made copy of a Private line, the round-1 S4 case: that line is in every
+    group prompt's MEMORY.md block already), the older copy is no longer redacted for any session in the
+    process: a read-back shows two copies where a wrong guess shows one. The marked USER.md entry itself
+    stays hidden by its mark. The per-entry-instance alternative is not built; this test pins the outcome."""
+    dm_copy = f"From our private chat:\n{RIGHT_GUESS}"
+    views = {}
+    for guess in (RIGHT_GUESS, WRONG_GUESS):
+        gate._gate_reset_for_tests()
+        gate.shared_user_block(user_block(SETUP, NOTE))
+        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites.", dm_copy])
+        seen, prompt = _run(gate, "tg-group", [{"action": "add", "target": "memory", "content": f"Group note:\n{guess}"},
+                                               {"action": "remove", "target": "memory", "old_text": NO_SUCH}], store)
+        views[guess] = (json.loads(seen[-1][1])["current_entries"], prompt)
+    assert views[WRONG_GUESS][0] == ["Likes kites.", f"Group note:\n{WRONG_GUESS}"]
+    assert views[RIGHT_GUESS][0] == ["Likes kites.", dm_copy, f"Group note:\n{RIGHT_GUESS}"]  # two copies
+    assert views[RIGHT_GUESS][1] == views[WRONG_GUESS][1] == user_block(NOTE)  # the marked entry stays hidden
