@@ -153,6 +153,9 @@ PROFILE_PROVIDER = "village-memory"
 PROFILE_BLOCK_MARK = "═" * 46 + "\nRESIDENT PROFILE (village-memory: knowledge/agentvillage/_profile.md)"
 #: village-memory's USER.md gate on `agent.system_prompt._memory_parts` (plugins/village-memory USER_GATE_ATTR).
 USER_GATE_ATTR = "village_user_gate"
+#: The app's setup-profile entry and Hermes's entry delimiter (village-memory SETUP_PROFILE_MARK, ENTRY_DELIMITER).
+SETUP_PROFILE_MARK = "[Edge City profile, written at setup]"
+ENTRY_DELIMITER = "\n§\n"
 MEMORY_SOURCES = ("user_md", "memory_md")
 #: Hermes's names: the module whose global the turn loop calls, and the seams the refresh uses.
 LOOP_MODULE = "agent.conversation_loop"
@@ -420,6 +423,20 @@ def _user_gate() -> Optional[Callable[[Any, str], str]]:
     return gate if callable(gate) else None
 
 
+def _setup_profile_left(prompt: str, gated: str) -> bool:
+    """A session whose USER.md block the gate filtered: is the setup-profile entry still in the prompt?
+    A substring test alone is not enough: with the entry last, the gated block is a prefix of the old one
+    (same header, same usage figure). So: the mark anywhere from the USER.md block on (MEMORY.md comes
+    before it, the provider block after it never holds the mark), or the gated block followed by another
+    entry."""
+    header = _memory_header("user")
+    at = prompt.find(header) if header else -1
+    if SETUP_PROFILE_MARK in (prompt[at:] if at >= 0 else ""):
+        return True
+    found = prompt.find(gated) if gated else -1
+    return found >= 0 and prompt.startswith(ENTRY_DELIMITER, found + len(gated))
+
+
 def _memory_reasons(agent: Any, prompt: str) -> list:
     store = getattr(agent, "_memory_store", None)
     if store is None:
@@ -437,7 +454,15 @@ def _memory_reasons(agent: Any, prompt: str) -> list:
             continue
         block = (fresh.format_for_system_prompt(target) or "").strip()
         if target == "user" and block and gate is not None:
-            block = (gate(agent, block) or "").strip()
+            try:
+                gated = (gate(agent, block) or "").strip()
+            except Exception:  # noqa: BLE001 - the gate's verdict is unknown: rebuild (the build fails closed)
+                reasons.append(reason)
+                continue
+            if gated != block and _setup_profile_left(prompt, gated):
+                reasons.append(reason)
+                continue
+            block = gated
         if block:
             if block not in prompt:
                 reasons.append(reason)

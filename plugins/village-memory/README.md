@@ -34,10 +34,13 @@ plugins/village-memory/
   (Private, L31622). `register()` wraps `agent.system_prompt._memory_parts` once per process: a session
   that is not private gets the USER.md block without that entry (the header and the agent's other entries
   stay; a block left with nothing is dropped; a block holding the entry in a shape it does not know is
-  dropped whole). A private session gets it byte for byte. An agent with no village-memory provider (a
-  subagent, a review fork) is judged on Hermes's own init facts. `AV_VILLAGE_MEMORY` does not turn it
+  dropped whole). A private session gets it byte for byte. The provider decides only once `initialize` bound the
+  session (`session_known()`; before that its `private_session()` says True for tool routing). An agent
+  with no initialised provider (a subagent, a review fork) is judged on Hermes's own init facts. `AV_VILLAGE_MEMORY` does not turn it
   off. F1 renders through the same gate (`village_user_gate` on the wrapper), so a group turn is not
-  stale; a group prompt stored before the roll is rebuilt at its next turn where F1 is on (team tenants),
+  stale; for a filtered session it also reads the prompt as stale while the mark is still in or after its
+  USER.md block, or another entry follows the gated block (the gated block can be a prefix of the old one),
+  and a gate that raises reads as stale; a group prompt stored before the roll is rebuilt at its next turn where F1 is on (team tenants),
   elsewhere at its next compaction or `/new`.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.

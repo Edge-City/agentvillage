@@ -647,17 +647,20 @@ def shared_user_block(block: Any) -> Any:
 def _village_provider(agent: Any) -> Any:
     manager = getattr(agent, "_memory_manager", None)
     for provider in list(getattr(manager, "providers", None) or []) if manager is not None else []:
-        if getattr(provider, "name", None) == PROVIDER_NAME and callable(getattr(provider, "private_session", None)):
+        if (getattr(provider, "name", None) == PROVIDER_NAME and callable(getattr(provider, "private_session", None))
+                and callable(getattr(provider, "session_known", None))):
             return provider
     return None
 
 
 def agent_is_private(agent: Any) -> bool:
-    """The agent's own village-memory provider decides (`private_session`). An agent without one in
-    this process (a subagent, a review fork) is judged on the same facts Hermes hands a provider
-    (agent/agent_init.py:1221-1248: platform defaults to cli, agent_context from platform)."""
+    """The agent's own village-memory provider decides (`private_session`), once it knows the session.
+    Before `initialize` its `private_session()` says True for tool routing, so the gate never asks it then.
+    An agent without an initialised provider (a subagent, a review fork, a provider not yet initialised)
+    is judged on the same facts Hermes hands a provider (agent/agent_init.py:1221-1248: platform defaults
+    to cli, agent_context from platform)."""
     provider = _village_provider(agent)
-    if provider is not None:
+    if provider is not None and provider.session_known():
         return bool(provider.private_session())
     platform = _norm(getattr(agent, "platform", None)) or "cli"
     context = platform if platform in ("cron", "subagent") else "primary"
@@ -765,6 +768,10 @@ class VillageMemoryProvider(MemoryProvider):
     def profile_digest(self) -> str:
         """The profile's digest through the safe reader (`profile_digest`), for F1."""
         return profile_digest(self.home())
+
+    def session_known(self) -> bool:
+        """True once `initialize` bound this session's facts (the USER.md gate asks only then)."""
+        return self._initialized
 
     def private_session(self) -> bool:
         """A one-to-one chat, or no chat type on the owner's own machine; never a cron run.

@@ -1361,6 +1361,41 @@ def test_a_group_prompt_stored_before_the_gate_is_refreshed_once(hermes, caplog)
     assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
 
 
+@pytest.mark.parametrize("order", ["setup-last", "setup-middle", "setup-first"])
+def test_a_stored_group_prompt_whose_gated_block_is_a_substring_is_still_refreshed(hermes, caplog, order):
+    """Security review: with the setup entry last, the gated block (same header, same usage figure) is a
+    prefix of the old one, so `block in prompt` alone would keep the old prompt. The mark check catches it."""
+    entries = {"setup-last": ["Name: Test Resident", "Likes kites", SETUP_ENTRY],
+               "setup-middle": ["Name: Test Resident", SETUP_ENTRY, "Likes kites"],
+               "setup-first": [SETUP_ENTRY, "Name: Test Resident", "Likes kites"]}[order]
+    write("memories/USER.md", "\n§\n".join(entries))
+    old = FakeAgent(hermes.db, "tg-group-4")
+    old._memory_manager = FakeMemoryManager()
+    stored = run_turn(hermes.loop, old, "hello", [])["system"]
+    assert "kelp sensors" in stored
+    agent = gated_agent(hermes, "tg-group-4", "group")
+    pr(hermes.plugin).reset()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+        again = run_turn(hermes.loop, agent, "hi again", HISTORY)["system"]
+    assert "kelp sensors" not in got and "Likes kites" in got and again == got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+def test_a_failing_gate_reads_as_stale_and_the_rebuild_fails_closed(hermes, caplog, monkeypatch):
+    write("memories/USER.md", f"Name: Test Resident\n§\n{SETUP_ENTRY}")
+    agent = gated_agent(hermes, "tg-group-5", "group")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "kelp sensors" not in first
+    sp = sys.modules["agent.system_prompt"]
+
+    def broken(_agent, _block):
+        raise RuntimeError("no verdict")
+
+    monkeypatch.setattr(sp._memory_parts, "village_user_gate", broken)
+    assert pr(hermes.plugin)._memory_reasons(agent, first) == ["user_md"]
+
+
 def test_a_dm_keeps_the_setup_profile_through_the_gate(hermes, caplog):
     write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
     agent = gated_agent(hermes, "tg-dm-9", "dm")

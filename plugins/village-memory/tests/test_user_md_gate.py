@@ -132,6 +132,30 @@ def test_an_agent_without_the_provider_is_judged_on_the_facts_hermes_hands_one(v
     assert vm.agent_is_private(agent) is private
 
 
+@pytest.mark.parametrize(("chat_type", "platform", "private"), [
+    ("group", "telegram", False), ("", "cron", False), ("", "telegram", False), ("dm", "telegram", True),
+])
+def test_an_uninitialised_provider_never_decides(vm, chat_type, platform, private):
+    """Security review: before `initialize` the provider's `private_session()` says True (tool routing).
+    The gate never asks it then: it judges the agent's own chat facts, so it cannot fail open."""
+    provider = vm.VillageMemoryProvider()
+    assert provider.private_session() is True and provider.session_known() is False
+    agent = types.SimpleNamespace(_memory_manager=types.SimpleNamespace(providers=[provider]), platform=platform,
+                                  _chat_type=chat_type, _memory_store=Store(user_block(SETUP, NOTE)))
+    assert vm.agent_is_private(agent) is private
+    shown = vm.user_block_for(agent, user_block(SETUP, NOTE))
+    assert ("kelp sensors" in shown) is private
+    assert vm.VillageMemoryProvider().get_tool_schemas() != []  # the routing default is unchanged
+
+
+def test_a_provider_without_session_known_is_not_trusted(vm, session):
+    """An object named village-memory that cannot say whether it knows the session: agent facts decide."""
+    stranger = types.SimpleNamespace(name="village-memory", private_session=lambda: True)
+    agent = types.SimpleNamespace(_memory_manager=types.SimpleNamespace(providers=[stranger]), platform="telegram",
+                                  _chat_type="group")
+    assert vm.agent_is_private(agent) is False
+
+
 # ---- the wrapped seam -------------------------------------------------------------------------------
 
 
