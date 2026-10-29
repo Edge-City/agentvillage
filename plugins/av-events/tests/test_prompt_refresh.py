@@ -1396,6 +1396,37 @@ def test_a_failing_gate_reads_as_stale_and_the_rebuild_fails_closed(hermes, capl
     assert pr(hermes.plugin)._memory_reasons(agent, first) == ["user_md"]
 
 
+TAGS_ENTRY_PRIVATE_LAST = ("[Context tags, kept in the Agent Village app]\nKept by the app.\nHere to:\n"
+                           "- Meet kite makers (you, village)\n- Quiet private aim (you, private)")
+
+
+@pytest.mark.parametrize("cached", [True, False], ids=["cached-agent", "fresh-agent"])
+def test_a_stored_group_prompt_with_a_private_tags_line_last_is_refreshed_once(hermes, caplog, cached):
+    """Lead L32765 R1: the gate drops the Private tags line; with it last, the gated block is a prefix of
+    the old one, so F1 also looks for every line the gate left out."""
+    write("memories/USER.md", f"Name: Test Resident\n§\n{TAGS_ENTRY_PRIVATE_LAST}")
+    old = FakeAgent(hermes.db, "tg-group-7")
+    old._memory_manager = FakeMemoryManager()
+    assert "Quiet private aim" in run_turn(hermes.loop, old, "hello", [])["system"]
+    agent = gated_agent(hermes, "tg-group-7", "group")
+    pr(hermes.plugin).reset()
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+        again = run_turn(hermes.loop, agent if cached else gated_agent(hermes, "tg-group-7", "group"), "hi", HISTORY)["system"]
+    assert "Quiet private aim" not in got and "Meet kite makers (you, village)" in got and again == got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+def test_a_dm_keeps_its_private_tags_lines(hermes, caplog):
+    write("memories/USER.md", f"Name: Test Resident\n§\n{TAGS_ENTRY_PRIVATE_LAST}")
+    agent = gated_agent(hermes, "tg-dm-7", "dm")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "Quiet private aim (you, private)" in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        assert run_turn(hermes.loop, agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
+
+
 def test_a_dm_keeps_the_setup_profile_through_the_gate(hermes, caplog):
     write("memories/USER.md", f"{SETUP_ENTRY}\n§\nName: Test Resident")
     agent = gated_agent(hermes, "tg-dm-9", "dm")

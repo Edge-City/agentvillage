@@ -42,6 +42,21 @@ plugins/village-memory/
   USER.md block, or another entry follows the gated block (the gated block can be a prefix of the old one),
   and a gate that raises reads as stale; a group prompt stored before the roll is rebuilt at its next turn where F1 is on (team tenants),
   elsewhere at its next compaction or `/new`.
+- **The app's tags entry in USER.md** (lead L32765 R1), outside a private session too: every
+  Private-marked line of the `[Context tags, kept in the Agent Village app]` entry goes, and every line
+  whose mark the gate cannot parse. The grammar is the Index readers' exactly (`ITEM_LINE` =
+  `memory_signal_gate.py` ITEM_LINE = `context-tags.ts` LINE; a test holds them together): shared only
+  with `public`, `village` or `agentvillage/edgecityindia2026` on a line known to be no guess. An
+  unmarked line keeps its current meaning: in a marked entry (any mark, or the sections note "an item
+  with no mark: treat it as private") it is Private and goes, the unmarked `Summary:` line, gift lines,
+  group posts and Removed-by-you lines included; in an entry with no mark and no note every line stays,
+  as today. Headings, the header and the note stay. A private session is byte for byte. A mark the gate
+  cannot parse (a lookalike, an invisible, a refused list, a mark word in a last parenthesis even with
+  punctuation after it or left unclosed, a parenthesis before the last that is tag-shaped or mentions a
+  mark; a mark is any token, split on anything but letters, digits and `/`) drops the line and
+  counts as a mark, so the entry reads marked. Lines are split as the Index readers split them (`\r\n`,
+  `\r` folded to `\n`); a line still holding another line break is dropped, and so is a line that is no
+  item and no structure line but holds a tag-shaped parenthesis.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and

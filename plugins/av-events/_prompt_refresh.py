@@ -423,16 +423,23 @@ def _user_gate() -> Optional[Callable[[Any, str], str]]:
     return gate if callable(gate) else None
 
 
-def _setup_profile_left(prompt: str, gated: str) -> bool:
-    """A session whose USER.md block the gate filtered: is the setup-profile entry still in the prompt?
-    A substring test alone is not enough: with the entry last, the gated block is a prefix of the old one
-    (same header, same usage figure). So: the mark anywhere from the USER.md block on (MEMORY.md comes
-    before it, the provider block after it never holds the mark), or the gated block followed by another
-    entry."""
+def _setup_profile_left(prompt: str, gated: str, block: str = "") -> bool:
+    """A session whose USER.md block the gate filtered: is anything the gate left out still in the prompt?
+    A substring test alone is not enough: with the dropped part last, the gated block is a prefix of the
+    old one (same header, same usage figure). So, from the prompt's USER.md block on (MEMORY.md comes
+    before it; nothing after it holds USER.md lines): the setup-profile mark, or any whole line of the
+    rendered block that the gated block does not keep (a Private tags line, lead L32765 R1), or the
+    gated block followed by another entry."""
     header = _memory_header("user")
     at = prompt.find(header) if header else -1
-    if SETUP_PROFILE_MARK in (prompt[at:] if at >= 0 else ""):
+    region = prompt[at:] if at >= 0 else ""
+    if SETUP_PROFILE_MARK in region:
         return True
+    if region and block:
+        kept = set(gated.split("\n"))
+        present = set(region.split("\n"))
+        if any(line.strip() and line not in kept and line in present for line in block.split("\n")):
+            return True
     found = prompt.find(gated) if gated else -1
     return found >= 0 and prompt.startswith(ENTRY_DELIMITER, found + len(gated))
 
@@ -459,7 +466,7 @@ def _memory_reasons(agent: Any, prompt: str) -> list:
             except Exception:  # noqa: BLE001 - the gate's verdict is unknown: rebuild (the build fails closed)
                 reasons.append(reason)
                 continue
-            if gated != block and _setup_profile_left(prompt, gated):
+            if gated != block and _setup_profile_left(prompt, gated, block):
                 reasons.append(reason)
                 continue
             block = gated
