@@ -1450,7 +1450,7 @@ async def _elicit_advance(bot: Any, chat: str, session: dict, cards: list, ledge
                 if str(position) in session["cards"] or position in set(session["dropped"]):
                     continue
                 card = by_id[order[position]]
-                message_id = await _send(bot, chat, L.elicit_card_text(position, card["text"]),
+                message_id = await _send(bot, chat, L.elicit_card_text(card["text"]),
                                          make_markup(L.elicit_rating_rows(session["nonce"], position, make_button, card["saved"])))
                 if message_id is None:
                     _send_failure(ledger, session, home, count)
@@ -1471,7 +1471,7 @@ async def _elicit_advance(bot: Any, chat: str, session: dict, cards: list, ledge
         save_elicit_ledger(ledger, home)
     # Every statement rated (or dropped): the last line once; the cards stay tappable for revisions.
     if session["status"] == ACTIVE:
-        if await _send(bot, chat, L.elicit_done_text(len(session["rated"]), expires)) is None:
+        if await _send(bot, chat, L.elicit_done_text(expires)) is None:
             count("send_failed")
         session["status"] = "done"
         count("final_sent")

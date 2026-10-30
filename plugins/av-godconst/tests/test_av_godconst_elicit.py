@@ -263,6 +263,11 @@ def first_line(msg):
     return msg.text.splitlines()[0]
 
 
+def card_no(msg):
+    """A card's 1-based place in the order, from its buttons (gce:r:<nonce>:<position>:<value>): the text never numbers it."""
+    return int(msg.reply_markup.inline_keyboard[0][0].callback_data.split(":")[3]) + 1
+
+
 def open_ballot_page(P, home, status="active"):
     """A ballot ledger with a sent, unrated card inside its window (the ballot mode's open page)."""
     P.save_ledger({"v": 1, "session": {
@@ -384,7 +389,7 @@ def test_a_pending_opener_holds_the_page_and_the_next_pair_follows_once_it_clear
     assert pass_(plugin, bot, server, now=DAY + 60) == "opener_pending"
     os.rename(nxt, nxt[:-4] + ".done")
     assert pass_(plugin, bot, server, now=DAY + 120) == "sent"
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3", f"{FU} · Statement 4"]
+    assert [card_no(c) for c in bot.cards()[2:]] == [3, 4]
     # An inject directory that cannot be listed holds too, and says so.
     caplog.set_level(logging.INFO)
     inject = os.path.join(elicit, "av-events", "elicit", "inject")
@@ -418,7 +423,7 @@ def test_start_sends_a_labelled_header_and_the_first_pair_of_the_files_statement
     assert "5  Strongly support inclusion" in header.text and "Open until 10:30 IST, Sun 25 Oct." in header.text
     assert "Submit" not in header.text and "remind" not in header.text.lower()
     assert [[b.text for b in row] for row in header.reply_markup.inline_keyboard] == [["Stop these cards"]]
-    assert [first_line(c) for c in cards] == [f"{FU} · Statement 1", f"{FU} · Statement 2"]
+    assert [first_line(c) for c in cards] == [FU, FU] and [card_no(c) for c in cards] == [1, 2]
     assert f"{TEXT} s002" in cards[0].text and f"{TEXT} s003" in cards[1].text
     assert "odin" not in cards[0].text.lower() and "agent" not in cards[0].text.lower()
     assert [b.text for b in cards[0].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
@@ -445,9 +450,9 @@ def test_taps_post_one_rating_advance_and_revisions_still_save_after_all_are_rat
     assert q.answers == ["Saved: Oppose inclusion (changed)"]
     tap(plugin, server, second, 5)
     third = bot.cards()[2]
-    assert first_line(third) == f"{FU} · Statement 3"
+    assert first_line(third) == FU and card_no(third) == 3
     tap(plugin, server, third, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated. Thank you: your ratings are saved.")
+    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated. Thank you: your ratings are saved.")
     assert "change a rating until 10:30 IST, Sun 25 Oct." in bot.sent[-1].text
     stored = ledger(elicit)
     assert stored["session"]["status"] == "done" and stored["ended"] == []
@@ -482,7 +487,7 @@ def test_saved_ratings_are_prefilled_and_a_fully_rated_pair_moves_on(plugin, eli
     assert [b.text for b in cards[3].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
     assert ledger(elicit)["session"]["rated"] == [0, 1, 2]
     tap(plugin, server, cards[3], 3)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 4 statements rated.")
+    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated.")
     bot2 = Bot()
     write_trigger(elicit, eid=EID2, ids=["s001"])
     assert pass_(plugin, bot2, server) == "all_rated"
@@ -503,10 +508,10 @@ def test_an_unknown_statement_drops_only_that_card(plugin, elicit):
     assert tap(plugin, server, second, data=again).answers == ["This statement is no longer available."]
     assert len(server.calls) == calls  # no call for a dropped card
     tap(plugin, server, first, 5)  # the pair needs nothing more: the next pair goes
-    assert [first_line(c) for c in bot.cards()[-2:]] == [f"{FU} · Statement 3", f"{FU} · Statement 4"]
+    assert [card_no(c) for c in bot.cards()[-2:]] == [3, 4]
     for card in bot.cards()[-2:]:
         tap(plugin, server, card, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated.")
+    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated.")
     assert_nothing_private_on_disk(elicit)
 
 
@@ -518,7 +523,7 @@ def test_a_statement_the_read_no_longer_returns_is_dropped(plugin, elicit):
     server.order.remove("s004")
     tap(plugin, server, first, 2)
     tap(plugin, server, second, 2)
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3"]
+    assert [card_no(c) for c in bot.cards()[2:]] == [3]
     assert ledger(elicit)["session"]["dropped"] == [3]
     tap(plugin, server, bot.cards()[2], 2)
     assert ledger(elicit)["session"]["status"] == "done"
