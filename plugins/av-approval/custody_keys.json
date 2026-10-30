@@ -38,6 +38,10 @@
       "decision": "strip",
       "reason": "GC-TELEGRAM-BALLOT: the resident's per-tenant God Constitution ballot credential the control plane writes (godconst-ballot-key.js); it reads, rates and submits that resident's ballot. Only av-godconst, inside the gateway, reads it (process environment, then $HERMES_HOME/.env). With it agent code could cast or change its human's ballot, so it is in _custody.FLOOR too."
     },
+    "AV_THOR_KEY": {
+      "decision": "strip",
+      "reason": "THOR nudge card: the resident's per-tenant THOR credential the control plane writes; it reads the resident's daily card (GET /tenants/:id/thor/today) and records their Do it / Not now / Not for me answer (POST .../thor/:item_key/answer, not_for_me suppressing that title for good). Only av-godconst, inside the gateway, reads it (process environment, then $HERMES_HOME/.env). With it agent code could answer or suppress its human's cards, so it is in _custody.FLOOR too: agent-run code gets no copy of it through the tool and environment surface custody controls; the residual is the ballot key's ($HERMES_HOME/.env stays readable by the agent's user)."
+    },
     "TURING_FALLS_CLAIM_TOKEN": {
       "decision": "agent_readable",
       "reason": "A third-party game credential the agent itself uses: Agent Plaza steering (skills/agent-plaza/SKILL.md, step 5) has the agent POST /action with it as a bearer to the Turing Falls origin, and lists the environment as one of its sources. No approval class gates Turing Falls. Not on village boxes today; the selfie script reads it from $HERMES_HOME/.env."

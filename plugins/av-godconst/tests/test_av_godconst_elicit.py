@@ -909,7 +909,7 @@ def test_nothing_is_injected_or_emitted(plugin, elicit):
     assert "inject_message" not in source and "emit_event" not in source
 
 
-def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
+def test_the_factory_wires_all_three_handlers_and_passes(plugin, elicit):
     pytest.importorskip("telegram")
     handlers, jobs = [], []
 
@@ -919,7 +919,7 @@ def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
 
     app = type("App", (), {"add_handler": lambda self, h: handlers.append(h), "job_queue": JobQueue(), "bot": Bot()})()
     plugin._wire_telegram(app, None)
-    assert [h.pattern.pattern for h in handlers] == ["^gcb:", "^gce:"] and all(h.block is False for h in handlers)
+    assert [h.pattern.pattern for h in handlers] == ["^gcb:", "^gce:", "^avt:"] and all(h.block is False for h in handlers)
     assert len(jobs) == 1 and jobs[0][1] == plugin.PASS_INTERVAL_S
     seen = []
 
@@ -929,9 +929,12 @@ def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
     async def fake_elicit(*a, **k):
         seen.append("elicit")
 
-    plugin.pass_once, plugin.elicit_pass_once = fake_ballot, fake_elicit
+    async def fake_thor(*a, **k):
+        seen.append("thor")
+
+    plugin.pass_once, plugin.elicit_pass_once, plugin.thor_pass_once = fake_ballot, fake_elicit, fake_thor
     run(jobs[0][0]())
-    assert seen == ["ballot", "elicit"]
+    assert seen == ["ballot", "elicit", "thor"]
 
 
 def test_the_pass_and_the_tap_never_raise(plugin, elicit, monkeypatch):
