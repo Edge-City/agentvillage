@@ -16,7 +16,7 @@
     {
       "kind": "action",
       "label": "Prepare and send Gold Stars",
-      "description": "Prepare, send or cancel your exact draft, and mark or undo a Rolodex meeting when you ask. Sending requires manual approval."
+      "description": "Prepare, send or cancel your exact draft, and mark or undo a Rolodex meeting when you ask. Sent when you ask; a card only if your own settings ask first."
     },
     {
       "kind": "read",

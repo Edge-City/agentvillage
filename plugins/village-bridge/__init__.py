@@ -968,7 +968,7 @@ def transport(config, payload, flat_card=True, operation_class=None, *, timeout=
             "star_daily_limit": "All three stars are used today. More arrive at midnight India time.",
             "star_already_sent": "You already sent this person a star today.",
             "star_self": "Choose someone else to thank.",
-            "star_preview_expired": "Prepare a fresh preview and ask for confirmation again.",
+            "star_preview_expired": "Prepare a fresh preview and send it.",
             "star_preview_conflict": "Wait for the owner's next reply before revising the preview.",
             # An older app still answers this for a same-turn send (Lane AK, L34995: the current app sends at once).
             "star_confirmation_required": "Send again in the owner's next message.",
