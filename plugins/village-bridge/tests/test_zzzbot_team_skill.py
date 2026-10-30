@@ -181,6 +181,10 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
         self.assertIn("call `zzz.schedule_posts` at once: their request is the approval, with no preview or confirmation.", repeat)
         self.assertIn("60 to 1440 (every hour = 60, every 3 hours = 180, twice a day = 720)", repeat)
         self.assertIn("call `zzz.schedule_posts` with `every_minutes` `null` and nothing else.", repeat)
+        # Fold 1 (lead L36260): a set while the owner's Pause is on is saved (paused: true, notice zzz_schedule_paused).
+        self.assertIn('If the answer has `paused: true` (its `notice` is `zzz_schedule_paused`), the owner\'s own Pause is on', repeat)
+        self.assertIn('Say in one line: "Saved: posts about this start once you unpause your agent on the Messaging page. '
+                      'Nothing was posted." Do not retry.', repeat)
         self.assertIn("never create a cron job for ZZZ.", repeat)
         self.assertIn('{"operation":"zzz.schedule_posts","arguments":{"every_minutes":60,"about":"the community garden"}}', SKILL)
         for code in ("zzz_schedule_not_on", "zzz_settings_conflict", "zzz_unavailable"):

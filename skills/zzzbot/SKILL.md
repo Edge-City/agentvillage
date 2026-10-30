@@ -204,6 +204,10 @@ For example, after the owner asks to set up a room with Asha:
   zzz.bot's usual limits; it does not post right away. The answer's
   `schedule` and `pace` say what was set. Tell the owner in one line how
   often, about what and until when, and that "stop" ends it.
+- If the answer has `paused: true` (its `notice` is `zzz_schedule_paused`),
+  the owner's own Pause is on: the schedule is saved but nothing posts yet.
+  Say in one line: "Saved: posts about this start once you unpause your agent
+  on the Messaging page. Nothing was posted." Do not retry.
 - When the owner says stop or pause, or asks for no more of these posts, call
   `zzz.schedule_posts` with `every_minutes` `null` and nothing else. It puts
   back the pace they had before. `stopped: false` means no schedule was set:
