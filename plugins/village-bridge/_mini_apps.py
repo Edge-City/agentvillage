@@ -71,12 +71,19 @@ KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kisme
 # class: no new class, row, gate or card.
 LIBRARY_READ_OPERATIONS = ("library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history",
                            "library.changes_since", "library.proposals")
+# Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops (reads), and the owner's own join,
+# yes or no, received-favor confirmation and leave (writes). The writes take zzz's path (gate_verified), never a manual
+# grant, a card or a new class: each happens only on the owner's own ask in this chat.
+FAVORLOOP_READ_OPERATIONS = ("favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.my_loops")
+FAVORLOOP_WRITE_OPERATIONS = ("favorloop.join", "favorloop.answer", "favorloop.confirm", "favorloop.leave")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", "zzz.pairs", *ZZZ_READ_OPERATIONS,
-                             *ZZZ_TEAM_READ_OPERATIONS, *DS_READ_OPERATIONS, *KISMET_READ_OPERATIONS, *LIBRARY_READ_OPERATIONS})
+                             *ZZZ_TEAM_READ_OPERATIONS, *DS_READ_OPERATIONS, *KISMET_READ_OPERATIONS, *LIBRARY_READ_OPERATIONS,
+                             *FAVORLOOP_READ_OPERATIONS})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
                               "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_POST_WRITES,
-                              *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS})
+                              *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS,
+                              *FAVORLOOP_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -106,6 +113,12 @@ DS_OPERATIONS = frozenset(DREAMSTARTER["operations"])
 # The library install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order).
 LIBRARY = {"version": "1.0.0", "skills": ["library"], "operations": [*LIBRARY_READ_OPERATIONS]}
 LIBRARY_OPERATIONS = frozenset(LIBRARY["operations"])
+# The favorloop install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order). No
+# mini-app.read: the generic relay never reaches Favor Loop (installed(home, "favorloop", "mini-app.read") is False).
+FAVORLOOP = {"version": "1.0.0", "skills": ["favorloop"], "operations": [
+    "favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops",
+    "favorloop.answer", "favorloop.confirm", "favorloop.leave"]}
+FAVORLOOP_OPERATIONS = frozenset(FAVORLOOP["operations"])
 # ov#441 S1 (lead RULING CLAIMS L16692, reaffirmed L16696): managed private-pair participation is gated ONLY by a
 # separate cp catalog/allowlist entry, projected in `apps` beside zzzbot and granted per tenant at activation (the
 # Mosaic restricted-entry pattern). Id `zzz-bridge`: cp and app validate app ids with ^[a-z0-9][a-z0-9-]{0,39}$,
@@ -225,7 +238,7 @@ def _card_entry_ok(app) -> bool:
 REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": ZZZBOT_ACCEPTED, ZZZ_BRIDGE_ID: (ZZZ_BRIDGE,),
                     ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,),
                     "dreamstarter": (DREAMSTARTER,), "kismet": (KISMET, KISMET_PUBLIC),
-                    "library": (LIBRARY,)}
+                    "library": (LIBRARY,), "favorloop": (FAVORLOOP,)}
 LOGGED_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 LOG = logging.getLogger("village_bridge")
 _REFUSED_LOGGED = set()

@@ -149,9 +149,11 @@ loops (never with the same group).
   receives from, and only once everyone in that loop said yes. In a gift chain
   the giver and the last receiver never see each other's handle.
 - A no is never shown to anyone. `waitingFor` is a count, never a name.
-- The board (the `board` tool and the web page `https://favorloop.fly.dev/board`) is
-  anonymous: counts, shapes, favor ids and statuses. The web board draws each
-  member as a dot whose id is new for every loop, so dots link to nothing.
+- The board (the `board` tool and the web page `https://favorloop.fly.dev/board`)
+  shows no names or handles: counts, shapes, favor ids and statuses. The web
+  board also draws a dot for each member waiting in the pool and for each seat
+  in a loop, with the loop's times, so someone who knows when a person joined
+  may be able to link that person's dot to a loop and its favors.
 
 ## How residents are kept apart
 

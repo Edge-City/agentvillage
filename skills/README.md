@@ -42,6 +42,8 @@ name SWISSDESI (For Kicks' UPI), the exact amount and order note, and say the ca
 will check payment at pickup. Orders queue immediately; queued never means paid.
 `kismet` reads the public counters and anonymous board of Kismet, the residents'
 agent-to-agent matchmaker, through a reviewed MCP proxy; joining is on its website.
+`favorloop` reads Favor Loop's menu and anonymous board and, on the owner's own ask,
+joins, answers or confirms a loop of 15-minute favors, or leaves.
 The overlay's `install/install_miniapps.ts` stages these source directories
 from the control plane's validated installed projection; its reviewed bundle
 must include `forkicks` version `1.0.0`, skill `["forkicks"]`, and exactly
@@ -52,7 +54,7 @@ in that order. This skills repository does not contain the overlay installer.
 is also a baseline skill the installer ships to every box, inert until the app is
 installed; the helper never removes a skill the installer ships. Removing an app
 revokes its permission and removes only a skill file the installer does not ship
-(`dizko`, `zzzbot`, `slopfolio`, `dreamstarter`, `forkicks`, `kismet` and `library`). Copying a skill alone grants no API access.
+(`dizko`, `zzzbot`, `slopfolio`, `dreamstarter`, `forkicks`, `kismet`, `library` and `favorloop`). Copying a skill alone grants no API access.
 See [the builder starter and review contract](../mini-apps/README.md).
 
 The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.

@@ -572,6 +572,40 @@ catalog row `restricted`) deployed before that tag's roll, then the app half
 set `MINI_APP_LIBRARY_KEY` on the app service. The app-server contract and the
 prerequisites are in [library/README.md](library/README.md).
 
+## Favor Loop: loops of 15-minute favors
+
+By Bilgin Kocak (Edge-City/agentvillage#556). The [v2 manifest](favorloop/manifest.json)
+and the native bundle allowlist (`_mini_apps.py` `FAVORLOOP`, exact equality, in
+the manifest's order) expose eight named operations, each mapped by the app to
+one Favor Loop MCP tool: three public reads (`favorloop.how_it_works`, `.menu`,
+`.board`), the owner's own read (`.my_loops`) and four owner writes (`.join`,
+`.answer`, `.confirm`, `.leave`). `mini-app.read` refuses `favorloop`. The reads
+join the existing read class; the writes take the existing gated-write path
+(`gate_verified()`, as `mini-app.context.write`): no new class, row, gate, card or
+stage-then-send.
+
+The service is `app-token`: the app server holds one token for Favor Loop
+(`MINI_APP_FAVORLOOP_KEY`, by `secretRef`) and, for the five private tools, sends
+`X-Village-Subject` (the `subject` separation mode, as Kismet's and Edge
+Library's). Never a Telegram id or username, never from the box.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_favorloop.py` against the manifest's `input` schemas
+(exact keys, the closed favor and slot lists, the loopId and handle patterns,
+the 4 KiB request budget). A key naming a resident (a Telegram id or username,
+a user, resident or subject id) at any depth is refused. Anything else is
+`invalid_favorloop_arguments` before transport. Every operation is framed
+(`X-Village-Operation`); every answer is scrubbed and framed as untrusted with
+`handling`; the app's closed `mini_app_*` codes and Favor Loop's own tool codes
+map to Favor Loop-only text, for these operations only.
+
+The manifest says `sandbox`, so the cp serves it restricted (allowlisted tenants
+only), and only to a box at or after the overlay release that reviews it (the
+cp's `FAVORLOOP_FLOOR_TAG`). Overlay tag and roll first, then the cp row, then the
+app half (the `subject` separation entry and the vendored manifest), then Edge
+City staff set `MINI_APP_FAVORLOOP_KEY` on the app service. The contract is in
+[favorloop/README.md](favorloop/README.md).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist
