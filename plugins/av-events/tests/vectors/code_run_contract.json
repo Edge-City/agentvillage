@@ -28,7 +28,7 @@
     "risk_tags": {"kind": "array", "enum": ["base64_or_eval", "cron_write", "dotenv_path", "gated_host", "hermes_home_write", "os_environ", "proc_environ", "scripts_dir_write", "socket_or_http_client", "subprocess"], "sorted": true, "distinct": true, "nullable": false},
     "scan_truncated": {"kind": "bool", "nullable": false, "true_when": "the tags or the refusal count read only the first 262144 characters of the program or of a result text; code_hmac and code_bytes always cover the whole program"},
     "rules_version": {"kind": "regex", "regex": "^[a-z][a-z0-9_]{0,63}$", "nullable": false, "current": "code_run_tags_v1"},
-    "category_version": {"kind": "regex", "regex": "^[a-z][a-z0-9_]{0,63}$", "nullable": true, "current": "tool_categories_v3"}
+    "category_version": {"kind": "regex", "regex": "^[a-z][a-z0-9_]{0,63}$", "nullable": true, "current": "tool_categories_v4"}
   },
   "consentless_nulls_suggested": ["code_hmac", "code_bytes"]
 }

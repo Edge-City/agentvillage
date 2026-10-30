@@ -27,6 +27,7 @@ plugins/av-events/
   _negotiator_llm.py  llm.call (caller moralmod_negotiator) for each model step the Index plugin's bridge makes: wraps that bridge's own client only (MM-INFER-VIS, dark behind AV_EVENTS_NEGOTIATOR_LLM)
   _messages.py     message.in/out payloads and the punctuation flags (pure)
   _edgeos.py       the curl and script-verb parsers, EdgeOS operations, the action ledger and planner
+  _llm_errors.py   llm.call error_code: a failed model call named from a fixed list, never its text (pure; HOT-RASOOL F1)
   _skill_label.py  tool.call label for a terminal run of a shipped skill's script: target_system skill, operation the skill name (pure; B-169b)
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _outcome_ask.py  the evening outcome ask: outcome.asked and the resident's answer (DATA-42)
@@ -46,7 +47,7 @@ plugins/av-events/
   _query_village.py   the query_village tool, on the same switch: one read-only SQL SELECT the app runs over the main group's scrubbed messages (in-memory SQLite), through the control plane
   _village_visible.py  the village tools, elicitation_record and ask_odin stay out of Hermes's tool_search bridge: wraps tools.tool_search._core_tool_names (R-DEON)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
-  tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
+  tool_categories.json        frozen seed: tool name -> category (tool_categories_v4)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v4)
   outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v5)
@@ -211,7 +212,7 @@ recreates its directory if it disappears under a running process.
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
 `AV_EVENTS_TOKEN`. This is a last line of defence behind the capture modes, not the privacy control.
 
-**Tool-name allowlist.** `tool_categories.json` (`tool_categories_v3`) is the frozen seed; `_tools.py`
+**Tool-name allowlist.** `tool_categories.json` (`tool_categories_v4`) is the frozen seed; `_tools.py`
 reads it once at import. `builtin` lists Hermes's own tools by registry name (the `v2026.8.31`
 `_HERMES_CORE_TOOLS` set, plus `send_message`, `recall`, `record_intention` and, under v2's `meta`
 category, the plugin's own `consent_status`), and since v3 the Index Hermes plugin's tools
@@ -223,7 +224,11 @@ below, is a separate rule: it does read a bare `create_intent`, and the plugin's
 / `index_update_intent`, as Index writes.) v3 (DATA-261) adds Index
 main's MCP tool names (`list_intents`, `get_intent`, `pause_intent`, `resume_intent`,
 `archive_intent`, `get_opportunity`, `accept_opportunity`, `reject_opportunity` and the
-`*_my_profile` tools) under the category of the old tool each replaces, and keeps every older name. A listed tool leaves by name and
+`*_my_profile` tools) under the category of the old tool each replaces, and keeps every older name. v4
+(HOT-RASOOL F1) adds the village-bridge plugin's `village` tool (every Gold Stars, Mosaic and other village
+mini-app operation goes through it; Hermes registers it by bare name) under a new category `village`; v3 left
+it as `tool_name: null`, `other`. v4 also names av-events' own village tools, `ask_village`, `search_village`,
+`query_village`, `ask_odin` and `pray`, all under `village`, so research can tell them apart by name. A listed tool leaves by name and
 category; anything else leaves as `tool_name: null`, `tool_category: "other"`, so a third-party MCP
 server's tool names never reach ingest. A missing or malformed seed lists nothing (everything
 `other`). It moves together with the `agentvillage-data` seed of the same purpose.
@@ -272,7 +277,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`), `intention_reason` (the ask's); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `intention_id` (the ask's), `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
-| `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
+| `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `error_code` (a token from a fixed list, never the message: see "Failed model calls: `error_code`"), `status_code`, `retryable`, and zeroed token counts |
+| `llm.call` (fallback answered) | `pre_api_request` + `post_api_request` | as `llm.call`, plus `error_code: "fallback_activated"` on the first call of a turn on another model after a failed call in that turn |
 | `llm.call` (`caller: "moralmod_negotiator"`) | the Index plugin bridge's own `chat.completions.create`, behind `AV_EVENTS_NEGOTIATOR_LLM` (default off) | closed, every key always present, in this order: `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash` and `system_prompt_hash` (always null), `api_mode`, `response_model`, `tool_count`, `message_count`, `cost_usd`, `generation_id`, `error_type`, `status_code`, `caller`, `key_source` (`moralmod` \| `tenant`), `consent_scope`, plus `assistant_content_chars` / `assistant_tool_call_count` above `metadata`; no session, turn or run id — see "The MoralMod negotiator's model steps (MM-INFER-VIS)" |
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
@@ -1130,6 +1136,39 @@ them for research-consenting tenants only, which is why the tools ask ingest fir
 `question_closed`, `answer_not_an_option`, `payload_unencodable`, `payload_tampered`,
 `start_answer_mismatch` and `authorization_mismatch`. Log lines carry these codes only, never the
 text, the rationale or an answer.
+
+---
+
+## Failed model calls: `error_code` (HOT-RASOOL F1)
+
+A failed `llm.call` (`finish_reason: "error"`) carries `error_code`, one token from a fixed list
+(`_llm_errors.FAILURE_CODES`). Hermes's `api_request_error` hands the plugin the exception's class
+name, the HTTP status, its own classification (`reason`, Hermes's `FailoverReason`) and the provider's
+message; the message can quote the prompt, so it never leaves. The code comes from the reason first,
+then the status, then the class name, else `other`:
+
+| `error_code` | From |
+|---|---|
+| `mixed_provider_history` | the message contains OpenRouter's fixed wording "encrypted reasoning or compaction content from multiple providers" (case-insensitive substring; the match leaves, the text does not). Checked before everything else: a history carrying another provider's encrypted reasoning (a fallback turn's), replayed to the primary (CLAIMS L26001) |
+| `bad_request` | reasons `format_error`, `role_alternation`, `invalid_encrypted_content`, `thinking_signature`, `multimodal_tool_content_unsupported`, `reasoning_mandatory`, `image_too_large`, `image_corrupt`, `llama_cpp_grammar_pattern`, `long_context_tier`, `oauth_long_context_beta_forbidden`; status 400, 422; class `BadRequest*`, `Unprocessable*` |
+| `context_overflow` | reasons `context_overflow`, `payload_too_large`; status 413 |
+| `content_policy` | reasons `content_policy_blocked`, `provider_policy_blocked`; class `ContentPolicy*` |
+| `model_not_found` | reason `model_not_found`; status 404; class `*NotFound*` |
+| `rate_limited` | reasons `rate_limit`, `upstream_rate_limit`; status 429; class `RateLimit*` |
+| `billing` | reason `billing`; status 402 |
+| `auth` | reasons `auth`, `auth_permanent`, `model_entitlement`; status 401, 403; class `Authentication*`, `PermissionDenied*` |
+| `timeout` | reason `timeout`; status 408; class `*Timeout*` |
+| `server` | reasons `server_error`, `overloaded`; any other 5xx; class `InternalServer*`, `ServiceUnavailable*`, `*Overloaded*` |
+| `network` | reasons `upstream_blocked`, `ssl_cert_verification`; class `*Connect*`, `*Connection*`, `RemoteProtocol*`, `*SSL*` |
+| `cancelled` | class `*Cancel*`, `*Interrupt*` |
+| `invalid_response` | reasons `invalid_response`, `incomplete_response`; class `InvalidAPIResponse` |
+| `other` | anything else (`unknown` included) |
+
+`fallback_activated` is the one value on a call that did not fail: the first `llm.call` of a turn
+(same `turn_id`) on a different `model` after a failed call in that turn, i.e. Hermes's
+`fallback_providers` chain took the turn. The failed call before it carries the failure's own code,
+so a fallback is the pair (join on `turn_id`). A retry on the same model, or a later turn, is not
+marked. Every other successful call has no `error_code` key. Every existing field is unchanged.
 
 ---
 
@@ -2225,7 +2264,7 @@ the tenant is not in the cohort), a 429 is `rate_limited` with `retry_after_s` f
   to a `CP_HOSTS` host; 4 KiB body; 65 s deadline over the control plane's 60 s; redirects and proxies
   refused; one retry only before anything was sent). The contract is `tests/vectors/ask-odin-contract.json`.
 - **Not routed through the approval gate** (`NOT_GATED` in `install/tests/plugin_tools_gated.test.ts`), and
-  not in `tool_categories.json` (frozen v3): `tool.call` carries it as `other` with no name.
+  not in `tool_categories.json` (frozen v4): `tool.call` carries it as `other` with no name.
 - **Never logged:** the question, the answer, the key or the tenant; one line of codes per call.
 
 ---

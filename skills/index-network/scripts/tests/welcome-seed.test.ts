@@ -1761,7 +1761,11 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
     const edgeos = JSON.parse(readFileSync(join(repo, "plugins", "av-events", "edgeos_tool_allowlist.json"), "utf8")) as { carrier_tools: string[] };
     const source = readFileSync(join(import.meta.dir, "..", "welcome.ts"), "utf8");
     const called = [...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1]);
-    const names = [...Object.keys(categories.builtin), ...Object.values(categories.mcp).flatMap((tools) => Object.keys(tools)), ...edgeos.carrier_tools, ...called];
+    // `village` (tool_categories_v4, HOT-RASOOL F1) is listed for telemetry only: the village-bridge tool
+    // was never in the guard's list, and the word is the village's own name in ordinary questions, so
+    // the guard keeps letting it through (unchanged behaviour).
+    const NOT_GUARDED = new Set(["village"]);
+    const names = [...Object.keys(categories.builtin), ...Object.values(categories.mcp).flatMap((tools) => Object.keys(tools)), ...edgeos.carrier_tools, ...called].filter((name) => !NOT_GUARDED.has(name));
     expect(names.length).toBeGreaterThan(100);
     const camel = (name: string) => name.replace(/_(\w)/g, (_m, c: string) => c.toUpperCase());
     for (const name of names) {
