@@ -1,0 +1,113 @@
+{
+  "manifest": 2,
+  "id": "plantgo",
+  "name": "PlantGo",
+  "version": "1.0.0",
+  "description": "Look up plants and recent community plant sightings from PlantGo, a citizen-science plant app. Public read only.",
+  "homepage": "https://plantgo.club/",
+  "owner": {
+    "github": "agnelvishal"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Look up plants and sightings",
+      "description": "Read public plant species details and community sightings, with locations rounded to about 1 km and no user names. Only the search words you give are sent to plantgo.gptindia.pro. No accounts, profiles or purchases."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://plantgo.gptindia.pro/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "plantgo.search_sightings",
+      "class": "read",
+      "target": {
+        "tool": "search_sightings"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "plantgo.search_species",
+      "class": "read",
+      "target": {
+        "tool": "search_species"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "plantgo.get_species",
+      "class": "read",
+      "target": {
+        "tool": "get_species"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "plantgo",
+      "version": "1.0.0",
+      "sha256": "ae82aa4bfe800a2732d89248da8517dd347fc978c1c0da9189c926ef793c2aa8",
+      "path": "skills/plantgo/SKILL.md"
+    }
+  ]
+}
