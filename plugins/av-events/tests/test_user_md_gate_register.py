@@ -15,7 +15,8 @@ SEP = "═" * 46
 
 
 def user_block(*entries):
-    return f"{SEP}\nUSER PROFILE (who the user is) [1% — 10/24,000 chars]\n{SEP}\n" + "\n§\n".join(entries)
+    content = "\n§\n".join(entries)
+    return f"{SEP}\nUSER PROFILE (who the user is) [{len(content) * 100 // 24000}% — {len(content):,}/24,000 chars]\n{SEP}\n" + content
 
 
 @pytest.fixture()

@@ -285,16 +285,17 @@ def run(store, session_id, calls):
     return seen, prompt
 
 
-for kind, (env, session_id) in spec["sessions"].items():
-    set_session(env)
-    for shape, calls in spec["shapes"].items():
-        runs = []
-        for guess in (spec["right"], spec["wrong"]):
-            gate._self_written_digests().clear()
-            store = load([SETUP, NOTE], ["Likes kites."])
-            seen, prompt = run(store, session_id, fill(calls, guess))
-            runs.append(json.dumps([seen, prompt], ensure_ascii=False).replace(guess, "<guess>"))
-        report["matrix"].setdefault(kind, {})[shape] = runs
+for seed, (user, memory) in spec["seeds"].items():
+    for kind, (env, session_id) in spec["sessions"].items():
+        set_session(env)
+        for shape, calls in spec["shapes"].items():
+            runs = []
+            for guess in (spec["right"], spec["wrong"]):
+                gate._self_written_digests().clear()
+                store = load(user, memory)
+                seen, prompt = run(store, session_id, fill(calls, guess))
+                runs.append(json.dumps([seen, prompt], ensure_ascii=False).replace(guess, "<guess>"))
+            report["matrix"].setdefault(seed, {}).setdefault(kind, {})[shape] = runs
 
 # S1-r3: a DM copies the unmarked setup line into MEMORY.md; a group's no-match edit does not carry it.
 set_session({"HERMES_SESSION_PLATFORM": "telegram", "HERMES_SESSION_CHAT_TYPE": "dm"})
@@ -335,11 +336,13 @@ def _gate_paths_module(h):
 @pytest.mark.skipif(not ((_SRC / "plugins" / "memory" / "__init__.py").is_file() and _PY),
                     reason="no Hermes source tree + interpreter (AV_HERMES_SRC / AV_HERMES_PYTHON)")
 def test_real_hermes_oracle_matrix_and_the_self_written_exemption(tmp_path, h):
-    """Review-b ov#565 Q1 and the round-3 fold on Hermes's own memory tool and store: for a group, a cron
-    run, an unknown chat type and no session metadata, every call shape gives a right guess of a setup line
-    and a same-length wrong one byte-identical answers and next-load group prompts (guess normalised out);
-    a Private line a DM copied into MEMORY.md stays out of a group's results (S1-r3); and the restart
-    residual is what the PR says it is."""
+    """Review-b ov#565 Q1, the round-3 fold and ROUND 4 on Hermes's own memory tool and store: for a group,
+    a cron run, an unknown chat type and no session metadata, every call shape gives a right guess of a
+    setup line and a same-length wrong one byte-identical answers and next-load group prompts (guess
+    normalised out) on seeds A, B and C (S1-r4: Hermes's dedupe reply, and a DM-made USER.md copy alone or
+    beside a DM-only line); on seed D only N2-r4's MEMORY.md substring replace/remove differs. A Private
+    line a DM copied into MEMORY.md stays out of a group's results (S1-r3); the restart residual is what
+    the PR says it is."""
     paths = _gate_paths_module(h)
     token = "\u0000GUESS\u0000"
     home = tmp_path / ".hermes"
@@ -349,8 +352,12 @@ def test_real_hermes_oracle_matrix_and_the_self_written_exemption(tmp_path, h):
     (home / "config.yaml").write_text("memory:\n  user_char_limit: 600\n  memory_char_limit: 400\n", encoding="utf-8")
     right = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the Goa coast."
     wrong = "Synthetic Resident, Tidepool Bay. Builds kelp sensors for the Gox coast."
-    spec = {"token": token, "right": right, "wrong": wrong, "note": "Prefers calls before noon.",
-            "setup": "[Edge City profile, written at setup]\n" + right,
+    setup, note = "[Edge City profile, written at setup]\n" + right, "Prefers calls before noon."
+    seeds = {"A": [[setup, note], ["Likes kites."]],
+             "B": [[setup, note, right], ["Likes kites."]],
+             "C": [[setup, note, f"{right}\n{paths.DM_ONLY}"], ["Likes kites."]],
+             "D": [[setup, note], ["Likes kites.", f"{right}\n{paths.DM_ONLY}"]]}
+    spec = {"token": token, "right": right, "wrong": wrong, "note": note, "setup": setup, "seeds": seeds,
             "sessions": {kind: [env, sid] for kind, (env, sid) in paths.SESSION_KINDS.items()},
             "shapes": {shape: make(token) for shape, make in paths.MATRIX.items()}}
     spec_path = tmp_path / "matrix.json"
@@ -364,20 +371,26 @@ def test_real_hermes_oracle_matrix_and_the_self_written_exemption(tmp_path, h):
     if "import_error" in report:
         pytest.skip(f"Hermes not importable with {_PY}: {report['import_error']}")
     assert report["installed"] is True
-    assert sorted(report["matrix"]) == sorted(paths.SESSION_KINDS)
-    differences = [(kind, shape) for kind, shapes in report["matrix"].items()
-                   for shape, (r, w) in shapes.items() if r != w]
-    assert differences == []
-    for kind, shapes in report["matrix"].items():
-        assert sorted(shapes) == sorted(paths.MATRIX), kind
-        for shape, (r, _w) in shapes.items():
-            seen, prompt = json.loads(r)
-            assert seen[0][0] == ("blocked" if shape in paths.REFUSED else "ran"), (kind, shape)
-            assert "kelp sensors for the Goa" not in r and "Tidepool" not in r.replace("<guess>", ""), (kind, shape)
-        # the read-backs are not vacuous: the group's own line comes back on both stores and in the prompt
-        assert "<guess>" in json.dumps(json.loads(json.loads(shapes["read-back-memory"][0])[0][-1][1])["current_entries"])
-        assert "<guess>" in json.dumps(json.loads(json.loads(shapes["over-limit-user"][0])[0][-1][1])["current_entries"])
-        assert "<guess>" in json.loads(shapes["add-user"][0])[1]
+    assert sorted(report["matrix"]) == sorted(seeds)
+    differences = {seed: sorted({shape for kind, shapes in kinds.items() for shape, (r, w) in shapes.items() if r != w})
+                   for seed, kinds in report["matrix"].items()}
+    assert differences == {"A": [], "B": [], "C": [], "D": sorted(paths.SEED_D_KNOWN)}
+    for seed, kinds in report["matrix"].items():
+        assert sorted(kinds) == sorted(paths.SESSION_KINDS), seed
+        for kind, shapes in kinds.items():
+            assert sorted(shapes) == sorted(paths.MATRIX), kind
+            if seed == "D":  # N2-r4 in every session kind alike
+                assert sorted(s for s, (r, w) in shapes.items() if r != w) == sorted(paths.SEED_D_KNOWN), kind
+            for shape, runs in shapes.items():
+                seen, prompt = json.loads(runs[0])
+                assert seen[0][0] == ("blocked" if shape in paths.REFUSED else "ran"), (seed, kind, shape)
+                for r in runs:
+                    assert "kelp sensors for the Goa" not in r and "Tidepool" not in r.replace("<guess>", ""), (seed, kind, shape)
+                    assert "lighthouse" not in r and "already exists" not in r, (seed, kind, shape)
+            # the read-backs are not vacuous: the group's own line comes back on both stores and in the prompt
+            assert "<guess>" in json.dumps(json.loads(json.loads(shapes["read-back-memory"][0])[0][-1][1])["current_entries"])
+            assert "<guess>" in json.dumps(json.loads(json.loads(shapes["over-limit-user"][0])[0][-1][1])["current_entries"])
+            assert "<guess>" in json.loads(shapes["add-user"][0])[1]
     assert json.loads(report["dm_copy"][0][1])["success"] is True
     (s1r3,) = report["s1r3_group"]
     assert s1r3[0] == "ran" and json.loads(s1r3[1])["current_entries"] == ["Likes kites."]

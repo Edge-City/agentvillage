@@ -12,6 +12,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import sys
 import threading
 from typing import Any, List, Optional
@@ -49,16 +50,25 @@ from typing import Any, List, Optional
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
 #   prompt gate), so text derived from one is still known after its mark has gone. One fingerprint set per
 #   process, on Hermes's `MemoryStore` class, read by both copies of this block (review-b ov#563 N4-d).
-# - Self-written lines (review-b ov#565 S1-r3): when a session that is not private writes a line (an
-#   allowed call's content or new_text) whose digest is a fingerprint, the write check records that digest
-#   (`remember_self_written`, one set per process on the same class, at most SELF_WRITTEN_MAX). The prompt
-#   gate and every memory-tool result outside a private session (USER.md and MEMORY.md alike) redact on
-#   marks and on fingerprints, but a fingerprint is ignored for a line a non-private session wrote itself,
-#   or that the call itself carries (content, new_text, old_text). So a group's own note reads back the
-#   same whether or not it equals a Private line (no guess-confirm oracle), while a Private line a DM copied
-#   into MEMORY.md or USER.md stays hidden. Residual: the set lives in memory, so after a restart a line a
-#   group wrote earlier that equals a Private line is hidden again (one bit per restart, only for a line
-#   that group already wrote).
+# - Self-written entries (review-b ov#565 S1-r3, S1-r4 (b)): when a session that is not private writes a
+#   text (an allowed call's content or new_text, of the call or of each op) that holds a fingerprinted
+#   line, the write check records the digest of that WHOLE stripped text with the store Hermes writes it
+#   to (`remember_self_written`, one set per process on the same class, at most SELF_WRITTEN_MAX). The
+#   prompt gate and every memory-tool result outside a private session (USER.md and MEMORY.md alike) redact
+#   on marks and on fingerprints; an entry that holds a fingerprint escapes only when its whole stripped
+#   text (`stripped_entry`) is such a self-written text of the same store, or is a text the call itself
+#   carries (content, new_text, old_text). So a group's own note reads back the same whether or not it
+#   holds a Private line (no guess-confirm oracle), an identical DM-made copy shows only what the group
+#   itself typed, and a DM-made entry that holds a Private line beside other text stays hidden in every
+#   session that is not private. A result's error or message text (never an entry) is judged with the
+#   call's own texts cut out of it, since Hermes echoes them there. Residual: the set lives in memory, so
+#   after a restart a text a group wrote earlier that holds a Private line is hidden again (one bit per
+#   restart, only for a text that group already wrote).
+# - Adds answer alike (review-b ov#565 S1-r4 (a)): outside a private session an add (or a batch of adds)
+#   gets the same reply whether or not Hermes found the text already stored: "Entry already exists (no
+#   duplicate added)." reads "Entry added.", and the size figures (`usage`, `entry_count`, and the
+#   current char count in an over-limit error) are left out of the result (`uniform_add_result`); the
+#   USER.md prompt header outside a private session counts only the entries it shows.
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -96,15 +106,30 @@ FINGERPRINT_MIN_CHARS = 24
 DIGESTS_ATTR = "village_private_line_digests"
 #: This copy's own set, only while Hermes's store is not loaded (outside Hermes: the tests).
 _PRIVATE_LINE_DIGESTS: set = set()
-#: Set on the same class: the digests of the fingerprinted lines a session that is not private wrote itself
-#: (review-b ov#565 S1-r3), insertion-ordered (a dict), the oldest dropped past SELF_WRITTEN_MAX.
+#: Set on the same class: the digests of the whole stripped texts holding a fingerprinted line that a
+#: session that is not private wrote itself (review-b ov#565 S1-r3, S1-r4 (b)), insertion-ordered (a dict),
+#: the oldest dropped past SELF_WRITTEN_MAX. Only a text holding a Private line is recorded, so pushing one
+#: out takes that many distinct writes holding a right guess (dozens of tool calls of thousands of ops).
 SELF_WRITTEN_ATTR = "village_self_written_digests"
-SELF_WRITTEN_MAX = 4096
+SELF_WRITTEN_MAX = 65536
 #: This copy's own self-written digests, only while Hermes's store is not loaded (outside Hermes: the tests).
 _SELF_WRITTEN_DIGESTS: dict = {}
 #: The text fields of a memory call (and of each batch op) that land in a store, and the one that only locates.
 WRITTEN_FIELDS = ("content", "new_text")
 CALL_TEXT_FIELDS = ("content", "new_text", "old_text")
+#: The memory-tool result fields that carry stored entries (tools/memory_tool_store.py `_locate`, `_edit`,
+#: `_batch`, `_failure_with_entries`, `resolve_*`); every other string in a result is Hermes's own text.
+ENTRY_RESULT_KEYS = frozenset({"current_entries", "matches", "replaced_entry", "removed_entry", "replaced_entries",
+                               "removed_entries", "matched_entry", "matched_entries"})
+#: Hermes's add replies (tools/memory_tool_store.py `add`) and the size fields of a write result
+#: (`_success_response`, `_failure_with_entries`, `_batch_failure`).
+ADD_DEDUPE_MESSAGE = "Entry already exists (no duplicate added)."
+ADD_MESSAGE = "Entry added."
+SIZE_FIELDS = ("usage", "entry_count")
+#: A char count beside its limit in Hermes's text ("Memory at 2,190/2,200 chars"): the count is left out.
+CHAR_COUNT_FIGURE = re.compile(r"\b\d[\d,]*/(\d[\d,]*) chars\b")
+#: The usage figure ending the USER.md block's title line (tools/memory_tool_store.py `_render_block`).
+USAGE_FIGURE = re.compile(r" \[(?:(\d+)% — )?(\d[\d,]*)/(\d[\d,]*) chars\]$")
 
 _GATE_LATCHED: set = set()
 _GATE_LATCH_LOCK = threading.Lock()
@@ -200,11 +225,27 @@ def holds_private_mark(text: Any) -> bool:
     return isinstance(text, str) and any(mark in text for mark in PRIVATE_ENTRY_MARKS)
 
 
-def holds_private_entry(text: Any, exempt: Any = frozenset()) -> bool:
-    """A Private mark in `text`, or a line of an entry this process has seen marked, unless a session that
-    is not private wrote that line itself (`remember_self_written`) or it is in `exempt` (the digests of
-    the lines the call itself carries). The prompt gate and every memory-tool result; never the write
-    check."""
+def stripped_entry(text: str) -> str:
+    """An entry's text as Hermes stores and compares it (tools/memory_tool_store.py `_parse_entries`, `add`:
+    split on ENTRY_DELIMITER, then stripped): what the self-written and own-call exemptions compare whole."""
+    return text.strip()
+
+
+def _entry_digest(text: str) -> str:
+    return hashlib.sha256(stripped_entry(text).encode("utf-8")).hexdigest()
+
+
+def _holds_fingerprint(text: str, digests: Any) -> bool:
+    return any(_line_digest(line) in digests for line in _fingerprint_lines(text))
+
+
+def holds_private_entry(text: Any, exempt: Any = frozenset(), cut: Any = (), store: str = "user") -> bool:
+    """A Private mark in `text`, or a line of an entry this process has seen marked, unless the WHOLE
+    stripped text is one a session that is not private wrote itself to `store` (`remember_self_written`;
+    the prompt gate's USER.md by default) or is in `exempt` (the digests of the whole texts the call
+    itself carries), review-b ov#565 S1-r4 (b). `cut` (the call's own texts) is taken out first, for
+    Hermes's own text that echoes them, never for an entry. The prompt gate and every memory-tool result;
+    never the write check."""
     if not isinstance(text, str):
         return False
     if holds_private_mark(text):
@@ -212,12 +253,12 @@ def holds_private_entry(text: Any, exempt: Any = frozenset()) -> bool:
     digests = _private_line_digests()
     if not digests:
         return False
-    written = _self_written_digests()
-    for line in _fingerprint_lines(text):
-        digest = _line_digest(line)
-        if digest in digests and digest not in written and digest not in exempt:
-            return True
-    return False
+    for own in cut:
+        text = text.replace(own, "")
+    if not _holds_fingerprint(text, digests):
+        return False
+    whole = _entry_digest(text)
+    return f"{store}:{whole}" not in _self_written_digests() and whole not in exempt
 
 
 def _call_texts(args: Any, fields: Any) -> List[str]:
@@ -229,23 +270,37 @@ def _call_texts(args: Any, fields: Any) -> List[str]:
     return [call[name] for call in calls for name in fields if isinstance(call.get(name), str)]
 
 
-def call_line_digests(args: Any) -> frozenset:
-    """The digests of the fingerprint-length lines a call carries (content, new_text, old_text): Hermes
-    echoes them back (an error naming old_text), so they never count against the call's own result."""
-    return frozenset(_line_digest(line) for text in _call_texts(args, CALL_TEXT_FIELDS)
-                     for line in _fingerprint_lines(text))
+def call_own_texts(args: Any) -> tuple:
+    """The texts a call carries (content, new_text, old_text, of the call and each op), stripped as Hermes
+    strips them, longest first: Hermes echoes them in its own text (an error naming old_text)."""
+    texts = {stripped_entry(text) for text in _call_texts(args, CALL_TEXT_FIELDS)}
+    return tuple(sorted((text for text in texts if text), key=len, reverse=True))
+
+
+def call_entry_digests(args: Any) -> frozenset:
+    """The whole-text digests of the texts a call carries: an entry equal to one of them is the call's own
+    (review-b ov#565 S1-r4 (b): whole entry, never a line of one)."""
+    return frozenset(_entry_digest(text) for text in call_own_texts(args))
+
+
+def written_store(args: Any) -> str:
+    """The store Hermes runs a call on (tools/memory_tool.py `memory_tool`: `target` None is memory, a batch
+    runs on the call's own target whatever its ops name): where its texts land and its result's entries
+    come from. Not the write check's fail-closed reading (`memory_call_target`)."""
+    target = args.get("target") if isinstance(args, dict) else "user"
+    return "memory" if target in (None, "memory") else "user"
 
 
 def remember_self_written(args: Any) -> None:
-    """Record the lines an allowed write outside a private session puts in a store (content, new_text, of
-    the call and of each op) whose digest is a fingerprint: only those can ever be redacted, so the set
-    grows only with lines equal to a Private line (a chatty group cannot push a recorded one out). Oldest
-    dropped past SELF_WRITTEN_MAX."""
+    """Record the whole stripped texts an allowed write outside a private session puts in a store (content,
+    new_text, of the call and of each op) that hold a fingerprinted line: only those can ever be redacted,
+    so a chatty group's other notes never take a place. Oldest dropped past SELF_WRITTEN_MAX."""
     private = _private_line_digests()
     if not private:
         return
-    digests = [_line_digest(line) for text in _call_texts(args, WRITTEN_FIELDS) for line in _fingerprint_lines(text)]
-    digests = [digest for digest in digests if digest in private]
+    texts = [text for text in _call_texts(args, WRITTEN_FIELDS) if _holds_fingerprint(text, private)]
+    store = written_store(args)
+    digests = [f"{store}:{_entry_digest(text)}" for text in texts if stripped_entry(text)]
     if not digests:
         return
     written = _self_written_digests()
@@ -257,10 +312,26 @@ def remember_self_written(args: Any) -> None:
             del written[next(iter(written))]
 
 
+def _user_header_for(title_line: str, kept: List[str]) -> str:
+    """The block's title line with its usage figure counting only `kept` (Hermes's `_render_block`:
+    "[P% — N/L chars]"), so the figure never tells a session the size of what it does not see (review-b
+    ov#565 S1-r4: a deduped add would show there). The title alone when there is no figure in that form."""
+    figure = USAGE_FIGURE.search(title_line)
+    if figure is None or figure.start() < len(USER_BLOCK_TITLE):
+        return USER_BLOCK_TITLE
+    percent, count, limit_text = figure.groups()
+    limit = int(limit_text.replace(",", ""))
+    current = len(ENTRY_DELIMITER.join(kept))
+    shown = f"{current:,}" if "," in count + limit_text else str(current)
+    if percent is not None:
+        shown = f"{min(100, int((current / limit) * 100)) if limit > 0 else 0}% — {shown}"
+    return f"{title_line[:figure.start()]} [{shown}/{limit_text} chars]"
+
+
 def shared_user_block(block: Any) -> Any:
-    """Hermes's USER.md block without the Private entries (PRIVATE_ENTRY_MARKS), the header (and its usage
-    figure, which is the file's) kept. "" when nothing else is left. Fail closed: a block that holds a mark
-    in a shape this does not know is dropped whole."""
+    """Hermes's USER.md block without the Private entries (PRIVATE_ENTRY_MARKS), the header kept with its
+    usage figure counting the entries kept. "" when nothing else is left. Fail closed: a block that holds a
+    mark in a shape this does not know is dropped whole."""
     if not holds_private_entry(block):
         return block
     lines = block.split("\n", 3)
@@ -272,7 +343,7 @@ def shared_user_block(block: Any) -> Any:
     kept = [entry for entry in entries if not holds_private_entry(entry)]
     if not [entry for entry in kept if entry.strip()]:
         return ""
-    return "\n".join(lines[:3]) + "\n" + ENTRY_DELIMITER.join(kept)
+    return "\n".join([lines[0], _user_header_for(lines[1], kept), lines[2]]) + "\n" + ENTRY_DELIMITER.join(kept)
 
 
 def _village_provider(agent: Any) -> Any:
@@ -494,29 +565,32 @@ def memory_call_target(args: Any) -> str:
     return "memory" if args.get("target") in (None, "memory") else "user"
 
 
-def _left_out(value: Any, holds: Any = None) -> Any:
-    """`value` with every string `holds` flags (default `holds_private_entry`) left out: a list drops it, a
-    dict keeps the key with LEFT_OUT in its place."""
-    holds = holds or holds_private_entry
+def _left_out(value: Any, holds: Any = None, entry: bool = False) -> Any:
+    """`value` with every string `holds(text, entry)` flags (default `holds_private_entry`) left out: a
+    list drops it, a dict keeps the key with LEFT_OUT in its place. `entry`: the value sits under one of
+    ENTRY_RESULT_KEYS (a stored entry), else it is Hermes's own text."""
+    holds = holds or (lambda text, _entry: holds_private_entry(text))
     if isinstance(value, str):
-        return LEFT_OUT if holds(value) else value
+        return LEFT_OUT if holds(value, entry) else value
     if isinstance(value, list):
-        return [_left_out(v, holds) for v in value if not holds(v)]
+        return [_left_out(v, holds, entry) for v in value if not holds(v, entry)]
     if isinstance(value, dict):
-        return {k: _left_out(v, holds) for k, v in value.items()}
+        return {k: _left_out(v, holds, entry or k in ENTRY_RESULT_KEYS) for k, v in value.items()}
     return value
 
 
-def redact_memory_result(result: Any, exempt: Any = frozenset()) -> Optional[str]:
+def redact_memory_result(result: Any, exempt: Any = frozenset(), cut: Any = (), store: str = "user") -> Optional[str]:
     """A memory-tool result without its Private entries (judged value by value, so a fingerprint inside a
     JSON string counts), or None when it holds none. A result that is not JSON but holds a mark or a
-    fingerprint is replaced whole (fail closed). A fingerprint in `exempt` (the call's own lines) or
-    self-written does not count (review-b ov#565 S1-r3)."""
+    fingerprint is replaced whole (fail closed). An entry whose whole stripped text is in `exempt` (the
+    call's own texts) or self-written does not count; Hermes's own text (an error, a message) is judged
+    with `cut` (the call's own texts) taken out (review-b ov#565 S1-r3, S1-r4 (b)). `store`: the store the
+    result's entries come from."""
     if not isinstance(result, str):
         return None
 
-    def holds(text: Any) -> bool:
-        return holds_private_entry(text, exempt)
+    def holds(text: Any, entry: bool = True) -> bool:
+        return holds_private_entry(text, exempt, () if entry else cut, store)
 
     try:
         payload = json.loads(result)
@@ -540,17 +614,49 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
     try:
         if tool_name != "memory" or session_is_private_now(session_id):
             return None
-        out = redact_memory_result(result, call_line_digests(args))
+        out = redact_memory_result(result, call_entry_digests(args), call_own_texts(args), written_store(args))
         if out is not None:
             _gate_log_once("user_gate:memory_result", "USER.md gate: private entries left out of a memory result")
+        if isinstance(args, dict) and adds_only(args):
+            uniform = uniform_add_result(result if out is None else out)
+            out = out if uniform is None else uniform
         return out
     except Exception:  # noqa: BLE001 - fail closed
         return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
 
 
+def _uniform(value: Any) -> Any:
+    """Hermes's own text and fields of an add result made alike; a stored entry (ENTRY_RESULT_KEYS) kept."""
+    if isinstance(value, str):
+        return ADD_MESSAGE if value == ADD_DEDUPE_MESSAGE else CHAR_COUNT_FIGURE.sub(r"its \1-char limit", value)
+    if isinstance(value, list):
+        return [_uniform(v) for v in value]
+    if isinstance(value, dict):
+        return {k: v if k in ENTRY_RESULT_KEYS else _uniform(v) for k, v in value.items() if k not in SIZE_FIELDS}
+    return value
+
+
+def uniform_add_result(result: Any) -> Optional[str]:
+    """An add's (or a batch of adds') result as it reads outside a private session, or None when that is
+    the result as it is (review-b ov#565 S1-r4 (a)): Hermes's "Entry already exists (no duplicate added)."
+    reads "Entry added.", and `usage`, `entry_count` and the current char count of an over-limit error
+    are left out, at every level, so a deduped add and a fresh one answer alike (the text the call
+    supplied aside). A result that is not JSON is left as it is (Hermes always answers JSON)."""
+    if not isinstance(result, str):
+        return None
+    try:
+        payload = json.loads(result)
+    except Exception:  # noqa: BLE001
+        return None
+    uniform = _uniform(payload)
+    return None if uniform == payload else json.dumps(uniform, ensure_ascii=False)
+
+
 def adds_only(args: Any) -> bool:
     """The call only adds, as Hermes runs it: a batch (a non-empty `operations`, whatever `action` says)
     whose every op is a dict with action add, else `action` add."""
+    if not isinstance(args, dict):
+        return False
     ops = args.get("operations")
     if ops:
         return isinstance(ops, list) and all(isinstance(op, dict) and op.get("action") == "add" for op in ops)
@@ -564,8 +670,9 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
     and on whether the text it writes holds a Private mark (a public constant), never on a fingerprint
     (review-b ov#563 S1-d, ov#565 N1-r3): the answer never tells a group whether a guess is in the setup
     text (no membership oracle). MEMORY_WRITE_REFUSAL for a USER.md change (N3-d), MEMORY_MARK_REFUSAL for
-    a marked write. An allowed call's fingerprinted lines are recorded as self-written (S1-r3); if that
-    fails, the call is refused (fail closed). A DM is never refused."""
+    a marked write. An allowed call's whole texts that hold a fingerprinted line are recorded as
+    self-written (S1-r3, S1-r4 (b)); if that fails, the call is refused (fail closed). A DM is never
+    refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
     try:
         if tool_name != "memory" or session_is_private_now(session_id):

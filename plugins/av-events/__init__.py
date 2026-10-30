@@ -1210,7 +1210,8 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             return guard
         # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d, ov#565 N1-r3): outside a private session the memory
         # tool may add to USER.md but not change or remove it (target and action only, never the content);
-        # MEMORY.md is unchanged; an allowed write's fingerprinted lines are recorded as self-written (S1-r3).
+        # MEMORY.md is unchanged; an allowed write's whole texts that hold a fingerprinted line are recorded as
+        # self-written (S1-r3, S1-r4 (b)).
         # A block beats anything but the EdgeOS guard.
         memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
                                                            kwargs.get("session_id"))

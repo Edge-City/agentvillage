@@ -58,7 +58,11 @@ plugins/village-memory/
     `transform_tool_result`
     leaves Private entries out of every result (`current_entries`, `matches`, `replaced_entry`,
     `removed_entry`, `replaced_entries`, ...), USER.md and MEMORY.md alike, by marks and fingerprints,
-    except a self-written line (below). A call whose target is unknown counts as USER.md. A DM keeps
+    except a self-written entry (below), and makes an add's reply the same whether or not Hermes found
+    the text already stored (ov#565 S1-r4 (a)): "Entry already exists (no duplicate added)." reads
+    "Entry added.", and `usage`, `entry_count` and the current char count in an over-limit error are
+    left out of an add or a batch of adds (dropped, not set to a constant: no figure is better than a
+    wrong one). A call whose target is unknown counts as USER.md. A DM keeps
     Hermes's own tool. "Private" needs positive evidence: a direct chat type or an explicit local surface
     from Hermes's session context, else Hermes's own session row for the session id; empty or unknown
     (`thread`, `forum`, `supergroup`, anything else) is not private, and cron never is.
@@ -67,22 +71,33 @@ plugins/village-memory/
     check): each line of 24 characters or more, by sha256, in memory only. One set per process, on
     Hermes's `MemoryStore` class (`village_private_line_digests`), read by both copies of the gate
     (ov#563 N4-d).
-  - **Self-written lines** (review-b ov#565 S1-r3): when a session that is not private writes a line
-    (an allowed call's `content` or `new_text`, in the call or a batch op) equal to a fingerprinted line,
-    the write check records its digest (`village_self_written_digests`, on the same class, at most 4,096,
-    oldest dropped; only fingerprinted lines are recorded, so a chatty group cannot push one out). A
-    fingerprint does not count for a recorded line, nor for a line the call itself carries (`content`,
-    `new_text`, `old_text`, which Hermes echoes back), in the prompt gate or any result. So a group's own
-    note (USER.md or MEMORY.md) reads back the same whether or not it equals a Private line (no
-    guess-confirm oracle), and a Private line a DM copied into MEMORY.md or USER.md stays out of group
-    and cron results. Residual: the record is in memory only, so after a restart a line a group wrote
-    earlier that equals a Private line is hidden again, from its results and its next prompt (one bit
-    per restart, and only for a line that group already wrote). The record is process-wide, not per
-    session (the memory files are shared by all the agent's chats), so once a non-private session writes
-    a line that already sits unmarked in MEMORY.md (a DM-made copy of a Private line, round-1 S4: in every
-    group prompt already), that older copy is no longer redacted for any session in the process, and a
-    read-back shows two copies where a wrong guess shows one. The marked USER.md entry stays hidden by
-    its mark.
+  - **Self-written entries** (review-b ov#565 S1-r3, S1-r4 (b)): when a session that is not private
+    writes a text (an allowed call's `content` or `new_text`, in the call or a batch op) that holds a
+    fingerprinted line, the write check records the digest of that WHOLE text, stripped as Hermes stores
+    an entry, with the store Hermes writes it to (`village_self_written_digests`, on the same class, at
+    most 65,536, oldest dropped; only texts holding a Private line are recorded, so a chatty group's
+    other notes never take a place). An entry that holds a fingerprint is left out unless its whole
+    stripped text is such a recorded text of the same store, or a text the call itself carries
+    (`content`, `new_text`, `old_text`); never line by line. Hermes's own text in a result (an error that
+    echoes `old_text`) is judged with the call's texts cut out. So a group's own note (USER.md or
+    MEMORY.md) reads back the same whether or not it holds a Private line (no guess-confirm oracle); an
+    identical DM-made copy is the same text, so it shows only what the group itself typed; and a DM-made
+    entry that holds a Private line beside other text stays out of every non-private session's results
+    and prompt, whatever a group writes. The USER.md prompt header outside a private session counts only
+    the entries it shows.
+  - **Residuals:**
+    - Restart (review-b ov#565 N1-r4): the record is in memory only, so after a restart a text a group
+      wrote earlier that holds a Private line is hidden again, from its results and its next prompt (one
+      bit per restart, and only for a text that group already wrote).
+    - MEMORY.md substring edits (N2-r4, round-1 S4, owned by data, since v2.1.23): a group's MEMORY.md
+      replace or remove whose `old_text` is part of a DM-made MEMORY.md entry succeeds (and changes that
+      entry) where a wrong guess finds no match. The entry itself stays out of the result.
+    - Capacity: an add of a text already stored never fails for room, a new one can; so a group that
+      first fills USER.md to the brim with its own notes can tell a deduped add from a new one. It
+      needs USER.md filled with junk the human sees in a private chat.
+    - The record's bound: a group that knows a right guess can push its own older text out with 65,536
+      distinct writes holding that line (dozens of tool calls, each carrying thousands of batch ops),
+      after which that text is hidden again, as after a restart: one bit per flood.
   - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
     the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
     when both are `seam`.

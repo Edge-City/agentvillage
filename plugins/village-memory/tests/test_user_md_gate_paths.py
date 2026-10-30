@@ -39,8 +39,10 @@ CP_MEMORY_ENTRY = Path(os.environ.get("AV_CP_SRC") or Path.home() / "dev" / "age
 
 
 def user_block(*entries: str) -> str:
+    """Hermes's `_render_block`: the usage figure counts the entries it holds (the gate recounts it for the
+    entries a group sees, review-b ov#565 S1-r4)."""
     content = "\n§\n".join(entries)
-    return f"{SEP}\nUSER PROFILE (who the user is) [12% — 165/24,000 chars]\n{SEP}\n{content}"
+    return f"{SEP}\nUSER PROFILE (who the user is) [{len(content) * 100 // 24000}% — {len(content):,}/24,000 chars]\n{SEP}\n{content}"
 
 
 @pytest.fixture()
@@ -335,9 +337,10 @@ def _own(g, target="memory", content=None):
         "add-user-again"])
 def test_a_group_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, group_session, user_md, call):
     """Review-b ov#563 S1-d and ov#565 S1-r3, the result half: a group's own note (USER.md or MEMORY.md)
-    reads back unchanged even when it equals a setup-profile line (a fingerprint does not count for a line
-    a non-private session wrote itself or the call carries), so the answer is the same, with the guess in
-    place, for a right and a wrong guess."""
+    reads back unchanged even when it equals a setup-profile line (a fingerprint does not count for an
+    entry a non-private session wrote itself or the call carries), so the answer is the same, with the
+    guess in place, for a right and a wrong guess. An add's reply loses its size figures and reads
+    "Entry added." even when Hermes deduped it (ov#565 S1-r4 (a)); nothing else is touched."""
     user_md(SETUP, NOTE)
     answers = []
     for guess in (RIGHT_GUESS, WRONG_GUESS):
@@ -350,7 +353,12 @@ def test_a_group_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, gro
         assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
         out = gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-group")
         answers.append(None if out is None else out.replace(guess, "<guess>"))
-    assert answers == [None, None]
+    assert answers[0] == answers[1]
+    if not gate_copy.adds_only(args):
+        assert answers == [None, None]
+    elif answers[0] is not None:
+        assert '"usage"' not in answers[0] and '"entry_count"' not in answers[0]
+        assert "already exists" not in answers[0] and not re.search(r"\d/\d", answers[0])
 
 
 @pytest.mark.parametrize("args", [
@@ -469,9 +477,10 @@ def test_tools_md_says_never_edit_the_setup_entry(h):
     tools = (h.PLUGIN_DIR.parents[1] / "skills" / "index-network" / "tools.md").read_text(encoding="utf-8")
     assert "Never edit, rewrite or remove the entry headed `[Edge City profile, written at setup]` either" in tools
     # ov#565 N1-r3: outside the private chat USER.md takes a new note but no change or removal.
-    assert ("Outside your private chat with them (a group, a cron run) you can add a new note to `memories/USER.md`, "
-            "but you cannot change or remove one there: change or remove a USER.md note only in your private "
-            "chat") in tools
+    # Worded without "cannot ... change": own-profile-copy.test.ts holds tools.md free of any line that reads
+    # as "the agent cannot change the profile" (DATA-413).
+    assert ("Outside your private chat with them (a group, a cron run) you can add a new note to `memories/USER.md`; "
+            "changing or removing a USER.md note works only in your private chat.") in tools
 
 
 # ---- private only on positive evidence (security review: no fail-open default) -----------------------------
@@ -893,25 +902,90 @@ def _run(gate_mod, session_id, calls, store):
     return seen, prompt
 
 
-@pytest.mark.parametrize("shape", sorted(MATRIX))
-def test_the_oracle_matrix_a_right_guess_gets_what_a_wrong_one_gets(gate_copy, outside, shape):
-    """Review-b ov#565 Q1 and the round-3 fold: in a group, a cron run, an unknown chat type and with no
-    session metadata, a right guess of a setup line and a same-length wrong one get byte-identical write
-    checks, results and next-load USER.md prompt blocks (the guess normalised out), on every call shape."""
+#: A DM-only line that sits beside a setup line in a DM-made entry (fictional).
+DM_ONLY = "Owner's partner works night shifts at the lighthouse."
+#: Review-b ov#565 ROUND 4's seeds, the stores before the group's calls: A, only the marked setup entry;
+#: B, plus an UNMARKED USER.md entry equal to one setup line (a DM-made copy); C, plus an unmarked USER.md
+#: entry holding that line and a DM-only line; D, a MEMORY.md entry with the same two lines.
+SEEDS = {
+    "A": ([SETUP, NOTE], ["Likes kites."]),
+    "B": ([SETUP, NOTE, RIGHT_GUESS], ["Likes kites."]),
+    "C": ([SETUP, NOTE, f"{RIGHT_GUESS}\n{DM_ONLY}"], ["Likes kites."]),
+    "D": ([SETUP, NOTE], ["Likes kites.", f"{RIGHT_GUESS}\n{DM_ONLY}"]),
+}
+#: Seed D's known differences (review-b ov#565 N2-r4, round-1 S4, owned by data, since v2.1.23): a MEMORY.md
+#: replace or remove whose old_text is a substring of a DM-made MEMORY.md entry succeeds, a wrong one finds
+#: no match. Nothing else may differ on D.
+SEED_D_KNOWN = {"replace-memory", "remove-memory"}
+
+
+def _matrix_transcripts(gate_mod, session_id, shape, seed):
+    """Right and wrong guess, each from a fresh process state and the seed's stores: what the model sees
+    and the next USER.md prompt block, the guess normalised out."""
     transcripts = []
     for guess in (RIGHT_GUESS, WRONG_GUESS):
-        gate_copy._gate_reset_for_tests()
-        gate_copy.shared_user_block(user_block(SETUP, NOTE))  # the process saw the entry marked
-        assert gate_copy.holds_private_entry(RIGHT_GUESS) and not gate_copy.holds_private_entry(WRONG_GUESS)
-        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites."])
-        seen, prompt = _run(gate_copy, outside, MATRIX[shape](guess), store)
+        gate_mod._gate_reset_for_tests()
+        gate_mod.shared_user_block(user_block(SETUP, NOTE))  # the process saw the entry marked
+        assert gate_mod.holds_private_entry(RIGHT_GUESS) and not gate_mod.holds_private_entry(WRONG_GUESS)
+        store = FakeMemoryTool(*SEEDS[seed])
+        seen, prompt = _run(gate_mod, session_id, MATRIX[shape](guess), store)
         transcripts.append(json.dumps([seen, prompt], ensure_ascii=False).replace(json.dumps(guess)[1:-1], "<guess>"))
-    assert transcripts[0] == transcripts[1]
-    first = json.loads(transcripts[0])[0][0]
+    return transcripts
+
+
+@pytest.mark.parametrize("seed", sorted(SEEDS))
+@pytest.mark.parametrize("shape", sorted(MATRIX))
+def test_the_oracle_matrix_a_right_guess_gets_what_a_wrong_one_gets(gate_copy, outside, shape, seed):
+    """Review-b ov#565 Q1, the round-3 fold and ROUND 4 (S1-r4 fold (c)): in a group, a cron run, an
+    unknown chat type and with no session metadata, a right guess of a setup line and a same-length wrong
+    one get byte-identical write checks, results and next-load USER.md prompt blocks (the guess normalised
+    out), on every call shape and on seeds A, B and C. On seed D only N2-r4's two shapes differ. No
+    transcript ever carries the DM-only line, or a DM-made copy of the setup line beside a wrong guess."""
+    right, wrong = _matrix_transcripts(gate_copy, outside, shape, seed)
+    if seed == "D" and shape in SEED_D_KNOWN:
+        assert right != wrong  # N2-r4, stated in the README; the S4 fix is data's
+    else:
+        assert right == wrong
+    first = json.loads(right)[0][0]
     assert first[0] == ("blocked" if shape in REFUSED else "ran")
     if shape in REFUSED:
         assert first[1] == {"action": "block", "message": MARK_REFUSAL_TEXT if shape in MARKED else REFUSAL_TEXT}
-    assert "kelp sensors for the harbour" not in transcripts[0] and "Tidepool" not in transcripts[0]
+    for transcript in (right, wrong):
+        assert "kelp sensors for the harbour" not in transcript and "Tidepool" not in transcript
+        assert "lighthouse" not in transcript and "already exists" not in transcript
+
+
+def test_seeds_b_and_c_are_not_vacuous(gate, group_session, monkeypatch):
+    """Review-b ov#565 S1-r4 on the stand-in, before the fold's normalisation: on seed B Hermes dedupes a
+    right guess's USER.md add (a wrong one is added), and on seed C the DM-made entry holds the DM-only
+    line; after the fold the group sees the same either way and never the DM-only line."""
+    gate.shared_user_block(user_block(SETUP, NOTE))
+    store = FakeMemoryTool(*SEEDS["B"])
+    add = {"action": "add", "target": "user", "content": RIGHT_GUESS}
+    assert gate.memory_write_directive(tool_name="memory", args=add, session_id="tg-group") is None
+    raw = store(**add)
+    assert json.loads(raw)["message"] == "Entry already exists (no duplicate added)."
+    out = json.loads(gate.transform_memory_result(tool_name="memory", result=raw, session_id="tg-group", args=add))
+    assert out == {"success": True, "done": True, "target": "user", "message": "Entry added."}
+    # The group's own line and the DM's identical copy are one text: the prompt shows it once, as typed.
+    assert gate.shared_user_block(user_block(*store.entries["user"])) == user_block(NOTE, RIGHT_GUESS)
+    gate._gate_reset_for_tests()
+    gate.shared_user_block(user_block(SETUP, NOTE))
+    store = FakeMemoryTool(*SEEDS["C"])
+    seen, prompt = _run(gate, "tg-group", MATRIX["add-user"](RIGHT_GUESS) + MATRIX["over-limit-user"](RIGHT_GUESS)[1:],
+                        store)
+    assert any(DM_ONLY in entry for entry in store.entries["user"])
+    assert json.loads(seen[-1][1])["current_entries"] == [NOTE, RIGHT_GUESS]
+    assert prompt == user_block(NOTE, RIGHT_GUESS) and DM_ONLY not in json.dumps(seen)
+    # A DM keeps Hermes's own replies, the dedupe answer and the figures included.
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
+    store = FakeMemoryTool(*SEEDS["B"])
+    for add in ({"action": "add", "target": "user", "content": RIGHT_GUESS},
+                {"target": "user", "operations": [{"action": "add", "content": RIGHT_GUESS}]}):
+        assert gate.memory_write_directive(tool_name="memory", args=add, session_id="tg-dm") is None
+        raw = store(**add)
+        assert '"entry_count": 3' in raw
+        assert gate.transform_memory_result(tool_name="memory", result=raw, session_id="tg-dm", args=add) is None
 
 
 def test_the_matrix_reads_back_the_guess_on_both_stores(gate, group_session):
@@ -990,12 +1064,17 @@ def test_only_an_allowed_non_private_write_of_a_fingerprinted_line_is_recorded(g
     gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": RIGHT_GUESS}, session_id="tg-dm")
     assert not gate._self_written_digests()
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "group")
-    for args in ({"action": "add", "content": f"note:\n{RIGHT_GUESS}"},
-                 {"action": "replace", "old_text": "kites", "new_text": RIGHT_GUESS},
-                 {"target": "user", "operations": [{"action": "add", "new_text": RIGHT_GUESS}]}):
+    note = f"note:\n{RIGHT_GUESS}"
+    for args, key in (({"action": "add", "content": f"  {note}\n"}, f"memory:{gate._line_digest(note)}"),
+                      ({"action": "replace", "old_text": "kites", "new_text": RIGHT_GUESS}, f"memory:{right}"),
+                      ({"target": "user", "operations": [{"action": "add", "target": "memory", "new_text": RIGHT_GUESS}]},
+                       f"user:{right}")):
         gate._self_written_digests().clear()
         assert gate.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") is None
-        assert list(gate._self_written_digests()) == [right]
+        # The WHOLE stripped text, never its lines, with the store Hermes writes it to (a batch: the call's
+        # target), review-b ov#565 S1-r4 (b).
+        assert list(gate._self_written_digests()) == [key]
+    assert gate._line_digest(note) != right
 
 
 def test_the_self_written_set_is_bounded_and_drops_the_oldest(gate, group_session, monkeypatch):
@@ -1004,14 +1083,14 @@ def test_the_self_written_set_is_bounded_and_drops_the_oldest(gate, group_sessio
     monkeypatch.setattr(gate, "SELF_WRITTEN_MAX", 2)
     for line in lines[:3]:
         gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": line}, session_id="g")
-    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in lines[1:3]]
+    assert list(gate._self_written_digests()) == [f"memory:{gate._line_digest(line)}" for line in lines[1:3]]
     gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": lines[1]}, session_id="g")
-    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in (lines[2], lines[1])]
+    assert list(gate._self_written_digests()) == [f"memory:{gate._line_digest(line)}" for line in (lines[2], lines[1])]
     # Lines that are no fingerprint never take a place, however many a group writes.
     for i in range(50):
         gate.memory_write_directive(tool_name="memory", args={"action": "add", "content": f"A chatty group note, number {i}."},
                                     session_id="g")
-    assert list(gate._self_written_digests()) == [gate._line_digest(line) for line in (lines[2], lines[1])]
+    assert list(gate._self_written_digests()) == [f"memory:{gate._line_digest(line)}" for line in (lines[2], lines[1])]
 
 
 def test_both_copies_read_one_self_written_set(vm, gate, group_session, user_md):
@@ -1028,14 +1107,12 @@ def test_both_copies_read_one_self_written_set(vm, gate, group_session, user_md)
     assert not gate._SELF_WRITTEN_DIGESTS and not vm._SELF_WRITTEN_DIGESTS
 
 
-def test_the_process_wide_residual_a_group_write_unhides_an_older_unmarked_copy(gate, group_session, monkeypatch):
-    """Stated residual (commit-time security review): the self-written set is process-wide, not per session
-    (an agent's memory files are shared by all its chats; a per-session key would redact one group's own
-    note from another group, itself a reply difference). So when a group writes a line that already sits
-    UNMARKED in MEMORY.md (a DM-made copy of a Private line, the round-1 S4 case: that line is in every
-    group prompt's MEMORY.md block already), the older copy is no longer redacted for any session in the
-    process: a read-back shows two copies where a wrong guess shows one. The marked USER.md entry itself
-    stays hidden by its mark. The per-entry-instance alternative is not built; this test pins the outcome."""
+def test_a_group_write_of_a_line_never_unhides_an_older_dm_entry_holding_it(gate, group_session, monkeypatch):
+    """Review-b ov#565 S1-r4 (b), which replaces round 3's process-wide residual: the self-written set is
+    process-wide (an agent's memory files are shared by all its chats; a per-session key would redact one
+    group's own note from another group), but it holds WHOLE texts. So a group that writes a line a
+    DM-made entry also holds (with other text beside it) un-hides nothing: the DM's entry stays hidden,
+    and a right guess reads back what a wrong one does."""
     dm_copy = f"From our private chat:\n{RIGHT_GUESS}"
     views = {}
     for guess in (RIGHT_GUESS, WRONG_GUESS):
@@ -1046,7 +1123,7 @@ def test_the_process_wide_residual_a_group_write_unhides_an_older_unmarked_copy(
                                                {"action": "remove", "target": "memory", "old_text": NO_SUCH}], store)
         views[guess] = (json.loads(seen[-1][1])["current_entries"], prompt)
     assert views[WRONG_GUESS][0] == ["Likes kites.", f"Group note:\n{WRONG_GUESS}"]
-    assert views[RIGHT_GUESS][0] == ["Likes kites.", dm_copy, f"Group note:\n{RIGHT_GUESS}"]  # two copies
+    assert views[RIGHT_GUESS][0] == ["Likes kites.", f"Group note:\n{RIGHT_GUESS}"]  # the DM's entry stays out
     assert views[RIGHT_GUESS][1] == views[WRONG_GUESS][1] == user_block(NOTE)  # the marked entry stays hidden
 
 
