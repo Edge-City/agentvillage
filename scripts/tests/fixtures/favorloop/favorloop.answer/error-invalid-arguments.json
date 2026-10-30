@@ -1,0 +1,4 @@
+{
+  "code": "invalid_arguments",
+  "detail": "decision must be one of: yes, no."
+}

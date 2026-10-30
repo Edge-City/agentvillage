@@ -61,7 +61,7 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(receipt).toEqual(reconcileMiniApps(all, root));
   expect(receipt).toEqual(reconcileMiniApps(all, root, undefined, true));
   expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(all)).digest("hex"));
-  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md", "skills/dreamstarter/SKILL.md", "skills/kismet/SKILL.md", "skills/library/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md"]);
+  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md", "skills/dreamstarter/SKILL.md", "skills/kismet/SKILL.md", "skills/library/SKILL.md", "skills/favorloop/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md"]);
   expect(receipt).not.toHaveProperty("active");
   writeFileSync(join(root, "skills", "gold-stars", "SKILL.md"), "tampered");
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
@@ -374,6 +374,45 @@ test("Edge Library 1.0.0 manifest and native allowlist pin exactly its eight rea
   expect(skill).not.toMatch(/library\.(submit_source|write|propose)\b/);
   reconcileMiniApps({ version: 1, apps: [] }, root);
   expect(existsSync(join(root, "skills", "library", "SKILL.md"))).toBe(false);
+});
+
+test("Favor Loop 1.0.0 (ov#556): the manifest and native allowlist pin exactly its eight operations (no relay read) and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "favorloop")!;
+  const ops = ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"];
+  const manifest = reviewedManifest("favorloop");
+  expect(app).toEqual({ id: "favorloop", version: "1.0.0", operations: ops, skills: ["favorloop"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://favorloop.fly.dev/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "favorloop", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://favorloop.fly.dev/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_FAVORLOOP_KEY" } });
+  expect(v2.operations.map((op: { name: string }) => op.name)).toEqual(ops);
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual(["read", "read", "read", "write", "read", "write", "write", "write"]);
+  expect(v2.operations.map((op: { target: { tool: string } }) => op.target.tool)).toEqual(ops.map(name => name.replace("favorloop.", "")));
+  expect(EDGE_SKILL_NAMES).not.toContain("favorloop");
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "mini-app.read"] },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ops.slice(1) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.0.1" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/favorloop/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "favorloop", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "favorloop", "SKILL.md")));
+  expect(statSync(join(root, "skills", "favorloop", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  const skill = readFileSync(join(REPO, "skills", "favorloop", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget/);
+  expect(skill).toMatch(/^name: favorloop$/m);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "favorloop", "SKILL.md"))).toBe(false);
 });
 
 test("ov#441 S1: managed ZZZ participation is the cp projection's zzzbot + zzz-bridge pair and nothing else", () => {

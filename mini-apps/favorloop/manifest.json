@@ -1,0 +1,280 @@
+{
+  "manifest": 2,
+  "id": "favorloop",
+  "name": "Favor Loop",
+  "version": "1.0.0",
+  "description": "Favor Loop at Edge City India finds loops of 15-minute favors between residents (A helps B, B helps C, C helps A) when no two of them could swap directly, plus simple swaps and gift chains. Read how it works, the favor menu and the anonymous board; and, only when the owner asks in their private chat, join with their offers and wants, see their proposed loops, say yes or no, confirm a favor they received, or leave.",
+  "homepage": "https://favorloop.fly.dev/",
+  "owner": {
+    "github": "bilgin-kocak"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Public Favor Loop info",
+      "description": "How Favor Loop works, the favor menu and an anonymous board of loops and counts. No names or private data."
+    },
+    {
+      "kind": "read",
+      "label": "Your own loops",
+      "description": "Your chosen favors and the loops proposed to you. Agent Village tells Favor Loop which resident you are by a private, stable reference, never your Telegram id or username."
+    },
+    {
+      "kind": "action",
+      "label": "Join, answer, confirm and leave, when you ask",
+      "description": "Sends your chosen favor ids, an optional Telegram handle that is shown only to people in a loop you accepted, your yes or no to a proposed loop, your confirmation that you received a favor, or a request to delete everything Favor Loop holds about you. If someone in your loop uses the Favor Loop Telegram bot, the loop (favors, time, place) and, once everyone said yes, your handle reach them through Telegram; nothing goes to any other third party."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://favorloop.fly.dev/mcp",
+    "auth": {
+      "mode": "app-token",
+      "secretRef": "MINI_APP_FAVORLOOP_KEY"
+    }
+  },
+  "operations": [
+    {
+      "name": "favorloop.how_it_works",
+      "class": "read",
+      "target": {
+        "tool": "how_it_works"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.menu",
+      "class": "read",
+      "target": {
+        "tool": "menu"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.board",
+      "class": "read",
+      "target": {
+        "tool": "board"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.join",
+      "class": "write",
+      "target": {
+        "tool": "join"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "offers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "code_review",
+                "portrait_photo",
+                "stretch_session",
+                "pitch_feedback",
+                "cv_review",
+                "design_feedback",
+                "ai_tool_setup",
+                "wallet_setup",
+                "language_basics",
+                "music_lesson",
+                "proofreading",
+                "goa_tips"
+              ]
+            }
+          },
+          "wants": {
+            "type": "array",
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "code_review",
+                "portrait_photo",
+                "stretch_session",
+                "pitch_feedback",
+                "cv_review",
+                "design_feedback",
+                "ai_tool_setup",
+                "wallet_setup",
+                "language_basics",
+                "music_lesson",
+                "proofreading",
+                "goa_tips"
+              ]
+            }
+          },
+          "giftOnly": {
+            "type": "boolean"
+          },
+          "contactHandle": {
+            "type": "string",
+            "pattern": "^@?[A-Za-z0-9_]{5,32}$"
+          },
+          "availability": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "thu_evening",
+                "fri_morning",
+                "fri_afternoon",
+                "sat"
+              ]
+            }
+          }
+        },
+        "required": [
+          "offers"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.my_loops",
+      "class": "read",
+      "target": {
+        "tool": "my_loops"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.answer",
+      "class": "write",
+      "target": {
+        "tool": "answer"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "loopId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "no"
+            ]
+          }
+        },
+        "required": [
+          "loopId",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.confirm",
+      "class": "write",
+      "target": {
+        "tool": "confirm"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "loopId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "received": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "loopId",
+          "received"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "favorloop.leave",
+      "class": "write",
+      "target": {
+        "tool": "leave"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "favorloop",
+      "version": "1.0.0",
+      "sha256": "b7be7c46c795713ca92e1f2220a29fb3ca3325fd2b4c0eb7f2024c15c239c3e9",
+      "path": "skills/favorloop/SKILL.md"
+    }
+  ]
+}

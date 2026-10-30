@@ -1,0 +1,60 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Confirmed: 1 of 3 favors in this loop are done.\",\"loop\":{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000001\",\"shape\":\"loop3\",\"status\":\"accepted\",\"window\":\"Saturday\",\"place\":\"The Circle, or online\",\"youGive\":{\"favor\":\"code_review\",\"label\":\"Code review\",\"to\":\"a resident\"},\"youReceive\":{\"favor\":\"portrait_photo\",\"label\":\"Portrait photo\",\"from\":\"@fixture_bob\"},\"steps\":[{\"from\":\"@fixture_bob\",\"to\":\"you\",\"favor\":\"portrait_photo\"},{\"from\":\"you\",\"to\":\"a resident\",\"favor\":\"code_review\"},{\"from\":\"a resident\",\"to\":\"@fixture_bob\",\"favor\":\"stretch_session\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you give to\",\"handle\":null},{\"role\":\"you receive from\",\"handle\":\"@fixture_bob\"}],\"youReceived\":true,\"favorsConfirmed\":1,\"favorsTotal\":3}}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Confirmed: 1 of 3 favors in this loop are done.",
+    "loop": {
+      "loopId": "0f0f0f0f-0000-4000-8000-000000000001",
+      "shape": "loop3",
+      "status": "accepted",
+      "window": "Saturday",
+      "place": "The Circle, or online",
+      "youGive": {
+        "favor": "code_review",
+        "label": "Code review",
+        "to": "a resident"
+      },
+      "youReceive": {
+        "favor": "portrait_photo",
+        "label": "Portrait photo",
+        "from": "@fixture_bob"
+      },
+      "steps": [
+        {
+          "from": "@fixture_bob",
+          "to": "you",
+          "favor": "portrait_photo"
+        },
+        {
+          "from": "you",
+          "to": "a resident",
+          "favor": "code_review"
+        },
+        {
+          "from": "a resident",
+          "to": "@fixture_bob",
+          "favor": "stretch_session"
+        }
+      ],
+      "yourAnswer": "yes",
+      "waitingFor": 0,
+      "contacts": [
+        {
+          "role": "you give to",
+          "handle": null
+        },
+        {
+          "role": "you receive from",
+          "handle": "@fixture_bob"
+        }
+      ],
+      "youReceived": true,
+      "favorsConfirmed": 1,
+      "favorsTotal": 3
+    }
+  }
+}

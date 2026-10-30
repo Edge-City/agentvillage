@@ -47,6 +47,9 @@ export const REVIEWED_MINI_APPS = [
   // Edge Library (Naman, adapted from ov#506): READS ONLY in 1.0.0 (CD-44), the village knowledge graph's eight reads;
   // its writes are not exposed (_mini_apps.py LIBRARY, exact).
   { id: "library", version: "1.0.0", operations: ["library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history", "library.changes_since", "library.proposals"], skills: ["library"] },
+  // Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops, and the owner's own join, yes or
+  // no, confirmation and leave (gated writes); _mini_apps.py FAVORLOOP, exact (the manifest's order). No mini-app.read.
+  { id: "favorloop", version: "1.0.0", operations: ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"], skills: ["favorloop"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
