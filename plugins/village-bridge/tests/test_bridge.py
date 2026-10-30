@@ -100,6 +100,23 @@ class TransportTest(unittest.TestCase):
    opener.open.side_effect=refuse('something_else')
    self.assertEqual(real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})['error'],'connection_or_request_refused')
 
+ def test_lane_ak_gold_stars_text_sends_on_the_ask_and_names_a_card_only_when_the_policy_asks_first(self):
+  # Lane AK (L34995): an older app can still answer star_confirmation_required for a same-turn send; the
+  # agent sends again in the owner's next message. The tool text never says an approval round always happens.
+  import io
+  from urllib.error import HTTPError
+  body=json.dumps({'code':'star_confirmation_required','detail':'not shown'}).encode()
+  opener=unittest.mock.Mock()
+  opener.open.side_effect=HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool',409,'refused',{},io.BytesIO(body))
+  with patch.object(bridge,'build_opener',return_value=opener):
+   result=real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})
+  self.assertEqual(result,{'error':'star_confirmation_required','instruction':"Send again in the owner's next message."})
+  desc=bridge.SCHEMA['description'];draft=bridge.SCHEMA['parameters']['properties']['draftId']['description']
+  for text in (desc,draft):
+   self.assertIn("a card only when the owner's policy asks first",text)
+   self.assertNotIn('Gold Stars send and For Kicks',text)
+  self.assertNotIn('stage an exact preview, then request real manual approval',desc)
+
  def test_zzz_writes_declare_their_operation_and_zzz_codes_stay_zzz_only(self):
   import io
   from urllib.error import HTTPError

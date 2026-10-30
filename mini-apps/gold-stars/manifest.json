@@ -107,8 +107,8 @@
   "skills": [
     {
       "name": "gold-stars",
-      "version": "1.1.1",
-      "sha256": "b9fda16a13a4ef37f07d2af174bab95d9899af12c273d063a342f6f00b9fe754",
+      "version": "1.1.2",
+      "sha256": "ca855cf0f49752ec3206b476daeea1f04cc6c2cad08de62c0fa88a349ed36c18",
       "path": "skills/gold-stars/SKILL.md"
     }
   ],
