@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"not_found\",\"detail\":\"No live page has that slug.\"}"
+    }
+  ],
+  "structuredContent": {
+    "code": "not_found",
+    "detail": "No live page has that slug."
+  },
+  "isError": true
+}
