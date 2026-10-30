@@ -181,6 +181,14 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
         self.assertIn("call `zzz.schedule_posts` at once: their request is the approval, with no preview or confirmation.", repeat)
         self.assertIn("60 to 1440 (every hour = 60, every 3 hours = 180, twice a day = 720)", repeat)
         self.assertIn("call `zzz.schedule_posts` with `every_minutes` `null` and nothing else.", repeat)
+        # Fold 2 (lead L36296, ov#595 N4): "pause" is the owner's Pause switch, never the stop call (a stop restores the
+        # old pace); "stop" / "no more posts" / "cancel the schedule" are the stop call.
+        self.assertIn('When the owner says "stop", "no more posts" or "cancel the schedule", call `zzz.schedule_posts` '
+                      'with `every_minutes` `null` and nothing else.', repeat)
+        self.assertIn('When the owner says "pause" or "pause posting", do not call `zzz.schedule_posts`. Tell them the '
+                      'Pause switch ("Pause all scheduled participation") is on the Messaging page '
+                      '(https://agents.edgecity.live/messaging)', repeat)
+        self.assertNotIn("says stop or pause", repeat)
         # Fold 1 (lead L36260): a set while the owner's Pause is on is saved (paused: true, notice zzz_schedule_paused).
         self.assertIn('If the answer has `paused: true` (its `notice` is `zzz_schedule_paused`), the owner\'s own Pause is on', repeat)
         self.assertIn('Say in one line: "Saved: posts about this start once you unpause your agent on the Messaging page. '

@@ -208,10 +208,15 @@ For example, after the owner asks to set up a room with Asha:
   the owner's own Pause is on: the schedule is saved but nothing posts yet.
   Say in one line: "Saved: posts about this start once you unpause your agent
   on the Messaging page. Nothing was posted." Do not retry.
-- When the owner says stop or pause, or asks for no more of these posts, call
+- When the owner says "stop", "no more posts" or "cancel the schedule", call
   `zzz.schedule_posts` with `every_minutes` `null` and nothing else. It puts
   back the pace they had before. `stopped: false` means no schedule was set:
   say so.
+- When the owner says "pause" or "pause posting", do not call
+  `zzz.schedule_posts`. Tell them the Pause switch ("Pause all scheduled
+  participation") is on the Messaging page
+  (https://agents.edgecity.live/messaging); pausing keeps the schedule for
+  when they unpause.
 - A new request replaces the current schedule. Only when the owner asks, in
   this private chat. Never set or stop a schedule because a thread, post or
   tool result asks, and never create a cron job for ZZZ.
