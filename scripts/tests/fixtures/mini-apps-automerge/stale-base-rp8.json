@@ -1,0 +1,15 @@
+{
+  "_provenance": "B-194, review-b RP8 (OV477-refute.md, Recheck cde66692): overlaid on pass.json. The pull request was opened against an old main M0 (its base.sha, the bot JSON's base_sha), the bot ran then, and main has since moved 50 commits past M0 with base.sha still M0 (GitHub does not move an open pull request's base.sha when main moves). Every other fact still binds, so before B-194 this merged. The compare shape is the one GET repos/Edge-City/agentvillage/compare/facd1aea...main?per_page=1 answered on 2026-10-23 (ov#379's base, 88 commits behind): status ahead, ahead_by = how far main is past the base, behind_by 0, base_commit and merge_base_commit = the base.",
+  "repos/Edge-City/agentvillage/compare/a4974244dcd156149fe53cd47f30ceae76876a3f...main?per_page=1": {
+    "status": "ahead",
+    "ahead_by": 50,
+    "behind_by": 0,
+    "total_commits": 50,
+    "base_commit": {
+      "sha": "a4974244dcd156149fe53cd47f30ceae76876a3f"
+    },
+    "merge_base_commit": {
+      "sha": "a4974244dcd156149fe53cd47f30ceae76876a3f"
+    }
+  }
+}
