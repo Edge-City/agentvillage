@@ -1450,7 +1450,7 @@ async def _elicit_advance(bot: Any, chat: str, session: dict, cards: list, ledge
                 if str(position) in session["cards"] or position in set(session["dropped"]):
                     continue
                 card = by_id[order[position]]
-                message_id = await _send(bot, chat, L.elicit_card_text(position, n, card["text"]),
+                message_id = await _send(bot, chat, L.elicit_card_text(card["text"]),
                                          make_markup(L.elicit_rating_rows(session["nonce"], position, make_button, card["saved"])))
                 if message_id is None:
                     _send_failure(ledger, session, home, count)
@@ -1471,7 +1471,7 @@ async def _elicit_advance(bot: Any, chat: str, session: dict, cards: list, ledge
         save_elicit_ledger(ledger, home)
     # Every statement rated (or dropped): the last line once; the cards stay tappable for revisions.
     if session["status"] == ACTIVE:
-        if await _send(bot, chat, L.elicit_done_text(len(session["rated"]), expires)) is None:
+        if await _send(bot, chat, L.elicit_done_text(expires)) is None:
             count("send_failed")
         session["status"] = "done"
         count("final_sent")
@@ -1574,7 +1574,7 @@ async def _elicit_pass_locked(bot: Any, adapter: Any, make_button: Callable, mak
             _log("elicit_not_started", status=status)
             return status
         session = new_elicit_session(trigger, [c["id"] for c in cards], stamp)
-        header = await _send(bot, chat, L.elicit_header_text(len(cards), trigger["expires_ms"] / 1000.0),
+        header = await _send(bot, chat, L.elicit_header_text(trigger["expires_ms"] / 1000.0),
                              make_markup(L.elicit_header_rows(session["nonce"], make_button)))
         if header is None:
             # Nothing kept but the count (ids only): the next pass starts again; SEND_FAILURES_MAX in a row end it.
