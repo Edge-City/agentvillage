@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"invalid_arguments\",\"detail\":\"limit: must be a whole number\"}"
+    }
+  ],
+  "structuredContent": {
+    "code": "invalid_arguments",
+    "detail": "limit: must be a whole number"
+  },
+  "isError": true
+}
