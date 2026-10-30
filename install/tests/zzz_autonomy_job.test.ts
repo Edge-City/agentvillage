@@ -7,6 +7,7 @@ import { REVIEWED_MINI_APPS } from "../install_miniapps";
 import { AUTONOMY_FILES, AUTONOMY_GATE, AUTONOMY_JOB_NAME, AUTONOMY_JOB_SCRIPT,
   AUTONOMY_SHIPPED, autonomyMarkers, autonomySchedule, reconcileAutonomyJob } from "../zzz_autonomy_job";
 import { withSymlinkPlantedAfterCheck } from "./plant_after_check";
+import { OWNED_FILE_MAX_BYTES } from "../zzz_managed_job";
 import { createHash } from "node:crypto";
 
 const repo = join(import.meta.dir, "../..");
@@ -64,13 +65,15 @@ test("gate without zzzbot stages no job and malformed gate fails closed",()=>{
   expect(autonomyMarkers(home)).toBe(false);
 });
 
-test("every shipped runner fits the installer's 65,536-byte ownership cap",()=>{
-  // ownedFile treats a file over 65,536 bytes as not_ours: a runner past it would never upgrade or tear down on a box.
+test("every shipped runner fits the installer's 131,072-byte ownership cap",()=>{
+  // ownedFile treats a file over OWNED_FILE_MAX_BYTES as not_ours: a runner past it would never upgrade or tear down on
+  // a box (the stage refuses to write one: zzz_owned_file_cap.test.ts). 128 KiB since v2.2.0 (was 65,536; lead L35228).
+  expect(OWNED_FILE_MAX_BYTES).toBe(131072);
   for (const relative of AUTONOMY_FILES) {
     const size=readFileSync(join(repo,"skills/zzzbot",relative)).length;
-    expect(size).toBeLessThanOrEqual(65536);
+    expect(size).toBeLessThanOrEqual(OWNED_FILE_MAX_BYTES);
   }
-  expect(readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)).length).toBeLessThanOrEqual(65536);
+  expect(readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)).length).toBeLessThanOrEqual(OWNED_FILE_MAX_BYTES);
 });
 
 test("first shipped bytes are pinned and teardown preserves resident replacement",()=>{

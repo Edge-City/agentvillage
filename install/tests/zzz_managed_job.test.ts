@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { REVIEWED_MINI_APPS, zzzMarkerOnDisk, zzzMarkerScan } from "../install_miniapps";
-import { reconcileZzzManagedJob, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT, ZZZ_JOB_TOOLSETS, ZZZ_SHIPPED_SHA256, zzzShippedFile } from "../zzz_managed_job";
+import { OWNED_FILE_MAX_BYTES, reconcileZzzManagedJob, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT, ZZZ_JOB_TOOLSETS, ZZZ_SHIPPED_SHA256, zzzShippedFile } from "../zzz_managed_job";
 import { withSymlinkPlantedAfterCheck } from "./plant_after_check";
 
 const fake = join(import.meta.dir, "fake_hermes.ts");
@@ -1007,7 +1007,7 @@ test("N12: the shipped sha table holds this checkout's managed-file bytes, and o
   writeFileSync(at("runner"), SHIPPED_RUNNER);
   writeFileSync(at("prompt"), SHIPPED_PROMPT);
   writeFileSync(at("near"), Buffer.concat([SHIPPED_LEGACY_SHIM, Buffer.from(" ")]));
-  writeFileSync(at("big"), Buffer.alloc(65537));
+  writeFileSync(at("big"), Buffer.alloc(OWNED_FILE_MAX_BYTES + 1));
   symlinkSync(at("shim"), at("link"));
   mkdirSync(at("dir"));
   expect(spawnSync("/usr/bin/mkfifo", [at("fifo")]).status).toBe(0);
