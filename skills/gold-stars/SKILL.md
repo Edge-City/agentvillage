@@ -71,8 +71,7 @@ prompt; this live conversation begins with the owner's reply.
    comes before the send.
 6. The native tool checks the immutable backend preview with the approval gate,
    and the exact payload is authorized and started before any star is sent. If
-   the send answers `approval_required` (or `star_approval_required`), the
-   owner's own settings ask first: say a card is waiting in the approvals bot,
+   the send answers `approval_required`, the owner's own settings ask first: say a card is waiting in the approvals bot,
    then retry the SAME draftId after they approve; never prepare a new preview
    to retry. A chat reply or model boolean is not that approval. In that
    approval-waiting message, include a separate line:
