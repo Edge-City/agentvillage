@@ -569,9 +569,15 @@ its checks (complete trees, the caps this job and `refs.ts` apply, manifest
 links only to the guide's own sites), a commit per change under our org's
 audit log, and a kill switch (disable the workflow, or revert the mirror). A
 push to upstream read directly would reach every agent within one run with
-none of these. The PR is opened with `GITHUB_TOKEN`, which needs the repo
-setting "Allow GitHub Actions to create and approve pull requests" (or a GitHub
-App token); without it the run fails and nothing is forwarded.
+none of these. The push to `bot/india-refs` and the PR use a token of the
+mirror GitHub App (SEC-5 follow-up b: contents and pull requests, installed on
+this repo only; `INDIA_MIRROR_APP_ID` and `INDIA_MIRROR_APP_PRIVATE_KEY` are
+secrets of the environment `india-mirror`, deployable from `main` only, so a run
+from any other branch never receives the key), minted after the sync step and
+revoked when the job ends; `GITHUB_TOKEN` only reads. Because the App opens the PR, the Test
+workflow runs on it and on every head the bot pushes. Without the two secrets
+the run fails before any checkout and nothing is forwarded; there is no
+fallback to `GITHUB_TOKEN`.
 
 **Trust boundary.** The decision: Carter's choice of upstream (GRANT
 2026-10-06 09:06Z named `aromeoes/edge-agent-skill`; moved to
