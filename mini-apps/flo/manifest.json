@@ -3,7 +3,7 @@
   "id": "flo",
   "name": "Flo by Unwindflow",
   "version": "1.0.0",
-  "description": "Small, research-informed resets for how you feel, what you're in the middle of and thought loops, plus a Feeling Finder for when you can't name a feeling. Read only: Flo has no accounts, stores nothing and never sees who you are. Educational and awareness purposes only, not medical advice.",
+  "description": "Small, research-informed resets for how you feel, what you're in the middle of and thought loops, plus a Feeling Finder for when you can't name a feeling. Read only: Flo has no accounts, never sees who you are and keeps only anonymous usage counts. Educational and awareness purposes only, not medical advice.",
   "homepage": "https://unwindflow.com/",
   "owner": {
     "github": "VineethaDonga",
@@ -19,7 +19,12 @@
     {
       "kind": "read",
       "label": "Find a word for a feeling",
-      "description": "When you can't name a feeling, your agent sends Flo where you notice it in your body, your energy and whether it's pleasant, or a short description in your words, and gets back feeling words and a matching step. Flo does not store or log what is sent."
+      "description": "When you can't name a feeling, your agent sends Flo where you notice it in your body, your energy and whether it's pleasant, or a short description in your words, and gets back feeling words and a matching step. Flo never stores or logs your words."
+    },
+    {
+      "kind": "read",
+      "label": "Anonymous usage counts",
+      "description": "Flo keeps a daily count of which tool and which topic (for example the mood id) was used, with the date. It never keeps your words, your name or who asked, and counts are deleted after 12 months."
     },
     {
       "kind": "read",
@@ -186,7 +191,7 @@
     {
       "name": "flo",
       "version": "1.0.0",
-      "sha256": "644a407f8328f2c69a87c6058c8ed23aad70babe7c9156723062d6446b202037",
+      "sha256": "4ab5e77ffa44ec3248ea5b05e908de57325a35c0f5999a963fff6c6e8a3a018b",
       "path": "skills/flo/SKILL.md"
     }
   ]
