@@ -1,0 +1,70 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Everyone said yes: you give Help setting up an AI tool to @fixture_last and @fixture_giver gives Goa local tips (food, places, getting around) to you, by Friday 13:00 at The Circle, or online.\",\"joined\":true,\"member\":{\"offers\":[\"ai_tool_setup\"],\"wants\":[\"goa_tips\"],\"giftOnly\":false,\"contactHandle\":\"@fixture_middle\",\"availability\":[],\"paused\":false},\"loops\":[{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000002\",\"shape\":\"chain\",\"status\":\"accepted\",\"window\":\"by Friday 13:00\",\"place\":\"The Circle, or online\",\"youGive\":{\"favor\":\"ai_tool_setup\",\"label\":\"Help setting up an AI tool\",\"to\":\"@fixture_last\"},\"youReceive\":{\"favor\":\"goa_tips\",\"label\":\"Goa local tips (food, places, getting around)\",\"from\":\"@fixture_giver\"},\"steps\":[{\"from\":\"@fixture_giver\",\"to\":\"you\",\"favor\":\"goa_tips\"},{\"from\":\"you\",\"to\":\"@fixture_last\",\"favor\":\"ai_tool_setup\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you give to\",\"handle\":\"@fixture_last\"},{\"role\":\"you receive from\",\"handle\":\"@fixture_giver\"}],\"youReceived\":false,\"favorsConfirmed\":0,\"favorsTotal\":2}]}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Everyone said yes: you give Help setting up an AI tool to @fixture_last and @fixture_giver gives Goa local tips (food, places, getting around) to you, by Friday 13:00 at The Circle, or online.",
+    "joined": true,
+    "member": {
+      "offers": [
+        "ai_tool_setup"
+      ],
+      "wants": [
+        "goa_tips"
+      ],
+      "giftOnly": false,
+      "contactHandle": "@fixture_middle",
+      "availability": [],
+      "paused": false
+    },
+    "loops": [
+      {
+        "loopId": "0f0f0f0f-0000-4000-8000-000000000002",
+        "shape": "chain",
+        "status": "accepted",
+        "window": "by Friday 13:00",
+        "place": "The Circle, or online",
+        "youGive": {
+          "favor": "ai_tool_setup",
+          "label": "Help setting up an AI tool",
+          "to": "@fixture_last"
+        },
+        "youReceive": {
+          "favor": "goa_tips",
+          "label": "Goa local tips (food, places, getting around)",
+          "from": "@fixture_giver"
+        },
+        "steps": [
+          {
+            "from": "@fixture_giver",
+            "to": "you",
+            "favor": "goa_tips"
+          },
+          {
+            "from": "you",
+            "to": "@fixture_last",
+            "favor": "ai_tool_setup"
+          }
+        ],
+        "yourAnswer": "yes",
+        "waitingFor": 0,
+        "contacts": [
+          {
+            "role": "you give to",
+            "handle": "@fixture_last"
+          },
+          {
+            "role": "you receive from",
+            "handle": "@fixture_giver"
+          }
+        ],
+        "youReceived": false,
+        "favorsConfirmed": 0,
+        "favorsTotal": 2
+      }
+    ]
+  }
+}

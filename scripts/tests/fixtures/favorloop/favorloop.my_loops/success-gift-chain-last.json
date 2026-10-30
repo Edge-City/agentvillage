@@ -1,0 +1,62 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Everyone said yes: @fixture_middle gives Help setting up an AI tool to you, by Friday 13:00 at The Circle, or online.\",\"joined\":true,\"member\":{\"offers\":[\"music_lesson\"],\"wants\":[\"ai_tool_setup\"],\"giftOnly\":false,\"contactHandle\":\"@fixture_last\",\"availability\":[],\"paused\":false},\"loops\":[{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000002\",\"shape\":\"chain\",\"status\":\"accepted\",\"window\":\"by Friday 13:00\",\"place\":\"The Circle, or online\",\"youGive\":null,\"youReceive\":{\"favor\":\"ai_tool_setup\",\"label\":\"Help setting up an AI tool\",\"from\":\"@fixture_middle\"},\"steps\":[{\"from\":\"a resident\",\"to\":\"@fixture_middle\",\"favor\":\"goa_tips\"},{\"from\":\"@fixture_middle\",\"to\":\"you\",\"favor\":\"ai_tool_setup\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you receive from\",\"handle\":\"@fixture_middle\"}],\"youReceived\":false,\"favorsConfirmed\":0,\"favorsTotal\":2}]}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Everyone said yes: @fixture_middle gives Help setting up an AI tool to you, by Friday 13:00 at The Circle, or online.",
+    "joined": true,
+    "member": {
+      "offers": [
+        "music_lesson"
+      ],
+      "wants": [
+        "ai_tool_setup"
+      ],
+      "giftOnly": false,
+      "contactHandle": "@fixture_last",
+      "availability": [],
+      "paused": false
+    },
+    "loops": [
+      {
+        "loopId": "0f0f0f0f-0000-4000-8000-000000000002",
+        "shape": "chain",
+        "status": "accepted",
+        "window": "by Friday 13:00",
+        "place": "The Circle, or online",
+        "youGive": null,
+        "youReceive": {
+          "favor": "ai_tool_setup",
+          "label": "Help setting up an AI tool",
+          "from": "@fixture_middle"
+        },
+        "steps": [
+          {
+            "from": "a resident",
+            "to": "@fixture_middle",
+            "favor": "goa_tips"
+          },
+          {
+            "from": "@fixture_middle",
+            "to": "you",
+            "favor": "ai_tool_setup"
+          }
+        ],
+        "yourAnswer": "yes",
+        "waitingFor": 0,
+        "contacts": [
+          {
+            "role": "you receive from",
+            "handle": "@fixture_middle"
+          }
+        ],
+        "youReceived": false,
+        "favorsConfirmed": 0,
+        "favorsTotal": 2
+      }
+    ]
+  }
+}

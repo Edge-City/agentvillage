@@ -1,0 +1,60 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Everyone said yes: you give Goa local tips (food, places, getting around) to @fixture_middle, by Friday 13:00 at The Circle, or online.\",\"joined\":true,\"member\":{\"offers\":[\"goa_tips\"],\"wants\":[],\"giftOnly\":true,\"contactHandle\":\"@fixture_giver\",\"availability\":[],\"paused\":false},\"loops\":[{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000002\",\"shape\":\"chain\",\"status\":\"accepted\",\"window\":\"by Friday 13:00\",\"place\":\"The Circle, or online\",\"youGive\":{\"favor\":\"goa_tips\",\"label\":\"Goa local tips (food, places, getting around)\",\"to\":\"@fixture_middle\"},\"youReceive\":null,\"steps\":[{\"from\":\"you\",\"to\":\"@fixture_middle\",\"favor\":\"goa_tips\"},{\"from\":\"@fixture_middle\",\"to\":\"another resident\",\"favor\":\"ai_tool_setup\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you give to\",\"handle\":\"@fixture_middle\"}],\"youReceived\":null,\"favorsConfirmed\":0,\"favorsTotal\":2}]}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Everyone said yes: you give Goa local tips (food, places, getting around) to @fixture_middle, by Friday 13:00 at The Circle, or online.",
+    "joined": true,
+    "member": {
+      "offers": [
+        "goa_tips"
+      ],
+      "wants": [],
+      "giftOnly": true,
+      "contactHandle": "@fixture_giver",
+      "availability": [],
+      "paused": false
+    },
+    "loops": [
+      {
+        "loopId": "0f0f0f0f-0000-4000-8000-000000000002",
+        "shape": "chain",
+        "status": "accepted",
+        "window": "by Friday 13:00",
+        "place": "The Circle, or online",
+        "youGive": {
+          "favor": "goa_tips",
+          "label": "Goa local tips (food, places, getting around)",
+          "to": "@fixture_middle"
+        },
+        "youReceive": null,
+        "steps": [
+          {
+            "from": "you",
+            "to": "@fixture_middle",
+            "favor": "goa_tips"
+          },
+          {
+            "from": "@fixture_middle",
+            "to": "another resident",
+            "favor": "ai_tool_setup"
+          }
+        ],
+        "yourAnswer": "yes",
+        "waitingFor": 0,
+        "contacts": [
+          {
+            "role": "you give to",
+            "handle": "@fixture_middle"
+          }
+        ],
+        "youReceived": null,
+        "favorsConfirmed": 0,
+        "favorsTotal": 2
+      }
+    ]
+  }
+}

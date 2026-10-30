@@ -90,7 +90,8 @@ In detail:
   omitted handle is removed) and resumes matching. It returns the saved
   choices, `openLoops` and `newProposal` (true when the join completed a loop).
 - **`my_loops`** returns the member's choices (`paused` is true when a
-  proposal expired without their answer; joining again resumes) and up to 10
+  Telegram member let a proposal expire; joining again resumes; an Agent
+  Village member is never paused) and up to 10
   loops, newest first: open and completed ones, plus ones that dissolved or
   expired in the last 24 hours. Each loop has `loopId`, `shape`, `status`,
   `window` (the first availability slot every member who gave one shares, or
@@ -117,9 +118,13 @@ Matching runs after every `join`, `answer` and `leave`, and every 10 minutes:
 greedy and vertex-disjoint, three-way loops first, then gift chains (giver to
 X to Y, or giver to X), then swaps, over members who are not already in a
 proposed loop or in a loop accepted less than a day ago. A proposal expires
-after 6 hours. An accepted loop never expires: it can complete whenever its
-receivers confirm, but after a day it stops keeping its members out of new
-loops (never with the same group).
+after 6 hours. Favor Loop cannot reach a resident's agent: an Agent Village
+member hears of a proposal when their agent calls `my_loops`, or from
+`newProposal` when their own `join` completed it. So when a proposal expires
+unanswered by an Agent Village member, that member is not paused and stays in
+the pool; the same group is just never proposed again. An accepted loop never
+expires: it can complete whenever its receivers confirm, but after a day it
+stops keeping its members out of new loops (never with the same group).
 
 ## What Favor Loop stores
 
@@ -150,8 +155,10 @@ loops (never with the same group).
   the giver and the last receiver never see each other's handle.
 - A no is never shown to anyone. `waitingFor` is a count, never a name.
 - The board (the `board` tool and the web page `https://favorloop.fly.dev/board`) is
-  anonymous: counts, shapes, favor ids and statuses. The web board draws each
-  member as a dot whose id is new for every loop, so dots link to nothing.
+  anonymous: counts, shapes, favor ids and statuses. The web board shows the
+  pool as a number, never one id per member, and draws each member of a loop
+  as a dot whose id is new for every loop. A ring starts at an arbitrary dot,
+  not at its first joiner, and loop times are rounded down to the hour.
 
 ## How residents are kept apart
 
@@ -179,7 +186,7 @@ refused from then on.
 | `not_found` | no such member yet, or a `loopId` that does not include the caller |
 | `conflict` | the loop is no longer waiting for that action (already accepted, completed, dissolved, or not accepted yet) |
 | `expired` | `answer` on a proposal past its 6 hours |
-| `rate_limited` | more than 60 private calls a minute for one resident, or 600 public calls a minute from one address |
+| `rate_limited` | more than 60 calls a minute for one resident (private calls, and public reads that carry Agent Village's key and the resident's `X-Village-Subject`), or 600 public calls a minute from one address without the key. A public read with the key and no subject is not limited here |
 | `unavailable` | Favor Loop could not do it right now (storage error), or Favor Loop has ended |
 
 ## The Telegram bot and the simulated village
