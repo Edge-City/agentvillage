@@ -234,7 +234,8 @@ class ApprovalTest(unittest.TestCase):
         rows = {m.group(1): m.group(2) for m in re.finditer(r"^  ([a-z][a-z0-9.*-]*):\s+(\{[^}]*\})", classes, re.M)}
         self.assertEqual(rows[mini.SEND_CLASS], "{ autonomy: autonomous, agent_may_request: true }")
         self.assertEqual(rows["marketplace.app.action"], "{ autonomy: manual, agent_may_request: true }")
-        self.assertFalse([name for name in rows if name != mini.SEND_CLASS and name.startswith("marketplace.app.action.")])
+        self.assertEqual(rows["marketplace.app.action.mochi.ask"], "{ autonomy: manual, agent_may_request: true }")
+        self.assertFalse([name for name in rows if name not in (mini.SEND_CLASS, "marketplace.app.action.mochi.ask") and name.startswith("marketplace.app.action.")])
 
     def test_preview_from_another_draft_and_extra_model_flags_refused(self):
         for preview in ({**self.preview, "draftId": "other"}, {**self.preview, "approved": True}, None):

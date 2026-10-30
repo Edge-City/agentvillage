@@ -50,7 +50,7 @@ import { join } from "node:path";
 // install/read, treasury.propose/withdraw, resource.allocate, edgeos.event/venue.write,
 // moralmod.assess), say lines and comments only; no class value moves. The block is cp#336's byte
 // for byte (head acec28bd). The previous pin was 8e59e8d7 (B-133).
-const POLICY_BLOCK_SHA256 = "c9a58616260b08c7215a6e9f57babb394593e2dc9bf80b3ef04e104110694b27";
+const POLICY_BLOCK_SHA256 = "0d3a4bbc1113c1dad606d08335de06bdbfa28a54faa3ab54984b3c3be9a889ac";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

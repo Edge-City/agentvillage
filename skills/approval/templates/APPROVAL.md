@@ -319,9 +319,14 @@ channels:
           note: none
         # APPROVAL-UX (P0, 20 Oct): every class a resident can be asked about has an entry, so no card
         # falls back to technical for want of one (`undeclared`). does phrases and labels: product@2.
-        marketplace.app.action:       # a mini-app order or action, e.g. a For Kicks order (overlay _forkicks.py, _mini_apps.py)
-          does: "do something in one of your mini-apps, such as place an order"
-          quote: { appId: "App", operation: ~, preview: ~ }   # the preview is a nested object with ids: kept to Full details; the order's lines and prices show as the summary
+        marketplace.app.action:       # a For Kicks order: the app's four strings (B-166); a legacy {appId, operation, preview} request gets the technical card
+          does: "place an order in one of your mini-apps for you"
+          quote: { order: "Order", total: "Total", pickup: "Pickup", name: "Name shared with café" }
+          note: none
+        marketplace.app.action.mochi.ask:
+          does: "send your gathering details to John (ECI Loves Goa Baking Co)"
+          quote: { asked_by_person: "You asked", gathering: "Gathering", date: "Date IST", time: "Time IST", place: "Place", headcount: "Headcount", contact: "Reply contact", requesting_agent: "Agent name", note: "Note", request_key: "Retry key" }
+          note: none
         marketplace.app.install:      # nothing proposes it yet: keys to confirm in its producer's PR
           does: "add a mini-app to your agent"
           quote: { appId: "App", version: "Version" }
@@ -376,6 +381,7 @@ classes:
   marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
   marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
   marketplace.app.action.gold-stars.send: { autonomy: autonomous, agent_may_request: true }   # Gold Stars: a star your agent sends after you confirm the exact preview in chat (B-133, Carter 18 Oct); the parent class stays manual for any other installed app
+  marketplace.app.action.mochi.ask: { autonomy: manual, agent_may_request: true }
   marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; the village tool (Rolodex search, a reviewed mini-app's public reads, Gold Star previews and status) reaches it through the hook; a star send needs its own marketplace.app.action grant; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
@@ -463,4 +469,5 @@ tools:
   # The village-bridge plugin's entry tool, exactly `village` (no wildcard). A star send also
   # needs its own marketplace.app.action grant; an install or enable is never reached through this line.
   - { match: village,                          class: marketplace.app.read }
+  - { match: mochi,                            class: marketplace.app.read }
 ```

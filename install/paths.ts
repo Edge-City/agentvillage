@@ -38,6 +38,7 @@ export const EDGE_SKILL_NAMES = [
   // P1: the agent's nickname and the resident's own profile, read once per
   // private session from $HERMES_HOME/av-profile.json (the control plane writes it).
   "agent-profile",
+  "mochi",
 ] as const;
 
 /**

@@ -62,6 +62,15 @@ interface NotGated {
 /** Tools no `pre_tool_call` entry routes, each with why. */
 const NOT_GATED: readonly NotGated[] = [
   {
+    name: "mochi",
+    plugin: "village-bridge",
+    reason:
+      "Public reads and local prepare need no hook card. The external gathering write is self-gated in _mochi.py: " +
+      "approval_modules requires the configured, on, verified backstop; exact owner-bound draft fields are proposed " +
+      "under marketplace.app.action.mochi.ask; only requested plus a direct grant/start can send. " +
+      "Autonomy and unavailable approval fail closed; the unauthenticated raw MCP write is never registered",
+  },
+  {
     name: "consent_status",
     plugin: "av-events",
     reason: "read: one GET of the tenant's own consent row from ingest (_consent.py); writes nothing, emits nothing",
@@ -522,7 +531,7 @@ describe("OV-300 S2: every plugin tool is gated or explicitly NOT_GATED", () => 
     // and resident_profile (village-memory plugin.yaml provides_tools: a memory provider's tools come from
     // get_tool_schemas, which no register_tool scan sees), elicitation_record (av-elicit, GC-ELICIT).
     expect([...inv.tools.keys()].sort()).toEqual([
-      "ask_odin", "ask_village", "consent_status", "elicitation_record", "pray", "query_village", "recall", "record_intention",
+      "ask_odin", "ask_village", "consent_status", "elicitation_record", "mochi", "pray", "query_village", "recall", "record_intention",
       "resident_context", "resident_profile", "search_village", "share_digest", "village", "village_vote",
     ]);
     expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(10);

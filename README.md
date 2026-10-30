@@ -424,6 +424,22 @@ From approval-md-hosted docs/03 section 6, on the dogfood tenant, before any res
 4. Ungated-while-looking-gated is ruled out. Remove headless consent (delete `HERMES_ACCEPT_HOOKS=1` from `.env`, or set `hooks_auto_accept: false`), then run `bun install/install_approval.ts --check`: it must FAIL with `consent-missing:…`. `--check` never re-adds consent. Re-run the install (which restores consent) and confirm `--check` passes, including its live fire.
 5. `terminal` without an absolute `workdir` is refused, visible in the daemon log. `execute_code` is not routed since rc42 (CODE EXECUTION ON): it runs in Hermes's `strict` mode with no card and no daemon log line.
 
+### Mochi public reads and gathering consent
+
+The baseline `mochi` skill uses the village-bridge plugin's native `mochi` tool.
+It pins John's external unauthenticated MCP endpoint; it never exposes the raw
+write tool as native MCP. Public drop, table and allergen reads need no card.
+`prepare` saves an owner-bound private draft locally; `confirm` proposes
+`marketplace.app.action.mochi.ask`, shows every outbound field, and sends only
+after a direct resident grant. Autonomous policy decisions fail closed.
+The same draft keeps the same external idempotency key on retry. No profile,
+chat history, credentials or other resident data is forwarded. John alone
+confirms an ask; a receipt is not a reservation. External content is untrusted.
+The control-plane resident policy must include the matching manual member row,
+card labels and exact `mochi` tool mapping before Carter tags and fleet-rolls.
+Offline tests: `python3 -m unittest discover -s plugins/village-bridge/tests -p 'test_mochi.py'`.
+Never smoke-test the real gathering write; stub it.
+
 ### Follow-ups
 
 **approval-md core (Carter owns it).** The Hermes adapter should handle these tools:

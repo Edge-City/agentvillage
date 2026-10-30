@@ -2153,5 +2153,5 @@ class BridgeTest(unittest.TestCase):
   self.transport.assert_not_called()
  def test_registration_idempotent(self):
   with patch.object(bridge,'_REGISTERED',False):
-   ctx=types.SimpleNamespace(register_tool=unittest.mock.Mock());bridge.register(ctx);bridge.register(ctx);self.assertEqual(ctx.register_tool.call_count,1)
+   ctx=types.SimpleNamespace(register_tool=unittest.mock.Mock());bridge.register(ctx);bridge.register(ctx);self.assertEqual(ctx.register_tool.call_count,2)
 if __name__=='__main__':unittest.main()

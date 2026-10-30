@@ -1832,6 +1832,8 @@ def register(ctx):
     global _REGISTERED
     if _REGISTERED:
         return
+    from . import _mochi
+    _mochi.register(ctx, sys.modules[__name__])
     ctx.register_tool(name="village", toolset="village", schema=SCHEMA, handler=handle, description=SCHEMA["description"])
     emit = getattr(ctx, "emit", None)
     if callable(emit):

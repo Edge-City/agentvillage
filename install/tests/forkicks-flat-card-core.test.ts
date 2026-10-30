@@ -22,9 +22,10 @@ const CORE_VERSION: string = coreUsable ? JSON.parse(readFileSync(join(dirname(C
 
 // What the control plane's template must say for the parent class (context mirrors these bytes).
 const PARENT_ENTRY_TODAY = [
-  "        marketplace.app.action:       # a mini-app order or action, e.g. a For Kicks order (overlay _forkicks.py, _mini_apps.py)",
-  '          does: "do something in one of your mini-apps, such as place an order"',
-  "          quote: { appId: \"App\", operation: ~, preview: ~ }   # the preview is a nested object with ids: kept to Full details; the order's lines and prices show as the summary",
+  "        marketplace.app.action:       # a For Kicks order: the app's four strings (B-166); a legacy {appId, operation, preview} request gets the technical card",
+  '          does: "place an order in one of your mini-apps for you"',
+  '          quote: { order: "Order", total: "Total", pickup: "Pickup", name: "Name shared with café" }',
+  "          note: none",
 ].join("\n");
 const sayEntry = (nameLabel: string) => [
   "        marketplace.app.action:       # a For Kicks order: the app's four strings, re-derived by the box from the saved order (overlay _forkicks.py card_fields); any other payload shape gets the technical card (unlisted-key)",
