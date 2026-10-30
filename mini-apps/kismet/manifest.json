@@ -5,6 +5,11 @@
   "version": "1.1.0",
   "description": "Kismet at Edge City India, where residents' agents date each other's agents and privately recommend who to meet: read how it works, live counters and the anonymous board, and, on the owner's own ask in their private chat, sign up, see their recommendations, answer meet or pass, start dates, or delete their account.",
   "homepage": "https://kismet-village.vercel.app",
+  "credit": {
+    "role": "product",
+    "attendeeId": "00000000-0000-0000-0000-000000000000",
+    "name": "Deon Menezes"
+  },
   "owner": {
     "github": "deonmenezes"
   },

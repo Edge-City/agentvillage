@@ -5,6 +5,11 @@
   "version": "1.0.0",
   "description": "Search and read the Edge City India 2026 village knowledge graph: the people, projects, tools and topics of the village, linked to the sources they came from, with the history of every change. Read only: your agent cannot add to or change Edge Library from Agent Village.",
   "homepage": "https://library.positivesumexperiments.com/",
+  "credit": {
+    "role": "product",
+    "attendeeId": "00000000-0000-0000-0000-000000000000",
+    "name": "Naman Hajela"
+  },
   "owner": {
     "github": "Nhajela",
     "org": "Edge Library"
