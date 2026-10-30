@@ -43,6 +43,22 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
                       "you cannot see other topics' tags.", flat)
         self.assertNotIn("reuse tags already on that room's topics first", flat)
 
+    def test_live_daily_caps_exact_text_and_team_rooms_by_name(self):
+        # Lead L34250 / L34255: zzz's account cap is 100 a day (zzz#50, migration 0038) and tags-only edits have their
+        # own allowance (zzz#53); exact owner text posts at once; a team room is found by its name from zzz.list_rooms.
+        flat = " ".join(SKILL.split())
+        self.assertNotIn("ten posts a day", flat)
+        self.assertIn("Connected accounts share 100 posts and edits a day on zzz.bot.", flat)
+        self.assertIn("Each edit (zzzbot 1.1.0) counts against the same 100 a day; a change to a topic's tags alone has "
+                      "its own daily allowance.", flat)
+        posting = " ".join(section(SKILL, "## Posting").split())
+        self.assertIn("When the owner gives the exact title and body, post them as given at once: no preview and no "
+                      "second confirmation. Show a preview only for text you composed yourself.", posting)
+        team = " ".join(section(SKILL, "## Team rooms").split())
+        self.assertIn("To act on \"that room\", call `zzz.list_rooms` and pick the room by its name", team)
+        self.assertIn("Never look a teammate up in the Rolodex to find a room, and never say you cannot find a team room "
+                      "without having listed rooms first.", team)
+
     def test_the_skill_is_found_for_a_team_room_ask(self):
         front = SKILL.split("---", 2)[1]
         self.assertIn("open private team rooms with named people or add people to one", front)
