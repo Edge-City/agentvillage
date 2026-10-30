@@ -17,7 +17,7 @@ import pytest
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 MODULE_NAME = "hermes_plugins.av_godconst"
-ENV = ("AV_GODCONST_BALLOT", "AV_GODCONST_ELICIT_CARDS", "AV_GODCONST_BALLOT_KEY", "CONTROL_PLANE_URL", "EDGEOS_API_KEY", "TELEGRAM_HOME_CHANNEL", "AV_TENANT_ID", "TENANT_ID", "HERMES_HOME")
+ENV = ("THOR_NUDGES_ENABLED", "AV_THOR_KEY", "AV_GODCONST_BALLOT", "AV_GODCONST_ELICIT_CARDS", "AV_GODCONST_BALLOT_KEY", "CONTROL_PLANE_URL", "EDGEOS_API_KEY", "TELEGRAM_HOME_CHANNEL", "AV_TENANT_ID", "TENANT_ID", "HERMES_HOME")
 
 
 def load_plugin():
@@ -27,7 +27,7 @@ def load_plugin():
         namespace.__path__ = []  # type: ignore[attr-defined]
         namespace.__package__ = parent
         sys.modules[parent] = namespace
-    for name in (MODULE_NAME, f"{MODULE_NAME}._logic"):
+    for name in (MODULE_NAME, f"{MODULE_NAME}._logic", f"{MODULE_NAME}._thor"):
         sys.modules.pop(name, None)
     spec = importlib.util.spec_from_file_location(MODULE_NAME, PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
     assert spec is not None and spec.loader is not None
