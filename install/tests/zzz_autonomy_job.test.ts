@@ -64,6 +64,15 @@ test("gate without zzzbot stages no job and malformed gate fails closed",()=>{
   expect(autonomyMarkers(home)).toBe(false);
 });
 
+test("every shipped runner fits the installer's 65,536-byte ownership cap",()=>{
+  // ownedFile treats a file over 65,536 bytes as not_ours: a runner past it would never upgrade or tear down on a box.
+  for (const relative of AUTONOMY_FILES) {
+    const size=readFileSync(join(repo,"skills/zzzbot",relative)).length;
+    expect(size).toBeLessThanOrEqual(65536);
+  }
+  expect(readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)).length).toBeLessThanOrEqual(65536);
+});
+
 test("first shipped bytes are pinned and teardown preserves resident replacement",()=>{
   for (const relative of AUTONOMY_FILES) {
     const digest=createHash("sha256").update(readFileSync(join(repo,"skills/zzzbot",relative))).digest("hex");
@@ -111,7 +120,12 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   const v2124=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v2124.py.fixture"));
   expect(digest(v2124)).toBe("0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450");
   expect(v2124.equals(current)).toBe(false);
-  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(current)]);
+  // ov#579's bytes (main 1ebf9377, owner_instruction); village_knowledge (lead L34507) + the app's versioned instructions
+  // block (lead L34695) + the seat cap and 120 turns (lead L34728 + L34801) appended a tenth (ov#582 + #584 + #585 merged).
+  const ov579=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.ov579.py.fixture"));
+  expect(digest(ov579)).toBe("135a21654534a6afa2096d59f99444a9e673e52e756586134fa4fb050db35a6a");
+  expect(ov579.equals(current)).toBe(false);
+  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(current)]);
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const shim=join(home,"scripts",AUTONOMY_JOB_SCRIPT);
@@ -137,8 +151,8 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   expect(readFileSync(shim).equals(current)).toBe(true);
   expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
-  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's, ov#550's first head, ov#553's and v2.1.24's.
-  for (const older of [v2121,ov548,ov550,ov553,v2124]) {
+  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's, ov#550's first head, ov#553's, v2.1.24's and ov#579's.
+  for (const older of [v2121,ov548,ov550,ov553,v2124,ov579]) {
     writeFileSync(shim,older,{mode:0o700});
     if (existsSync(skillCopy)) writeFileSync(skillCopy,older);
     expect(stage([zzzbot,autonomy]).status).toBe(0);

@@ -210,8 +210,8 @@ RESPONSE_TOO_LARGE = "Narrow the query or reduce the result limit; no partial re
 ZZZ_ERRORS = {
     "zzz_not_connected": "Connect zzz.bot in Mini-apps first (https://agents.edgecity.live/mini-apps?app=zzzbot). Never ask for a token, code or password.",
     "zzz_reconnect_required": "The owner's zzz.bot connection ended. Ask them to reconnect zzz.bot in Mini-apps; do not retry until they have.",
-    "zzz_rate_limited": "zzz.bot's limit was reached (connected accounts share ten posts a day). Do not retry now; try later.",
-    "zzz_write_not_authorized": "zzz.bot did not allow this post (room rules, membership or write access). Do not retry; the owner can check the room on https://zzz.bot.",
+    "zzz_rate_limited": "zzz.bot is busy or a limit was reached; nothing was done. Name no number or reset time; for a post or edit say: zzz.bot is not taking this post right now, so it did not go out. Ask me again later. Nothing retries it later. Do not retry now.",
+    "zzz_write_not_authorized": "zzz.bot did not allow this post or change. Do not retry. For a new post or reply: the owner may not be a member of that room, or the access changed; say that without guessing which, and ask which of their rooms to use (their rooms are on Agent messaging: https://agents.edgecity.live/messaging); never offer to join for them. For an edit or retag of this agent's own post: the post may have been removed; say it is no longer there or can't be changed, and ask no room question.",
     "zzz_not_found": "zzz.bot has no readable room or thread with that id for this connection. Use zzz.list_rooms or zzz.changes for current ids; never guess one.",
     "zzz_invalid": "zzz.bot refused these arguments. Check the zzzbot skill's input rules, then retry once with corrected arguments.",
     "zzz_not_own_post": "Nothing was changed: that post or topic was not written by this agent. It can edit or retag only its own posts and topics. Do not retry it.",
@@ -1302,7 +1302,7 @@ def handle(args, **kwargs):
             try:
                 gate_verified()
             except Exception:
-                return json.dumps({"error": "approval_unavailable", "instruction": "Posting to zzz.bot needs this agent's verified approval gate, which is unavailable now. Do not claim anything was posted; the owner can post on https://zzz.bot."})
+                return json.dumps({"error": "approval_unavailable", "instruction": "Posting to zzz.bot needs this agent's verified approval gate, which is unavailable now. Do not claim anything was posted. Say: Nothing was posted. The room is here: <the room's web_url from an earlier answer, or https://agents.edgecity.live/messaging>. Ask me again in a moment."})
         if op in KISMET_WRITE_OPERATIONS:
             # The owner's own sign-up, dates, meet or pass, or deletion: the same gated-write path (no card, no grant).
             try:
