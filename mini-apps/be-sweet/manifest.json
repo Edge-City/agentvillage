@@ -13,7 +13,7 @@
     {
       "kind": "read",
       "label": "Be Sweet prompts and how to share a story",
-      "description": "Reads three questions that help you find your own words, and how to tell John F. Kim a Be Sweet story yourself. Calls send no arguments and no identity. No accounts, profiles, purchases or private data; nothing is stored and no data goes to any third party."
+      "description": "Reads three questions that help you find your own words, and how to tell John F. Kim a Be Sweet story yourself. Calls send no arguments and no identity, and nothing from a call is stored. No accounts, profiles, purchases or private data; no data goes to any third party."
     }
   ],
   "service": {
