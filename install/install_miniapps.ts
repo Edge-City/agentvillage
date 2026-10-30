@@ -38,6 +38,18 @@ export const REVIEWED_MINI_APPS = [
   // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
+  // DreamStarter (adapted from ov#393, arrfire): seven reads and two owner-asked writes, discover and grant_prepare
+  // (_mini_apps.py DREAMSTARTER, exact; the manifest's order).
+  { id: "dreamstarter", version: "2.0.0", operations: ["dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare", "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"], skills: ["dreamstarter"] },
+  // Kismet Part 2 (lead L29830): its three public reads and the owner's own summary, then the owner's own sign-up, new
+  // dates, meet or pass and deletion (gated writes); _mini_apps.py KISMET, exact. Part 1's read alone is below.
+  { id: "kismet", version: "1.1.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete"], skills: ["kismet"] },
+  // Edge Library (Naman, adapted from ov#506): READS ONLY in 1.0.0 (CD-44), the village knowledge graph's eight reads;
+  // its writes are not exposed (_mini_apps.py LIBRARY, exact).
+  { id: "library", version: "1.0.0", operations: ["library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history", "library.changes_since", "library.proposals"], skills: ["library"] },
+  // Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops, and the owner's own join, yes or
+  // no, confirmation and leave (gated writes); _mini_apps.py FAVORLOOP, exact (the manifest's order). No mini-app.read.
+  { id: "favorloop", version: "1.0.0", operations: ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"], skills: ["favorloop"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
@@ -46,7 +58,7 @@ export const REVIEWED_MINI_APPS = [
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
  * projects the context operations), and mosaic's the same way, and zzzbot's five (1.0.0, _mini_apps.py ZZZBOT_PREVIOUS: the
- * CP's entry until its catalog serves 1.1.0; the two edits refused under it). Remove each after the CP catalog serves a newer
+ * CP's entry until its catalog serves 1.1.0; the two edits refused under it), and kismet's Part 1 read (ov#533). Remove each after the CP catalog serves a newer
  * list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
@@ -57,6 +69,8 @@ export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
   // ZZZBOT: the five named operations alone (v2.1.3 to v2.1.19), the CP's entry until its catalog serves 1.1.0.
   { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
+  // KISMET: Part 1's public relay read alone (ov#533), the CP's entry until its catalog serves 1.1.0 (_mini_apps.py KISMET_PUBLIC).
+  { id: "kismet", version: "1.0.0", operations: ["mini-app.read"], skills: ["kismet"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
@@ -72,6 +86,7 @@ const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).dige
 export const ZZZ_BRIDGE_ID = "zzz-bridge";
 const ZZZ_SHIM = "zzz_managed_runner.py";
 const ZZZ_LEGACY_SHIM = "agentvillage_zzz_pairs.sh";
+// cp#467: the control plane mirrors the receipt paths these give (mini-apps-skills.js ZZZ_STAGE_FILE_LISTS); change it first.
 const ZZZ_MANAGED_FILES = [`scripts/${ZZZ_LEGACY_SHIM}`, `scripts/${ZZZ_SHIM}`, "prompts/participate.md"] as const;
 const ZZZ_STAGE_FILES = ZZZ_MANAGED_FILES.filter(relative => relative !== `scripts/${ZZZ_LEGACY_SHIM}`);
 /**

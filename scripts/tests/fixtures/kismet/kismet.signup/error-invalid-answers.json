@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "interests needs at least 3 entries."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"invalid_answers\",\"message\":\"interests needs at least 3 entries.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "invalid_answers",
+    "message": "interests needs at least 3 entries."
+  },
+  "isError": true
+}

@@ -499,6 +499,113 @@ replies are exact-thread reservations and an empty newly enabled pair can receiv
 one fixed introduction per epoch. All writes share a two-per-UTC-day budget. The job does not
 deliver pair content to the resident or copy it into other surfaces.
 
+## DreamStarter: dreams, the grant draft, Goa's local businesses
+
+The [v2 manifest](dreamstarter/manifest.json) and the native bundle allowlist
+(`_mini_apps.py` `DREAMSTARTER`, exact equality, in this order) expose nine
+named operations, each mapped by the app to one DreamStarter MCP tool: seven
+reads (`dreamstarter.dream_status`, `.workflows`, `.grant_requirements`,
+`.grant_status`, `.businesses`, `.business_brief`, `.business_status`) and two
+owner-asked writes, `dreamstarter.discover` (the lines the owner types for that
+request; DreamStarter passes them to Google Gemini and keeps only the
+suggestions, never the lines) and `dreamstarter.grant_prepare` (the owner's confirmed
+application answers, a private 14-day draft that DreamStarter submits to
+ElevenLabs' live form only when the owner clicks Submit on its review page).
+`mini-app.read` refuses `dreamstarter`.
+
+The bundle is the DreamStarter team's
+([PR #393](https://github.com/Edge-City/agentvillage/pull/393), arrfire),
+adapted from a generic read relay to a reviewed app because those two
+operations send the owner's own words. The service is `app-token`: the app
+server holds one key (`MINI_APP_DREAMSTARTER_KEY`) and sends no resident
+identity. Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_dreamstarter.py` against DreamStarter's published
+schemas; a discovery call holding an email address or a phone number is refused
+before transport. Both writes take the verified gate (`gate_verified`, zzz's
+path), no card and no manual grant, and carry the trusted `turnId`; the skill
+shows exactly what will be sent and waits for the owner's yes. Results are
+scrubbed and framed as untrusted.
+
+Overlay first, then the CP catalog row and sandbox allowlist, then the app
+routes, then Edge City staff set `MINI_APP_DREAMSTARTER_KEY`. The app-server
+contract is in [dreamstarter/README.md](dreamstarter/README.md).
+
+## Edge Library: the village knowledge graph (reads only)
+
+Adapted from Naman's bundle (Edge-City/agentvillage#506). Version 1.0.0 is
+READS ONLY (Carter, CD-44). The [v2 manifest](library/manifest.json) and the
+native bundle allowlist (`_mini_apps.py` `LIBRARY`, exact equality, in this
+order) expose eight named reads, each mapped by the app to one Edge Library
+MCP tool: `library.initialize`, `.search`, `.get`, `.source`, `.schema`,
+`.history`, `.changes_since` and `.proposals`. Edge Library's three writes
+(`library_submit_source`, `library_write`, `library_propose`) are not exposed:
+no operation, schema entry or tool reaches them. `mini-app.read` refuses
+`library`. The reads join the existing read class: no new class, row, gate or
+card.
+
+There is no per-resident sign-in. The service is `app-token`: the app server
+holds one token for Edge Library (`MINI_APP_LIBRARY_KEY`, by `secretRef`) and,
+through the generic dispatcher, sends `X-Village-Subject`: the app's private,
+stable, per-app reference for the owner (the existing `subject` separation
+mode, as Kismet's). Never a Telegram id or username, never from the box, and
+only for a resident who installed `library`, only to the manifest's origin.
+Edge Library acts as its Agent Village agent on behalf of that resident, with
+a member's role (a read never creates a member entry; 60 tool calls a minute
+per resident). The id is `library` because the
+validator reserves `edge-`.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_library.py` against Edge Library's own tool schemas
+(the manifest's `input` schemas say the same): exact keys, uuids, bounds and the
+4 KiB request budget. A key naming a resident (a Telegram id or username, a
+user, resident or subject id) at any depth is refused. Anything else is
+`invalid_library_arguments` before transport. Every operation is framed
+(`X-Village-Operation`). Every answer is scrubbed (hidden characters become
+spaces of the same UTF-16 length, so Edge Library's JavaScript-string offsets
+hold) and framed as untrusted with `handling`; the app's closed `mini_app_*`
+codes and Edge Library's own tool codes map to Edge Library-only text, for
+these operations only.
+
+Overlay tag first, then the one cp switch PR (vendored manifest, reviewed id,
+catalog row `restricted`) deployed before that tag's roll, then the app half
+(the `subject` separation entry and the vendored manifest), then Edge City staff
+set `MINI_APP_LIBRARY_KEY` on the app service. The app-server contract and the
+prerequisites are in [library/README.md](library/README.md).
+
+## Favor Loop: loops of 15-minute favors
+
+By Bilgin Kocak (Edge-City/agentvillage#556). The [v2 manifest](favorloop/manifest.json)
+and the native bundle allowlist (`_mini_apps.py` `FAVORLOOP`, exact equality, in
+the manifest's order) expose eight named operations, each mapped by the app to
+one Favor Loop MCP tool: three public reads (`favorloop.how_it_works`, `.menu`,
+`.board`), the owner's own read (`.my_loops`) and four owner writes (`.join`,
+`.answer`, `.confirm`, `.leave`). `mini-app.read` refuses `favorloop`. The reads
+join the existing read class; the writes take the existing gated-write path
+(`gate_verified()`, as `mini-app.context.write`): no new class, row, gate, card or
+stage-then-send.
+
+The service is `app-token`: the app server holds one token for Favor Loop
+(`MINI_APP_FAVORLOOP_KEY`, by `secretRef`) and, for the five private tools, sends
+`X-Village-Subject` (the `subject` separation mode, as Kismet's and Edge
+Library's). Never a Telegram id or username, never from the box.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_favorloop.py` against the manifest's `input` schemas
+(exact keys, the closed favor and slot lists, the loopId and handle patterns,
+the 4 KiB request budget). A key naming a resident (a Telegram id or username,
+a user, resident or subject id) at any depth is refused. Anything else is
+`invalid_favorloop_arguments` before transport. Every operation is framed
+(`X-Village-Operation`); every answer is scrubbed and framed as untrusted with
+`handling`; the app's closed `mini_app_*` codes and Favor Loop's own tool codes
+map to Favor Loop-only text, for these operations only.
+
+The manifest says `sandbox`, so the cp serves it restricted (allowlisted tenants
+only), and only to a box at or after the overlay release that reviews it (the
+cp's `FAVORLOOP_FLOOR_TAG`). Overlay tag and roll first, then the cp row, then the
+app half (the `subject` separation entry and the vendored manifest), then Edge
+City staff set `MINI_APP_FAVORLOOP_KEY` on the app service. The contract is in
+[favorloop/README.md](favorloop/README.md).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist

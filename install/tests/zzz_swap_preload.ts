@@ -4,13 +4,13 @@ import { readFileSync } from "node:fs";
 
 const IMPORT = "fstatSync, lstatSync, mkdirSync";
 const HOOK = `
-import { renameSync } from "node:fs";
+import { renameSync as swapRenameSync } from "node:fs";
 let swapped = false;
 const lstatSync = (path: string) => {
   const metadata = nativeLstatSync(path);
   if (!swapped && path === process.env.ZZZ_SWAP_TARGET && process.env.ZZZ_SWAP_REPLACEMENT) {
     swapped = true;
-    renameSync(process.env.ZZZ_SWAP_REPLACEMENT, path);
+    swapRenameSync(process.env.ZZZ_SWAP_REPLACEMENT, path);
   }
   return metadata;
 };

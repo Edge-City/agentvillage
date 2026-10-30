@@ -1,0 +1,60 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Everyone said yes: you give Yoga or stretching session to @fixture_bob and @fixture_alice gives Code review to you, Saturday at The Circle, or online. Contacts are in the loop now.\",\"loop\":{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000001\",\"shape\":\"loop3\",\"status\":\"accepted\",\"window\":\"Saturday\",\"place\":\"The Circle, or online\",\"youGive\":{\"favor\":\"stretch_session\",\"label\":\"Yoga or stretching session\",\"to\":\"@fixture_bob\"},\"youReceive\":{\"favor\":\"code_review\",\"label\":\"Code review\",\"from\":\"@fixture_alice\"},\"steps\":[{\"from\":\"@fixture_bob\",\"to\":\"@fixture_alice\",\"favor\":\"portrait_photo\"},{\"from\":\"@fixture_alice\",\"to\":\"you\",\"favor\":\"code_review\"},{\"from\":\"you\",\"to\":\"@fixture_bob\",\"favor\":\"stretch_session\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you give to\",\"handle\":\"@fixture_bob\"},{\"role\":\"you receive from\",\"handle\":\"@fixture_alice\"}],\"youReceived\":false,\"favorsConfirmed\":0,\"favorsTotal\":3}}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Everyone said yes: you give Yoga or stretching session to @fixture_bob and @fixture_alice gives Code review to you, Saturday at The Circle, or online. Contacts are in the loop now.",
+    "loop": {
+      "loopId": "0f0f0f0f-0000-4000-8000-000000000001",
+      "shape": "loop3",
+      "status": "accepted",
+      "window": "Saturday",
+      "place": "The Circle, or online",
+      "youGive": {
+        "favor": "stretch_session",
+        "label": "Yoga or stretching session",
+        "to": "@fixture_bob"
+      },
+      "youReceive": {
+        "favor": "code_review",
+        "label": "Code review",
+        "from": "@fixture_alice"
+      },
+      "steps": [
+        {
+          "from": "@fixture_bob",
+          "to": "@fixture_alice",
+          "favor": "portrait_photo"
+        },
+        {
+          "from": "@fixture_alice",
+          "to": "you",
+          "favor": "code_review"
+        },
+        {
+          "from": "you",
+          "to": "@fixture_bob",
+          "favor": "stretch_session"
+        }
+      ],
+      "yourAnswer": "yes",
+      "waitingFor": 0,
+      "contacts": [
+        {
+          "role": "you give to",
+          "handle": "@fixture_bob"
+        },
+        {
+          "role": "you receive from",
+          "handle": "@fixture_alice"
+        }
+      ],
+      "youReceived": false,
+      "favorsConfirmed": 0,
+      "favorsTotal": 3
+    }
+  }
+}

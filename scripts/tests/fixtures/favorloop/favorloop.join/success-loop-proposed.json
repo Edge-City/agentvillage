@@ -1,0 +1,25 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Saved: you offer Yoga or stretching session and would like Code review, and a loop was just proposed to you, so check your loops to say yes or no.\",\"member\":{\"offers\":[\"stretch_session\"],\"wants\":[\"code_review\"],\"giftOnly\":false,\"contactHandle\":null,\"availability\":[],\"paused\":false},\"openLoops\":1,\"newProposal\":true}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Saved: you offer Yoga or stretching session and would like Code review, and a loop was just proposed to you, so check your loops to say yes or no.",
+    "member": {
+      "offers": [
+        "stretch_session"
+      ],
+      "wants": [
+        "code_review"
+      ],
+      "giftOnly": false,
+      "contactHandle": null,
+      "availability": [],
+      "paused": false
+    },
+    "openLoops": 1,
+    "newProposal": true
+  }
+}

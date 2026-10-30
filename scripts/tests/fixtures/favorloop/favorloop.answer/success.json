@@ -1,0 +1,52 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"You said yes; the loop starts when the other 2 members say yes too.\",\"loop\":{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000001\",\"shape\":\"loop3\",\"status\":\"proposed\",\"window\":\"Saturday\",\"place\":\"The Circle, or online\",\"answerBy\":\"2026-10-30T00:00:00+05:30\",\"youGive\":{\"favor\":\"code_review\",\"label\":\"Code review\",\"to\":\"a resident\"},\"youReceive\":{\"favor\":\"portrait_photo\",\"label\":\"Portrait photo\",\"from\":\"another resident\"},\"steps\":[{\"from\":\"another resident\",\"to\":\"you\",\"favor\":\"portrait_photo\"},{\"from\":\"you\",\"to\":\"a resident\",\"favor\":\"code_review\"},{\"from\":\"a resident\",\"to\":\"another resident\",\"favor\":\"stretch_session\"}],\"yourAnswer\":\"yes\",\"waitingFor\":2,\"contacts\":[],\"youReceived\":false,\"favorsConfirmed\":0,\"favorsTotal\":3}}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "You said yes; the loop starts when the other 2 members say yes too.",
+    "loop": {
+      "loopId": "0f0f0f0f-0000-4000-8000-000000000001",
+      "shape": "loop3",
+      "status": "proposed",
+      "window": "Saturday",
+      "place": "The Circle, or online",
+      "answerBy": "2026-10-30T00:00:00+05:30",
+      "youGive": {
+        "favor": "code_review",
+        "label": "Code review",
+        "to": "a resident"
+      },
+      "youReceive": {
+        "favor": "portrait_photo",
+        "label": "Portrait photo",
+        "from": "another resident"
+      },
+      "steps": [
+        {
+          "from": "another resident",
+          "to": "you",
+          "favor": "portrait_photo"
+        },
+        {
+          "from": "you",
+          "to": "a resident",
+          "favor": "code_review"
+        },
+        {
+          "from": "a resident",
+          "to": "another resident",
+          "favor": "stretch_session"
+        }
+      ],
+      "yourAnswer": "yes",
+      "waitingFor": 2,
+      "contacts": [],
+      "youReceived": false,
+      "favorsConfirmed": 0,
+      "favorsTotal": 3
+    }
+  }
+}

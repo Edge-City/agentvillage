@@ -407,6 +407,9 @@ export const BRIDGE_ERROR_CODES: Readonly<Record<string, string>> = Object.freez
   zzz_write_not_authorized: "zzzbot", zzz_not_found: "zzzbot", zzz_invalid: "zzzbot",
   zzz_not_own_post: "zzzbot", zzz_post_changed: "zzzbot",
   connection_or_request_refused: "zzzbot", response_too_large: "zzzbot",
+  // Kismet's box-side step refusals (lead L29897: stage then send, shown dates only), _kismet.py / KISMET_STEP_ERRORS.
+  kismet_preview_expired: "kismet", kismet_preview_unavailable: "kismet", kismet_confirmation_required: "kismet",
+  date_not_found: "kismet",
 });
 /** For Kicks' one parameterised code (transport(): a 409 on forkicks.order.confirm). */
 const FORKICKS_PICKUP_ONLY = /^pickup_only:[A-Za-z0-9_-]{1,128}$/;

@@ -1,0 +1,17 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "There was no Kismet account to delete."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":true,\"deleted\":false,\"text\":\"There was no Kismet account to delete.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "deleted": false,
+    "text": "There was no Kismet account to delete."
+  }
+}

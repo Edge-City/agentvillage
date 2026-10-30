@@ -1,7 +1,7 @@
 /** Installer-owned Hermes job for enabled zzzbot projections. No resident-created cron. */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, constants, existsSync, fchmodSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
@@ -142,6 +142,32 @@ export function jobApi(python: string, home: string, request: Record<string, unk
     env, input: JSON.stringify(request),
     stdio: ["pipe", "ignore", "ignore"], timeout: 30_000,
   });
+}
+
+/**
+ * v2.1.20: write `bytes` to dir/name without a check-then-write. A symlink swapped in at dir/name after the caller's
+ * refusal checks is never followed: the bytes go to a fresh temp file in the same, already-checked directory (O_EXCL +
+ * O_NOFOLLOW, so nothing planted at the temp name is reused), fstat'd as a lone regular file, written, fsynced, then
+ * renamed over dir/name (rename replaces a symlink there, never follows it). Any failure unlinks the temp.
+ */
+export function replaceFileNoFollow(dir: string, name: string, bytes: Buffer, mode = 0o700): void {
+  const temp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+    const meta = fstatSync(fd);
+    if (!meta.isFile() || meta.nlink !== 1) throw new Error("zzz_shim_temp_invalid");
+    for (let offset = 0; offset < bytes.length;) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temp, join(dir, name));
+  } catch (error) {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* already failing */ }
+    try { unlinkSync(temp); } catch { /* absent or never created */ }
+    throw error;
+  }
 }
 
 function plainFile(path: string): boolean {
@@ -342,8 +368,7 @@ export function reconcileZzzManagedJob(home: string, installed: boolean): void {
   plainFile(shim);
   // The mini-app helper stages the reviewed script before publishing authority.
   mkdirSync(scriptsDir(home), { recursive: true });
-  writeFileSync(shim, script, { mode: 0o700 });
-  chmodSync(shim, 0o700);
+  replaceFileNoFollow(scriptsDir(home), ZZZ_JOB_SCRIPT, script);
   const id = current[0]?.id;
   if (id !== undefined && (typeof id !== "string" || !ID.test(id))) throw new Error("zzz_job_invalid");
   jobApi(python, home, { action: "install", ...(id ? { id } : {}), name: ZZZ_JOB_NAME,

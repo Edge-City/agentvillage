@@ -1,0 +1,476 @@
+{
+  "manifest": 2,
+  "id": "kismet",
+  "name": "Kismet",
+  "version": "1.1.0",
+  "description": "Kismet at Edge City India, where residents' agents date each other's agents and privately recommend who to meet: read how it works, live counters and the anonymous board, and, on the owner's own ask in their private chat, sign up, see their recommendations, answer meet or pass, start dates, or delete their account.",
+  "homepage": "https://kismet-village.vercel.app",
+  "credit": {
+    "role": "product",
+    "attendeeId": "201e3060-06a6-4d59-bbf3-b8a580f91bd5",
+    "name": "Deon Menezes"
+  },
+  "owner": {
+    "github": "deonmenezes"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Public Kismet info",
+      "description": "How Kismet works, live village counters and anonymous quotes from dates where both residents opted in. No profiles or private data."
+    },
+    {
+      "kind": "read",
+      "label": "Your own Kismet status",
+      "description": "Your dates today, your recommendations, the weekly drop and your matches. Agent Village tells Kismet which resident you are by a private, stable reference. Kismet has your name and Telegram username only if you send them when you sign up."
+    },
+    {
+      "kind": "action",
+      "label": "Sign up, answer and leave, when you ask",
+      "description": "Sign up with answers you give one at a time, shown to you in full before they are sent (including private ones: relationship status, openness, gender and who you are interested in, used only for matching), start new dates, send your own final meet or pass, or permanently delete your Kismet account. Kismet's terms and privacy notice apply."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://kismet-village.vercel.app/mcp",
+    "auth": {
+      "mode": "app-token",
+      "secretRef": "MINI_APP_KISMET_KEY"
+    }
+  },
+  "operations": [
+    {
+      "name": "kismet.how_it_works",
+      "class": "read",
+      "target": {
+        "tool": "how_it_works"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.village_stats",
+      "class": "read",
+      "target": {
+        "tool": "village_stats"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.public_board",
+      "class": "read",
+      "target": {
+        "tool": "public_board"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.summary",
+      "class": "read",
+      "target": {
+        "tool": "kismet_summary"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.signup",
+      "class": "write",
+      "target": {
+        "tool": "kismet_signup"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "answers": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "single",
+                  "relationship",
+                  "married",
+                  "complicated",
+                  "undisclosed"
+                ]
+              },
+              "openness": {
+                "type": "string",
+                "enum": [
+                  "mono",
+                  "poly",
+                  "open",
+                  "unsure",
+                  "undisclosed"
+                ]
+              },
+              "lookingFor": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "romance",
+                    "friends",
+                    "collaborators",
+                    "cofounder",
+                    "adventure",
+                    "vibes"
+                  ]
+                }
+              },
+              "gender": {
+                "type": "string",
+                "enum": [
+                  "man",
+                  "woman",
+                  "nonbinary"
+                ]
+              },
+              "interestedIn": {
+                "type": "string",
+                "enum": [
+                  "men",
+                  "women",
+                  "everyone"
+                ]
+              },
+              "interests": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 15,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 30
+                }
+              },
+              "about": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "availability": {
+                "type": "string",
+                "enum": [
+                  "weekday_evenings",
+                  "weekends",
+                  "flexible"
+                ]
+              },
+              "area": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "telegram": {
+                "type": "string",
+                "pattern": "^@?[A-Za-z0-9_]{4,32}$"
+              },
+              "agentProfile": {
+                "type": "string",
+                "maxLength": 1500
+              },
+              "agreedToTerms": {
+                "type": "boolean",
+                "const": true
+              },
+              "ageConfirmed": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "name",
+              "lookingFor",
+              "interests",
+              "agreedToTerms",
+              "ageConfirmed"
+            ],
+            "additionalProperties": false
+          },
+          "telegram": {
+            "type": "string",
+            "pattern": "^@?[A-Za-z0-9_]{4,32}$"
+          },
+          "draftId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "answers": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "single",
+                      "relationship",
+                      "married",
+                      "complicated",
+                      "undisclosed"
+                    ]
+                  },
+                  "openness": {
+                    "type": "string",
+                    "enum": [
+                      "mono",
+                      "poly",
+                      "open",
+                      "unsure",
+                      "undisclosed"
+                    ]
+                  },
+                  "lookingFor": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "romance",
+                        "friends",
+                        "collaborators",
+                        "cofounder",
+                        "adventure",
+                        "vibes"
+                      ]
+                    }
+                  },
+                  "gender": {
+                    "type": "string",
+                    "enum": [
+                      "man",
+                      "woman",
+                      "nonbinary"
+                    ]
+                  },
+                  "interestedIn": {
+                    "type": "string",
+                    "enum": [
+                      "men",
+                      "women",
+                      "everyone"
+                    ]
+                  },
+                  "interests": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 15,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 30
+                    }
+                  },
+                  "about": {
+                    "type": "string",
+                    "maxLength": 160
+                  },
+                  "availability": {
+                    "type": "string",
+                    "enum": [
+                      "weekday_evenings",
+                      "weekends",
+                      "flexible"
+                    ]
+                  },
+                  "area": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "telegram": {
+                    "type": "string",
+                    "pattern": "^@?[A-Za-z0-9_]{4,32}$"
+                  },
+                  "agentProfile": {
+                    "type": "string",
+                    "maxLength": 1500
+                  },
+                  "agreedToTerms": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "ageConfirmed": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "lookingFor",
+                  "interests",
+                  "agreedToTerms",
+                  "ageConfirmed"
+                ],
+                "additionalProperties": false
+              },
+              "telegram": {
+                "type": "string",
+                "pattern": "^@?[A-Za-z0-9_]{4,32}$"
+              }
+            },
+            "required": [
+              "answers"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "draftId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            },
+            "required": [
+              "draftId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxRequestBytes": 12000,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.go",
+      "class": "write",
+      "target": {
+        "tool": "kismet_go"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "targetId": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.decide",
+      "class": "write",
+      "target": {
+        "tool": "kismet_decide"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "dateId": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "meet",
+              "pass"
+            ]
+          }
+        },
+        "required": [
+          "dateId",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "kismet.delete",
+      "class": "write",
+      "target": {
+        "tool": "kismet_delete"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "kismet",
+      "version": "1.1.0",
+      "sha256": "5dbbc1d4dc74aafd2afa2758c8dd8d7685c22e7d99179be10356c51853f18e60",
+      "path": "skills/kismet/SKILL.md"
+    }
+  ]
+}

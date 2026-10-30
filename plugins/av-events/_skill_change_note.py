@@ -86,7 +86,7 @@ NO_SUMMARY = "check the tool for what it can do now"
 
 #: The installer's reviewed apps with a skill (`install/install_miniapps.ts` REVIEWED_MINI_APPS; a test
 #: holds the two equal). Only their SKILL.md text is shown; any other app is named by its id.
-REVIEWED = frozenset({"gold-stars", "dizko", "forkicks", "zzzbot", "slopfolio", "mosaic"})
+REVIEWED = frozenset({"gold-stars", "dizko", "forkicks", "zzzbot", "slopfolio", "mosaic", "dreamstarter", "kismet", "library", "favorloop"})
 #: The installer's record of the cp-offered generic apps it staged (`GENERIC_STATE`).
 GENERIC_STATE = "mini-apps-generic.json"
 MAX_GENERIC_BYTES = 65536

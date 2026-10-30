@@ -1,0 +1,4 @@
+{
+  "code": "not_found",
+  "detail": "No loop with that loopId includes you; use a loopId that my_loops returned."
+}

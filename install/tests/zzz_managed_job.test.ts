@@ -6,6 +6,7 @@ import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { REVIEWED_MINI_APPS, zzzMarkerOnDisk, zzzMarkerScan } from "../install_miniapps";
 import { reconcileZzzManagedJob, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT, ZZZ_JOB_TOOLSETS, ZZZ_SHIPPED_SHA256, zzzShippedFile } from "../zzz_managed_job";
+import { withSymlinkPlantedAfterCheck } from "./plant_after_check";
 
 const fake = join(import.meta.dir, "fake_hermes.ts");
 const fakeJobPython = join(import.meta.dir, "fake_hermes_job_python.ts");
@@ -114,6 +115,24 @@ test("installed ZZZ projection owns one script-only Hermes job; revocation remov
   expect(existsSync(join(home, "skills", "zzzbot", "prompts", "participate.md"))).toBe(false);
   expect(existsSync(join(home, "zzzbot"))).toBe(false);
   expect(existsSync(join(home, "skills", "zzzbot", "SKILL.md"))).toBe(true);
+});
+
+test("v2.1.20: a symlink swapped in after the shim check is replaced, never followed (temp file + rename)", () => {
+  const { home, stage, jobs } = fakeBox();
+  expect(stage(projection).status).toBe(0);
+  const shim = join(home, "scripts", ZZZ_JOB_SCRIPT);
+  const outside = join(home, "outside-target");
+  rmSync(shim);
+  writeFileSync(outside, "resident outside file");
+  // plainFile(shim) sees no shim; the symlink lands between that check and the write.
+  expect(withSymlinkPlantedAfterCheck(shim, outside, () => reconcileZzzManagedJob(home, true)).planted).toBe(true);
+  expect(readFileSync(outside, "utf8")).toBe("resident outside file");
+  const meta = lstatSync(shim);
+  expect(meta.isFile() && !meta.isSymbolicLink()).toBe(true);
+  expect(meta.mode & 0o777).toBe(0o700);
+  expect(readFileSync(shim)).toEqual(SHIPPED_SHIM);
+  expect(readdirSync(join(home, "scripts")).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  expect(jobs()).toHaveLength(1);
 });
 
 test("N7: the whole-turn lock alone marks managed state and revocation removes it", () => {

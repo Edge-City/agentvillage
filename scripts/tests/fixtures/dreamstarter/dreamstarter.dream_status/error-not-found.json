@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"error\":\"not_found\",\"message\":\"No dream with that ref. Ask for the ref exactly as discover_dreams returned it.\"}"
+    }
+  ],
+  "isError": true
+}

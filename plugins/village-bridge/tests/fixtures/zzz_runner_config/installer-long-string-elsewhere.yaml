@@ -1,0 +1,12 @@
+agent:
+  system_prompt: "You are a helpful village agent. You are a helpful village
+    agent. You are a helpful village agent. You are a helpful village agent. You
+    are a helpful village agent. You are a helpful village agent. Keep answers
+    short: one line; # not a comment."
+model:
+  default: openai/gpt-5.4-mini
+  provider: openrouter
+quick_commands:
+  status:
+    type: exec
+    command: 'echo "model: injected"'

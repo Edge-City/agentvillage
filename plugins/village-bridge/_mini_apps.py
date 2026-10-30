@@ -46,18 +46,44 @@ ZZZ_EDIT_OPERATIONS = ("zzz.tag_thread", "zzz.edit_post")
 ZZZ_POST_WRITES = (*ZZZ_WRITE_OPERATIONS, *ZZZ_EDIT_OPERATIONS)
 # Buildathon team rooms (zzz#32 + app#842, lead L28970): app-side feature-gated operations that, like zzz.pairs,
 # borrow an existing zzzbot install permission and are deliberately absent from the CP catalog and from ZZZBOT.
-# The read borrows zzz.list_rooms; the two writes borrow zzz.create_thread and take the same gated-write path.
+# The read borrows zzz.list_rooms; the writes borrow zzz.create_thread and take the same gated-write path.
 # They are owner-led only: the managed pair job's CRON_OPS (and any runner) never includes them.
+# TEAM-ADD-MEMBER (lead L31271, release's TEAM-ADD-MEMBER-CONTRACT.md): zzz.add_team_members adds people to a team
+# room the owner already has, borrowing exactly as zzz.open_team_room does (no catalog, class or gate change).
 ZZZ_TEAM_READ_OPERATIONS = ("zzz.list_team_invites",)
-ZZZ_TEAM_WRITE_OPERATIONS = ("zzz.open_team_room", "zzz.respond_team_invite")
+ZZZ_TEAM_WRITE_OPERATIONS = ("zzz.open_team_room", "zzz.respond_team_invite", "zzz.add_team_members")
 ZZZ_TEAM_BORROWS = {"zzz.list_team_invites": "zzz.list_rooms", "zzz.open_team_room": "zzz.create_thread",
-                    "zzz.respond_team_invite": "zzz.create_thread"}
+                    "zzz.respond_team_invite": "zzz.create_thread", "zzz.add_team_members": "zzz.create_thread"}
+# DreamStarter (adapted from ov#393, arrfire): public reads (the workflow catalog, the grant's rules, the local
+# businesses) and the owner's own status reads by a returned ref, plus two owner-asked WRITES that send the owner's
+# own words: dreamstarter.discover (the lines typed for that request) and dreamstarter.grant_prepare (the confirmed
+# application answers). The writes take zzz's path (gate_verified), never a card or a manual grant.
+DS_READ_OPERATIONS = ("dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_status",
+                      "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status")
+DS_WRITE_OPERATIONS = ("dreamstarter.discover", "dreamstarter.grant_prepare")
+# Kismet Part 2 (lead L29830, product's build spec): its three public reads and the owner's own summary (reads), and
+# the owner's own sign-up, new dates, meet or pass and account deletion (writes). The writes take zzz's path
+# (gate_verified), never a manual grant, a card or a new class: each happens only on the owner's own ask in this chat.
+KISMET_READ_OPERATIONS = ("kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary")
+KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete")
+# Edge Library (Naman, adapted from ov#506): the village knowledge graph's eight reads. 1.0.0 is READS ONLY (Carter,
+# CD-44): Edge Library's three writes are not exposed, so none is in WRITE_OPERATIONS. The reads join the existing read
+# class: no new class, row, gate or card.
+LIBRARY_READ_OPERATIONS = ("library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history",
+                           "library.changes_since", "library.proposals")
+# Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops (reads), and the owner's own join,
+# yes or no, received-favor confirmation and leave (writes). The writes take zzz's path (gate_verified), never a manual
+# grant, a card or a new class: each happens only on the owner's own ask in this chat.
+FAVORLOOP_READ_OPERATIONS = ("favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.my_loops")
+FAVORLOOP_WRITE_OPERATIONS = ("favorloop.join", "favorloop.answer", "favorloop.confirm", "favorloop.leave")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", "zzz.pairs", *ZZZ_READ_OPERATIONS,
-                             *ZZZ_TEAM_READ_OPERATIONS})
+                             *ZZZ_TEAM_READ_OPERATIONS, *DS_READ_OPERATIONS, *KISMET_READ_OPERATIONS, *LIBRARY_READ_OPERATIONS,
+                             *FAVORLOOP_READ_OPERATIONS})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
                               "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_POST_WRITES,
-                              *ZZZ_TEAM_WRITE_OPERATIONS})
+                              *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS,
+                              *FAVORLOOP_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -72,7 +98,27 @@ ZZZBOT_ACCEPTED = (ZZZBOT, ZZZBOT_PREVIOUS)
 # zzz.pairs is an app-side feature-gated read which borrows the existing
 # list_rooms install permission; it is deliberately absent from the CP catalog.
 ZZZ_OPERATIONS = frozenset((*ZZZBOT["operations"], "zzz.pairs", *ZZZ_TEAM_READ_OPERATIONS, *ZZZ_TEAM_WRITE_OPERATIONS))
+# The kismet install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order), and Part 1's
+# public read alone (ov#533), still accepted while the CP catalog serves it. Under 1.0.0 the named operations stay
+# refused (mini_app_not_installed); under 1.1.0 mini-app.read is refused for kismet.
+KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}
+KISMET_PUBLIC = {"version": "1.0.0", "skills": ["kismet"], "operations": ["mini-app.read"]}
+KISMET_OPERATIONS = frozenset(KISMET["operations"])
 SLOPFOLIO = {"version": "1.0.0", "skills": ["slopfolio"], "operations": ["slopfolio.prepare", "slopfolio.status"]}
+# The dreamstarter install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order).
+DREAMSTARTER = {"version": "2.0.0", "skills": ["dreamstarter"], "operations": [
+    "dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare",
+    "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"]}
+DS_OPERATIONS = frozenset(DREAMSTARTER["operations"])
+# The library install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order).
+LIBRARY = {"version": "1.0.0", "skills": ["library"], "operations": [*LIBRARY_READ_OPERATIONS]}
+LIBRARY_OPERATIONS = frozenset(LIBRARY["operations"])
+# The favorloop install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order). No
+# mini-app.read: the generic relay never reaches Favor Loop (installed(home, "favorloop", "mini-app.read") is False).
+FAVORLOOP = {"version": "1.0.0", "skills": ["favorloop"], "operations": [
+    "favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops",
+    "favorloop.answer", "favorloop.confirm", "favorloop.leave"]}
+FAVORLOOP_OPERATIONS = frozenset(FAVORLOOP["operations"])
 # ov#441 S1 (lead RULING CLAIMS L16692, reaffirmed L16696): managed private-pair participation is gated ONLY by a
 # separate cp catalog/allowlist entry, projected in `apps` beside zzzbot and granted per tenant at activation (the
 # Mosaic restricted-entry pattern). Id `zzz-bridge`: cp and app validate app ids with ^[a-z0-9][a-z0-9-]{0,39}$,
@@ -190,7 +236,9 @@ def _card_entry_ok(app) -> bool:
 # refuses per app (ov#455). What stays WHOLE-FILE is the structure: the doc shape, version 1, an app that is not an
 # object or has no string id, a duplicate id, and a reviewed id failing its exact equality (the tamper signal).
 REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": ZZZBOT_ACCEPTED, ZZZ_BRIDGE_ID: (ZZZ_BRIDGE,),
-                    ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,)}
+                    ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,),
+                    "dreamstarter": (DREAMSTARTER,), "kismet": (KISMET, KISMET_PUBLIC),
+                    "library": (LIBRARY,), "favorloop": (FAVORLOOP,)}
 LOGGED_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 LOG = logging.getLogger("village_bridge")
 _REFUSED_LOGGED = set()

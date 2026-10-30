@@ -1,0 +1,4 @@
+{
+  "code": "invalid_arguments",
+  "detail": "limit must be from 1 to 20."
+}

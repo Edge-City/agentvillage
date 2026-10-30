@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "You haven't signed up for Kismet yet. Ask me to sign you up, or take the quiz at https://kismet-village.vercel.app/join."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"not_signed_up\",\"message\":\"You haven't signed up for Kismet yet. Ask me to sign you up, or take the quiz at https://kismet-village.vercel.app/join.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "not_signed_up",
+    "message": "You haven't signed up for Kismet yet. Ask me to sign you up, or take the quiz at https://kismet-village.vercel.app/join."
+  },
+  "isError": true
+}

@@ -1,14 +1,15 @@
 /** Separate, projection-gated no-agent ZZZ event job. No pair-gate dependency. */
-import { chmodSync, constants, lstatSync, mkdirSync, openSync, readFileSync, closeSync, fstatSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants, lstatSync, mkdirSync, openSync, readFileSync, closeSync, fstatSync, rmdirSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
-import { jobApi, jobPython, parseHermesJobs } from "./zzz_managed_job";
+import { jobApi, jobPython, parseHermesJobs, replaceFileNoFollow } from "./zzz_managed_job";
 
 export const AUTONOMY_GATE = "zzz-autonomy-runner";
 export const AUTONOMY_JOB_NAME = "Edge — zzz event autonomy";
 export const AUTONOMY_JOB_SCRIPT = "zzz_autonomy_runner.py";
+// cp#467: the control plane mirrors these receipt paths (mini-apps-skills.js ZZZ_AUTONOMY_FILE_LISTS); change it first.
 export const AUTONOMY_FILES = ["scripts/zzz_autonomy_runner.py", "prompts/autonomy.md"] as const;
 const ID = /^[0-9a-f]{12}$/;
 const TOKEN = /^avb_[A-Za-z0-9_-]{43}$/;
@@ -22,6 +23,11 @@ export const AUTONOMY_SHIPPED = {
     "f25327ecfb2781969d511c23c1c1c4e5e93e829f9abae1384d3b582174b3061e", // ov#528 9d80c106 (the runner PR alone)
     "95b64ed6eef6d42897e7ad4f922266fbbf1320abeaeeee9f28e06ca9a1d51c9c", // + untrusted event_brief + ZZZ 0031 reuse (ov#526)
     "f71f3c5d48c90ca8dcbdfa22a58c945dcf3d6e54640536ca30194722e0d97a32", // + topic tags, only with the app's room_tags (lead L30725)
+    "cd566df9f69d257a4f75e0d59e331902381ff9bb61ed0e2945d1bedf6e7a3f78", // + zzzbot 1.1.0 by the bridge's exact ZZZBOT_ACCEPTED (RUNNER-ZZZBOT-110)
+    "5db8a0da4210b5145b55d713e0a97a5a0627332b1f6728c4bf30261432838e45", // + stdlib-only model route read and a stderr reason line (ov#550 8821169a)
+    "e6edc00f2b8f02ab87787f0592645fa134c6bbfa68de36a349f34c0f6113c498", // + PyYAML first, the stdlib reader only when PyYAML is not importable (review-b ov#550 S1)
+    "06607497360fc59bd9507eccab0a40280a321f9bab6bf6e31e6c574f1dee8ef5", // + provider auto takes config.yaml's own OpenRouter api_key only with the OpenRouter base_url (RUNNER-MODEL-RESOLVE + review-b ov#553 S1, canary aa9a5de3)
+    "0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450", // + ODIN's seat_answer posted as given or silent with no model call (data L32206, context L32211) + resident_brief grounding (lead L32261, data L32263) + one run deadline, context read up to 75 s for the seat hold (review-b S1 on app#932) + brief name/voice may be null (review-b ov#554 S1) + thread_replies grounding (lead L32986) + context reply cap 64 KiB (review-b ov#554 L33044 S1)
   ],
   "prompts/autonomy.md": ["93b8442797de1957ac5e64eb7477e1288601654fdaccb56fc4791f0bfd608587"],
 } as const;
@@ -212,7 +218,7 @@ export function reconcileAutonomyJob(home: string, installed: boolean): void {
   mkdirSync(scripts, {recursive:true,mode:0o700});
   const shim = join(scripts, AUTONOMY_JOB_SCRIPT);
   if (ownedFile(shim, AUTONOMY_FILES[0]) === "not_ours") throw new Error("zzz_autonomy_shim_not_ours");
-  writeFileSync(shim, script, {mode:0o700}); chmodSync(shim,0o700);
+  replaceFileNoFollow(scripts, AUTONOMY_JOB_SCRIPT, script);
   const id = jobs[0]?.id;
   if (id !== undefined && (typeof id !== "string" || !ID.test(id))) throw new Error("zzz_autonomy_job_invalid");
   jobApi(python, home, {action:"install",...(id?{id}:{}),name:AUTONOMY_JOB_NAME,prompt,

@@ -204,13 +204,13 @@ def test_invisible_and_control_characters_and_fences_never_reach_the_prompt(prov
     ("thread", "slack", "primary"), ("something-new", "telegram", "primary"),
     ("", "cron", "cron"), (None, "telegram", "cron"), ("", "api_server", "primary"), ("", "webhook", "primary"),
 ])
-def test_shared_chats_and_cron_get_the_reduced_block_and_no_tools(session, write_profile, vm, chat_type, platform,
-                                                                  agent_context):
+def test_shared_chats_and_cron_get_no_profile_block_and_no_tools(session, write_profile, vm, chat_type, platform,
+                                                                 agent_context):
+    """PRIVACY (lead L32315): the profile holds Private lines with no per-line visibility, so a group, room or
+    cron session gets NO profile block (it used to get a reduced one), as it gets no tools."""
     write_profile()
     p = session(chat_type=chat_type, platform=platform, agent_context=agent_context)
-    block = p.system_prompt_block()
-    assert "courtyard" in block and "lighthouse" not in block and block.endswith(vm.REDUCED_MARKER)
-    assert "`resident_profile`" not in block
+    assert p.system_prompt_block() == ""
     assert p.get_tool_schemas() == []
     for tool in ("resident_profile", "resident_context"):
         result = json.loads(p.handle_tool_call(tool, {"query": "courtyard"}))
