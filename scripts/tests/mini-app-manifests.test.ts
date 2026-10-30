@@ -218,9 +218,9 @@ describe("mini-apps/: the published catalog", () => {
     for (const file of ["mini-apps/catalog.json", ...index.apps.map((id: string) => `mini-apps/${id}/manifest.json`)])
       expect([file, canonical(bytes(file).toString("utf8"))]).toEqual([file, true]);
     const zzz = bytes("mini-apps/zzzbot/manifest.json").toString("utf8");
-    const dup = zzz.replace('  "visibility": "sandbox",\n', '  "visibility": "sandbox",\n  "visibility": "everyone",\n');
+    const dup = zzz.replace('  "visibility": "everyone",\n', '  "visibility": "everyone",\n  "visibility": "sandbox",\n');
     expect(dup).not.toBe(zzz);
-    expect(JSON.parse(dup).visibility).toBe("everyone");
+    expect(JSON.parse(dup).visibility).toBe("sandbox");
     expect(canonical(dup)).toBe(false);
   });
 });
@@ -363,13 +363,13 @@ describe("the validator, fold 2: staff and listed, every endpoint field, linear 
       expect(entry.staff).toBe(true);
       const { staff: _s, ...rest } = entry;
       expect(json(rest)).toBe(json(base));
-      const listed = { ...plain("zzzbot"), listed: false };
+      const listed = { ...plain("zzzbot"), visibility: "sandbox", listed: false };
       expect(reasons(m.validateManifest(listed))).toEqual([]);
       const unlisted = m.v1Entry(listed, opts);
       expect(Object.keys(unlisted).slice(5, 9)).toEqual(["provenance", "auth", "restricted", "listed"]);
       expect(unlisted.listed).toBe(false);
       const { listed: _l, ...kept } = unlisted;
-      expect(json(kept)).toBe(json(m.v1Entry(plain("zzzbot"), opts)));
+      expect(json(kept)).toBe(json(m.v1Entry({ ...plain("zzzbot"), visibility: "sandbox" }, opts)));
       // The box projection is id, version, operations, skills: the installer takes it, and neither mark rides it.
       const projection = { version: 1, apps: [entry, unlisted].map(({ id, version, operations, skills }: any) => ({ id, version, operations, skills })) };
       expect(validateProjection(projection)).toEqual(projection);
