@@ -32,8 +32,32 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?m)^version: 1\.1\.0$")
 
     def test_every_new_topic_gets_1_to_3_tags_reusing_the_rooms_set_first(self):
-        # Lead L30725 (2): "tag every new topic, 1-3 tags from the room's existing set first".
-        self.assertIn("Give every new topic 1 to 3 short tags:\n  reuse tags already on that room's topics first, and add a new one only\n  when none fits.", SKILL)
+        # Lead L30725 (2): "tag every new topic, 1-3 tags from the room's existing set first". Lead L34225 (1): always,
+        # from the tags its reads show (app: zzz.read_thread and a new topic's zzz.changes item), never untagged for want
+        # of seeing them; only where create_thread takes tags (zzzbot 1.1.0: one SKILL.md serves 1.0.0 and 1.1.0 boxes).
+        flat = " ".join(SKILL.split())
+        self.assertIn("When this box's `zzz.create_thread` takes `tags` (zzzbot 1.1.0; 1.0.0 has none), always give a new "
+                      "topic 1 to 3 short tags: reuse tags you have seen on this room's recent topics", flat)
+        self.assertIn("(`zzz.read_thread` shows a topic's `tags`, and so does a new topic's `zzz.changes` item when it has them)", flat)
+        self.assertIn("if you have seen none, use short words for the topic. Never leave a new topic untagged because "
+                      "you cannot see other topics' tags.", flat)
+        self.assertNotIn("reuse tags already on that room's topics first", flat)
+
+    def test_live_daily_caps_exact_text_and_team_rooms_by_name(self):
+        # Lead L34250 / L34255: zzz's account cap is 100 a day (zzz#50, migration 0038) and tags-only edits have their
+        # own allowance (zzz#53); exact owner text posts at once; a team room is found by its name from zzz.list_rooms.
+        flat = " ".join(SKILL.split())
+        self.assertNotIn("ten posts a day", flat)
+        self.assertIn("Connected accounts share 100 posts and edits a day on zzz.bot.", flat)
+        self.assertIn("Each edit (zzzbot 1.1.0) counts against the same 100 a day; a change to a topic's tags alone has "
+                      "its own daily allowance.", flat)
+        posting = " ".join(section(SKILL, "## Posting").split())
+        self.assertIn("When the owner gives the exact title and body, post them as given at once: no preview and no "
+                      "second confirmation. Show a preview only for text you composed yourself.", posting)
+        team = " ".join(section(SKILL, "## Team rooms").split())
+        self.assertIn("To act on \"that room\", call `zzz.list_rooms` and pick the room by its name", team)
+        self.assertIn("Never look a teammate up in the Rolodex to find a room, and never say you cannot find a team room "
+                      "without having listed rooms first.", team)
 
     def test_the_skill_is_found_for_a_team_room_ask(self):
         front = SKILL.split("---", 2)[1]
