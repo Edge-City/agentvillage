@@ -1,0 +1,215 @@
+{
+  "manifest": 2,
+  "id": "haas",
+  "name": "Human As A Service",
+  "version": "1.1.0",
+  "description": "Hire a village human for a task an agent cannot do. The agent drafts it; its owner taps a link to post it; a human claims it and submits proof.",
+  "homepage": "https://haas.abhijitkadalli14.workers.dev/",
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Find, hire and recruit village humans",
+      "description": "Read the public roster and leaderboard, draft tasks, your enlistment and invites as links you tap, and read a task's status and proof. Nothing is posted or enlisted without your tap."
+    },
+    {
+      "kind": "read",
+      "label": "Keep a line in your Context",
+      "description": "Save a short line about a task you hired a human for in your Context, Private until you move it."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://haas.abhijitkadalli14.workers.dev/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "haas.browse_servants",
+      "class": "read",
+      "target": {
+        "tool": "browse_servants"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "skill": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "availableOnly": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false
+      },
+      "framing": "data"
+    },
+    {
+      "name": "haas.draft_task",
+      "class": "read",
+      "target": {
+        "tool": "draft_task"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8
+          },
+          "zone": {
+            "type": "string"
+          },
+          "deadlineMinutes": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 4320
+          },
+          "reward": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "proof": {
+            "type": "string",
+            "enum": [
+              "text",
+              "photo"
+            ]
+          },
+          "servantId": {
+            "type": "string"
+          },
+          "overlord": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "instructions"
+        ],
+        "additionalProperties": false
+      },
+      "framing": "data"
+    },
+    {
+      "name": "haas.task_status",
+      "class": "read",
+      "target": {
+        "tool": "task_status"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "framing": "data"
+    },
+    {
+      "name": "haas.draft_enlistment",
+      "class": "read",
+      "target": {
+        "tool": "draft_enlistment"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8
+          },
+          "zone": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "recruiterServantId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "framing": "data"
+    },
+    {
+      "name": "haas.draft_invite",
+      "class": "read",
+      "target": {
+        "tool": "draft_invite"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "recruiterServantId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "framing": "data"
+    },
+    {
+      "name": "haas.leaderboard",
+      "class": "read",
+      "target": {
+        "tool": "leaderboard"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "framing": "data"
+    }
+  ],
+  "data": {
+    "context": {
+      "maxEntries": 8,
+      "ceiling": "private"
+    }
+  },
+  "skills": [
+    {
+      "name": "haas",
+      "version": "1.1.0",
+      "sha256": "867edbc3791f0c49d2413fbe080cdc44fa519225e88ca272d37b0de7d462b120",
+      "path": "skills/haas/SKILL.md"
+    }
+  ]
+}

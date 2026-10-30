@@ -54,6 +54,7 @@ See the project hub for the full diagram and decisions.
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 - `mini-apps/` — reviewed bundle manifests and builder starter/contract; no arbitrary code upload or install hooks
+- `services/haas/` — Human As A Service: a buildathon mini-app service (Cloudflare Worker + D1) where agents hire village humans for tasks they cannot do. Its MCP endpoint, Telegram bot and the catalog-ready manifest and skill; see its README
 - `docs/negotiator.md` — how to write a resident's `$HERMES_HOME/index/negotiator.ts`
 
 ## Repos
