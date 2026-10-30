@@ -384,7 +384,7 @@ def test_a_pending_opener_holds_the_page_and_the_next_pair_follows_once_it_clear
     assert pass_(plugin, bot, server, now=DAY + 60) == "opener_pending"
     os.rename(nxt, nxt[:-4] + ".done")
     assert pass_(plugin, bot, server, now=DAY + 120) == "sent"
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3 of 6", f"{FU} · Statement 4 of 6"]
+    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3", f"{FU} · Statement 4"]
     # An inject directory that cannot be listed holds too, and says so.
     caplog.set_level(logging.INFO)
     inject = os.path.join(elicit, "av-events", "elicit", "inject")
@@ -413,12 +413,12 @@ def test_start_sends_a_labelled_header_and_the_first_pair_of_the_files_statement
     write_trigger(elicit, ids=["s005", "s002", "s003"])  # the read's order wins; s001, s004, s006 are never shown
     assert pass_(plugin, bot, server) == "sent"
     header, *cards = bot.sent
-    assert first_line(header) == f"{FU}: 3 constitution statements to rate (optional)"
+    assert first_line(header) == f"{FU}: constitution statements to rate (optional)"
     assert "separate from the official constitution ballot" in header.text and "Tap again to change a rating" in header.text
     assert "5  Strongly support inclusion" in header.text and "Open until 10:30 IST, Sun 25 Oct." in header.text
     assert "Submit" not in header.text and "remind" not in header.text.lower()
     assert [[b.text for b in row] for row in header.reply_markup.inline_keyboard] == [["Stop these cards"]]
-    assert [first_line(c) for c in cards] == [f"{FU} · Statement 1 of 3", f"{FU} · Statement 2 of 3"]
+    assert [first_line(c) for c in cards] == [f"{FU} · Statement 1", f"{FU} · Statement 2"]
     assert f"{TEXT} s002" in cards[0].text and f"{TEXT} s003" in cards[1].text
     assert "odin" not in cards[0].text.lower() and "agent" not in cards[0].text.lower()
     assert [b.text for b in cards[0].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
@@ -445,7 +445,7 @@ def test_taps_post_one_rating_advance_and_revisions_still_save_after_all_are_rat
     assert q.answers == ["Saved: Oppose inclusion (changed)"]
     tap(plugin, server, second, 5)
     third = bot.cards()[2]
-    assert first_line(third) == f"{FU} · Statement 3 of 3"
+    assert first_line(third) == f"{FU} · Statement 3"
     tap(plugin, server, third, 1)
     assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated. Thank you: your ratings are saved.")
     assert "change a rating until 10:30 IST, Sun 25 Oct." in bot.sent[-1].text
@@ -503,7 +503,7 @@ def test_an_unknown_statement_drops_only_that_card(plugin, elicit):
     assert tap(plugin, server, second, data=again).answers == ["This statement is no longer available."]
     assert len(server.calls) == calls  # no call for a dropped card
     tap(plugin, server, first, 5)  # the pair needs nothing more: the next pair goes
-    assert [first_line(c) for c in bot.cards()[-2:]] == [f"{FU} · Statement 3 of 4", f"{FU} · Statement 4 of 4"]
+    assert [first_line(c) for c in bot.cards()[-2:]] == [f"{FU} · Statement 3", f"{FU} · Statement 4"]
     for card in bot.cards()[-2:]:
         tap(plugin, server, card, 1)
     assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated.")
@@ -518,7 +518,7 @@ def test_a_statement_the_read_no_longer_returns_is_dropped(plugin, elicit):
     server.order.remove("s004")
     tap(plugin, server, first, 2)
     tap(plugin, server, second, 2)
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3 of 4"]
+    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3"]
     assert ledger(elicit)["session"]["dropped"] == [3]
     tap(plugin, server, bot.cards()[2], 2)
     assert ledger(elicit)["session"]["status"] == "done"

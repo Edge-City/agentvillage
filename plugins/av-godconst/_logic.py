@@ -348,9 +348,11 @@ def valid_cards(data: Any, statement_ids: Iterable) -> Optional[list]:
 FOLLOW_UP = "Follow-up (not your ballot)"
 
 
-def elicit_header_text(n: int, expires_at: Optional[float]) -> str:
+# The follow-up cards never say how many statements there are: the whole pool is offered and the resident rates as
+# many as they like, so a total reads as a chore (app's v5 pilot, 30 Oct 2026).
+def elicit_header_text(expires_at: Optional[float]) -> str:
     lines = [
-        f"{FOLLOW_UP}: {n} constitution statements to rate (optional)",
+        f"{FOLLOW_UP}: constitution statements to rate (optional)",
         "",
         "A research follow-up, separate from the official constitution ballot: these ratings do not change any ballot.",
         "",
@@ -367,8 +369,8 @@ def elicit_header_text(n: int, expires_at: Optional[float]) -> str:
     return _esc(lines)
 
 
-def elicit_card_text(position: int, n: int, text: str) -> str:
-    return _esc([f"{FOLLOW_UP} · Statement {position + 1} of {n}", "", text, "",
+def elicit_card_text(position: int, text: str) -> str:
+    return _esc([f"{FOLLOW_UP} · Statement {position + 1}", "", text, "",
                  "1 strongly oppose inclusion · 3 neutral · 5 strongly support inclusion"])
 
 
