@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"story\":\"Asha started as a schoolteacher, spent two years building a reading app on weekends, and now runs a small studio making learning tools for rural schools.\",\"facts\":[{\"text\":\"Taught middle-school science for six years before building software\",\"sourceUrl\":\"https://asha.example/about\"},{\"text\":\"Launched a free offline reading app used in village schools\",\"sourceUrl\":\"https://asha.example/projects/reader\"}],\"recentWork\":[{\"title\":\"Why offline-first matters in rural classrooms (talk)\",\"url\":\"https://talks.example/asha-offline-first\",\"date\":\"2026-10-12\"}],\"questions\":[\"What were you doing right before you started building the reading app?\",\"What was the moment you decided to leave teaching?\",\"What did the in-between years feel like, day to day?\",\"Who helped you most when it was uncertain?\",\"What did you have to unlearn as a teacher turned builder?\",\"What would you tell a teacher thinking about building something?\",\"What are you still figuring out today?\",\"What question do you wish people asked you more?\"],\"limited\":false,\"sources\":[\"https://asha.example/about\",\"https://asha.example/projects/reader\",\"https://talks.example/asha-offline-first\"]}"
+    }
+  ]
+}

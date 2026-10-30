@@ -1,0 +1,124 @@
+{
+  "manifest": 2,
+  "id": "green-room",
+  "name": "Green Room",
+  "version": "1.0.0",
+  "description": "A booking desk for creators. Researches a possible podcast or video guest from their public name and public links, and returns their story, sourced facts and interview questions.",
+  "homepage": "https://green-room-eta.vercel.app/",
+  "owner": {
+    "github": "Varun-2538"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Research a guest from public links",
+      "description": "Sends only the public name, public links and episode topic you choose to Green Room (hosted on Vercel), which reads public web pages with TinyFish and summarises them with an open model on Groq. No identity, accounts, profiles, messages or purchases; nothing is stored."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://green-room-eta.vercel.app/api/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "green-room.read",
+      "class": "read",
+      "target": {
+        "tool": "guest_brief"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "The guest's public name"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "format": "uri"
+            },
+            "description": "Up to 5 public https links from the guest's Rolodex profile"
+          },
+          "topic": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The episode topic"
+          }
+        },
+        "required": [
+          "name",
+          "links",
+          "topic"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 131072,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "green-room.questions",
+      "class": "read",
+      "target": {
+        "tool": "episode_questions"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "The guest's public name"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "format": "uri"
+            },
+            "description": "Up to 5 public https links from the guest's Rolodex profile"
+          },
+          "topic": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The episode topic"
+          }
+        },
+        "required": [
+          "name",
+          "links",
+          "topic"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 131072,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "green-room",
+      "version": "1.0.0",
+      "sha256": "336a6f11fa287c474fc009cac1a2b57e2db0a8abc948117415ffbad71ce2ea3b",
+      "path": "skills/green-room/SKILL.md"
+    }
+  ]
+}
