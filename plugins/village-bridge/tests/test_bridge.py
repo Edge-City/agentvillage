@@ -1887,6 +1887,22 @@ class BridgeTest(unittest.TestCase):
    answer=self.call(self.SCHEDULE_SET)
    self.assertEqual(answer['data'],ok)
    self.assertEqual(answer['handling'],bridge.ZZZ_HANDLING)
+ def test_schedule_set_while_paused_passes_through_on_the_success_path(self):
+  # Fold 1 (lead L36260, app#1076 824a46b8): a set while the owner's own Pause is on is saved and answers 200 with
+  # paused:true and notice zzz_schedule_paused. It is a success, never an error: the bridge frames it as data, with
+  # paused and notice intact, and nothing is retried (one send).
+  self.zzz_home()
+  paused={'schedule':{'every_minutes':60,'about':'fixture garden updates','until':None},
+          'pace':{'new_topic_interval_minutes':60,'daily_budget':24},'paused':True,'notice':'zzz_schedule_paused'}
+  normal={**paused,'paused':False};del normal['notice']
+  with self.gate():
+   for answer in (paused,normal):
+    with self.subTest(paused=answer['paused']):
+     self.transport.reset_mock();self.transport.return_value=answer
+     result=self.call(self.SCHEDULE_SET)
+     self.assertEqual(result,{'data':answer,'handling':bridge.ZZZ_HANDLING})
+     self.assertNotIn('error',result);self.assertEqual(self.transport.call_count,1)
+  self.assertNotIn('zzz_schedule_paused',bridge.ZZZ_ERRORS);self.assertNotIn('zzz_schedule_paused',bridge.ZZZ_SCHEDULE_ERRORS)
  def test_schedule_is_refused_in_a_cron_or_managed_run(self):
   self.zzz_home()
   with self.gate(),patch.object(bridge,'bound_context',side_effect=ValueError('private_owner_chat_required')):
