@@ -1,0 +1,198 @@
+{
+  "manifest": 2,
+  "id": "flo",
+  "name": "Flo by Unwindflow",
+  "version": "1.0.0",
+  "description": "Small, research-informed resets for how you feel, what you're in the middle of and thought loops, plus a Feeling Finder for when you can't name a feeling. Read only: Flo has no accounts, never sees who you are and keeps only anonymous usage counts. Educational and awareness purposes only, not medical advice.",
+  "homepage": "https://unwindflow.com/",
+  "owner": {
+    "github": "VineethaDonga",
+    "org": "Unwindflow"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Get a reset from Flo's library",
+      "description": "Your agent looks up a mood, moment or thought loop in Flo's public library and gets one small step with a short reason why. No account, profile or purchase, and nothing about you is sent."
+    },
+    {
+      "kind": "read",
+      "label": "Find a word for a feeling",
+      "description": "When you can't name a feeling, your agent sends Flo where you notice it in your body, your energy and whether it's pleasant, or a short description in your words, and gets back feeling words and a matching step. Flo never stores or logs your words."
+    },
+    {
+      "kind": "read",
+      "label": "Anonymous usage counts",
+      "description": "Flo keeps a daily count of which tool and which topic (for example the mood id) was used, with the date. It never keeps your words, your name or who asked, and counts are deleted after 12 months."
+    },
+    {
+      "kind": "read",
+      "label": "Keep what helped in your Context",
+      "description": "Only when you ask, your agent saves a short line about a reset that helped in your Context, Private until you move it."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://unwindflow--f3899312d47911f188401607ee4eb77e.web.val.run/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "flo.list_options",
+      "class": "read",
+      "target": {
+        "tool": "list_options"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mood",
+              "moment",
+              "perspective"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "flo.get_tip",
+      "class": "read",
+      "target": {
+        "tool": "get_tip"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "wait",
+              "stuck",
+              "scattered",
+              "wired",
+              "pitch",
+              "shipped",
+              "offline",
+              "anxious",
+              "stressed",
+              "overwhelmed",
+              "frustrated",
+              "sad",
+              "low",
+              "tired",
+              "doubt",
+              "lonely",
+              "restless",
+              "guilty",
+              "good",
+              "urgency",
+              "wanting",
+              "comparing",
+              "decide",
+              "why",
+              "perfect",
+              "loop"
+            ]
+          },
+          "variant": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "flo.feeling_finder",
+      "class": "read",
+      "target": {
+        "tool": "feeling_finder"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "enum": [
+              "chest",
+              "throat",
+              "stomach",
+              "head",
+              "shoulders",
+              "all",
+              "none"
+            ]
+          },
+          "energy": {
+            "type": "string",
+            "enum": [
+              "high",
+              "low",
+              "unsure"
+            ]
+          },
+          "pleasant": {
+            "type": "string",
+            "enum": [
+              "bad",
+              "good",
+              "unsure"
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "energy",
+          "pleasant"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "flo.match_feeling",
+      "class": "read",
+      "target": {
+        "tool": "match_feeling"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "data": {
+    "context": {
+      "maxEntries": 6,
+      "ceiling": "private"
+    }
+  },
+  "skills": [
+    {
+      "name": "flo",
+      "version": "1.0.0",
+      "sha256": "4ab5e77ffa44ec3248ea5b05e908de57325a35c0f5999a963fff6c6e8a3a018b",
+      "path": "skills/flo/SKILL.md"
+    }
+  ]
+}
