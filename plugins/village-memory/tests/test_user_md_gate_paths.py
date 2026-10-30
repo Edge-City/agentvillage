@@ -149,7 +149,7 @@ def test_a_group_memory_result_leaves_private_entries_out(gate, group_session):
     assert out["matches"] == []
     assert out["replaced_entry"] == out["removed_entry"] == gate.LEFT_OUT
     assert out["replaced_entries"] == {"1": gate.LEFT_OUT, "2": NOTE}
-    assert out["usage"] == "12%"
+    assert "usage" not in out  # no size figure outside a private session (review-b ov#565 S1-r4 (a))
     assert "kelp" not in json.dumps(out) and "ballot" not in json.dumps(out)
 
 
@@ -354,10 +354,10 @@ def test_a_group_result_is_the_same_for_a_right_and_a_wrong_guess(gate_copy, gro
         out = gate_copy.transform_memory_result(tool_name="memory", args=args, result=raw, session_id="tg-group")
         answers.append(None if out is None else out.replace(guess, "<guess>"))
     assert answers[0] == answers[1]
-    if not gate_copy.adds_only(args):
+    if '"usage"' not in raw and '"entry_count"' not in raw and "already exists" not in raw and not re.search(r"\d/\d", raw):
         assert answers == [None, None]
-    elif answers[0] is not None:
-        assert '"usage"' not in answers[0] and '"entry_count"' not in answers[0]
+    else:
+        assert answers[0] is not None and '"usage"' not in answers[0] and '"entry_count"' not in answers[0]
         assert "already exists" not in answers[0] and not re.search(r"\d/\d", answers[0])
 
 
@@ -733,7 +733,12 @@ class FakeMemoryTool:
         if action == "add":
             return json.dumps(self._add(target, (content or "").strip()), ensure_ascii=False)
         if action in ("replace", "remove"):
-            if not (old_text or "").strip():
+            if not old_text:  # tools/memory_tool.py `_validate_single_op`: the inventory and its usage
+                return json.dumps({"success": False, "error": f"'{action}' needs old_text. Reissue it with old_text set "
+                                                             "to part of one of the current_entries below.",
+                                   "current_entries": list(self.entries[target]), "usage": self._usage(target)},
+                                  ensure_ascii=False)
+            if not old_text.strip():
                 return json.dumps({"success": False, "error": "old_text cannot be empty."})
             if action == "replace" and not (content or "").strip():
                 return json.dumps({"success": False, "error": "new_content cannot be empty. Use 'remove' to delete entries."})
@@ -877,6 +882,19 @@ MATRIX = {
         {"action": "add", "target": "user", "content": g}]}, {"action": "remove", "old_text": NO_SUCH}],
     "add-user-whole-marked-entry": lambda g: [{"action": "add", "target": "user", "content": f"{SETUP_MARK}\n{g}"}],
     "add-memory-whole-marked-entry": lambda g: [{"action": "add", "target": "memory", "content": f"{SETUP_MARK}\n{g}"}],
+    # ROUND 4 (a) widened: after an add, no later result shows by a size figure whether Hermes deduped it.
+    "add-user-then-view": lambda g: [{"action": "add", "target": "user", "content": g}, {"action": "view", "target": "user"}],
+    "add-user-then-search": lambda g: [{"action": "add", "target": "user", "content": g},
+                                       {"action": "search", "target": "memory", "content": g}],
+    "add-user-then-missing-old_text": lambda g: [{"action": "add", "target": "user", "content": g},
+                                                 {"action": "replace", "target": "memory", "content": "Likes kites a lot."}],
+    "add-memory-then-view": lambda g: [{"action": "add", "target": "memory", "content": g},
+                                       {"action": "view", "target": "memory"}],
+    "add-memory-then-missing-old_text": lambda g: [{"action": "add", "target": "memory", "content": g},
+                                                   {"action": "remove", "target": "memory"}],
+    "add-whole-dm-entry-then-missing-old_text": lambda g: [
+        {"action": "add", "target": "memory", "content": f"{g}\n{DM_ONLY}"},
+        {"action": "replace", "target": "memory", "content": "Likes kites a lot."}],
     "batch-user-marked-add": lambda g: [{"target": "user", "operations": [
         {"action": "add", "content": "Likes kites a lot."}, {"action": "add", "new_text": f"{SETUP_MARK}\n{g}"}]}],
 }
@@ -884,6 +902,8 @@ MATRIX = {
 MARKED = {"add-user-whole-marked-entry", "add-memory-whole-marked-entry", "batch-user-marked-add"}
 REFUSED = {"replace-user", "remove-user", "batch-user", "add-shape-batch-user", "batch-op-memory-call-user",
            "batch-memory-op-user"} | MARKED
+#: The shapes whose own call carries the DM-only line (a guess of the whole DM-made entry): it may show there.
+CARRIES_DM_ONLY = {"add-whole-dm-entry-then-missing-old_text"}
 
 
 def _run(gate_mod, session_id, calls, store):
@@ -952,7 +972,8 @@ def test_the_oracle_matrix_a_right_guess_gets_what_a_wrong_one_gets(gate_copy, o
         assert first[1] == {"action": "block", "message": MARK_REFUSAL_TEXT if shape in MARKED else REFUSAL_TEXT}
     for transcript in (right, wrong):
         assert "kelp sensors for the harbour" not in transcript and "Tidepool" not in transcript
-        assert "lighthouse" not in transcript and "already exists" not in transcript
+        assert ("lighthouse" not in transcript or shape in CARRIES_DM_ONLY) and "already exists" not in transcript
+        assert '\\"usage\\"' not in transcript and "entry_count" not in transcript  # escaped: results are JSON in JSON
 
 
 def test_seeds_b_and_c_are_not_vacuous(gate, group_session, monkeypatch):
@@ -1047,6 +1068,27 @@ def test_the_restart_residual_a_groups_own_right_guess_is_hidden_again_after_a_r
                         guess in json.dumps(after, ensure_ascii=False), guess in after_prompt)
     assert reads[WRONG_GUESS] == (True, True, True, True)
     assert reads[RIGHT_GUESS] == (True, True, False, False)
+
+
+def test_a_whole_entry_the_call_itself_names_is_its_own(gate_copy, group_session):
+    """The own-call exemption, whole entry (review-b ov#565 S1-r4 (b)): after a restart (the self-written
+    record gone) a group that removes its own earlier note by naming the whole of it gets the entry back in
+    `removed_entry` for a right guess as for a wrong one; a DM-made entry that only HOLDS the named line
+    beside other text stays out of the inventory."""
+    replies = []
+    for guess in (RIGHT_GUESS, WRONG_GUESS):
+        gate_copy._gate_reset_for_tests()
+        gate_copy.shared_user_block(user_block(SETUP, NOTE))
+        store = FakeMemoryTool([SETUP, NOTE], ["Likes kites.", f"{RIGHT_GUESS}\n{DM_ONLY}"])
+        _run(gate_copy, "tg-group", [{"action": "add", "target": "memory", "content": guess}], store)
+        gate_copy._self_written_digests().clear()  # the restart
+        seen, _ = _run(gate_copy, "tg-group", [{"action": "remove", "target": "memory", "old_text": guess},
+                                               {"action": "remove", "target": "memory", "old_text": NO_SUCH}], store)
+        replies.append(json.dumps(seen, ensure_ascii=False).replace(guess, "<guess>"))
+    assert replies[0] == replies[1]
+    removed, missing = json.loads(replies[0])
+    assert json.loads(removed[1])["removed_entry"] == "<guess>"
+    assert json.loads(missing[1])["current_entries"] == ["Likes kites."]
 
 
 def test_only_an_allowed_non_private_write_of_a_fingerprinted_line_is_recorded(gate, group_session, monkeypatch):

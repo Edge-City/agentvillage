@@ -60,9 +60,10 @@ plugins/village-memory/
     `removed_entry`, `replaced_entries`, ...), USER.md and MEMORY.md alike, by marks and fingerprints,
     except a self-written entry (below), and makes an add's reply the same whether or not Hermes found
     the text already stored (ov#565 S1-r4 (a)): "Entry already exists (no duplicate added)." reads
-    "Entry added.", and `usage`, `entry_count` and the current char count in an over-limit error are
-    left out of an add or a batch of adds (dropped, not set to a constant: no figure is better than a
-    wrong one). A call whose target is unknown counts as USER.md. A DM keeps
+    "Entry added.", and `usage`, `entry_count` and the current char count in Hermes's text are left out
+    of every result, so no later result shows by the store's size whether an add was deduped (dropped,
+    not set to a constant: no figure is better than a wrong one; only Hermes's ACP display shows them,
+    and only when present). A call whose target is unknown counts as USER.md. A DM keeps
     Hermes's own tool. "Private" needs positive evidence: a direct chat type or an explicit local surface
     from Hermes's session context, else Hermes's own session row for the session id; empty or unknown
     (`thread`, `forum`, `supergroup`, anything else) is not private, and cron never is.

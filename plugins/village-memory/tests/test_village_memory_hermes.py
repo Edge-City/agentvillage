@@ -386,7 +386,8 @@ def test_real_hermes_oracle_matrix_and_the_self_written_exemption(tmp_path, h):
                 assert seen[0][0] == ("blocked" if shape in paths.REFUSED else "ran"), (seed, kind, shape)
                 for r in runs:
                     assert "kelp sensors for the Goa" not in r and "Tidepool" not in r.replace("<guess>", ""), (seed, kind, shape)
-                    assert "lighthouse" not in r and "already exists" not in r, (seed, kind, shape)
+                    assert "lighthouse" not in r or shape in paths.CARRIES_DM_ONLY, (seed, kind, shape)
+                    assert "already exists" not in r and '\\"usage\\"' not in r and "entry_count" not in r, (seed, kind, shape)
             # the read-backs are not vacuous: the group's own line comes back on both stores and in the prompt
             assert "<guess>" in json.dumps(json.loads(json.loads(shapes["read-back-memory"][0])[0][-1][1])["current_entries"])
             assert "<guess>" in json.dumps(json.loads(json.loads(shapes["over-limit-user"][0])[0][-1][1])["current_entries"])

@@ -67,8 +67,9 @@ from typing import Any, List, Optional
 # - Adds answer alike (review-b ov#565 S1-r4 (a)): outside a private session an add (or a batch of adds)
 #   gets the same reply whether or not Hermes found the text already stored: "Entry already exists (no
 #   duplicate added)." reads "Entry added.", and the size figures (`usage`, `entry_count`, and the
-#   current char count in an over-limit error) are left out of the result (`uniform_add_result`); the
-#   USER.md prompt header outside a private session counts only the entries it shows.
+#   current char count in an error) are left out of EVERY memory-tool result there (`uniform_result`), so
+#   no later result shows whether an earlier add was deduped; the USER.md prompt header outside a private
+#   session counts only the entries it shows.
 # Standard library only; logs carry codes, never text.
 
 GATE_LOGGER = logging.getLogger("av-user-md-gate")
@@ -617,16 +618,15 @@ def transform_memory_result(tool_name: Any = None, result: Any = None, session_i
         out = redact_memory_result(result, call_entry_digests(args), call_own_texts(args), written_store(args))
         if out is not None:
             _gate_log_once("user_gate:memory_result", "USER.md gate: private entries left out of a memory result")
-        if isinstance(args, dict) and adds_only(args):
-            uniform = uniform_add_result(result if out is None else out)
-            out = out if uniform is None else uniform
+        uniform = uniform_result(result if out is None else out)
+        out = out if uniform is None else uniform
         return out
     except Exception:  # noqa: BLE001 - fail closed
         return json.dumps({"success": False, "error": LEFT_OUT}, ensure_ascii=False)
 
 
 def _uniform(value: Any) -> Any:
-    """Hermes's own text and fields of an add result made alike; a stored entry (ENTRY_RESULT_KEYS) kept."""
+    """Hermes's own text and fields of a result made alike; a stored entry (ENTRY_RESULT_KEYS) kept."""
     if isinstance(value, str):
         return ADD_MESSAGE if value == ADD_DEDUPE_MESSAGE else CHAR_COUNT_FIGURE.sub(r"its \1-char limit", value)
     if isinstance(value, list):
@@ -636,12 +636,13 @@ def _uniform(value: Any) -> Any:
     return value
 
 
-def uniform_add_result(result: Any) -> Optional[str]:
-    """An add's (or a batch of adds') result as it reads outside a private session, or None when that is
-    the result as it is (review-b ov#565 S1-r4 (a)): Hermes's "Entry already exists (no duplicate added)."
-    reads "Entry added.", and `usage`, `entry_count` and the current char count of an over-limit error
-    are left out, at every level, so a deduped add and a fresh one answer alike (the text the call
-    supplied aside). A result that is not JSON is left as it is (Hermes always answers JSON)."""
+def uniform_result(result: Any) -> Optional[str]:
+    """A memory-tool result as it reads outside a private session, or None when that is the result as it is
+    (review-b ov#565 S1-r4 (a)): Hermes's "Entry already exists (no duplicate added)." reads "Entry
+    added.", and `usage`, `entry_count` and the current char count in Hermes's text are left out, at every
+    level and on every result (dropped: only Hermes's ACP display shows them, and only when present), so
+    a deduped add and a fresh one answer alike, and no later result tells them apart by the store's size.
+    A result that is not JSON is left as it is (Hermes always answers JSON)."""
     if not isinstance(result, str):
         return None
     try:
