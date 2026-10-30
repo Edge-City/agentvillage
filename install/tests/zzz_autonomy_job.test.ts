@@ -295,3 +295,130 @@ test("teardown removes a FIFO (or any non-regular file) at the runner's state na
   expect(existsSync(join(home,"village-bridge.json"))).toBe(true);
   expect(stage([zzzbot],["--verify"]).status).toBe(0);
 });
+
+// v2.2.0 item 4 (lead L35683; release L34199 (c)): a box with no village-bridge.json (the cp issues it only once an app
+// is active, after a good stage) stages the runner job DEFERRED, never failed, so the stage settles and the credential can
+// issue; the next stage after it lands installs the job. The receipt is the same bytes either way (no new code).
+test("no village-bridge.json: the runner job is deferred, the stage and receipt are unchanged, the bridge's arrival installs it",()=>{
+  const withBridge=box();
+  const reference=withBridge.stage([zzzbot,pair,autonomy]);
+  expect(reference.status).toBe(0);
+  const {home,stage,jobs}=box();
+  const bridge=join(home,"village-bridge.json"), saved=readFileSync(bridge);
+  unlinkSync(bridge);
+  const first=stage([zzzbot,pair,autonomy]);
+  expect(first.status).toBe(0);
+  // The receipt the cp checks is byte for byte the one a box with its credential writes (files list the runner's
+  // skill copies, which are staged), so the cp settles applied and last_good as for any good stage.
+  expect(first.stdout).toBe(reference.stdout);
+  expect(JSON.parse(readFileSync(join(home,"mini-apps.json"),"utf8")).apps.map((app:{id:string})=>app.id))
+    .toEqual(["zzzbot","zzz-bridge",AUTONOMY_GATE]);
+  // The pair job installs as before; no autonomy job and no shim.
+  expect(jobs().map(job=>job.name)).toEqual(["Edge — zzz pairs"]);
+  expect(existsSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toBe(false);
+  for (const relative of AUTONOMY_FILES) expect(existsSync(join(home,"skills/zzzbot",relative))).toBe(true);
+  expect(existsSync(bridge)).toBe(false);
+  expect(stage([zzzbot,pair,autonomy],["--verify"]).status).toBe(0);
+  // A re-run is idempotent: the same receipt, the same job store bytes.
+  const store=readFileSync(join(home,"cron/jobs.json"));
+  const again=stage([zzzbot,pair,autonomy]);
+  expect(again.status).toBe(0);
+  expect(again.stdout).toBe(reference.stdout);
+  expect(readFileSync(join(home,"cron/jobs.json")).equals(store)).toBe(true);
+  expect(stage([zzzbot,pair,autonomy],["--verify"]).status).toBe(0);
+  // The credential lands: the read-back no longer passes (the job is now due), and the next stage installs it.
+  writeFileSync(bridge,saved);
+  expect(stage([zzzbot,pair,autonomy],["--verify"]).status).toBe(1);
+  const installed=stage([zzzbot,pair,autonomy]);
+  expect(installed.status).toBe(0);
+  expect(installed.stdout).toBe(reference.stdout);
+  expect(jobs().map(job=>job.name).sort()).toEqual([AUTONOMY_JOB_NAME,"Edge — zzz pairs"]);
+  expect(jobs().find(job=>job.name===AUTONOMY_JOB_NAME)).toMatchObject({script:AUTONOMY_JOB_SCRIPT,
+    schedule:{kind:"cron",expr:autonomySchedule(token)}});
+  expect(readFileSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toEqual(readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)));
+  expect(stage([zzzbot,pair,autonomy],["--verify"]).status).toBe(0);
+  // Then as any box with its credential: the same job store as the reference box, and a re-run keeps one job.
+  expect(JSON.stringify(jobs().map(({id:_,...job})=>job))).toBe(JSON.stringify(withBridge.jobs().map(({id:_,...job})=>job)));
+  expect(stage([zzzbot,pair,autonomy]).status).toBe(0);
+  expect(jobs().filter(job=>job.name===AUTONOMY_JOB_NAME)).toHaveLength(1);
+}, 60_000);
+
+test("a deferred stage with no autonomy job makes no Hermes call",()=>{
+  const {home,stage}=box();
+  unlinkSync(join(home,"village-bridge.json"));
+  const failing=join(home,"bin","fail-hermes");
+  writeFileSync(failing,"#!/usr/bin/env bash\nexit 1\n");chmodSync(failing,0o755);
+  expect(stage([zzzbot,autonomy],[],{HERMES_BIN:failing}).status).toBe(0);
+  expect(existsSync(join(home,"cron/jobs.json"))).toBe(false);
+  expect(stage([zzzbot,autonomy],["--verify"],{HERMES_BIN:failing}).status).toBe(0);
+  expect(stage([zzzbot,autonomy],[],{HERMES_BIN:failing}).status).toBe(0);
+}, 60_000);
+
+test("the credential removed after the job is installed: the next stage removes the job and shim, keeps the files",()=>{
+  const {home,stage,jobs}=box();
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
+  const bridge=join(home,"village-bridge.json"), saved=readFileSync(bridge);
+  unlinkSync(bridge);
+  // The job left in place is not the deferred state: the read-back fails until a stage removes it.
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs()).toEqual([]);
+  expect(existsSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toBe(false);
+  for (const relative of AUTONOMY_FILES) expect(existsSync(join(home,"skills/zzzbot",relative))).toBe(true);
+  expect(autonomyMarkers(home)).toBe(true);
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  // A stale shim alone (no job) is not the deferred state either; the next stage removes it.
+  writeFileSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT),readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)),{mode:0o700});
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(existsSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toBe(false);
+  // Gate removed while deferred: the teardown removes the files, as for any box.
+  expect(stage([zzzbot]).status).toBe(0);
+  for (const relative of AUTONOMY_FILES) expect(existsSync(join(home,"skills/zzzbot",relative))).toBe(false);
+  expect(autonomyMarkers(home)).toBe(false);
+  expect(stage([zzzbot],["--verify"]).status).toBe(0);
+  // And back on with the credential: installed in one stage.
+  writeFileSync(bridge,saved);
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
+}, 60_000);
+
+test("a deferred stage whose stale job cannot be removed fails closed and the next stage finishes it",()=>{
+  const {home,stage,jobs}=box();
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  unlinkSync(join(home,"village-bridge.json"));
+  const failing=join(home,"bin","fail-hermes");
+  writeFileSync(failing,"#!/usr/bin/env bash\nexit 1\n");chmodSync(failing,0o755);
+  expect(stage([zzzbot,autonomy],[],{HERMES_BIN:failing}).status).toBe(1);
+  // As any failed stage: the gate is withdrawn, the inert job stays a marker with its files.
+  expect(JSON.parse(readFileSync(join(home,"mini-apps.json"),"utf8")).apps.map((app:{id:string})=>app.id)).toEqual(["zzzbot"]);
+  expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
+  expect(autonomyMarkers(home)).toBe(true);
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs()).toEqual([]);
+  expect(JSON.parse(readFileSync(join(home,"mini-apps.json"),"utf8")).apps.map((app:{id:string})=>app.id)).toEqual(["zzzbot",AUTONOMY_GATE]);
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+}, 60_000);
+
+test("only an ABSENT credential defers: anything else at village-bridge.json still fails the stage closed",()=>{
+  const cases: Array<[string,(path:string,home:string)=>void]>=[
+    ["dangling symlink",(path,home)=>symlinkSync(join(home,"no-such-credential"),path)],
+    ["symlink to a good file",(path,home)=>{writeFileSync(join(home,"elsewhere.json"),JSON.stringify({origin:"https://agents.edgecity.live",token,expiresAt:"2099-01-01T00:00:00Z"}));symlinkSync(join(home,"elsewhere.json"),path);}],
+    ["directory",path=>mkdirSync(path)],
+    ["not JSON",path=>writeFileSync(path,"{")],
+    ["bad token",path=>writeFileSync(path,JSON.stringify({origin:"https://agents.edgecity.live",token:"avb_short",expiresAt:"2099-01-01T00:00:00Z"}))],
+    ["oversize",path=>writeFileSync(path," ".repeat(2049))],
+  ];
+  for (const [,plant] of cases) {
+    const {home,stage}=box();
+    const bridge=join(home,"village-bridge.json");
+    unlinkSync(bridge);
+    plant(bridge,home);
+    expect(stage([zzzbot,autonomy]).status).toBe(1);
+    // What the failure leaves: the gate withdrawn (failClosedAutonomy), no job, no shim, zzzbot still published.
+    expect(JSON.parse(readFileSync(join(home,"mini-apps.json"),"utf8")).apps.map((app:{id:string})=>app.id)).toEqual(["zzzbot"]);
+    expect(existsSync(join(home,"cron/jobs.json"))).toBe(false);
+    expect(existsSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toBe(false);
+  }
+}, 60_000);

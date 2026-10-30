@@ -142,6 +142,21 @@ export function autonomySchedule(token: string): string {
   return `${phase}-59/5 * * * *`;
 }
 
+/**
+ * v2.2.0 item 4 (lead L35683; release L34172/L34181/L34199 (c)): the runner job's schedule is the bridge token's
+ * phase, and the cp issues village-bridge.json only to a box with an ACTIVE app (village-bridge.js, 409
+ * village_apps_not_active), which needs a good stage first. So a box with NOTHING at village-bridge.json (lstat ENOENT,
+ * not even a dangling link) stages the runner job DEFERRED: no job and no shim (one left by an earlier stage is removed,
+ * as on teardown), while the gate and the runner's skill files stage as usual, so the receipt is the same bytes and the
+ * other apps apply. The next stage after the credential lands installs the job; verify accepts exactly that deferred
+ * state while the file is absent. Anything else at that name (a symlink, a non-file, oversize, unreadable, bad JSON or
+ * a bad token) still throws, as before: no new leniency for a bad credential.
+ */
+export function autonomyBridgeAbsent(home: string): boolean {
+  try { lstatSync(join(home, "village-bridge.json")); return false; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
+}
+
 function bridgeToken(home: string): string {
   const path = join(home, "village-bridge.json");
   const meta = lstatSync(path);
@@ -174,7 +189,8 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
   const jobs = store(home).jobs;
   const dir = realDir(home, "scripts");
   const shim = dir ? join(dir, AUTONOMY_JOB_SCRIPT) : null;
-  if (!installed) {
+  // Deferred (no village-bridge.json): exactly the teardown's end state, no job and no shim of ours.
+  if (!installed || autonomyBridgeAbsent(home)) {
     if (jobs.length || (shim && ownedFile(shim, AUTONOMY_FILES[0]) === "ours")) throw new Error("zzz_autonomy_removal_pending");
     return;
   }
@@ -186,7 +202,8 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
 
 export function reconcileAutonomyJob(home: string, installed: boolean): void {
   const current = store(home), jobs=current.jobs;
-  if (!installed) {
+  // Deferred (autonomyBridgeAbsent): the teardown below, so no job runs without its credential; the files stay staged.
+  if (!installed || autonomyBridgeAbsent(home)) {
     if (jobs.length) {
       const bin = hermesBin();
       if (!hermesAvailable(bin, 15000, hermesExecEnv())) throw new Error("zzz_autonomy_hermes_missing");
