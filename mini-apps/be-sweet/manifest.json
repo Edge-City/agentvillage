@@ -1,0 +1,68 @@
+{
+  "manifest": 2,
+  "id": "be-sweet",
+  "name": "Be Sweet",
+  "version": "1.0.0",
+  "description": "Be Sweet helps a resident thank someone with a short voice affirmation in their own voice: three questions to help them find their own words, and how to share a Be Sweet story with John F. Kim directly. From the ECI Loves Goa Baking Co. pop-up bakery. Read-only; nothing collected, nothing sold.",
+  "homepage": "https://be-sweet.leo-relay-jfk.workers.dev/",
+  "owner": {
+    "github": "jfk-cil"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Be Sweet prompts and how to share a story",
+      "description": "Reads three questions that help you find your own words, and how to tell John F. Kim a Be Sweet story yourself. Calls send no arguments and no identity. No accounts, profiles, purchases or private data; nothing is stored and no data goes to any third party."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://be-sweet.leo-relay-jfk.workers.dev/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "be-sweet.prompts",
+      "class": "read",
+      "target": {
+        "tool": "be_sweet_prompts"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "be-sweet.how_to_share",
+      "class": "read",
+      "target": {
+        "tool": "how_to_share_a_story"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "be-sweet",
+      "version": "1.0.0",
+      "sha256": "5e66be31bf30026036e3b5c41c69d6353d5be8523d2d209341dcdb017adc5647",
+      "path": "skills/be-sweet/SKILL.md"
+    }
+  ]
+}
