@@ -384,6 +384,25 @@ test("the credential removed after the job is installed: the next stage removes 
   expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
 }, 60_000);
 
+// review-b L35893 N1: the deferred read-back checks the job on its own, not only through the shim. A job left under the
+// reserved name with no shim (a resident removed scripts/zzz_autonomy_runner.py) and no credential is not the deferred
+// state, so --verify exits 1 until a stage removes the job.
+test("deferred verify: a job with no shim and no credential is not the deferred state",()=>{
+  const {home,stage,jobs}=box();
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
+  unlinkSync(join(home,"village-bridge.json"));
+  unlinkSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT));
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+  // Nothing was written by the read-back: the job is still there and still no shim.
+  expect(jobs().map(job=>job.name)).toEqual([AUTONOMY_JOB_NAME]);
+  expect(existsSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toBe(false);
+  // The next stage removes the job; then the deferred read-back passes.
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs()).toEqual([]);
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+}, 60_000);
+
 test("a deferred stage whose stale job cannot be removed fails closed and the next stage finishes it",()=>{
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
