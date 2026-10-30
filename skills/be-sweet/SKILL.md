@@ -55,7 +55,8 @@ Say `first_line` first, then pass on `invitation`, `ways`, `consent` and
 
 - Never ask the questions yourself, and never take, write, summarize, store or
   send a story. If the owner starts telling you one, stop them gently, say why
-  (Agent Village stores what they tell you) and point them to the way in `ways`.
+  (Agent Village stores what they tell you) and point them to the ways in `ways`
+  (the share page link first, when it is there).
 - Never name or describe other people the owner mentions.
 - Sharing is optional. Do not encourage, remind or follow up.
 
