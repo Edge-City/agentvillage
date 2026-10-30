@@ -135,7 +135,10 @@ class FakeAgent:
         self.skip_context_files = kwargs.get("skip_context_files", False)
         self.load_soul_identity = kwargs.get("load_soul_identity", False)
         self.max_iterations = kwargs.get("max_iterations")
-        self.logs_dir = Path(tempfile.gettempdir()) / "hermes-home-sessions-fake"  # Hermes: <home>/sessions
+        self.session_id = kwargs.get("session_id")
+        # agent_init.py:1153: derived from the home while the agent is built (the runner scopes it to its temp folder)
+        self.logs_dir = sys.modules["agent.agent_init"].get_hermes_home() / "sessions"
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.valid_tool_names = set(self.tools)
 
     def interrupt(self, message=None, *, hard_cancel=False, **_kwargs):
@@ -167,7 +170,7 @@ class FakeScheduler:
         if self.build:
             try:
                 self.agents.append(self._construct_cron_agent(self.agent_cls, job, {}, None, workdir=job.get("workdir"),
-                                                              session_id="cron_x", session_db=object()))
+                                                              session_id=SESSION_ID, session_db=object()))
             except Exception as error:  # run_job's own except: a failed build is a failed run
                 return False, "", "", str(error)
         self.ran.append(1)
@@ -179,6 +182,9 @@ class FakeScheduler:
         if self.error is not None:  # run_job's own except: the failure comes back as a tuple, never raised
             return False, "", "", str(self.error)
         return True, "# output doc", self.text, None
+
+
+SESSION_ID = "cron_" + "b" * 12 + "_20261030_120000"
 
 
 ROOMS = [
@@ -216,6 +222,12 @@ class FullAgentBase(unittest.TestCase):
                     "schedule": {"kind": "cron", "expr": runner.schedule(TOKEN)}, "repeat": {"times": None}}
         (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [self.job]}))
         self.addCleanup(runner._turn.update, private=None, manager=None, room=None, calls=0, logs=None)
+
+    def agent_init(self):
+        """Hermes's agent.agent_init as far as the runner reads it: get_hermes_home, the box home."""
+        init = ModuleType("agent.agent_init")
+        init.get_hermes_home = lambda: self.home
+        return {"agent": ModuleType("agent"), "agent.agent_init": init}
 
     def skill(self, name, text, file="SKILL.md"):
         path = self.home / "skills" / name / file
@@ -266,6 +278,7 @@ class FullAgentBase(unittest.TestCase):
                 patch.object(runner, "_activity", side_effect=activity), \
                 patch.object(runner, "_output", side_effect=model), \
                 patch.object(runner, "_hermes", side_effect=hermes), \
+                patch.dict(sys.modules, self.agent_init()), \
                 patch.object(runner, "_note") as note:
             if code is None:
                 runner.run(self.home)
@@ -796,25 +809,66 @@ class TestSpend(FullAgentBase):
 
 
 class TestRequestDumps(FullAgentBase):
-    """review-b ov#580 v2 N3: nothing the agent's Hermes logs (a provider-4xx request dump) stays on disk."""
+    """review-b ov#580 v2 N3 + release's review of c56c2803: nothing of the agent's Hermes logs (a provider-4xx request
+    dump, a session log) stays under the box home; a log path the builder derives outside the temp folder = no agent."""
 
-    def test_the_agents_logs_go_to_a_temp_folder_removed_after_the_turn(self):
+    def test_the_builder_sees_the_temp_folder_and_nothing_stays_in_home_sessions(self):
         seen = []
+        (self.home / "sessions").mkdir()
+        (self.home / "sessions" / "session_20261029_other.json").write_text("{}")  # another session's file stays
 
         class Dumping(FakeScheduler):
             def run_job(self, job, **kwargs):
                 result = super().run_job(job, **kwargs)
                 for agent in self.agents:
                     seen.append(agent.logs_dir)
-                    (agent.logs_dir / "request_dump_cron_x_1.json").write_text('{"owner": "steer text"}')
+                    (agent.logs_dir / f"request_dump_{SESSION_ID}_1.json").write_text('{"owner": "steer text"}')
                 return result
-        for scheduler in (Dumping(text='{"silent":true}'), Dumping(text="not json")):
-            with self.subTest(text=scheduler.text):
+
+        class Late(Dumping):
+            def run_job(inner, job, **kwargs):
+                result = super().run_job(job, **kwargs)
+                (self.home / "sessions" / f"session_{SESSION_ID}.json").write_text('{"room": "text"}')
+                (self.home / "sessions" / f"request_dump_{SESSION_ID}_2.json").write_text('{"room": "text"}')
+                return result
+        for scheduler in (Dumping(text='{"silent":true}'), Dumping(text="not json"), Late(text='{"silent":true}'),
+                          Late(error=RuntimeError("HTTP 400"))):
+            with self.subTest(scheduler=type(scheduler).__name__, text=scheduler.text):
                 self.turn(ROOMS[0], scheduler, output={"silent": True})
                 logs = seen[-1]
-                self.assertNotEqual(logs, self.home / "sessions")
+                self.assertNotEqual(logs.parent, self.home)
                 self.assertFalse(logs.exists())
-                self.assertFalse((self.home / "sessions").exists())
+                self.assertEqual(sorted(p.name for p in (self.home / "sessions").iterdir()),
+                                 ["session_20261029_other.json"])
+
+    def test_a_log_or_session_path_outside_the_temp_folder_never_runs(self):
+        home = self.home
+
+        class Planted(FakeAgent):
+            where = None
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                setattr(self, *self.where)
+        for where in (("session_log_file", home / "sessions" / f"session_{SESSION_ID}.json"),
+                      ("_session_log_path", str(home / "sessions" / "x.json")),
+                      ("logs_dir", home / "sessions"),
+                      ("trajectory_file", "/tmp/elsewhere/trajectory.jsonl")):
+            with self.subTest(attr=where[0]):
+                agent = type("P", (Planted,), {"where": where})
+                scheduler = FakeScheduler(text='{"body":"agent"}', agent=agent)
+                _, completes, _ = self.turn(ROOMS[0], scheduler, output={"body": "Today."})
+                self.assertEqual((completes, scheduler.ran, self.notes), ([{"body": "Today."}], [], ["agent-context"]))
+        # A session id with no path in it is not a path.
+        fine = type("P", (Planted,), {"where": ("session_id", SESSION_ID)})
+        _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text='{"body":"Agent."}', agent=fine))
+        self.assertEqual(completes, [{"body": "Agent."}])
+
+    def test_no_agent_init_seam_means_no_agent(self):
+        scheduler = FakeScheduler(text='{"body":"agent"}')
+        with patch.object(self, "agent_init", return_value={"agent.agent_init": ModuleType("agent.agent_init")}):
+            _, completes, _ = self.turn(ROOMS[0], scheduler, output={"body": "Today."})
+        self.assertEqual((completes, scheduler.ran, self.notes), ([{"body": "Today."}], [], ["agent-context"]))
 
     def test_an_agent_without_a_logs_folder_never_runs(self):
         class NoLogs(FakeAgent):
