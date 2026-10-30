@@ -541,11 +541,15 @@ test("MOSAIC (app#486): Dizko's shape, its context read/write after mini-app.rea
   expect(plugin).not.toContain('"mosaic"');
   // The reviewed manifest (v2, service kind "none": a context-only app, the validator's grant to mosaic alone)
   // serves the CP's two entries: its base entry is the previous list, its context entry the current one,
-  // restricted with the 12-line namespace declaration, and never an MCP block or a credit.
+  // with the 12-line namespace declaration, and never an MCP block or a credit.
+  // MOSAIC FOR EVERYONE (overnight plan 26 Oct C1; review-a S3, cp#417): `"visibility": "everyone"`, so its v1
+  // entry carries no `restricted`, as the cp's MOSAIC constant (the box projection never carried it either).
   const manifest = reviewedManifest("mosaic");
   expect(manifest).toMatchObject({ id: "mosaic", version: "1.0.0", skills: ["mosaic"], operations: [read], homepage: "https://agents.edgecity.live" });
-  expect(Object.keys(manifest).sort()).toEqual(["data", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
-  expect([manifest.restricted, manifest.data]).toEqual([true, { context: { maxEntries: 12 } }]);
+  // `staff: true` (v2.1.17, lead L24457): the validator's FIRST_PARTY grant, as the cp's MOSAIC constant says (cp#410).
+  // A catalog mark only: the box projection below keeps id, version, operations and skills.
+  expect(Object.keys(manifest).sort()).toEqual(["data", "description", "homepage", "id", "name", "operations", "permissions", "skills", "staff", "version"]);
+  expect([Object.hasOwn(manifest, "restricted"), manifest.staff, manifest.data]).toEqual([false, true, { context: { maxEntries: 12 } }]);
   expect([[...manifest.operations], [...reviewedManifest("mosaic", { person: true, context: true }).operations]]).toEqual([[...previous.operations], [...mosaic.operations]]);
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read"]);
   // Only ever staged on install: not shipped to every box, never a references path.

@@ -50,7 +50,8 @@ const PROVENANCE = 'first-party-reviewed-external';
 // namespaces it owns beyond its id; `provenance`, `personOnly`: its exact Phase 0 legacy block;
 // `secretRef`: the one app-server env var outside MINI_APP_<ID>_ it may name (the token the app sends
 // today, forkicks-client.ts); `staff`: it may say `"staff": true` (fold 2: kept installed for every agent,
-// never removable, so it widens exposure; cp#322 and ov#411 mark Gold Stars alone). Any other manifest's ops
+// never removable, so it widens exposure; cp#322 and ov#411 mark Gold Stars; For Kicks and Mosaic too since v2.1.17,
+// Carter 25 Oct, lead L24183, L24457). Any other manifest's ops
 // sit under its own id, it is never `internal` or staff, it carries no `legacy` block, and its secretRef is
 // MINI_APP_<ID>_<NAME> (review-b S1, design §2).
 const FIRST_PARTY = deepFreeze({
@@ -58,8 +59,8 @@ const FIRST_PARTY = deepFreeze({
   dizko: {},
   zzzbot: { provenance: PROVENANCE, prefixes: ['zzz'] },
   slopfolio: { provenance: PROVENANCE },
-  forkicks: { secretRef: 'FORKICKS_AV_TOKEN' },
-  mosaic: { none: true },
+  forkicks: { secretRef: 'FORKICKS_AV_TOKEN', staff: true },
+  mosaic: { none: true, staff: true },
 });
 // Ids no manifest may take: the platform's own op namespaces and the overlay's baseline (non-app) skill
 // names (an app's skill is named for its id, so such an id would shadow a shipped skill on the box), and
