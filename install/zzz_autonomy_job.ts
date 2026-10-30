@@ -29,6 +29,7 @@ export const AUTONOMY_SHIPPED = {
     "06607497360fc59bd9507eccab0a40280a321f9bab6bf6e31e6c574f1dee8ef5", // + provider auto takes config.yaml's own OpenRouter api_key only with the OpenRouter base_url (RUNNER-MODEL-RESOLVE + review-b ov#553 S1, canary aa9a5de3)
     "0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450", // + ODIN's seat_answer posted as given or silent with no model call (data L32206, context L32211) + resident_brief grounding (lead L32261, data L32263) + one run deadline, context read up to 75 s for the seat hold (review-b S1 on app#932) + brief name/voice may be null (review-b ov#554 S1) + thread_replies grounding (lead L32986) + context reply cap 64 KiB (review-b ov#554 L33044 S1)
     "135a21654534a6afa2096d59f99444a9e673e52e756586134fa4fb050db35a6a", // + owner_instruction read from the context reply, appended last to the system message (lead L34271, release L34319); the header forbids quoting or revealing it in a post (review-b ov#579 N1)
+    "e7aa2ddc56251987335a7f16a302447565d0037b9e48f3d982d7f652664ee3e4", // + village_knowledge from the context reply (the app's consented catalogue for the room) after the room data, one guidance line before the owner's instruction (lead L34507 + L34517)
   ],
   "prompts/autonomy.md": ["93b8442797de1957ac5e64eb7477e1288601654fdaccb56fc4791f0bfd608587"],
 } as const;
