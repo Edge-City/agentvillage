@@ -208,7 +208,8 @@ function regular(path: string): void {
  *   4. operations must be EXACTLY one of GENERIC_OPERATIONS_ACCEPTED (the bridge's APP_OPERATIONS_ACCEPTED, the
  *      same lists in the same order; the cp has no other operations gate before this one):
  *      `operations_not_generic`. A card app's entry (cp#352, context L19898) carries `approval` (cardKey below):
- *      its operations are then [one accepted list or none, prepare, card], and a malformed key is the same code;
+ *      its operations are then [one accepted list or none, prepare, card] with no op twice (the cp's rule, ov#466 S1),
+ *      and a malformed key is the same code;
  *   5. keys exactly id, operations, skills, version (and an optional `approval`); skills exactly [id]; a plain x.y.z
  *      version (the bridge's rule): `bundle_invalid` for that app alone (a pre-release such as 1.0.0-beta.1 included);
  *   6. its SKILL.md comes ONLY from the cp's offer (MINI_APPS_SKILLS + a well-formed MINI_APPS_SKILLS_OFFER),
@@ -452,10 +453,12 @@ function checkApp(app: Record<string, unknown> & { id: string }, served: ReturnT
     return { app: reviewed };
   }
   if (shadows(app.id)) return { code: "shadows_reviewed" };
-  // cp#352: a card app's ops are [an accepted list or none, prepare, card] (the bridge's `[*ops, prepare, card]`).
+  // cp#352: a card app's ops are [an accepted list or none, prepare, card] (the bridge's `[*ops, prepare, card]`), with
+  // prepare and card ONCE each (the cp's boxRefusal, mini-apps-catalog.js:403-404; ov#466 S1): a list that would repeat
+  // an op (only app id `mini-app` can name a platform generic op as its card op) is no accepted list, as the cp refuses it.
   const card = Object.hasOwn(app, "approval") ? cardKey(app.approval, app.id) : undefined;
   if (card === null) return { code: "operations_not_generic" };
-  const lists = card ? [...GENERIC_OPERATIONS_ACCEPTED, []].map(ops => [...ops, card.prepare, card.card]) : GENERIC_OPERATIONS_ACCEPTED;
+  const lists = card ? [...GENERIC_OPERATIONS_ACCEPTED, []].map(ops => [...ops, card.prepare, card.card]).filter(ops => new Set(ops).size === ops.length) : GENERIC_OPERATIONS_ACCEPTED;
   const operations = lists.find(ops => same(app.operations, ops));
   if (!operations) return { code: "operations_not_generic" };
   // Rule 5 refuses this app alone (context L19825 / RA36 M2: a cp-valid pre-release version must never fail Gold Stars).
