@@ -1525,7 +1525,7 @@ def register(ctx) -> None:
                                      "av-events: USER.md gate install failed (%s)", type(exc).__name__)
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.
-    # Behind AV_PROMPT_REFRESH (default: team tenants only); a missing seam is one log line.
+    # Behind AV_PROMPT_REFRESH (default on for every resident from v2.1.12); a missing seam is one log line.
     try:
         _prompt_refresh.install(_collector)
     except Exception:  # noqa: BLE001 - the refresh is optional; the hooks are not
