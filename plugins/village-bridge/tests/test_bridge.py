@@ -94,11 +94,47 @@ class TransportTest(unittest.TestCase):
   with patch.object(bridge,'build_opener',return_value=opener):
    opener.open.side_effect=refuse('star_approval_required')
    result=real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})
-   self.assertEqual(result,{'error':'star_approval_required','instruction':mini.APPROVE_IN_BOT})
-   self.assertIn('approvals bot',result['instruction']);self.assertIn('SAME draftId',result['instruction'])
+   # Lane AK fold 2 (review-b S1): a start already exists here, so no card is waiting: never the bot text.
+   self.assertEqual(result,{'error':'star_approval_required','instruction':bridge.STAR_APPROVAL_UNVERIFIED})
+   self.assertIn('SAME draftId',result['instruction'])
    # An unmapped code is still the generic refusal, unchanged.
    opener.open.side_effect=refuse('something_else')
    self.assertEqual(real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})['error'],'connection_or_request_refused')
+
+ def test_lane_ak_gold_stars_text_sends_on_the_ask_and_names_a_card_only_when_the_policy_asks_first(self):
+  # Lane AK (L34995): an older app can still answer star_confirmation_required for a same-turn send; the
+  # agent sends again in the owner's next message. The tool text never says an approval round always happens.
+  import io
+  from urllib.error import HTTPError
+  body=json.dumps({'code':'star_confirmation_required','detail':'not shown'}).encode()
+  opener=unittest.mock.Mock()
+  opener.open.side_effect=HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool',409,'refused',{},io.BytesIO(body))
+  with patch.object(bridge,'build_opener',return_value=opener):
+   result=real_transport({'origin':'https://agents.edgecity.live','token':'not-logged'},{'operation':'gold-stars.send'})
+  self.assertEqual(result,{'error':'star_confirmation_required','instruction':"An older app wants the owner's next message before sending. Tell the owner the star is ready and will send when they reply; then send again."})
+  desc=bridge.SCHEMA['description'];draft=bridge.SCHEMA['parameters']['properties']['draftId']['description']
+  for text in (desc,draft):
+   self.assertIn("a card only when the owner's policy asks first",text)
+   self.assertNotIn('Gold Stars send and For Kicks',text)
+  self.assertNotIn('stage an exact preview, then request real manual approval',desc)
+
+ def test_lane_ak_fold2_star_approval_required_never_names_the_bot_and_approval_required_still_does(self):
+  # review-b S1: the app's 403 star_approval_required = an existing start the cp could not verify yet.
+  import io
+  from urllib.error import HTTPError
+  self.assertEqual(bridge.STAR_APPROVAL_UNVERIFIED,"The approval check could not be verified yet; no card was made. Retry gold-stars.send with the SAME draftId in a moment; do not say a card is waiting.")
+  def refuse(code,status):
+   return HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool',status,'refused',{},io.BytesIO(json.dumps({'code':code,'detail':'not shown'}).encode()))
+  config={'origin':'https://agents.edgecity.live','token':'not-logged'}
+  opener=unittest.mock.Mock()
+  with patch.object(bridge,'build_opener',return_value=opener):
+   opener.open.side_effect=refuse('star_approval_required',403)
+   result=real_transport(config,{'operation':'gold-stars.send'})
+   self.assertEqual(result,{'error':'star_approval_required','instruction':bridge.STAR_APPROVAL_UNVERIFIED})
+   for word in (mini.APPROVALS_CHAT_URL,'Open approvals chat','approvals bot'):
+    self.assertNotIn(word,result['instruction'])
+   opener.open.side_effect=refuse('star_preview_expired',409)
+   self.assertEqual(real_transport(config,{'operation':'gold-stars.send'})['instruction'],"Prepare a fresh preview on the owner's next message and send it.")
 
  def test_zzz_writes_declare_their_operation_and_zzz_codes_stay_zzz_only(self):
   import io
@@ -706,6 +742,18 @@ class BridgeTest(unittest.TestCase):
  def star(self):
   draft='550e8400-e29b-41d4-a716-446655440000'
   return draft,{'appId':'gold-stars','draftId':draft,'attendeeId':draft,'recipientName':'Someone','note':'Exact note','visibility':'named'}
+ def test_lane_ak_fold2_daemon_approval_required_still_points_at_the_card_and_the_bot(self):
+  # Lane AK fold 2: only the daemon's approval_required (a policy that asks first) names the card and the bot.
+  draft,preview=self.star()
+  ap=self.fake_daemon('requested','grant')
+  ap.wait.return_value=types.SimpleNamespace(exit_code=1,status='pending')
+  self.transport.side_effect=None;self.transport.return_value={'status':'pending','approvalPayload':preview}
+  with patch.object(mini,'approval_modules',return_value=ap):
+   refused=self.call({'operation':'gold-stars.send','draftId':draft})
+  self.assertEqual(refused,{'error':'approval_required','instruction':mini.APPROVE_IN_BOT})
+  self.assertIn(mini.OPEN_APPROVALS_CHAT,refused['instruction'])
+  self.assertNotEqual(mini.APPROVE_IN_BOT,bridge.STAR_APPROVAL_UNVERIFIED)
+  self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.status','draftId':draft})
  def test_autonomous_send_end_to_end_starts_as_policy_and_sends_the_daemon_proof(self):
   draft,preview=self.star()
   ap=self.fake_daemon('autonomous','policy')
@@ -737,7 +785,7 @@ class BridgeTest(unittest.TestCase):
  def test_star_approval_required_then_same_draft_retry_sends_once_without_a_new_preview(self):
   draft,preview=self.star()
   ap=self.fake_daemon('requested','grant')
-  refused={'error':'star_approval_required','instruction':mini.APPROVE_IN_BOT}
+  refused={'error':'star_approval_required','instruction':bridge.STAR_APPROVAL_UNVERIFIED}
   self.transport.side_effect=[{'status':'pending','approvalPayload':preview},refused,{'status':'pending','approvalPayload':preview},{'status':'sent'}]
   with patch.object(mini,'approval_modules',return_value=ap):
    first=self.call({'operation':'gold-stars.send','draftId':draft})
