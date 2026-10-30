@@ -121,7 +121,7 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(digest(v2124)).toBe("0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450");
   expect(v2124.equals(current)).toBe(false);
   // ov#579's bytes (main 1ebf9377, owner_instruction); village_knowledge (lead L34507) + the app's versioned instructions
-  // block (lead L34695) appended a tenth (ov#582 + ov#584 merged).
+  // block (lead L34695) + the seat cap and 120 turns (lead L34728 + L34801) appended a tenth (ov#582 + #584 + #585 merged).
   const ov579=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.ov579.py.fixture"));
   expect(digest(ov579)).toBe("135a21654534a6afa2096d59f99444a9e673e52e756586134fa4fb050db35a6a");
   expect(ov579.equals(current)).toBe(false);

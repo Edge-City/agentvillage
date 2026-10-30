@@ -120,11 +120,9 @@ REPLIES_GUIDANCE = (
 THREAD_REPLIES_MAX, THREAD_LABEL_CHARS, THREAD_BODY_BYTES, THREAD_TOTAL_BYTES = 12, 80, 1000, 8000
 THREAD_REPLIES_CODE = "thread-replies-shape"
 USER_DATA_CHARS = 10000  # the user message's room-data slice
-# Server-side wording (lead L34695): the context reply may carry `instructions`, the app's versioned prompt text, so
-# wording ships as an app deploy, not a roll. Text for the model only: the data sent, output parser, allowed keys, caps
-# and posting never change. Valid, its `system` replaces SYSTEM, its kind text follows, and its slot texts replace the
-# guidance above, each used only when the box-side condition for that guidance holds; SAFETY always follows, then the
-# owner tail. Absent or null: today's prompt, byte for byte; any other value: the same plus a code-only stderr line.
+# Server-side wording (lead L34695): a valid context `instructions` block (the app's versioned text) replaces SYSTEM, then
+# its kind text, and the guidance texts, each slot only when its box-side condition holds; SAFETY, then the owner tail,
+# follow. Absent or null: today's prompt, byte for byte; anything else: the same plus a code-only stderr line.
 INSTRUCTIONS_VERSION, INSTRUCTIONS_CODE, INSTRUCTIONS_VERSION_CODE = 1, "instructions-shape", "instructions-version"
 INSTRUCTIONS_SLOTS = ("event_brief", "tags", "resident", "thread_replies")
 INSTRUCTIONS_SYSTEM_BYTES, INSTRUCTIONS_KIND_BYTES, INSTRUCTIONS_SLOT_BYTES = 4000, 2000, 1000
@@ -345,7 +343,12 @@ BACKOFF_BASE_SECONDS = 600
 BACKOFF_MAX_EXPONENT = 7
 BACKOFF_MAX_SECONDS = 6 * 3600
 FAILURE_COUNT_MAX = 1000
-DAILY_MODEL_TURNS = 48
+DAILY_MODEL_TURNS = 120  # lead L34801 (Carter: as active as the infra allows): was 48
+# ODIN's seat cadence (lead L34728): a well-formed claim-reply `seat` (the app sends it to its ODIN_SEAT_TENANT box
+# only) is recorded in the state file as "cap" until a claim reply without one clears it; malformed = absent, never an
+# error. poll_seconds is validated, not acted on: one claim per run (docs/zzz-autonomy-runner.md).
+SEAT_MAX_TURNS = 150
+SEAT_POLL_SECONDS = range(30, 301)
 DAILY_CAP_CODE = "daily-cap"
 BACKOFF_FILE = "autonomy-backoff.json"
 STATE_MAX_BYTES = 256
@@ -520,11 +523,8 @@ def _timeout(seconds: float):
     return httpx.Timeout(connect=short, read=seconds, write=short, pool=short)
 
 
-# The bridge reply caps (review-b ov#554 Fold 4, L33044 S1). Claim and complete replies are small and keep 16 KiB. A
-# context reply now carries a 4,000-byte source, up to 8,000 bytes of thread_replies bodies (12 replies of at most
-# 1,000 bytes, plus 80-code-point labels) and the app's resident_brief (rendered up to RESIDENT_BRIEF_BYTES, about 12
-# KiB, more as raw JSON), with JSON overhead: about 19-26 KB for a legitimate reply, past 16 KiB, which refused it after
-# the claim (a recorded failure and a spent ZZZ attempt). 64 KiB holds that with headroom.
+# Bridge reply caps (review-b ov#554 L33044 S1): claim and complete keep 16 KiB; a context reply (source, thread_replies,
+# resident_brief, JSON overhead: about 19-26 KB when legitimate) gets 64 KiB.
 ACTIVITY_REPLY_BYTES = 16384
 CONTEXT_REPLY_BYTES = 65536
 ACTIVITY_REPLY_CAP = {"claim": ACTIVITY_REPLY_BYTES, "context": CONTEXT_REPLY_BYTES, "complete": ACTIVITY_REPLY_BYTES}
@@ -550,17 +550,10 @@ def _activity(http, cfg: dict, operation: str, **fields):
     return result
 
 
-# config.yaml's top-level `model` (RUNNER-STDLIB-ROUTE). Hermes runs this job with its own interpreter, where PyYAML
-# is a core dependency, so the route is read with yaml.safe_load exactly as before; only when PyYAML cannot be imported
-# does this strict standard-library fallback read it, so a box missing PyYAML still reaches the claim step. It reads the
-# one top-level `model:` key, either as an inline scalar or as a block of `key: value` lines indented under it, with
-# plain, 'single'- or "double"-quoted one-line scalars, comments and blank lines; of that block it keeps MODEL_KEYS and
-# ignores the rest. Anything PyYAML might read differently raises ValueError("model-config"): a flow collection (other
-# than an empty [] or {} on an ignored key), an anchor, alias, tag or merge key, a block or multi-line scalar, a
-# duplicate key, a second `model:`, a tab in the block, a document marker or directive, or a value of a kept key that
-# is not a scalar or that YAML 1.1 types as other than a string or null. The rest of the file is scanned only so a
-# multi-line string or flow there can never hide or fake the `model:` line. Where yaml.safe_load reads the file, this
-# gives its `model` (kept keys) or refuses (pinned by a differential test against PyYAML).
+# config.yaml's top-level `model` (RUNNER-STDLIB-ROUTE): yaml.safe_load as before when PyYAML imports; else this strict
+# standard-library fallback reads only the top-level `model:` key (an inline scalar or indented `key: value` lines,
+# plain or quoted one-line scalars), keeps MODEL_KEYS and raises ValueError("model-config") on anything PyYAML might
+# read differently (the full list: docs/zzz-autonomy-runner.md; pinned by a differential test against PyYAML).
 MODEL_KEYS = ("provider", "default", "base_url", "api_mode", "api_key")
 # PyYAML's YAML 1.1 implicit resolvers (yaml/resolver.py): plain scalars it reads as null, or as bool, float, int,
 # timestamp, merge or value (anything but a string).
@@ -1051,16 +1044,34 @@ def _state_read(home: Path, now: float) -> dict:
             (type(until) is float and not math.isfinite(until)) or until > now + BACKOFF_MAX_SECONDS):
         failures, until = FAILURE_THRESHOLD - 1, 0
     state = {"failures": min(failures, FAILURE_COUNT_MAX), "until": until}
-    day, turns = data.get("day"), data.get("turns")
+    day, turns, cap = data.get("day"), data.get("turns"), data.get("cap")
+    cap = cap if type(cap) is int and 1 <= cap <= SEAT_MAX_TURNS else None  # the seat's recorded cap; bad = none
     if isinstance(day, str) and DAY.fullmatch(day) and day < today:
         state.update(day=today, turns=0)  # a new UTC day: the cap resets (ISO days compare as strings)
-    elif day == today and type(turns) is int and 0 <= turns <= DAILY_MODEL_TURNS:
+    elif day == today and type(turns) is int and 0 <= turns <= (cap or DAILY_MODEL_TURNS):
         state.update(day=today, turns=turns)
         if data.get("code") == DAILY_CAP_CODE:
             state["code"] = DAILY_CAP_CODE
     else:
-        state.update(day=today, turns=DAILY_MODEL_TURNS)
+        state.update(day=today, turns=cap or DAILY_MODEL_TURNS)
+    if cap is not None:
+        state["cap"] = cap
     return state
+
+
+def _daily_cap(state: dict) -> int:
+    return state.get("cap", DAILY_MODEL_TURNS)
+
+
+def _seat_cap(claim: dict):
+    """The daily cap a claim reply's `seat` sets: its daily_turns when well formed, else None (DAILY_MODEL_TURNS)."""
+    seat = claim.get("seat")
+    if not isinstance(seat, dict) or set(seat) != {"daily_turns", "poll_seconds"}:
+        return None
+    turns, poll = seat["daily_turns"], seat["poll_seconds"]
+    if type(turns) is int and 1 <= turns <= SEAT_MAX_TURNS and type(poll) is int and poll in SEAT_POLL_SECONDS:
+        return turns
+    return None
 
 
 def _state_write(home: Path, state: dict):
@@ -1151,7 +1162,7 @@ def _run(home: Path):
         state = _state_read(home, now)
         if state["until"] > now:
             return
-        if state["turns"] >= DAILY_MODEL_TURNS:
+        if state["turns"] >= _daily_cap(state):
             # Today's local cap is reached: no claim, no model call. The code is the only record (stdout would
             # reach the resident).
             if state.get("code") != DAILY_CAP_CODE:
@@ -1168,8 +1179,20 @@ def _run(home: Path):
             raise ValueError("model-client")
         with httpx.Client(trust_env=False, timeout=10) as http:
             claim = _activity(http, cfg, "claim")
+            cap = _seat_cap(claim)
+            if cap != state.get("cap"):
+                # The app's seat cadence changed (lead L34728): recorded on any claim reply, a null one too. A box the
+                # app never names never gets here (no seat in its replies, none recorded): its state file is unchanged.
+                state = {key: value for key, value in state.items() if key != "cap"}
+                if cap is not None:
+                    state["cap"] = cap
+                _state_write(home, state)
             candidate = claim.get("candidate")
             if candidate is None:
+                return
+            if state["turns"] >= _daily_cap(state):
+                # The cap just fell (the seat moved off this box): no context, no model call; the lease lapses.
+                _state_write(home, {**state, "code": DAILY_CAP_CODE})
                 return
             _enter("turn")
             try:
