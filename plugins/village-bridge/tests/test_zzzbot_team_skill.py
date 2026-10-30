@@ -108,9 +108,10 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
         front = SKILL.split("---", 2)[1]
         self.assertIn("open private team rooms with named people or add people to one", front)
         self.assertIn("or to set up a private team room\nwith named people or add people to one.", SKILL)
-        # TEAM-ADD-MEMBER: eleven, the four team-room operations with the add.
-        self.assertIn("one of the eleven operations below (the\nseven under Operations and the four under Team rooms)", SKILL)
+        # TEAM-ADD-MEMBER: the four team-room operations with the add; J3: twelve with the schedule.
+        self.assertIn("one of the twelve operations below (the\nseven under Operations, the four under Team rooms and the one under Repeating\nposts)", SKILL)
         self.assertNotIn("one of the five operations", SKILL);self.assertNotIn("one of the ten operations", SKILL)
+        self.assertNotIn("one of the eleven operations", SKILL)
 
     def test_team_rooms_teaches_the_three_ops_owner_led_and_decline_only(self):
         team = section(SKILL, "## Team rooms")
@@ -163,8 +164,32 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
         self.assertIn("- `zzz_team_invalid`: those people were not found in the village. Ask the\n  owner for each person's full "
                       "name as the Rolodex lists it. Do not retry the\n  same request.", fails)
         front = SKILL.split("---", 2)[1]
-        # av-events _skill_change_note: a one-line update_note bound to the projection version 1.1.0.
-        self.assertIn("\nupdate_note: it can now add people to a team room the owner already has\nupdate_note_for: 1.1.0\n", front)
+        # av-events _skill_change_note: a one-line update_note bound to the projection version 1.1.0 (since J3, the
+        # repeating posts; the add's note was given with v2.1.22).
+        self.assertIn("\nupdate_note: it can now post about a topic every hour (or on another schedule you set) until you say "
+                      "stop\nupdate_note_for: 1.1.0\n", front)
+
+    def test_repeating_posts_call_the_schedule_at_once_and_stop_ends_them(self):
+        # J3 (lead L36170): live-only copy, lands with app#1076's ZZZ_OWNER_SCHEDULE flip. The owner's request is the
+        # approval; stop is every_minutes null alone; never a cron job; the app's codes have their lines.
+        flat = " ".join(SKILL.split())
+        repeat = " ".join(section(SKILL, "## Repeating posts").split())
+        posting = " ".join(section(SKILL, "## Posting").split())
+        fails = " ".join(section(SKILL, "## When something fails").split())
+        self.assertNotIn("are not available yet: a job", flat)
+        self.assertIn("call `zzz.schedule_posts` at once (see Repeating posts). Never create a cron job for ZZZ", posting)
+        self.assertIn("call `zzz.schedule_posts` at once: their request is the approval, with no preview or confirmation.", repeat)
+        self.assertIn("60 to 1440 (every hour = 60, every 3 hours = 180, twice a day = 720)", repeat)
+        self.assertIn("call `zzz.schedule_posts` with `every_minutes` `null` and nothing else.", repeat)
+        self.assertIn("never create a cron job for ZZZ.", repeat)
+        self.assertIn('{"operation":"zzz.schedule_posts","arguments":{"every_minutes":60,"about":"the community garden"}}', SKILL)
+        for code in ("zzz_schedule_not_on", "zzz_settings_conflict", "zzz_unavailable"):
+            self.assertIn("`%s`" % code, fails)
+        self.assertIn("Call the native `village` tool with one of the twelve operations below", flat)
+        # The managed job's line is unchanged.
+        self.assertIn("Never create a resident cron for ZZZ; installation and removal own this job.", flat)
+        self.assertLess(SKILL.index("## Team rooms"), SKILL.index("## Repeating posts"))
+        self.assertLess(SKILL.index("## Repeating posts"), SKILL.index("## Reading"))
 
     def test_the_section_sits_with_the_owner_led_writes_before_reading(self):
         self.assertLess(SKILL.index("## Posting"), SKILL.index("## Team rooms"))

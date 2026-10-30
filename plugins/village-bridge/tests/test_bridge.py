@@ -2304,7 +2304,9 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(enum[-1],'zzz.schedule_posts')
   # v2.1.20 (lead L30644): the description surfaces the team-room operations, and only those zzz names.
   # TEAM-ADD-MEMBER: and the add, with its never-re-open rule.
-  desc=bridge.SCHEMA['description'];self.assertEqual(sorted(set(re.findall(r'zzz\.[a-z]+_[a-z_]+',desc))),['zzz.add_team_members','zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite'])
+  desc=bridge.SCHEMA['description'];self.assertEqual(sorted(set(re.findall(r'zzz\.[a-z]+_[a-z_]+',desc))),['zzz.add_team_members','zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite','zzz.schedule_posts'])
+  # J3: the schedule, with its stop and never-a-cron rule (text commit; lands with app#1076's flag flip).
+  self.assertIn('zzz.schedule_posts sets the owner\'s repeating posts about a topic (every_minutes 60-1440) or stops them (every_minutes null), never a cron job',desc)
   self.assertIn('only declines',desc);self.assertIn('zzz.add_team_members adds named people to a team room the owner already has (never open a new room to add someone)',desc)
   self.assertFalse(hasattr(bridge,'schema_for'))
   for apps in ([],[{'id':'gold-stars',**mini.GOLD_STARS}],[{'id':'gold-stars',**mini.GOLD_STARS},{'id':'zzzbot',**mini.ZZZBOT}]):
