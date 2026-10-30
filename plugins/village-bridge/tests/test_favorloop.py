@@ -116,7 +116,7 @@ class FavorLoopTest(unittest.TestCase):
         self.assertEqual({op: fl.FAVORLOOP_TOOLS[op] for op in ORDER}, {o['name']: o['target']['tool'] for o in MANIFEST['operations']})
         enum = bridge.SCHEMA['parameters']['properties']['operation']['enum']
         # ov#556: the eight are appended last (an open chat keeps its pinned tools[]; the enum only grows at its tail).
-        self.assertEqual(enum[-8:], ORDER)
+        self.assertEqual(enum[-20:-12], ORDER)
 
     def test_the_generic_relay_never_reaches_favorloop(self):
         # A crafted mini-app.read for Favor Loop's write tool: favorloop's entry has no mini-app.read, so it is refused
