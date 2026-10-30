@@ -1,0 +1,629 @@
+{
+"source": "control-plane tests/odin-ask.test.js 'the Private mark, row by row' (cp 2306504d), every row with privateMarked's answer",
+"rows": [
+[
+"Private: x",
+true
+],
+[
+"private:x",
+true
+],
+[
+"  Private : x",
+true
+],
+[
+"PRIVATE - x",
+true
+],
+[
+"Private \u2013 x",
+true
+],
+[
+"Private \u2014 x",
+true
+],
+[
+"(private) x",
+true
+],
+[
+"( private ) x",
+true
+],
+[
+"[ PRIVATE ] x",
+true
+],
+[
+"Private- x",
+true
+],
+[
+"\uff30\uff52\uff49\uff56\uff41\uff54\uff45: x",
+true
+],
+[
+"Private\uff1a x",
+true
+],
+[
+"Pri\u200bvate: x",
+true
+],
+[
+"\u200bPrivate: x",
+true
+],
+[
+"Pri\u00advate: x",
+true
+],
+[
+"\u202ePrivate: x",
+true
+],
+[
+"**Private:** x",
+true
+],
+[
+"*Private*: x",
+true
+],
+[
+"_Private_: x",
+true
+],
+[
+"> Private: x",
+true
+],
+[
+"- Private: x",
+true
+],
+[
+"# Private: x",
+true
+],
+[
+"\ud83d\udd12 Private: x",
+true
+],
+[
+"\ud83d\udd12\ufe0f Private: x",
+true
+],
+[
+"\u2022 Private: x",
+true
+],
+[
+"Private\nmy notes",
+true
+],
+[
+"\n\n  Private\nmy notes",
+true
+],
+[
+"Private.",
+true
+],
+[
+"Private, x",
+true
+],
+[
+"Private; x",
+true
+],
+[
+"Private! x",
+true
+],
+[
+"Private/ x",
+true
+],
+[
+"Private note: x",
+true
+],
+[
+"Private message: x",
+true
+],
+[
+"Private (do not share): x",
+true
+],
+[
+"PRIVATE x",
+true
+],
+[
+"x (private)",
+true
+],
+[
+"x [Private].",
+true
+],
+[
+"Private dinner: tonight",
+true
+],
+[
+"\u201cPrivate:\u201d x",
+true
+],
+[
+"\u201cPrivate\u201d x",
+true
+],
+[
+"\u2018Private\u2019 x",
+true
+],
+[
+"\u2014 Private: x",
+true
+],
+[
+"\u2013 Private: x",
+true
+],
+[
+"1. Private: x",
+true
+],
+[
+"12) Private: x",
+true
+],
+[
+"- [ ] Private: x",
+true
+],
+[
+"* [ ] Private: x",
+true
+],
+[
+"[ ] Private: x",
+true
+],
+[
+"- [x] Private: x",
+true
+],
+[
+"<private> x",
+true
+],
+[
+"<Private>: x",
+true
+],
+[
+"\u00abPrivate\u00bb x",
+true
+],
+[
+"\u00a1Private!",
+true
+],
+[
+":lock: Private: x",
+true
+],
+[
+":private: x",
+true
+],
+[
+"\ud83c\uddee\ud83c\uddf3 Private: x",
+true
+],
+[
+"notes (private)?",
+true
+],
+[
+"notes **(private)**",
+true
+],
+[
+"notes _(private)_",
+true
+],
+[
+"x (**private**)",
+true
+],
+[
+"notes (private) \ud83d\udd12",
+true
+],
+[
+"notes [private]!!",
+true
+],
+[
+"notes (private) :)",
+true
+],
+[
+"notes (private)\n\u2014 Ana",
+true
+],
+[
+"Private note: x",
+true
+],
+[
+"Private note : x",
+true
+],
+[
+"Private note\uff1a x",
+true
+],
+[
+"Private DM: x",
+true
+],
+[
+"PRIVATE NOTES: x",
+true
+],
+[
+"\u2605 Private: x",
+true
+],
+[
+"\u2192 Private: x",
+true
+],
+[
+"1\ufe0f\u20e3 Private: x",
+true
+],
+[
+"#\ufe0f\u20e3 Private: x",
+true
+],
+[
+"PR\u0130VATE: x",
+true
+],
+[
+"pr\u0131vate: x",
+true
+],
+[
+"PR\u0130VATE x",
+true
+],
+[
+"- [X] Private: x",
+true
+],
+[
+"[X] Private: x",
+true
+],
+[
+"100) Private: x",
+true
+],
+[
+"999. Private: x",
+true
+],
+[
+"PRI\u0307VATE: x",
+true
+],
+[
+"x <private>",
+true
+],
+[
+"x <Private>!",
+true
+],
+[
+"x < private >",
+true
+],
+[
+"x <**private**>",
+true
+],
+[
+"notes <private> \ud83d\udd12",
+true
+],
+[
+"x <private)",
+true
+],
+[
+"x (private>",
+true
+],
+[
+"x (<private>)",
+true
+],
+[
+"x (>private<)",
+true
+],
+[
+"x [>private]",
+true
+],
+[
+"x \uff1cprivate\uff1e",
+true
+],
+[
+"a) Private: x",
+true
+],
+[
+"B. Private: x",
+true
+],
+[
+"i. Private: x",
+true
+],
+[
+"@ODIN Private: x",
+true
+],
+[
+"@odin, Private: x",
+true
+],
+[
+"@ODIN PRIVATE x",
+true
+],
+[
+"@odin_bot Private: x",
+true
+],
+[
+"- @ODIN a) Private: x",
+true
+],
+[
+"@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa Private: x",
+true
+],
+[
+"@private: x",
+true
+],
+[
+"@Private (do not share): x",
+true
+],
+[
+"@PRIVATE x",
+true
+],
+[
+"@_private: x",
+true
+],
+[
+"@private5 x",
+true
+],
+[
+"@privately Private: x",
+true
+],
+[
+"\u00e9) Private: x",
+true
+],
+[
+"@bot2 Private: x",
+true
+],
+[
+"Private dinner tonight?",
+false
+],
+[
+"Private\u00a0dinner tonight?",
+false
+],
+[
+"Privately, x",
+false
+],
+[
+"Privacy: x",
+false
+],
+[
+"x private: y",
+false
+],
+[
+"The private room",
+false
+],
+[
+"hello",
+false
+],
+[
+"\u0420rivate: x",
+false
+],
+[
+"Confidential: x",
+false
+],
+[
+"Off the record: x",
+false
+],
+[
+"x (private) y",
+false
+],
+[
+"",
+false
+],
+[
+"Private notes for later:",
+false
+],
+[
+"\ud83d\udd12 private notes here",
+false
+],
+[
+"private message please",
+false
+],
+[
+"2nd private room",
+false
+],
+[
+"1.5 private rooms",
+false
+],
+[
+"1. private dinner tonight?",
+false
+],
+[
+":lock: private dinner tonight?",
+false
+],
+[
+"x (not private)",
+false
+],
+[
+"x (privately)",
+false
+],
+[
+"x (private) y\nmore",
+false
+],
+[
+"\u2605 private dinner tonight?",
+false
+],
+[
+"1.Private: x",
+false
+],
+[
+"12)Private: x",
+false
+],
+[
+":LOCK: Private: x",
+false
+],
+[
+"x ()private)",
+false
+],
+[
+"x (private[)",
+false
+],
+[
+"x [private(",
+false
+],
+[
+"pri\u0307vate: x",
+false
+],
+[
+"x <private> y",
+false
+],
+[
+"Ask about <private> schools",
+false
+],
+[
+"x <privately>",
+false
+],
+[
+"x {private}",
+false
+],
+[
+"x <(private",
+false
+],
+[
+"x <<private",
+false
+],
+[
+"@ODIN private dinner tonight?",
+false
+],
+[
+"a) private dinner tonight?",
+false
+],
+[
+"ab) Private: x",
+false
+],
+[
+"a)Private: x",
+false
+],
+[
+"@ODIN: Ana Private: x",
+false
+],
+[
+"@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa Private: x",
+false
+],
+[
+"@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab) Private: x",
+false
+],
+[
+"@Ana Lee Private: x",
+false
+],
+[
+"Re: Private: x",
+false
+],
+[
+"@ Ana Private: x",
+false
+]
+]
+}
