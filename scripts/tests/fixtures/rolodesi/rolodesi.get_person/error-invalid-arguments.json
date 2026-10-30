@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"invalid_arguments\",\"detail\":\"arguments: slug is required\"}"
+    }
+  ],
+  "structuredContent": {
+    "code": "invalid_arguments",
+    "detail": "arguments: slug is required"
+  },
+  "isError": true
+}
