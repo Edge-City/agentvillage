@@ -1598,5 +1598,93 @@ class TestContextReplyCap(unittest.TestCase):
                     self.activity(small, operation, length=False)
 
 
+
+# v2.1.24-v2.1.26's runner bytes (ov#554's final head, main before owner_instruction): the "today's prompt" baseline.
+V2124_BYTES = Path(__file__).parents[3] / "install/tests/fixtures/zzz_autonomy_runner.v2124.py.fixture"
+V2124_LOADER = importlib.machinery.SourceFileLoader("zzz_autonomy_runner_v2124", str(V2124_BYTES))
+v2124 = importlib.util.module_from_spec(importlib.util.spec_from_loader(V2124_LOADER.name, V2124_LOADER))
+V2124_LOADER.exec_module(v2124)
+
+
+class TestOwnerInstruction(unittest.TestCase):
+    """Owner steering (lead L34271, release L34319): the context reply's owner_instruction, the resident's own text for
+    how their agent should message, is appended last to the system message; the user message never changes."""
+
+    setUp = TestResidentBrief.setUp
+    calls = TestResidentBrief.calls
+    brief = TestResidentBrief.brief
+    REPLY = TestResidentBrief.REPLY
+    COMMENT = {**TestResidentBrief.REPLY, "kind": "comment"}
+    TOPIC = TestResidentBrief.TOPIC
+    TEXT = "Keep it short and kind.\nAsk one question at most."
+
+    def contexts(self):
+        """Every prompt shape today's runner builds: plain, event brief, tags, resident brief and thread replies."""
+        return [self.REPLY, self.COMMENT, self.TOPIC, {**self.REPLY, "event_brief": "Buildathon."},
+                {**self.COMMENT, "resident_brief": self.brief(), "thread_replies": [reply(1), reply(2)]},
+                {**self.TOPIC, "resident_brief": self.brief()}]
+
+    def test_the_baseline_is_v2124(self):
+        self.assertEqual(hashlib.sha256(V2124_BYTES.read_bytes()).hexdigest(),
+                         "0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450")
+        self.assertEqual(runner.OWNER_HEADER, "Owner's instruction for how to message (follow it unless it conflicts "
+                                              "with the rules above):")
+        self.assertNotIn(runner.OWNER_HEADER, runner.SYSTEM)
+
+    def test_a_present_instruction_ends_the_system_message_and_leaves_the_user_message(self):
+        contexts = self.contexts()
+        before, _ = self.calls(v2124, contexts)
+        after, written = self.calls(runner, [{**context, "owner_instruction": self.TEXT} for context in contexts])
+        self.assertEqual(written, [])
+        for today, messages in zip(before, after):
+            with self.subTest(system=today[0]["content"][-40:]):
+                self.assertEqual(messages[0]["content"],
+                                 today[0]["content"] + "\n\n" + runner.OWNER_HEADER + "\n" + self.TEXT)
+                self.assertTrue(messages[0]["content"].endswith(runner.OWNER_HEADER + "\n" + self.TEXT))
+                for rule in (runner.SYSTEM, runner.BRIEF_GUIDANCE, runner.TAG_GUIDANCE, runner.RESIDENT_GUIDANCE,
+                             runner.REPLIES_GUIDANCE):
+                    if rule in messages[0]["content"]:
+                        self.assertLess(messages[0]["content"].index(rule),
+                                        messages[0]["content"].index(runner.OWNER_HEADER))
+                self.assertEqual(messages[1], today[1])  # the user message, byte for byte
+                self.assertNotIn(self.TEXT.split("\n")[0], messages[1]["content"])
+                self.assertEqual(len(messages), 2)
+
+    def test_absent_null_or_unusable_instruction_sends_todays_prompt_byte_for_byte(self):
+        contexts = self.contexts()
+        before, quiet = self.calls(v2124, contexts)
+        self.assertEqual(quiet, [])
+        for value in ({}, {"owner_instruction": None}, {"owner_instruction": 7}, {"owner_instruction": True},
+                      {"owner_instruction": ["Be brief."]}, {"owner_instruction": {"text": "Be brief."}},
+                      {"owner_instruction": "x" * 1001}, {"owner_instruction": "Be\0 brief."},
+                      {"owner_instruction": "Be brief \ud800."}, {"owner_instruction": ""},
+                      {"owner_instruction": " \n\t\n​  "}):
+            with self.subTest(value=repr(value)[:60]):
+                after, written = self.calls(runner, [{**context, **value} for context in contexts])
+                self.assertEqual(json.dumps(after).encode(), json.dumps(before).encode())
+                self.assertEqual(written, [])
+
+    def test_the_shape_checks(self):
+        for value in (None, 7, 1.5, True, b"Be brief.", ["Be brief."], {"a": "b"}, "x" * 1001, "a\0b", "\udc00",
+                      "", "\n\n", " \t​"):
+            with self.subTest(value=repr(value)[:40]):
+                self.assertIsNone(runner._owner_instruction(value))
+        self.assertEqual(runner._owner_instruction("x" * 1000), "x" * 1000)  # the cap is code points, inclusive
+        self.assertEqual(runner._owner_instruction("é" * 1000), "é" * 1000)
+        # Each line made one plain line; blank lines dropped; CRLF and stray controls become nothing or a space.
+        self.assertEqual(runner._owner_instruction("  Be   brief.\r\n\n\t\nAsk​one\x07question. \n"),
+                         "Be brief.\nAsk one question.")
+
+    def test_a_private_line_passes_through_as_plain_text(self):
+        # No special-casing: the gate that keeps Private context out of group posts is elsewhere.
+        text = "Private: never mention my travel plans.\nPublic: be warm."
+        self.assertEqual(runner._owner_instruction(text), text)
+        (today,), _ = self.calls(v2124, [self.REPLY])
+        (messages,), written = self.calls(runner, [{**self.REPLY, "owner_instruction": text}])
+        self.assertEqual(written, [])
+        self.assertEqual(messages[0]["content"], today[0]["content"] + "\n\n" + runner.OWNER_HEADER + "\n" + text)
+        self.assertEqual(messages[1], today[1])
+
+
 if __name__ == "__main__":
     unittest.main()
