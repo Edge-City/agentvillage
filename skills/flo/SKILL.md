@@ -30,7 +30,8 @@ crisis beyond passing on the helpline details below.
 Call the native `village` tool with `mini-app.read`, the app id `flo`, a tool
 name and its arguments. There is nothing to connect or sign in to. Never call
 Flo by URL, shell, browser or MCP yourself, and never send any id, name or
-username for the owner. Flo needs none and stores nothing.
+username for the owner. Flo needs none. It keeps only anonymous daily counts of
+which tool and topic was used, never the owner's words or who asked.
 
 | Tool | `arguments` | Returns |
 |---|---|---|
