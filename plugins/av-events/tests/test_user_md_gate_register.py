@@ -15,7 +15,8 @@ SEP = "═" * 46
 
 
 def user_block(*entries):
-    return f"{SEP}\nUSER PROFILE (who the user is) [1% — 10/24,000 chars]\n{SEP}\n" + "\n§\n".join(entries)
+    content = "\n§\n".join(entries)
+    return f"{SEP}\nUSER PROFILE (who the user is) [{len(content) * 100 // 24000}% — {len(content):,}/24,000 chars]\n{SEP}\n" + content
 
 
 @pytest.fixture()
@@ -61,15 +62,34 @@ def test_register_wires_the_memory_result_filter(plugin, ctx, hermes_seams):
     assert ctx.fire("transform_tool_result", tool_name="terminal", args={}, result=raw, session_id="tg-group") == []
 
 
-def test_pre_tool_call_refuses_a_group_user_md_edit_and_lets_an_add_through(plugin, ctx, hermes_seams, monkeypatch):
+def test_pre_tool_call_refuses_a_group_user_md_change_and_lets_adds_through(plugin, ctx, hermes_seams, monkeypatch):
+    """ov#565 N1-r3: a group's USER.md add and MEMORY.md note go through; a USER.md change is refused."""
     plugin.register(ctx)
     gate = sys.modules[f"{plugin.__name__}._user_md_gate"]
     args = {"action": "replace", "target": "user", "old_text": "Tidepool Bay", "content": "Harbour"}
     results = ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-group", task_id="t")
     assert {"action": "block", "message": gate.MEMORY_WRITE_REFUSAL} in results
-    ok = {"action": "add", "target": "user", "content": "Brings snacks to the Friday meetup."}
-    assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=ok, session_id="tg-group", task_id="t")
-                if isinstance(r, dict) and r.get("action") == "block"]
+    for target in ("user", "memory"):
+        ok = {"action": "add", "target": target, "content": "Brings snacks to the Friday meetup."}
+        assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=ok, session_id="tg-group", task_id="t")
+                    if isinstance(r, dict) and r.get("action") == "block"]
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     assert not [r for r in ctx.fire("pre_tool_call", tool_name="memory", args=args, session_id="tg-dm", task_id="t")
                 if isinstance(r, dict) and r.get("action") == "block"]
+
+
+def test_a_failed_gate_install_is_logged_once_and_never_costs_the_hooks(plugin, ctx, monkeypatch, caplog):
+    """Review-b ov#563 N7-d: register() no longer swallows an install failure silently: one WARNING naming
+    the exception class (no text, no path), and the memory hooks are wired all the same."""
+    gate = sys.modules[f"{plugin.__name__}._user_md_gate"]
+
+    def boom():
+        raise RuntimeError("install failed")
+
+    monkeypatch.setattr(gate, "install_user_md_gate", boom)
+    with caplog.at_level("DEBUG", logger="av-user-md-gate"):
+        plugin.register(ctx)
+    records = [r for r in caplog.records if "USER.md gate install failed" in r.getMessage()]
+    assert [r.levelname for r in records] == ["WARNING"]
+    assert records[0].getMessage() == "av-events: USER.md gate install failed (RuntimeError)"
+    assert gate.transform_memory_result in ctx.hooks.get("transform_tool_result", [])

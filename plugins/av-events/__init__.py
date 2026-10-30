@@ -1208,8 +1208,11 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return guard
-        # USER.md GATE (review-b #558 S2 fold): outside a private session the memory tool may not touch a
-        # Private USER.md entry or add or remove its mark. A block beats anything but the EdgeOS guard.
+        # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d, ov#565 N1-r3): outside a private session the memory
+        # tool may add to USER.md but not change or remove it (target and action only, never the content);
+        # MEMORY.md is unchanged; an allowed write's whole texts that hold a fingerprinted line are recorded as
+        # self-written (S1-r3, S1-r4 (b)).
+        # A block beats anything but the EdgeOS guard.
         memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
                                                            kwargs.get("session_id"))
         if memory_block is not None:
@@ -1516,8 +1519,10 @@ def register(ctx) -> None:
     # never loads; and the memory tool's results leave them out there too (`_user_md_gate.py`).
     try:
         _user_md_gate.install_user_md_gate()
-    except Exception:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
-        pass
+    except Exception as exc:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
+        # review-b ov#563 N7-d: never silent. One WARNING per exception class, the class name only.
+        _user_md_gate._gate_log_once(f"user_gate:install_{type(exc).__name__}",
+                                     "av-events: USER.md gate install failed (%s)", type(exc).__name__)
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.
     # Behind AV_PROMPT_REFRESH (default: team tenants only); a missing seam is one log line.

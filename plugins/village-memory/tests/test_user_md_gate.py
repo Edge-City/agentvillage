@@ -22,8 +22,10 @@ TAGS = "[Context tags, kept in the Agent Village app]\nHere to:\n- Meet people w
 
 
 def user_block(*entries: str) -> str:
+    """Hermes's `_render_block`: the usage figure counts the entries it holds (the gate recounts it for the
+    entries a group sees, review-b ov#565 S1-r4)."""
     content = "\n§\n".join(entries)
-    return f"{SEP}\nUSER PROFILE (who the user is) [12% — 165/1,375 chars]\n{SEP}\n{content}"
+    return f"{SEP}\nUSER PROFILE (who the user is) [{len(content) * 100 // 1375}% — {len(content):,}/1,375 chars]\n{SEP}\n{content}"
 
 
 MEMORY_BLOCK = f"{SEP}\nMEMORY (your personal notes) [3% — 40/2,200 chars]\n{SEP}\nThe village meets on Fridays."
@@ -67,7 +69,11 @@ def test_shared_block_drops_only_the_setup_profile_entry_and_keeps_the_header(vm
     shared = vm.shared_user_block(block)
     assert shared == user_block(NOTE, TAGS)
     assert MARK not in shared and "kelp sensors" not in shared
-    assert shared.splitlines()[1] == block.splitlines()[1]  # the usage figure is the file's, kept
+    # The header is kept; its usage figure counts only the entries kept (review-b ov#565 S1-r4: the file's
+    # figure would tell a group whether its add was deduped).
+    assert shared.splitlines()[1] != block.splitlines()[1]
+    kept = len(NOTE) + len("\n§\n") + len(TAGS)
+    assert shared.splitlines()[1] == f"USER PROFILE (who the user is) [{kept * 100 // 1375}% — {kept}/1,375 chars]"
 
 
 @pytest.mark.parametrize("entries", [(NOTE, SETUP, TAGS), (NOTE, TAGS, SETUP)])
