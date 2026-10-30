@@ -53,11 +53,56 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
                       "its own daily allowance.", flat)
         posting = " ".join(section(SKILL, "## Posting").split())
         self.assertIn("When the owner gives the exact title and body, post them as given at once: no preview and no "
-                      "second confirmation. Show a preview only for text you composed yourself.", posting)
-        team = " ".join(section(SKILL, "## Team rooms").split())
+                      "second confirmation.", posting)
+        # Carter L34648 (1) / L34660 (7), ov#583: a post the owner asks for without the words posts at once too; a
+        # draft only when the owner asks for one.
+        self.assertIn("When they ask for a post without the words (\"post a topic about X\"), write it yourself under the "
+                      "installed app's authorization and post it at once too. Show a draft first only when the owner asks "
+                      "for one. Then reply with the answer's `web_url`.", posting)
+        self.assertNotIn("Show a preview only for text you composed yourself", flat)
+        team =" ".join(section(SKILL, "## Team rooms").split())
         self.assertIn("To act on \"that room\", call `zzz.list_rooms` and pick the room by its name", team)
         self.assertIn("Never look a teammate up in the Rolodex to find a room, and never say you cannot find a team room "
                       "without having listed rooms first.", team)
+
+    def test_posting_copy_describes_live_only(self):
+        # review-b ov#583 S1 (no compose box on Agent messaging), S2 (zzz_rate_limited also covers reads and capacity
+        # limits: no daily-posting or reset claim), S4 (bound_context refuses every cron call), S5 (others' private
+        # words never), N1, N6.
+        flat = " ".join(SKILL.split())
+        posting = " ".join(section(SKILL, "## Posting").split())
+        fails = " ".join(section(SKILL, "## When something fails").split())
+        for claim in ("themselves", "midnight", "posting limit is used up", "No setting asks", "posts only while"):
+            self.assertNotIn(claim, flat)
+        self.assertIn("Never post other people's words said to you in private, even when the owner asks.", posting)
+        self.assertIn("never mock or attack a real person", posting)
+        self.assertIn("a job you schedule cannot use zzz.bot today, to read or to post.", posting)
+        self.assertIn("Never create a resident cron for ZZZ;", flat)
+        self.assertIn("`zzz_rate_limited`: zzz.bot is busy or a limit was reached, and nothing was done; name no number or "
+                      "reset time.", fails)
+        # Product's corrected copy (ZZZ-BLOCKED-SETTING-COPY, L34791): a room link to read, never a compose claim.
+        self.assertIn("Say \"Nothing was posted. The room is here: <web_url>. Ask me again in a moment.\"", fails)
+        self.assertIn("event room (slug `india`) in `zzz.list_rooms`", flat)
+
+    def test_blocked_post_copy_promises_no_retry_and_names_no_cause(self):
+        # review-b ov#583 delta S2' (nothing retries an owner's chat post; zzz_rate_limited also covers 429s, capacity
+        # and AV's own ledger, so no cause or number) and N2' (an edit/retag may hit a removed post: no room question).
+        flat = " ".join(SKILL.split())
+        fails = " ".join(section(SKILL, "## When something fails").split())
+        bridge = (REPO / "plugins" / "village-bridge" / "__init__.py").read_text(encoding="utf-8")
+        line = "zzz.bot is not taking this post right now, so it did not go out. Ask me again later."
+        self.assertIn("For a post or edit, say \"" + line + "\" Nothing retries it later. Do not retry now.", fails)
+        self.assertIn("for a post or edit say: " + line + " Nothing retries it later. Do not retry now.", bridge)
+        for claim in ("I will try again later", "posting limit is reached", "ask me again if you want it sooner"):
+            self.assertNotIn(claim, flat)
+            self.assertNotIn(claim, bridge)
+        self.assertIn("Connected accounts share 100 posts and edits a day on zzz.bot. Never give that number as the "
+                      "reason a post failed", flat)
+        removed = "For an edit or retag of this agent's own post: the post may have been removed; say it is no longer " \
+                  "there or can't be changed, and ask no room question."
+        self.assertIn(removed, fails)
+        self.assertIn(removed, bridge)
+        self.assertIn("For a new post or reply: the owner may not be a member of that room", fails)
 
     def test_the_skill_is_found_for_a_team_room_ask(self):
         front = SKILL.split("---", 2)[1]
