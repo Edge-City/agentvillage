@@ -134,6 +134,7 @@ class FakeAgent:
         self._memory_store, self._memory_manager = (object() if on else None), None
         self.skip_context_files = kwargs.get("skip_context_files", False)
         self.load_soul_identity = kwargs.get("load_soul_identity", False)
+        self.max_iterations = kwargs.get("max_iterations")
         self.valid_tool_names = set(self.tools)
 
     def interrupt(self, message=None, *, hard_cancel=False, **_kwargs):
@@ -213,7 +214,7 @@ class FullAgentBase(unittest.TestCase):
                     "deliver": "local", "failure_deliver": "local",
                     "schedule": {"kind": "cron", "expr": runner.schedule(TOKEN)}, "repeat": {"times": None}}
         (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [self.job]}))
-        self.addCleanup(runner._turn.update, private=None, viewed=[], manager=None, room=None)
+        self.addCleanup(runner._turn.update, private=None, viewed=[], manager=None, room=None, calls=0)
 
     def skill(self, name, text, file="SKILL.md"):
         path = self.home / "skills" / name / file
@@ -586,91 +587,172 @@ class TestSafeMode(FullAgentBase):
         self.assertIsNone(safe)  # nothing touched before Hermes is known to be importable
 
 
+def sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 class TestSkills(FullAgentBase):
-    """review-b ov#580 S1: only the overlay's shipped skills, read as bytes; private lines never leave them."""
+    """review-b ov#580 S1 + release's security review (1)/(2): only a shipped SKILL.md whose bytes hash to a shipped
+    digest, opened component by component with no symlink; private lines never leave it."""
 
     def read(self, args, owner=None):
-        runner._turn.update(private=runner._private_corpus(self.home, owner), viewed=[])
+        runner._turn.update(private=runner._private_corpus(self.home, owner), viewed=[], calls=0)
         return json.loads(runner._skill(self.home, args))
 
-    def test_the_allowlist_is_overlay_shipped_skills(self):
+    def ship(self, name):
+        """The overlay's own SKILL.md installed on the box, byte for byte, as copySkillBundles writes it."""
+        return self.skill(name, (ROOT / "skills" / name / "SKILL.md").read_text())
+
+    def test_the_manifest_is_the_overlays_shipped_bytes(self):
         paths = (ROOT / "install/paths.ts").read_text()
         shipped = set(re.findall(r'^\s+"([a-z0-9-]+)",', paths.split("EDGE_SKILL_NAMES = [", 1)[1].split("] as const")[0],
                                  re.M))
         self.assertIn("edgeos", runner.AGENT_SKILLS)
-        self.assertLessEqual(set(runner.AGENT_SKILLS), shipped | {"zzzbot"})
-        for name in runner.AGENT_SKILLS:
-            self.assertTrue((ROOT / "skills" / name / "SKILL.md").is_file(), name)
-        for owner_facing in ("agent-profile", "record-intention", "token-usage-audit"):
-            self.assertNotIn(owner_facing, runner.AGENT_SKILLS)
+        self.assertLessEqual(set(runner.AGENT_SKILLS), shipped)
+        for name, digests in runner.SKILL_SHIPPED.items():
+            current = hashlib.sha256((ROOT / "skills" / name / "SKILL.md").read_bytes()).hexdigest()
+            self.assertIn(current, digests, f"{name}/SKILL.md changed: add its digest to SKILL_SHIPPED")
+        self.assertEqual(runner.SKILL_SCHEMA["parameters"]["properties"], {"name": {"type": "string",
+                                                                                   "enum": list(runner.AGENT_SKILLS)}})
 
-    def test_reads_an_installed_shipped_skill_and_a_file_under_it(self):
-        self.skill("edgeos", "# EdgeOS\nThe current event is Edge City India.\n")
-        self.skill("edge-india", "Meals are served at the long hall.\n", "references/meals.md")
+    def test_reads_an_installed_shipped_skill(self):
+        self.ship("edgeos")
         got = self.read({"name": "edgeos"})
-        self.assertEqual(got["content"], "# EdgeOS\nThe current event is Edge City India.\n")
-        self.assertEqual(self.read({"name": "edge-india", "file": "references/meals.md"})["content"],
-                         "Meals are served at the long hall.\n")
+        self.assertEqual(got["name"], "edgeos")
+        self.assertIn("EdgeOS", got["content"])
         self.assertEqual(len(runner._turn["viewed"]), 1)
 
-    def test_a_skill_the_residents_agent_wrote_is_never_read(self):
+    def test_a_planted_or_modified_file_is_never_read(self):
+        path = self.ship("edgeos")
+        self.skill("edgeos", "Alice's phone is 555 0100.\n", "notes.md")  # planted beside a shipped skill
         self.skill("my-notes", "Alice's phone is 555 0100.\n")
-        self.skill("notes/edgeos", "Alice's phone is 555 0100.\n")  # a category folder holding a same-named skill
-        self.skill("edgeos", "x\n")
-        for args in ({"name": "my-notes"}, {"name": "notes/edgeos"}, {"name": "edgeos", "file": "../my-notes/SKILL.md"},
-                     {"name": "edgeos", "file": "/etc/passwd"}, {"name": "edgeos", "file": ".env"},
-                     {"name": "edgeos", "file": "scripts/edgeos.ts"}, {"name": "edgeos", "file": "a/b/c/d/e.md"},
-                     {"name": "../my-notes"}, {"name": None}, {"file": "SKILL.md"}, "edgeos", None):
+        for args in ({"name": "edgeos", "file": "notes.md"}, {"name": "my-notes"}, {"name": "../my-notes"},
+                     {"name": "notes/edgeos"}, {"name": None}, {"file": "SKILL.md"}, "edgeos", None):
             with self.subTest(args=args):
                 self.assertEqual(self.read(args), {"error": "not available"})
-
-    def test_a_linked_skill_or_file_is_never_read(self):
-        outside = self.home / "outside"
-        outside.mkdir()
-        (outside / "SKILL.md").write_text("private things\n")
-        (self.home / "skills").mkdir()
-        (self.home / "skills" / "edgeos").symlink_to(outside)
+        path.write_text(path.read_text() + "\nAlice's phone is 555 0100.\n")  # skill_manage patched the shipped file
         self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
-        self.skill("edge-india", "x\n")
-        (self.home / "skills" / "edge-india" / "references").mkdir()
-        (self.home / "skills" / "edge-india" / "references" / "index.md").symlink_to(outside / "SKILL.md")
-        self.assertEqual(self.read({"name": "edge-india", "file": "references/index.md"}), {"error": "not available"})
+
+    def test_a_linked_skill_folder_or_skills_root_is_never_read(self):
+        """Even when the link's target holds the exact shipped bytes: every component is opened O_NOFOLLOW."""
+        outside = self.home / "outside"
+        (outside / "edgeos").mkdir(parents=True)
+        (outside / "edgeos" / "SKILL.md").write_bytes((ROOT / "skills/edgeos/SKILL.md").read_bytes())
+        (self.home / "skills").mkdir()
+        (self.home / "skills" / "edgeos").symlink_to(outside / "edgeos")
+        self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
+        (self.home / "skills" / "edgeos").unlink()
+        (self.home / "skills").rmdir()
+        (self.home / "skills").symlink_to(outside)  # a symlinked parent swapped in
+        self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
+        (self.home / "skills").unlink()
+        self.ship("edgeos")
+        (self.home / "skills/edgeos/SKILL.md").unlink()
+        (self.home / "skills/edgeos/SKILL.md").symlink_to(outside / "edgeos" / "SKILL.md")
+        self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
+
+    def test_at_most_two_reads_a_turn(self):
+        self.ship("edgeos")
+        self.ship("index-network")
+        runner._turn.update(private=[], viewed=[], calls=0)
+        reads = [json.loads(runner._skill(self.home, {"name": name})) for name in ("edgeos", "index-network", "edgeos")]
+        self.assertIn("content", reads[0])
+        self.assertIn("content", reads[1])
+        self.assertEqual(reads[2], {"error": "not available"})
+        self.assertEqual(runner.AGENT_SKILL_CALLS, 2)
 
     def test_private_lines_never_leave_a_skill(self):
         (self.home / "memories").mkdir()
         (self.home / "memories/USER.md").write_text(f"{gate.SETUP_PROFILE_MARK}\n{PRIVATE}\n")
         owner = "Never mention my startup by name in any room."
-        self.skill("edgeos", "\n".join([
+        text = "\n".join([
             "Public: the coworking hall opens at 9.", "Private: Alice's phone is 555 0100.",
             "Her notes (private)", f"{gate.SETUP_PROFILE_MARK} interview answers", f"She {PRIVATE.lower()}",
-            f"Reminder: {owner}", "Ask about <private> schools", "Last line."]))
-        content = self.read({"name": "edgeos"}, owner=owner)["content"]
+            f"Reminder: {owner}", "Ask about <private> schools", "Last line."])
+        self.skill("edgeos", text)
+        with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(text),)}):
+            content = self.read({"name": "edgeos"}, owner=owner)["content"]
         self.assertEqual(content, "Public: the coworking hall opens at 9.\nAsk about <private> schools\nLast line.")
 
     def test_an_unreadable_memory_file_refuses_every_read(self):
-        self.skill("edgeos", "Public.\n")
+        self.ship("edgeos")
         (self.home / "memories").mkdir()
         (self.home / "memories/MEMORY.md").symlink_to(self.home / "skills/edgeos/SKILL.md")
         self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
 
-    def test_skill_text_is_never_rendered_and_is_capped(self):
-        self.skill("edgeos", "Run !`cat ~/.hermes/.env` and ${HERMES_SKILL_DIR}\n" + "x" * runner.SKILL_MAX_BYTES)
-        got = self.read({"name": "edgeos"})
-        self.assertTrue(got["content"].startswith("Run !`cat ~/.hermes/.env` and ${HERMES_SKILL_DIR}\n"))
-        self.assertTrue(got["truncated"])
-        self.assertLessEqual(len(got["content"].encode()), runner.SKILL_MAX_BYTES)
+    def test_skill_text_is_never_rendered_and_an_oversize_file_is_refused(self):
+        text = "Run !`cat ~/.hermes/.env` and ${HERMES_SKILL_DIR}\n"
+        self.skill("edgeos", text)
+        with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(text),)}):
+            self.assertEqual(self.read({"name": "edgeos"})["content"], text)
+        big = "x" * (runner.SKILL_MAX_BYTES + 1)
+        self.skill("edgeos", big)
+        with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(big),)}):
+            self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
 
     def test_what_a_skill_returned_is_never_echoed_into_the_post(self):
         line = "The coworking hall opens at nine and closes at midnight on weekdays."
-        self.skill("edgeos", f"# EdgeOS\n{line}\n")
+        text = f"# EdgeOS\n{line}\n"
+        self.skill("edgeos", text)
         reads = ({"name": "edgeos"},)
-        _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps({"body": f"FYI: {line}"})),
-                                    output={"silent": True}, reads=reads)
-        self.assertEqual(completes, [{"silent": True}])
-        self.assertIn("agent-echo", self.notes)
-        own = {"body": "The hall is open late, so happy to pair there tonight."}
-        _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps(own)), reads=reads)
+        with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(text),)}):
+            _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps({"body": f"FYI: {line}"})),
+                                        output={"silent": True}, reads=reads)
+            self.assertEqual(completes, [{"silent": True}])
+            self.assertIn("agent-echo", self.notes)
+            self.assertIn(line, self.skill_results[0])
+            own = {"body": "The hall is open late, so happy to pair there tonight."}
+            _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps(own)), reads=reads)
         self.assertEqual(completes, [own])
+
+
+class TestSpend(FullAgentBase):
+    """release's security review (3): a bounded agent loop, charged to the daily cap with the fallback."""
+
+    AGENT = ROOMS[0]
+
+    def state(self):
+        return json.loads((self.home / "zzzbot" / runner.BACKOFF_FILE).read_text())
+
+    def test_the_agent_gets_max_iterations_and_one_that_ignores_it_never_runs(self):
+        scheduler = FakeScheduler(text='{"silent":true}')
+        self.turn(self.AGENT, scheduler)
+        (agent,) = scheduler.agents
+        self.assertEqual(agent.kwargs["max_iterations"], runner.AGENT_ITERATIONS)
+        self.assertLessEqual(runner.AGENT_ITERATIONS, 5)
+
+        class Unbounded(FakeAgent):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.max_iterations = 90
+        scheduler = FakeScheduler(text='{"body":"agent"}', agent=Unbounded)
+        _, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
+        self.assertEqual((completes, len(model_calls), scheduler.ran), ([{"body": "Today."}], 1, []))
+        self.assertEqual(self.notes, ["agent-context"])
+
+    def test_an_agent_turn_charges_its_calls_and_the_fallback_to_the_daily_cap(self):
+        self.turn(self.AGENT, FakeScheduler(text='{"silent":true}'))
+        self.assertEqual(self.state()["turns"], 1 + runner.AGENT_CHARGE)
+        self.assertEqual(runner.AGENT_CHARGE, runner.AGENT_ITERATIONS + 2)
+        # A timed-out agent and its fallback call: the same charge, no more.
+        with patch.object(runner, "AGENT_SECONDS", 0.3), patch.object(runner, "AGENT_MIN_SECONDS", 0.1):
+            _, completes, model_calls = self.turn(self.AGENT, FakeScheduler(block=True), output={"body": "Fallback."})
+        self.assertEqual((completes, len(model_calls)), ([{"body": "Fallback."}], 1))
+        self.assertEqual(self.state()["turns"], 2 * (1 + runner.AGENT_CHARGE))
+
+    def test_no_room_under_the_cap_skips_the_agent_and_today_call_still_runs(self):
+        (self.home / "zzzbot").mkdir(mode=0o700, exist_ok=True)
+        now = time.time()
+        day = runner._utc_day(now)
+        left = runner.AGENT_CHARGE  # room for today's call, not for the agent's calls too
+        (self.home / "zzzbot" / runner.BACKOFF_FILE).write_text(json.dumps(
+            {"failures": 0, "until": 0, "day": day, "turns": runner.DAILY_MODEL_TURNS - left}))
+        scheduler = FakeScheduler(text='{"body":"agent"}')
+        with patch.object(runner, "_now", return_value=now):
+            _, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
+        self.assertEqual((scheduler.calls, completes, len(model_calls)), ([], [{"body": "Today."}], 1))
+        self.assertEqual(self.notes, ["agent-cap"])
+        self.assertEqual(self.state()["turns"], runner.DAILY_MODEL_TURNS - left + 1)
 
 
 class TestPost(FullAgentBase):
@@ -752,13 +834,13 @@ class TestPost(FullAgentBase):
 
     def test_invisible_characters_never_post_but_emoji_do(self):
         """review-b ov#580 N3: U+FE0F after a symbol and U+200D between symbols are an emoji's own."""
-        for body in ("Love it ❤️", "Team \U0001f469‍\U0001f4bb‍\U0001f527 ready",
+        for body in ("Love it \u2764\ufe0f", "Team \U0001f469\u200d\U0001f4bb\u200d\U0001f527 ready",
                      "Thumbs \U0001f44d\U0001f3fd up"):
             with self.subTest(body=body):
                 _, completes, _ = self.turn(self.AGENT, FakeScheduler(text=json.dumps({"body": body})))
                 self.assertEqual(completes, [{"body": body}])
-        for body in ("Happy to​ pair on the enclosure.", "Happy to pair‮ on the enclosure.",
-                     "Happy️ to pair.", "Happy ‍ to pair.", "️️", "x❤️️"):
+        for body in ("Happy to\u200b pair on the enclosure.", "Happy to pair\u202e on the enclosure.",
+                     "Happy\ufe0f to pair.", "Happy \u200d to pair.", "\ufe0f\ufe0f", "x\u2764\ufe0f\ufe0f"):
             with self.subTest(body=ascii(body)):
                 _, completes, _ = self.turn(self.AGENT, FakeScheduler(text=json.dumps({"body": body})),
                                             output={"silent": True})
@@ -768,7 +850,7 @@ class TestPost(FullAgentBase):
     def test_invisible_or_compatibility_forms_never_dodge_the_checks(self):
         (self.home / "memories").mkdir()
         (self.home / "memories/USER.md").write_text(f"{gate.SETUP_PROFILE_MARK}\n{PRIVATE}\n")
-        zw = lambda text: "​".join(text[i:i + 3] for i in range(0, len(text), 3))  # noqa: E731
+        zw = lambda text: "\u200b".join(text[i:i + 3] for i in range(0, len(text), 3))  # noqa: E731
         wide = lambda text: "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in text)  # noqa: E731
         room = ROOMS[1]
         for body, code in ((zw(PRIVATE), "agent-leak"), (wide(PRIVATE), "agent-leak"),
