@@ -1,0 +1,298 @@
+{
+  "manifest": 2,
+  "id": "rolodesi",
+  "name": "Rolodesi",
+  "version": "1.0.0",
+  "description": "Free link pages for the local workers who served you at Edge City India: drivers, cooks, therapists, cafe and cleaning staff. Find them, read their Shukriyas (thank-yous), and stage a new page or a Shukriya that you confirm with one tap. The worker publishes their own page on their own phone. Phone numbers are never shared.",
+  "homepage": "https://app.rolodesi.com/agent",
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Find local workers",
+      "description": "Search and read public Rolodesi pages and their Shukriyas. No phone numbers, accounts or private data."
+    },
+    {
+      "kind": "read",
+      "label": "Stage a page or a Shukriya",
+      "description": "Prepare a page for a worker or a thank-you for a page. Nothing is saved: you get a private review link and confirm with one tap; a page goes live only when the worker publishes it."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://app.rolodesi.com/api/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "rolodesi.how_it_works",
+      "class": "read",
+      "target": {
+        "tool": "how_it_works"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "rolodesi.search",
+      "class": "read",
+      "target": {
+        "tool": "search_people"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Name, work or place, for example massage, driver or Mandrem."
+          },
+          "trade": {
+            "type": "string",
+            "enum": [
+              "cook",
+              "cleaner",
+              "driver",
+              "guard",
+              "gardener",
+              "bartender",
+              "waiter",
+              "spa",
+              "reception",
+              "manager",
+              "yoga",
+              "surf",
+              "salon",
+              "laundry",
+              "delivery",
+              "boat",
+              "photographer",
+              "musician",
+              "artist",
+              "tailor",
+              "electrician",
+              "plumber",
+              "carpenter",
+              "guide",
+              "shop",
+              "other"
+            ],
+            "description": "Limit to one kind of work."
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Limit to a place, for example Mandrem or Riva."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "How many to return (default 10)."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "rolodesi.get",
+      "class": "read",
+      "target": {
+        "tool": "get_person"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+            "description": "The page's slug, from search_people."
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "rolodesi.prepare_page",
+      "class": "read",
+      "target": {
+        "tool": "prepare_page"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "The worker's name as the resident knows it."
+          },
+          "trade": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "Their work, for example driver, cook, massage, housekeeping, waiter, guard."
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Where to find them: venue, stay or area."
+          },
+          "name_native": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Their name in their own script, if known."
+          },
+          "languages": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "maxLength": 40,
+              "description": "A language they speak."
+            },
+            "description": "Languages they speak."
+          },
+          "services": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "One thing they offer."
+            },
+            "description": "What they offer."
+          },
+          "intro_en": {
+            "type": "string",
+            "maxLength": 240,
+            "description": "One line about them in English."
+          },
+          "intro_hi": {
+            "type": "string",
+            "maxLength": 240,
+            "description": "One line about them in Hindi."
+          },
+          "giver_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "description": "The resident's first name, shown as who made the page."
+          },
+          "giver_from": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Where the resident is staying or from, for example Riva."
+          },
+          "thanks_text": {
+            "type": "string",
+            "maxLength": 280,
+            "description": "An optional first Shukriya from the resident."
+          },
+          "compliments": {
+            "type": "array",
+            "maxItems": 7,
+            "items": {
+              "type": "string",
+              "enum": [
+                "kind",
+                "on_time",
+                "skilled",
+                "honest",
+                "above_beyond",
+                "great_food",
+                "safe"
+              ]
+            },
+            "description": "Optional one-tap compliments: kind, on_time, skilled, honest, above_beyond, great_food, safe."
+          },
+          "worker_language": {
+            "type": "string",
+            "enum": [
+              "hi",
+              "en"
+            ],
+            "description": "Language of the message to the worker (default hi)."
+          }
+        },
+        "required": [
+          "name",
+          "trade",
+          "giver_name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "rolodesi.prepare_thanks",
+      "class": "read",
+      "target": {
+        "tool": "prepare_thanks"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+            "description": "The page's slug, from search_people."
+          },
+          "by_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "description": "The resident's first name."
+          },
+          "by_context": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Where the resident is staying or from, for example Riva."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 280,
+            "description": "The thank-you in the resident's words."
+          },
+          "compliments": {
+            "type": "array",
+            "maxItems": 7,
+            "items": {
+              "type": "string",
+              "enum": [
+                "kind",
+                "on_time",
+                "skilled",
+                "honest",
+                "above_beyond",
+                "great_food",
+                "safe"
+              ]
+            },
+            "description": "Optional one-tap compliments: kind, on_time, skilled, honest, above_beyond, great_food, safe."
+          }
+        },
+        "required": [
+          "slug",
+          "by_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "skills": [
+    {
+      "name": "rolodesi",
+      "version": "1.0.0",
+      "sha256": "307c8b18ce5dc61941dcccfe31fea0e61633320780c1dd290fe215d509bbaf83",
+      "path": "skills/rolodesi/SKILL.md"
+    }
+  ]
+}
