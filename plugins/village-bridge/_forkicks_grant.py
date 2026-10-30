@@ -23,8 +23,9 @@ What: a pass on av-events' approval poller (`_approval.register_pass`, every `AV
    `<draftId>.placed` (O_EXCL). The agent's later confirm of that draft returns that receipt and calls nothing.
 3. Only drafts this box saved (nonav (3)): `load_preview` (owner + origin + the saved payload's hash).
    A start or first confirm never happens at or after the quote's `expiresAt` (no re-quote, no re-propose):
-   the "wasn't placed" line instead. Only an earlier confirm whose answer was lost is retried after it
-   (the merchant answers the same idempotency key with the existing order and refuses a new create).
+   the "wasn't placed" line instead. Only an earlier confirm whose answer was lost is retried after it, and a
+   grant the wait shows spent while the marker still says awaiting (a start whose answer was lost, review-a N5) is
+   confirmed after it (the merchant answers the same idempotency key with the existing order and refuses a new create).
 4. The line (nonav (4), approval B4): one of the two product constants below, filled only from the approved
    preview (place, date, opening hours), sent ONLY to `telegram:<ownerTelegramId>`, the resident's own DM
    with their agent (the chat `bound_context` requires for every order: CHAT_ID == USER_ID == the paired
@@ -551,9 +552,14 @@ def _not_placed(home, draft_id, task, owner, marker_path, outcome, code, reason)
     return _finish(home, draft_id, task, owner, marker_path, outcome, code, NOT_PLACED_LINE.format(reason=REASONS[reason]))
 
 
-def _refuse_older(home, draft_id, task, owner, marker_path, reason):
+def _refuse_older(home, draft_id, task, owner, marker_path, reason, spent=False, own_start=False):
     """S1: never start an older draft (or any draft while `.latest` is unreadable). One line per draft, a code.
-    The tombstone keeps every later path (the agent's confirm adopting a spent grant included) from placing it."""
+    The tombstone keeps every later path (the agent's confirm adopting a spent grant included) from placing it.
+    `spent` (review-a ov#465 N8, product ruling (i)): the newest-draft check read this draft's grant spent, so the
+    agent's confirm may have placed it and lost its answer: the tombstone and the withdraw are as always, but no
+    SUPERSEDED_LINE ("Nothing was ordered from your earlier ...") is sent, since it could be false. `own_start`: the
+    refusal of this pass's own start before any confirm (nothing was sent): a retry of an unwritable tombstone keeps
+    today's line, without a wait read (its grant reads spent by that very start)."""
     try:
         with drafts_lock(home):
             tombstone(home, draft_id, reason)
@@ -562,7 +568,7 @@ def _refuse_older(home, draft_id, task, owner, marker_path, reason):
         # No line and no withdraw yet: the marker goes back to awaiting, so the next pass re-runs the newest check
         # first and retries the tombstone; a started marker would let the pass confirm this draft.
         try:
-            _replace(marker_path, {**_read(marker_path), "phase": "awaiting"})
+            _replace(marker_path, {**_read(marker_path), "phase": "awaiting", **({"ownStart": True} if own_start else {})})
         except Exception:  # noqa: BLE001 - the pass never places a draft without a marker
             try:
                 _drop(marker_path)
@@ -574,6 +580,8 @@ def _refuse_older(home, draft_id, task, owner, marker_path, reason):
             approval_modules().withdraw(task, "superseded", KEY_PREFIX + draft_id)
         except Exception:  # noqa: BLE001 - this draft is never started from here on anyway
             pass
+        if spent:  # an order may exist: refused for good, but no "nothing was ordered" line
+            return _finish(home, draft_id, task, owner, marker_path, "failed", "uncertain_" + reason, None)
         return _finish(home, draft_id, task, owner, marker_path, "denied", reason, SUPERSEDED_LINE)
     LOG.warning("village_bridge forkicks newest_check code=%s", reason)
     return _finish(home, draft_id, task, owner, marker_path, "denied", reason, LATEST_UNREADABLE_LINE)
@@ -615,9 +623,13 @@ def _spent(waited, key) -> bool:
 def _expired_awaiting(home, draft_id, task, key, owner, marker_path, code, ttl):
     """An awaiting marker past its quote (or the TTL). Review-a ov#465 N1 (probe X1): `awaiting` is only the pass's own
     progress, and the agent's confirm may have started the draft and lost its answer, so the wait is read FIRST. A
-    spent grant is an order that may exist: no line, no tombstone, no withdraw (as `uncertain_ttl` does for an attempted
-    marker); the agent's confirm of the same draft adopts it and gets the app's answer. An unreadable wait leaves the
-    marker for the next pass; past the TTL, today's line without the close (nothing about the card is known)."""
+    spent grant is an order that may exist: no line, no tombstone, no withdraw. Past the TTL the marker ends there (as
+    `uncertain_ttl` does for an attempted marker); the agent's confirm of the same draft adopts it. Past the quote, None:
+    the caller sends the confirm with the same draftId and the app decides (review-a N5: the pass's own start may be the
+    spent one, with its answer lost and no confirm ever sent; the app answers an existing order by its idempotency key
+    and the merchant refuses a new create past the quote, so the owner gets the true line either way). An unreadable
+    wait leaves the marker for the next pass; past the TTL, today's line without the close (nothing about the card is
+    known)."""
     try:
         waited = approval_modules().wait(task)
     except Exception:  # noqa: BLE001 - approval_unavailable (or no answer)
@@ -625,6 +637,8 @@ def _expired_awaiting(home, draft_id, task, key, owner, marker_path, code, ttl):
             return "approval_unavailable"
         return _not_placed(home, draft_id, task, owner, marker_path, "expired", code, "expired")
     if _spent(waited, key):
+        if not ttl:
+            return None
         return _finish(home, draft_id, task, owner, marker_path, "failed", "uncertain_" + code, None)
     close_expired(home, draft_id, task)
     return _not_placed(home, draft_id, task, owner, marker_path, "expired", code, "expired")
@@ -667,7 +681,16 @@ def advance(home, config, transport, installed, draft_id, now=None) -> str:
     if phase == "awaiting":
         reason = newest_reason(home, draft_id)
         if reason is not None:
-            return _refuse_older(home, draft_id, task, owner, marker_path, reason)
+            # Review-a ov#465 N8 (product ruling (i)): the wait first. A grant the agent's confirm spent (its answer
+            # lost) may be a placed order: refused as always, without the "nothing was ordered" line. An unreadable
+            # wait, or a retry of this pass's own refused start (`ownStart`), is today's refusal.
+            spent = False
+            if reason == "superseded" and marker.get("ownStart") is not True:
+                try:
+                    spent = _spent(approval_modules().wait(task), key)
+                except Exception:  # noqa: BLE001 - unreadable: today's refusal, with its line
+                    spent = False
+            return _refuse_older(home, draft_id, task, owner, marker_path, reason, spent=spent)
     if now - since > TTL_S:
         if phase == "attempted":  # the order may exist: no line; the agent's confirm of this draft recovers it
             return _finish(home, draft_id, task, owner, marker_path, "failed", "uncertain_ttl", None)
@@ -677,9 +700,18 @@ def advance(home, config, transport, installed, draft_id, now=None) -> str:
     expires = _expires(record)
     quote_live = expires is not None and now < expires
     started_now = False
-    if phase == "awaiting":
-        if not quote_live:
-            return _expired_awaiting(home, draft_id, task, key, owner, marker_path, "quote_expired", False)
+    late = False  # a spent grant past the quote (N5): confirm with the same draftId, the app answers
+    if phase == "awaiting" and not quote_live:
+        closed = _expired_awaiting(home, draft_id, task, key, owner, marker_path, "quote_expired", False)
+        if closed is not None:
+            return closed
+        # Safe past the quote (push-time security review of ov#468 (2), review-a CLAIMS L20800): the merchant's
+        # createOrder (Edge-City/forkicks dd0b8918 lib/orders.ts:33-44) locks the idempotency key, returns the EXISTING
+        # order for it before any quote check, and answers a key with no order 409 "Quote expired" past expiresAt. So
+        # this confirm can only return an order already placed for this draftId, never create one. The app's
+        # confirmForKicks forwards it with idempotencyKey = draftId (agentvillage-app forkicks.ts ~:207-213).
+        late = True
+    elif phase == "awaiting":
         ap = approval_modules()  # approval_unavailable: the marker waits for the next pass
         waited = ap.wait(task)
         status = waited.status
@@ -717,20 +749,25 @@ def advance(home, config, transport, installed, draft_id, now=None) -> str:
         # A start is spent, but no confirm was ever sent: nothing was placed, and no re-quote is made.
         return _not_placed(home, draft_id, task, owner, marker_path, "expired", "quote_expired", "expired")
     if not installed(home, "forkicks", "forkicks.order.confirm"):
+        if late:  # the order may exist (the agent's start): no line; the agent's confirm of this draft recovers it
+            return _finish(home, draft_id, task, owner, marker_path, "failed", "uncertain_quote_expired", None)
         if phase == "started":
             return _not_placed(home, draft_id, task, owner, marker_path, "failed", "not_installed", "failed")
         return "not_installed"
-    if started_now:
+    if started_now or late:
         # Review-a ov#465 N2: the agent's confirm read `granted` before this start, then found the quote gone and
         # closed the draft (`expired`) and told the owner nothing was ordered: the spent grant is dropped, no confirm.
+        # Review-a ov#468 N9: the late confirm (N5) checks it too, so a merchant clock behind the box's never places
+        # an order after the agent's "nothing was ordered".
         if tombstone_code(home, draft_id) == EXPIRED:
             _drop(marker_path)
             return "refused_earlier"
+    if started_now:
         # Security review (2): a prepare that landed between this pass's start and its confirm still wins (the
         # spent grant places nothing). A start from an earlier pass is an order in flight and keeps its confirm.
         reason = newest_reason(home, draft_id)
         if reason is not None:
-            return _refuse_older(home, draft_id, task, owner, marker_path, reason)
+            return _refuse_older(home, draft_id, task, owner, marker_path, reason, own_start=True)
     # Recorded BEFORE the confirm is sent: from here on a lost answer may be a placed order.
     _replace(marker_path, {**marker, "phase": "attempted"})
     proof = {"taskId": task, "payloadHash": record["payloadHash"], "payload": record["payload"]}
