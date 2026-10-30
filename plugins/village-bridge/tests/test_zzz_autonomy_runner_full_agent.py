@@ -135,6 +135,7 @@ class FakeAgent:
         self.skip_context_files = kwargs.get("skip_context_files", False)
         self.load_soul_identity = kwargs.get("load_soul_identity", False)
         self.max_iterations = kwargs.get("max_iterations")
+        self.logs_dir = Path(tempfile.gettempdir()) / "hermes-home-sessions-fake"  # Hermes: <home>/sessions
         self.valid_tool_names = set(self.tools)
 
     def interrupt(self, message=None, *, hard_cancel=False, **_kwargs):
@@ -214,7 +215,7 @@ class FullAgentBase(unittest.TestCase):
                     "deliver": "local", "failure_deliver": "local",
                     "schedule": {"kind": "cron", "expr": runner.schedule(TOKEN)}, "repeat": {"times": None}}
         (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [self.job]}))
-        self.addCleanup(runner._turn.update, private=None, viewed=[], manager=None, room=None, calls=0)
+        self.addCleanup(runner._turn.update, private=None, manager=None, room=None, calls=0, logs=None)
 
     def skill(self, name, text, file="SKILL.md"):
         path = self.home / "skills" / name / file
@@ -584,7 +585,7 @@ class TestSafeMode(FullAgentBase):
         with patch.object(runner, "_importable", return_value=False):
             _, code, safe = self.call_hermes({})
         self.assertEqual(code, "agent-import")
-        self.assertIsNone(safe)  # nothing touched before Hermes is known to be importable
+        self.assertEqual(safe, "1")  # set before Hermes is even looked for (review-b ov#580 v2 N4); process-local
 
 
 def sha(text: str) -> str:
@@ -596,7 +597,7 @@ class TestSkills(FullAgentBase):
     digest, opened component by component with no symlink; private lines never leave it."""
 
     def read(self, args, owner=None):
-        runner._turn.update(private=runner._private_corpus(self.home, owner), viewed=[], calls=0)
+        runner._turn.update(private=runner._private_corpus(self.home, owner), calls=0)
         return json.loads(runner._skill(self.home, args))
 
     def ship(self, name):
@@ -620,7 +621,6 @@ class TestSkills(FullAgentBase):
         got = self.read({"name": "edgeos"})
         self.assertEqual(got["name"], "edgeos")
         self.assertIn("EdgeOS", got["content"])
-        self.assertEqual(len(runner._turn["viewed"]), 1)
 
     def test_a_planted_or_modified_file_is_never_read(self):
         path = self.ship("edgeos")
@@ -654,7 +654,7 @@ class TestSkills(FullAgentBase):
     def test_at_most_two_reads_a_turn(self):
         self.ship("edgeos")
         self.ship("index-network")
-        runner._turn.update(private=[], viewed=[], calls=0)
+        runner._turn.update(private=[], calls=0)
         reads = [json.loads(runner._skill(self.home, {"name": name})) for name in ("edgeos", "index-network", "edgeos")]
         self.assertIn("content", reads[0])
         self.assertIn("content", reads[1])
@@ -690,20 +690,24 @@ class TestSkills(FullAgentBase):
         with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(big),)}):
             self.assertEqual(self.read({"name": "edgeos"}), {"error": "not available"})
 
-    def test_what_a_skill_returned_is_never_echoed_into_the_post(self):
+    def test_a_post_may_use_a_skill_fact_but_never_a_private_line(self):
+        """Lead L36075 S2: shipped skill text is public reference, not in the echo corpus; the private corpus stays."""
         line = "The coworking hall opens at nine and closes at midnight on weekdays."
         text = f"# EdgeOS\n{line}\n"
         self.skill("edgeos", text)
         reads = ({"name": "edgeos"},)
         with patch.dict(runner.SKILL_SHIPPED, {"edgeos": (sha(text),)}):
-            _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps({"body": f"FYI: {line}"})),
-                                        output={"silent": True}, reads=reads)
-            self.assertEqual(completes, [{"silent": True}])
-            self.assertIn("agent-echo", self.notes)
+            fact = {"body": f"FYI: {line} Happy to pair there tonight."}
+            _, completes, model_calls = self.turn(ROOMS[0], FakeScheduler(text=json.dumps(fact)), reads=reads)
             self.assertIn(line, self.skill_results[0])
-            own = {"body": "The hall is open late, so happy to pair there tonight."}
-            _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps(own)), reads=reads)
-        self.assertEqual(completes, [own])
+            self.assertEqual((completes, model_calls, self.notes), ([fact], [], []))
+            (self.home / "memories").mkdir()
+            (self.home / "memories/USER.md").write_text(f"{PRIVATE}\n")
+            leak = {"body": f"FYI: {line} Also: {PRIVATE}"}
+            _, completes, _ = self.turn(ROOMS[0], FakeScheduler(text=json.dumps(leak)), output={"silent": True},
+                                        reads=reads)
+        self.assertEqual(completes, [{"silent": True}])
+        self.assertIn("agent-leak", self.notes)
 
 
 class TestSpend(FullAgentBase):
@@ -730,29 +734,96 @@ class TestSpend(FullAgentBase):
         self.assertEqual((completes, len(model_calls), scheduler.ran), ([{"body": "Today."}], 1, []))
         self.assertEqual(self.notes, ["agent-context"])
 
-    def test_an_agent_turn_charges_its_calls_and_the_fallback_to_the_daily_cap(self):
-        self.turn(self.AGENT, FakeScheduler(text='{"silent":true}'))
-        self.assertEqual(self.state()["turns"], 1 + runner.AGENT_CHARGE)
-        self.assertEqual(runner.AGENT_CHARGE, runner.AGENT_ITERATIONS + 2)
-        # A timed-out agent and its fallback call: the same charge, no more.
-        with patch.object(runner, "AGENT_SECONDS", 0.3), patch.object(runner, "AGENT_MIN_SECONDS", 0.1):
-            _, completes, model_calls = self.turn(self.AGENT, FakeScheduler(block=True), output={"body": "Fallback."})
+    def test_an_agent_turn_is_one_claimed_turn_and_one_agent_turn(self):
+        """Lead L36075 S1: never 1 + 5; the fallback after a failed agent is part of the same claimed turn."""
+        now = time.time()
+        with patch.object(runner, "_now", return_value=now):
+            self.turn(self.AGENT, FakeScheduler(text='{"silent":true}'))
+            self.assertEqual((self.state()["turns"], self.state()["agent"]), (1, 1))
+            with patch.object(runner, "AGENT_SECONDS", 0.3), patch.object(runner, "AGENT_MIN_SECONDS", 0.1):
+                _, completes, model_calls = self.turn(self.AGENT, FakeScheduler(block=True),
+                                                      output={"body": "Fallback."})
         self.assertEqual((completes, len(model_calls)), ([{"body": "Fallback."}], 1))
-        self.assertEqual(self.state()["turns"], 2 * (1 + runner.AGENT_CHARGE))
+        self.assertEqual((self.state()["turns"], self.state()["agent"]), (2, 2))
+        self.assertFalse(hasattr(runner, "AGENT_CHARGE"))
 
-    def test_no_room_under_the_cap_skips_the_agent_and_today_call_still_runs(self):
+    def test_40_agent_turns_then_single_calls_up_to_the_daily_cap(self):
+        """130 ticks with a candidate in one UTC day: 40 agent turns, then 80 single calls (agent-cap), then the
+        daily cap skips the rest before claiming; an agent turn never brings daily-cap sooner."""
+        self.assertEqual((runner.AGENT_DAILY_TURNS, runner.DAILY_MODEL_TURNS), (40, 120))
+        now, agent_runs, singles, completes_all, claims = time.time(), 0, 0, 0, 0
+        with patch.object(runner, "_now", return_value=now):
+            for _ in range(130):
+                scheduler = FakeScheduler(text='{"body":"An agent point."}')
+                ops, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
+                agent_runs += len(scheduler.calls)
+                singles += len(model_calls)
+                completes_all += len(completes)
+                claims += ops.count("claim")
+        self.assertEqual((agent_runs, singles, completes_all, claims), (40, 80, 120, 120))
+        state = self.state()
+        self.assertEqual((state["turns"], state["agent"], state["code"]), (120, 40, runner.DAILY_CAP_CODE))
+
+    def test_no_agent_budget_left_skips_the_agent_and_today_call_still_runs(self):
         (self.home / "zzzbot").mkdir(mode=0o700, exist_ok=True)
         now = time.time()
         day = runner._utc_day(now)
-        left = runner.AGENT_CHARGE  # room for today's call, not for the agent's calls too
+        for agent in (runner.AGENT_DAILY_TURNS, 41, -1, "x", 1.5):  # spent, or a bad count read as spent
+            with self.subTest(agent=agent):
+                (self.home / "zzzbot" / runner.BACKOFF_FILE).write_text(json.dumps(
+                    {"failures": 0, "until": 0, "day": day, "turns": 7, "agent": agent}))
+                scheduler = FakeScheduler(text='{"body":"agent"}')
+                with patch.object(runner, "_now", return_value=now):
+                    _, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
+                self.assertEqual((scheduler.calls, completes, len(model_calls)), ([], [{"body": "Today."}], 1))
+                self.assertEqual(self.notes, ["agent-cap"])
+                self.assertEqual(self.state()["turns"], 8)
+
+    def test_a_new_utc_day_resets_the_agent_budget(self):
+        (self.home / "zzzbot").mkdir(mode=0o700, exist_ok=True)
+        now = time.time()
         (self.home / "zzzbot" / runner.BACKOFF_FILE).write_text(json.dumps(
-            {"failures": 0, "until": 0, "day": day, "turns": runner.DAILY_MODEL_TURNS - left}))
-        scheduler = FakeScheduler(text='{"body":"agent"}')
+            {"failures": 0, "until": 0, "day": runner._utc_day(now - 86400), "turns": 120, "agent": 40}))
+        scheduler = FakeScheduler(text='{"silent":true}')
         with patch.object(runner, "_now", return_value=now):
-            _, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
-        self.assertEqual((scheduler.calls, completes, len(model_calls)), ([], [{"body": "Today."}], 1))
-        self.assertEqual(self.notes, ["agent-cap"])
-        self.assertEqual(self.state()["turns"], runner.DAILY_MODEL_TURNS - left + 1)
+            self.turn(self.AGENT, scheduler)
+        self.assertEqual(len(scheduler.calls), 1)
+        self.assertEqual((self.state()["turns"], self.state()["agent"]), (1, 1))
+
+    def test_a_box_that_never_runs_the_agent_keeps_its_state_file_shape(self):
+        self.turn({**self.AGENT, "agent_turn": False}, FakeScheduler(text='{"silent":true}'))
+        self.assertNotIn("agent", self.state())
+
+
+class TestRequestDumps(FullAgentBase):
+    """review-b ov#580 v2 N3: nothing the agent's Hermes logs (a provider-4xx request dump) stays on disk."""
+
+    def test_the_agents_logs_go_to_a_temp_folder_removed_after_the_turn(self):
+        seen = []
+
+        class Dumping(FakeScheduler):
+            def run_job(self, job, **kwargs):
+                result = super().run_job(job, **kwargs)
+                for agent in self.agents:
+                    seen.append(agent.logs_dir)
+                    (agent.logs_dir / "request_dump_cron_x_1.json").write_text('{"owner": "steer text"}')
+                return result
+        for scheduler in (Dumping(text='{"silent":true}'), Dumping(text="not json")):
+            with self.subTest(text=scheduler.text):
+                self.turn(ROOMS[0], scheduler, output={"silent": True})
+                logs = seen[-1]
+                self.assertNotEqual(logs, self.home / "sessions")
+                self.assertFalse(logs.exists())
+                self.assertFalse((self.home / "sessions").exists())
+
+    def test_an_agent_without_a_logs_folder_never_runs(self):
+        class NoLogs(FakeAgent):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                del self.logs_dir
+        scheduler = FakeScheduler(text='{"body":"agent"}', agent=NoLogs)
+        _, completes, _ = self.turn(ROOMS[0], scheduler, output={"body": "Today."})
+        self.assertEqual((completes, scheduler.ran, self.notes), ([{"body": "Today."}], [], ["agent-context"]))
 
 
 class TestPost(FullAgentBase):
