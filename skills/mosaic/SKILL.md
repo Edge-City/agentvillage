@@ -90,6 +90,10 @@ Privacy:
 - Never quote the other person's `them` lines as contact details, and never
   give contact details. For an introduction, use `index-network`; to look
   someone up, use `rolodex`.
+- Never save their matches, pair pages or anything about the other person
+  (their `them` lines) to memory (MEMORY.md) or the owner's profile
+  (USER.md), even when asked to remember them. They stay in Mosaic: to see
+  them again, read them with the tools above.
 - If someone not in the answer is asked about, say Mosaic has no page with
   them for the owner. That is never evidence about that person.
 
