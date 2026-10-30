@@ -76,6 +76,8 @@ export const GATE_FILES = Object.freeze([
   "scripts/mini-apps-conformance.ts", "scripts/tests/mini-apps-conformance.test.ts", "package.json",
   // The baseline-skill list the lane classifier reads (EDGE_SKILL_NAMES).
   "install/paths.ts",
+  // P0-3's comment wiring (the bot's PR comment, edited in place) and its test.
+  "scripts/mini-apps-review-comment.ts", "scripts/tests/mini-apps-review-comment.test.ts",
 ]);
 /**
  * Baseline skills (install/paths.ts EDGE_SKILL_NAMES) ship to EVERY box at roll time whatever a manifest's
