@@ -5,6 +5,11 @@
   "version": "2.0.0",
   "description": "Three things through one reviewed DreamStarter app, each only when the resident asks. Dreams: send a few lines the resident types for that request and get up to three suggested dreams with a claim link each; DreamStarter passes the lines to Google Gemini to suggest the dreams and keeps only the suggestions, never the lines. Grant: stage the resident's ElevenLabs Startup Grant application as a private DreamStarter draft with a review link; when the resident accepts the terms and clicks Submit there, DreamStarter submits it to ElevenLabs' live form. Local businesses: read the public write-ups of the Goa businesses in the program. The agent shows exactly what will be sent and waits for the resident's yes before either send. Privacy: https://mcp.dreamstarter.xyz/privacy",
   "homepage": "https://dreamstarter.xyz",
+  "credit": {
+    "role": "product",
+    "attendeeId": "484a716e-a911-473f-9920-d99428cb2e79",
+    "name": "Arun Philips"
+  },
   "owner": {
     "github": "arrfire",
     "org": "DreamStarter"
