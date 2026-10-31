@@ -1414,9 +1414,11 @@ def _strings(value) -> list:
 def _leak(output: dict, data: dict) -> str:
     """Over the body, the title and each tag (lead R5 N1): agent-leak: one holds a private line (_private_corpus), or
     that corpus is unreadable; agent-private: one carries the Private mark; agent-echo: 24 characters of room text
-    (never skill text: lead L36075 S2), bar ONE quote of source.body <= QUOTE_CHARS; agent-format: an invisible character
-    but newline, tab or an emoji's own. Folded, in memory, never logged."""
-    raw = [output[key] for key in ("body", "title") if key in output] + list(output.get("tags", []))
+    (never skill text: lead L36075 S2), bar ONE quote of source.body <= QUOTE_CHARS, and never for a tag that IS one of
+    the room's tags (lead L36472); agent-format: an invisible character but newline, tab or an emoji's own. Folded, in
+    memory, never logged."""
+    texts = [output[key] for key in ("body", "title") if key in output]
+    raw = texts + list(output.get("tags", []))
     said, private = [_fold(text) for text in raw], _turn["private"]
     if private is None or any(line in text for line in private for text in said):
         return "agent-leak"
@@ -1425,7 +1427,10 @@ def _leak(output: dict, data: dict) -> str:
     source = data.get("source") if isinstance(data.get("source"), dict) else {}
     room = "\0".join(_fold(text) for text in _strings({**data, "source": {**source, "body": ""}}))
     source, quoted = _fold(source.get("body", "")), set()  # only source.body gets the one-quote allowance
+    reused = set(data.get("room_tags", ()))  # both sides _clean_tag forms (NFKC, trimmed, casefolded): equal = reused
     for n, text in enumerate(said):
+        if n >= len(texts) and raw[n] in reused:
+            continue  # lead L36472: reusing a room tag is not an echo; the other checks still apply to it
         for i in range(len(text) - LEAK_CHARS + 1):
             if text[i:i + LEAK_CHARS] in source:
                 quoted.update((n, j) for j in range(i, i + LEAK_CHARS))

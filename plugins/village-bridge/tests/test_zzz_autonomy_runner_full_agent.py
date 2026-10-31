@@ -1003,6 +1003,41 @@ class TestPost(FullAgentBase):
         _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps({**post, "tags": ["hardware", "water"]})))
         self.assertEqual(completes, [{**post, "tags": ["hardware", "water"]}])
 
+    def test_a_tag_that_is_a_room_tag_skips_only_the_echo_check(self):
+        """Lead L36472: a tag equal to one of the room's tags (both as _clean_tag leaves them: NFKC, trimmed,
+        casefolded) is a reuse, not an echo, however long; the leak, Private-mark and invisible checks still apply to
+        it, and a tag that is only near a room tag still echoes."""
+        long_tag, private_tag = "hardware teams of the east hall", "team notes for the east hall (private)"
+        owner_tag, hidden_tag = "never mention my visa overstay in goa", "hardware\u1160teams in the east hall"
+        room = {**ROOMS[2], "owner_instruction": "Keep it short.\nNever mention my visa overstay in Goa",
+                "room_tags": ["hardware", long_tag, private_tag, owner_tag, hidden_tag]}
+        self.assertEqual(runner._room_tags(room["room_tags"]), room["room_tags"])
+        self.assertGreaterEqual(len(long_tag), runner.LEAK_CHARS)
+        post = {"body": "Who wants to prototype a filter this weekend?", "title": "Filter prototype weekend"}
+        # (a) the exact room tag, written in any case or width, posts as the room's own form
+        for written in (long_tag, "  Hardware Teams Of The East Hall ", "\uff28ardware teams of the east hall"):
+            with self.subTest(written=written):
+                answer = {**post, "tags": [written, "water"]}
+                _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps(answer)), output={"silent": True})
+                self.assertEqual(completes, [{**post, "tags": [long_tag, "water"]}])
+                self.assertEqual(self.notes, [])
+        # (b) a reused room tag that leaks, is Private-marked or holds an invisible character is still refused;
+        # (c) a near-copy of a room tag still echoes
+        for tag, code in ((owner_tag, "agent-leak"), (private_tag, "agent-private"), (hidden_tag, "agent-format"),
+                          (long_tag + " 2", "agent-echo"), ("the " + long_tag, "agent-echo")):
+            with self.subTest(code=code, tag=ascii(tag)):
+                answer = {**post, "tags": ["hardware", tag]}
+                _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps(answer)), output={"silent": True})
+                self.assertEqual(completes, [{"silent": True}])
+                self.assertIn(code, self.notes)
+        # the body and title get no such allowance
+        for answer in ({"body": f"Join {long_tag} now!", "title": "Filter prototype weekend"},
+                       {**post, "title": long_tag}):
+            with self.subTest(answer=answer):
+                _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps(answer)), output={"silent": True})
+                self.assertEqual(completes, [{"silent": True}])
+                self.assertIn("agent-echo", self.notes)
+
     def test_the_owners_instruction_is_never_posted(self):
         """review-b ov#580 N2: owner_instruction is in the leak corpus."""
         room = ROOMS[1]
