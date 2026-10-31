@@ -115,8 +115,9 @@ class FavorLoopTest(unittest.TestCase):
         self.assertEqual(set(fl.FAVORLOOP_TOOLS), set(ORDER))
         self.assertEqual({op: fl.FAVORLOOP_TOOLS[op] for op in ORDER}, {o['name']: o['target']['tool'] for o in MANIFEST['operations']})
         enum = bridge.SCHEMA['parameters']['properties']['operation']['enum']
-        # ov#556: the eight are appended last (an open chat keeps its pinned tools[]; the enum only grows at its tail).
-        self.assertEqual(enum[-20:-12], ORDER)
+        # ov#556: the eight were appended last (an open chat keeps its pinned tools[]; the enum only grows at its tail); J3's
+        # zzz.schedule_posts follows them, then Edge City Volunteers' twelve (ov#450).
+        self.assertEqual(enum[-21:-13], ORDER); self.assertEqual(enum[-13], 'zzz.schedule_posts')
 
     def test_the_generic_relay_never_reaches_favorloop(self):
         # A crafted mini-app.read for Favor Loop's write tool: favorloop's entry has no mini-app.read, so it is refused

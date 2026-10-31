@@ -5,6 +5,11 @@
   "version": "1.0.0",
   "description": "Favor Loop at Edge City India finds loops of 15-minute favors between residents (A helps B, B helps C, C helps A) when no two of them could swap directly, plus simple swaps and gift chains. Read how it works, the favor menu and the anonymous board; and, only when the owner asks in their private chat, join with their offers and wants, see their proposed loops, say yes or no, confirm a favor they received, or leave.",
   "homepage": "https://favorloop.fly.dev/",
+  "credit": {
+    "role": "app",
+    "attendeeId": "998788ba-cbb4-441a-8f41-121c9f917f13",
+    "name": "Bilgin Koçak"
+  },
   "owner": {
     "github": "bilgin-kocak"
   },

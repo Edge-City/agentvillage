@@ -137,8 +137,8 @@ class KismetTest(unittest.TestCase):
         self.assertFalse(mini.KISMET_OPERATIONS & mini.APP_SCOPED_OPERATIONS)
         self.assertIn('kismet', bridge._mini_app_card.REVIEWED_APPS)
         enum = bridge.SCHEMA['parameters']['properties']['operation']['enum']
-        # v2.1.22: Kismet's eight are appended after DreamStarter's nine, then Edge Library's eight, then (ov#556) Favor Loop's eight (an open chat keeps its pinned tools[]; the enum only grows at its tail).
-        self.assertEqual(enum[-36:-28], READS + WRITES); self.assertEqual(enum[-45:-36], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
+        # v2.1.22: Kismet's eight are appended after DreamStarter's nine, then Edge Library's eight, then (ov#556) Favor Loop's eight, then (J3) zzz.schedule_posts, then (ov#450) Edge City Volunteers' twelve (an open chat keeps its pinned tools[]; the enum only grows at its tail).
+        self.assertEqual(enum[-37:-29], READS + WRITES); self.assertEqual(enum[-46:-37], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
         for op in mini.KISMET['operations']:
             self.assertTrue(mini.installed(self.home, 'kismet', op))
         self.assertFalse(mini.installed(self.home, 'kismet', 'mini-app.read'))

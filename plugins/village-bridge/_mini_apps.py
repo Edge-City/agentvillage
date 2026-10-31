@@ -52,8 +52,14 @@ ZZZ_POST_WRITES = (*ZZZ_WRITE_OPERATIONS, *ZZZ_EDIT_OPERATIONS)
 # room the owner already has, borrowing exactly as zzz.open_team_room does (no catalog, class or gate change).
 ZZZ_TEAM_READ_OPERATIONS = ("zzz.list_team_invites",)
 ZZZ_TEAM_WRITE_OPERATIONS = ("zzz.open_team_room", "zzz.respond_team_invite", "zzz.add_team_members")
+# J3 owner-set repeating posts (lead L36170 rulings 2-4, v2.2.0): zzz.schedule_posts sets (or, with every_minutes null,
+# stops) the owner's own zzz.bot new-topic pace and topic, through the app server. It borrows zzz.create_thread exactly as
+# the team writes do (installed permission and gated-write path; no catalog, class, card or gate change) and is owner-led
+# only: the managed pair job's CRON_OPS and any runner never include it.
+ZZZ_OWNER_WRITE_OPERATIONS = ("zzz.schedule_posts",)
 ZZZ_TEAM_BORROWS = {"zzz.list_team_invites": "zzz.list_rooms", "zzz.open_team_room": "zzz.create_thread",
-                    "zzz.respond_team_invite": "zzz.create_thread", "zzz.add_team_members": "zzz.create_thread"}
+                    "zzz.respond_team_invite": "zzz.create_thread", "zzz.add_team_members": "zzz.create_thread",
+                    "zzz.schedule_posts": "zzz.create_thread"}
 # DreamStarter (adapted from ov#393, arrfire): public reads (the workflow catalog, the grant's rules, the local
 # businesses) and the owner's own status reads by a returned ref, plus two owner-asked WRITES that send the owner's
 # own words: dreamstarter.discover (the lines typed for that request) and dreamstarter.grant_prepare (the confirmed
@@ -91,7 +97,7 @@ READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quo
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
                               "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_POST_WRITES,
                               *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS,
-                              *FAVORLOOP_WRITE_OPERATIONS, *ECV_WRITE_OPERATIONS})
+                              *FAVORLOOP_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS, *ECV_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -105,7 +111,8 @@ ZZZBOT_PREVIOUS = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ
 ZZZBOT_ACCEPTED = (ZZZBOT, ZZZBOT_PREVIOUS)
 # zzz.pairs is an app-side feature-gated read which borrows the existing
 # list_rooms install permission; it is deliberately absent from the CP catalog.
-ZZZ_OPERATIONS = frozenset((*ZZZBOT["operations"], "zzz.pairs", *ZZZ_TEAM_READ_OPERATIONS, *ZZZ_TEAM_WRITE_OPERATIONS))
+ZZZ_OPERATIONS = frozenset((*ZZZBOT["operations"], "zzz.pairs", *ZZZ_TEAM_READ_OPERATIONS, *ZZZ_TEAM_WRITE_OPERATIONS,
+                            *ZZZ_OWNER_WRITE_OPERATIONS))
 # The kismet install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order), and Part 1's
 # public read alone (ov#533), still accepted while the CP catalog serves it. Under 1.0.0 the named operations stay
 # refused (mini_app_not_installed); under 1.1.0 mini-app.read is refused for kismet.
@@ -166,8 +173,8 @@ OPEN_APPROVALS_CHAT = "Open approvals chat: " + APPROVALS_CHAT_URL
 # Appended where the instruction asks the agent to send the owner to the bot.
 APPROVALS_CHAT_LINE = " End that message with this line on its own: \"" + OPEN_APPROVALS_CHAT + "\"."
 
-# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
-# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py). With the
+# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap: the daemon's
+# "not granted yet" only (the app's 403 star_approval_required has its own text, __init__.py). With the
 # member row autonomous (the shipped template, B-133) the daemon answers "autonomous" and no card is
 # shown; a policy that still says manual for the member class (an older box) keeps the card and this text.
 APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "
