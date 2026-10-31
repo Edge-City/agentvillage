@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
-import { jobApi, jobPython, parseHermesJobs, replaceFileNoFollow } from "./zzz_managed_job";
+import { jobApi, jobPython, OWNED_FILE_MAX_BYTES, parseHermesJobs, replaceFileNoFollow } from "./zzz_managed_job";
 
 export const AUTONOMY_GATE = "zzz-autonomy-runner";
 export const AUTONOMY_JOB_NAME = "Edge — zzz event autonomy";
@@ -37,7 +37,7 @@ export const AUTONOMY_SHIPPED = {
 function ownedFile(path: string, relative: typeof AUTONOMY_FILES[number]): "absent" | "ours" | "not_ours" {
   let meta;
   try { meta = lstatSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "not_ours"; }
-  if (!meta.isFile() || meta.size > 65536) return "not_ours";
+  if (!meta.isFile() || meta.size > OWNED_FILE_MAX_BYTES) return "not_ours";
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

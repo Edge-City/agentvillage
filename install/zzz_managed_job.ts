@@ -36,7 +36,14 @@ export const ZZZ_SHIPPED_SHA256 = {
     "d62b2354eda4702795472a89ca163225c6c2d9979b0cdce3afa023b792a4c133"],
 } as const;
 export type ZzzShippedKind = keyof typeof ZZZ_SHIPPED_SHA256;
-const SHIPPED_MAX_BYTES = 65536;
+/**
+ * The size cap on every installer-owned ZZZ file (the managed runner, shim and prompt here; the autonomy runner and its
+ * prompt in zzz_autonomy_job.ts): a file over it is "not_ours", never hashed, upgraded or torn down. It only bounds the
+ * read before the sha256 check (ownership is the shipped digest); the bytes come from the box's own overlay checkout,
+ * never through the control plane, an exec argument or the receipt (paths and digests only). 128 KiB, was 65,536 through
+ * v2.1.27 (lead L35228: the autonomy runner was 64,146 B there). A shipped file must fit; tests pin both.
+ */
+export const OWNED_FILE_MAX_BYTES = 131072;
 /**
  * Whether the object at `path` is the installer's own file: "absent" (nothing there), "ours" (a regular file, not a
  * symlink, whose bytes hash to a shipped version) or "not_ours" (anything else: a symlink, directory, FIFO, an
@@ -46,7 +53,7 @@ const SHIPPED_MAX_BYTES = 65536;
 export function zzzShippedFile(path: string, kind: ZzzShippedKind): "absent" | "ours" | "not_ours" {
   let meta;
   try { meta = lstatSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "not_ours"; }
-  if (!meta.isFile() || meta.size > SHIPPED_MAX_BYTES) return "not_ours";
+  if (!meta.isFile() || meta.size > OWNED_FILE_MAX_BYTES) return "not_ours";
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
