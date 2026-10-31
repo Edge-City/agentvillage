@@ -302,7 +302,9 @@ class TestAutonomyRunner(unittest.TestCase):
 
     def test_consecutive_claimed_failures_back_off_locally_and_success_resets(self):
         ops = []
-        now = runner._now()
+        # A fixed mid-day UTC instant: the turns below run up to now + 1000 s, and from the real clock near 00:00Z
+        # the runner's per-UTC-day turn count reset mid-test (CI saw turns 4 or 3 against 6 model calls).
+        now = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc).timestamp()
         # NEW-3: one failure does not back off; the second in a row does, and its first step (10 minutes) is longer
         # than the 5-minute cron interval, so the very next tick is skipped.
         with self.assertRaises(ValueError):
