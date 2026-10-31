@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import tempfile
 import threading
@@ -135,6 +136,7 @@ class FakeAgent:
         self.skip_context_files = kwargs.get("skip_context_files", False)
         self.load_soul_identity = kwargs.get("load_soul_identity", False)
         self.max_iterations = kwargs.get("max_iterations")
+        self.reasoning_config = kwargs.get("reasoning_config")  # agent_init.py _PASSTHROUGH_PARAMS
         self.session_id = kwargs.get("session_id")
         # agent_init.py:1153: derived from the home while the agent is built (the runner scopes it to its temp folder)
         self.logs_dir = sys.modules["agent.agent_init"].get_hermes_home() / "sessions"
@@ -236,10 +238,10 @@ class FullAgentBase(unittest.TestCase):
         return path
 
     def turn(self, context, scheduler=None, output=None, model_fails=False, code=None, manager=None, candidate=True,
-             reads=()):
+             reads=(), entry=None):
         """One run() with a fake bridge; returns (ops, completes, model_calls). `scheduler` is what _hermes loads (None:
         Hermes is not importable). `reads`: the skill reads the agent makes before it answers. `code`: run() fails with
-        that code alone."""
+        that code alone. `entry(home)`: called in place of run(home)."""
         ops, completes, model_calls, self.skill_results = [], [], [], []
 
         def activity(_http, _cfg, operation, **args):
@@ -281,7 +283,7 @@ class FullAgentBase(unittest.TestCase):
                 patch.dict(sys.modules, self.agent_init()), \
                 patch.object(runner, "_note") as note:
             if code is None:
-                runner.run(self.home)
+                (entry or runner.run)(self.home)
             else:
                 with self.assertRaisesRegex(ValueError, f"^{code}$"):
                     runner.run(self.home)
@@ -747,6 +749,26 @@ class TestSpend(FullAgentBase):
         self.assertEqual((completes, len(model_calls), scheduler.ran), ([{"body": "Today."}], 1, []))
         self.assertEqual(self.notes, ["agent-context"])
 
+    def test_the_agent_reasons_low_and_one_that_ignores_it_never_runs(self):
+        """Lead L36453: reasoning pinned low in make(), over the box config's effort (Hermes's cron kwarg)."""
+        self.assertEqual(runner.AGENT_REASONING, {"enabled": True, "effort": "low"})
+        scheduler = FakeScheduler(text='{"silent":true}')
+        self.turn(self.AGENT, scheduler)
+        (agent,) = scheduler.agents
+        self.assertEqual(agent.kwargs["reasoning_config"], {"enabled": True, "effort": "low"})
+        self.assertEqual(agent.reasoning_config, {"enabled": True, "effort": "low"})
+
+        for config in (None, {"enabled": True, "effort": "medium"}, {"enabled": False}):
+            with self.subTest(config=config):
+                class Config(FakeAgent):
+                    def __init__(self, **kwargs):
+                        super().__init__(**kwargs)
+                        self.reasoning_config = config
+                scheduler = FakeScheduler(text='{"body":"agent"}', agent=Config)
+                _, completes, model_calls = self.turn(self.AGENT, scheduler, output={"body": "Today."})
+                self.assertEqual((completes, len(model_calls), scheduler.ran), ([{"body": "Today."}], 1, []))
+                self.assertEqual(self.notes, ["agent-context"])
+
     def test_an_agent_turn_is_one_claimed_turn_and_one_agent_turn(self):
         """Lead L36075 S1: never 1 + 5; the fallback after a failed agent is part of the same claimed turn."""
         now = time.time()
@@ -841,6 +863,56 @@ class TestRequestDumps(FullAgentBase):
                 self.assertEqual(sorted(p.name for p in (self.home / "sessions").iterdir()),
                                  ["session_20261029_other.json"])
 
+    def test_a_late_dump_is_removed_when_the_fallback_fails_too(self):
+        """Lead R5 N2: the agent times out, the turn drops its folder, the still-running agent then writes a request
+        dump (Hermes's atomic_json_write recreates the folder), and today's call fails too: main() leaves through its
+        failure path, which drops the folder as the success path does."""
+        seen, dumped = [], threading.Event()
+
+        class LateDump(FakeScheduler):
+            def run_job(inner, job, **kwargs):
+                result = super().run_job(job, **kwargs)  # blocks until the timed-out turn cancels it
+                for agent in inner.agents:
+                    folder, until = agent.logs_dir.parent, time.monotonic() + 5
+                    while folder.exists() and time.monotonic() < until:  # the turn's own drop first
+                        time.sleep(0.01)
+                    agent.logs_dir.mkdir(parents=True, exist_ok=True)
+                    (agent.logs_dir / f"request_dump_{SESSION_ID}_1.json").write_text('{"owner": "steer text"}')
+                    seen.append(folder)
+                dumped.set()
+                return result
+        real_turn, real_run, real_write, written, exits = runner._agent_turn, runner.run, os.write, [], []
+
+        def write(fd, data):
+            if fd != 2:
+                return real_write(fd, data)
+            written.append(data)
+            return len(data)
+
+        def main(_home):
+            env = {key: value for key, value in os.environ.items() if key != "HERMES_HOME"}
+            handler = signal.getsignal(signal.SIGALRM)
+            try:
+                with patch.dict(os.environ, env, clear=True), \
+                        patch.object(runner, "run", side_effect=lambda _: real_run(self.home)), \
+                        patch.object(runner, "_agent_loaded", True), \
+                        patch.object(runner.os, "write", side_effect=write), \
+                        patch.object(runner.os, "_exit", side_effect=lambda status: exits.append(status)):
+                    runner.main()
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, handler)
+        with patch.object(runner, "AGENT_SECONDS", 0.3), patch.object(runner, "AGENT_MIN_SECONDS", 0.1), \
+                patch.object(runner, "_agent_turn", side_effect=lambda *a: (real_turn(*a), dumped.wait(5))[0]):
+            ops, completes, _ = self.turn(ROOMS[0], LateDump(block=True), model_fails=True, entry=main)
+        self.assertEqual((ops, completes, self.notes), (["claim", "context"], [], ["agent-timeout"]))
+        self.assertEqual(exits, [1])
+        self.assertEqual(len(written), 1)
+        self.assertIn(b"model-response", written[0])
+        (folder,) = seen
+        self.assertTrue(folder.name.startswith("zzz-agent-"))
+        self.assertFalse(folder.exists())
+
     def test_a_log_or_session_path_outside_the_temp_folder_never_runs(self):
         home = self.home
 
@@ -910,6 +982,26 @@ class TestPost(FullAgentBase):
                 self.assertIn("agent-leak", self.notes)
         _, completes, _ = self.turn(self.AGENT, FakeScheduler(text='{"body":"Happy to help with sensors."}'))
         self.assertEqual(completes, [{"body": "Happy to help with sensors."}])
+
+    def test_a_tag_is_checked_as_the_body_and_title_are(self):
+        """Lead R5 N1: up to 3 free-text tags of 40 characters go through the leak, Private-mark, echo and invisible
+        checks; any tag that fails refuses the post, as the body or title would."""
+        room = {**ROOMS[2], "owner_instruction": "Keep it short.\nNever mention my visa overstay in Goa",
+                "room_brief": "Buildathon: hardware teams meet in the east hall."}
+        post = {"body": "Who wants to prototype a filter this weekend?", "title": "Filter prototype weekend"}
+        for tag, code in (("never mention my visa overstay in goa", "agent-leak"),
+                          ("notes (private)", "agent-private"),
+                          ("hardware teams meet in the east hall", "agent-echo"),
+                          ("hard\u3164ware", "agent-format")):
+            with self.subTest(code=code):
+                answer = {**post, "tags": ["hardware", tag]}
+                self.assertIsNotNone(runner._clean_tag(tag))  # a tag the parser keeps
+                _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps(answer)), output={"silent": True})
+                self.assertEqual(completes, [{"silent": True}])
+                self.assertIn(code, self.notes)
+                self.assertNotIn(tag, json.dumps(completes))
+        _, completes, _ = self.turn(room, FakeScheduler(text=json.dumps({**post, "tags": ["hardware", "water"]})))
+        self.assertEqual(completes, [{**post, "tags": ["hardware", "water"]}])
 
     def test_the_owners_instruction_is_never_posted(self):
         """review-b ov#580 N2: owner_instruction is in the leak corpus."""

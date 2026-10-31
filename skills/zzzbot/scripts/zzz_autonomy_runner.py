@@ -1050,6 +1050,9 @@ SKILL_MAX_BYTES = 65536
 # turns per UTC day (state key "agent", counted before the turn); past it the turn is today's one call (agent-cap), so
 # the box keeps going up to the daily cap and an agent turn never brings "daily-cap" sooner.
 AGENT_ITERATIONS, AGENT_SKILL_CALLS, AGENT_DAILY_TURNS = 3, 2, 40
+# Lead L36453 (R5 advice): the agent turn's reasoning is pinned low (the shape Hermes's parse_reasoning_effort returns),
+# never the box config's effort: a short task, and medium thinking on each call nears the AGENT_SECONDS join.
+AGENT_REASONING = {"enabled": True, "effort": "low"}
 SKILL_SCHEMA = {"name": AGENT_TOOL, "description": (
     "Read one of your village skills (read-only, at most two reads): edgeos covers the current event and its "
     "schedule tools; edge-india is public village knowledge; edge-esmeralda the previous village; index-network who "
@@ -1327,7 +1330,8 @@ def _agent_turn(scheduler, job_id: str, extra: str, seconds: float):
             init.get_hermes_home = lambda: Path(_turn["logs"])
             try:
                 agent = cls(**{**options, "skip_memory": True, "load_soul_identity": False, "skip_context_files": True,
-                               "session_db": None, "max_iterations": AGENT_ITERATIONS})
+                               "session_db": None, "max_iterations": AGENT_ITERATIONS,
+                               "reasoning_config": dict(AGENT_REASONING)})
             finally:
                 init.get_hermes_home = home_of
             _turn["sessions"].append(getattr(agent, "session_id", None))
@@ -1336,6 +1340,7 @@ def _agent_turn(scheduler, job_id: str, extra: str, seconds: float):
                     getattr(agent, "_memory_store", 1) or getattr(agent, "_memory_manager", 1) or
                     getattr(agent, "load_soul_identity", 1) or getattr(agent, "skip_context_files", 0) is not True or
                     getattr(agent, "max_iterations", None) != AGENT_ITERATIONS or
+                    getattr(agent, "reasoning_config", None) != AGENT_REASONING or
                     not isinstance(tools, (set, frozenset, list, tuple)) or not set(tools) <= {AGENT_TOOL} or
                     not _inert(_turn["manager"])):
                 refused.append("agent-context")
@@ -1407,11 +1412,11 @@ def _strings(value) -> list:
 
 
 def _leak(output: dict, data: dict) -> str:
-    """agent-leak: the body or title holds a private line (_private_corpus), or that corpus is unreadable;
-    agent-private: it carries the Private mark; agent-echo: 24 characters of room text (never skill text: lead L36075
-    S2), bar ONE quote of source.body <= QUOTE_CHARS; agent-format: an invisible character but newline, tab or an emoji's
-    own. Folded, in memory, never logged."""
-    raw = [output[key] for key in ("body", "title") if key in output]
+    """Over the body, the title and each tag (lead R5 N1): agent-leak: one holds a private line (_private_corpus), or
+    that corpus is unreadable; agent-private: one carries the Private mark; agent-echo: 24 characters of room text
+    (never skill text: lead L36075 S2), bar ONE quote of source.body <= QUOTE_CHARS; agent-format: an invisible character
+    but newline, tab or an emoji's own. Folded, in memory, never logged."""
+    raw = [output[key] for key in ("body", "title") if key in output] + list(output.get("tags", []))
     said, private = [_fold(text) for text in raw], _turn["private"]
     if private is None or any(line in text for line in private for text in said):
         return "agent-leak"
@@ -1725,6 +1730,11 @@ def main():
             os.write(2, reason_line(error).encode())
         except Exception:
             pass
+        if _agent_loaded:
+            try:
+                _drop_logs()  # lead R5 N2: a timed-out agent's late dump stays when the fallback fails too
+            except Exception:
+                pass
         os._exit(1)
 
 
