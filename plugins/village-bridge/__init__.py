@@ -31,7 +31,7 @@ from ._mini_apps import (installed, authorize_send, gate_verified, READ_OPERATIO
 from ._dreamstarter import (ds_payload, DS_APP_CODES, DS_ERRORS, DS_HANDLING, DS_INVALID, DS_CONTACT, DS_UNCLEAR,
                             DS_WRITE_UNAVAILABLE)
 from ._kismet import (kismet_payload, kismet_answer, kismet_write, remember_shown, KismetRefused, KISMET_ERRORS, KISMET_GATE, KISMET_IDENTITY, KISMET_UNCLEAR, KISMET_UNAVAILABLE,
-                      OP_ARGUMENTS as KISMET_OP_ARGUMENTS, PUBLIC_TOOLS as KISMET_PUBLIC_TOOLS)
+                      OP_ARGUMENTS as KISMET_OP_ARGUMENTS, PUBLIC_TOOLS as KISMET_PUBLIC_TOOLS, unclear_text as kismet_unclear)
 from ._library import (library_payload, library_answer, LibraryRefused, LIBRARY_APP_ERRORS, LIBRARY_IDENTITY, LIBRARY_INVALID,
                        LIBRARY_UNAVAILABLE)
 from ._favorloop import (favorloop_payload, favorloop_answer, FavorLoopRefused, FAVORLOOP_APP_ERRORS, FAVORLOOP_GATE,
@@ -1096,7 +1096,7 @@ def transport(config, payload, flat_card=True, operation_class=None, *, timeout=
             codes = {code: DS_ERRORS[code] for code in DS_APP_CODES}
         if kismet:
             # The app server's closed codes with Kismet's own text, only for its operations.
-            codes = {code: KISMET_ERRORS[code] for code in KISMET_ERRORS if code.startswith("mini_app_")}
+            codes = {code: kismet_unclear(payload.get("operation"), KISMET_ERRORS[code]) for code in KISMET_ERRORS if code.startswith("mini_app_")}
         if library:
             # The app server's closed codes with Edge Library's own text, only for its operations.
             codes = dict(LIBRARY_APP_ERRORS)
@@ -1138,7 +1138,7 @@ def transport(config, payload, flat_card=True, operation_class=None, *, timeout=
             return {"error": "connection_or_request_refused", "status": error.code, "settingsUrl": SETTINGS, "instruction": DS_UNCLEAR}
         if kismet:
             return {"error": "connection_or_request_refused", "status": error.code,
-                    "instruction": KISMET_UNCLEAR if payload.get("operation") in KISMET_WRITE_OPERATIONS else KISMET_UNAVAILABLE}
+                    "instruction": kismet_unclear(payload.get("operation"))}
         if library:
             return {"error": "connection_or_request_refused", "status": error.code, "instruction": LIBRARY_UNAVAILABLE}
         if favorloop:
@@ -1623,7 +1623,7 @@ def handle(args, **kwargs):
             return json.dumps({"error": "village_unavailable", "settingsUrl": SETTINGS, "instruction": DS_UNCLEAR})
         if isinstance(args, dict) and isinstance(args.get("operation"), str) and args["operation"] in KISMET_OPERATIONS:
             return json.dumps({"error": "village_unavailable",
-                               "instruction": KISMET_UNCLEAR if args["operation"] in KISMET_WRITE_OPERATIONS else KISMET_UNAVAILABLE})
+                               "instruction": kismet_unclear(args["operation"])})
         if isinstance(args, dict) and isinstance(args.get("operation"), str) and args["operation"] in LIBRARY_OPERATIONS:
             return json.dumps({"error": "village_unavailable", "instruction": LIBRARY_UNAVAILABLE})
         if isinstance(args, dict) and isinstance(args.get("operation"), str) and args["operation"] in FAVORLOOP_OPERATIONS:

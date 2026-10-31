@@ -926,6 +926,39 @@ class KismetTest(unittest.TestCase):
             out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
             self.assertEqual(out['handling'], kis.KISMET_HANDLING)
 
+    def test_an_unclear_web_link_answer_gets_the_unavailable_text_and_go_keeps_the_unclear_one(self):
+        # web_link changes nothing in the owner's account: never "a sign-up, date, answer or deletion may have gone through".
+        want = {'kismet.web_link': kis.UNAVAILABLE, 'kismet.go': kis.KISMET_UNCLEAR}
+        self.assertEqual(kis.KISMET_UNAVAILABLE, kis.UNAVAILABLE); self.assertIn('not available from here right now', kis.UNAVAILABLE)
+        with self.gate():
+            for op, text in want.items():
+                for answer, code in ((RuntimeError('socket closed'), 'village_unavailable'),
+                                     ({'error': 'connection_or_request_refused', 'status': 502}, 'connection_or_request_refused'),
+                                     ({'error': 'mini_app_upstream_unconfirmed', 'instruction': 'x'}, 'mini_app_upstream_unconfirmed'),
+                                     ({'error': 'made_up'}, 'connection_or_request_refused'), ({'ok': True}, 'kismet_invalid_answer')):
+                    with self.subTest(op=op, code=code):
+                        if isinstance(answer, Exception):
+                            self.transport.side_effect = answer
+                        else:
+                            self.transport.side_effect = None; self.transport.return_value = answer
+                        self.assertEqual(self.call({'operation': op, 'arguments': {}}), {'error': code, 'instruction': text})
+            self.transport.side_effect = None
+        # The transport's own answers (an HTTP refusal from the app server), the same split.
+        response = unittest.mock.MagicMock(); response.__enter__.return_value = response
+        opener = unittest.mock.Mock(); config = {'origin': 'https://agents.edgecity.live', 'token': 'not-logged'}
+        def refuse(code, status):
+            def raise_it(*_args, **_kwargs):
+                raise HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool', status, 'refused', {},
+                                io.BytesIO(json.dumps({'code': code}).encode()))
+            return raise_it
+        with patch.object(bridge, 'build_opener', return_value=opener):
+            for op, text in want.items():
+                for code, status, expect in (('mini_app_upstream_unconfirmed', 502, {'error': 'mini_app_upstream_unconfirmed', 'instruction': text}),
+                                             ('VALIDATION_ERROR', 422, {'error': 'connection_or_request_refused', 'status': 422, 'instruction': text})):
+                    with self.subTest(op=op, transport=code):
+                        opener.open.side_effect = refuse(code, status)
+                        self.assertEqual(real_transport(config, {'operation': op, 'arguments': {}}), expect)
+
     def test_web_link_projections_are_exact(self):
         accepted = [{'id': 'kismet', **entry} for entry in (mini.KISMET_120, mini.KISMET, mini.KISMET_PUBLIC)]
         for entry in accepted:

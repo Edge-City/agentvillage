@@ -522,6 +522,14 @@ KISMET_APP_CODES = {
 KISMET_ERRORS = {**{code: text for code, (_, text) in KISMET_CODES.items()}, **KISMET_APP_CODES,
                  "connection_or_request_refused": KISMET_UNCLEAR, "response_too_large": UNAVAILABLE}
 TEXT_MAX = 4000
+
+
+def unclear_text(op, text=None):
+    """The instruction for an unclear or refused-in-transit answer to `op` (`text`: the mapped one, default by class).
+    kismet.web_link changes nothing in the owner's account, so it never gets KISMET_UNCLEAR's "a sign-up, date, answer or
+    deletion may have gone through ... call kismet.summary": Kismet is unavailable, and asking again makes a new link."""
+    text = text if text is not None else KISMET_UNCLEAR if op in KISMET_WRITES else UNAVAILABLE
+    return UNAVAILABLE if op == "kismet.web_link" and text == KISMET_UNCLEAR else text
 CODE_PREFIX = re.compile(r"([a-z][a-z_]{0,63}): (.*)", re.DOTALL)
 
 
@@ -548,11 +556,11 @@ def kismet_answer(op, answer, scrub):
     if isinstance(answer, dict) and "kind" not in answer and isinstance(answer.get("error"), str):
         code = answer["error"] if answer["error"] in KISMET_ERRORS else "connection_or_request_refused"
         if code == "connection_or_request_refused":
-            return {"error": code, "instruction": KISMET_UNCLEAR if op in KISMET_WRITES else UNAVAILABLE}
-        return {"error": code, "instruction": KISMET_ERRORS[code]}
+            return {"error": code, "instruction": unclear_text(op)}
+        return {"error": code, "instruction": unclear_text(op, KISMET_ERRORS[code])}
     if (not isinstance(answer, dict) or answer.get("kind") != "mini-app" or answer.get("appId") != "kismet"
             or answer.get("operation") != op or not isinstance(answer.get("result"), dict)):
-        return {"error": "kismet_invalid_answer", "instruction": KISMET_UNCLEAR if op in KISMET_WRITES else UNAVAILABLE}
+        return {"error": "kismet_invalid_answer", "instruction": unclear_text(op)}
     result = answer["result"]
     structured = result.get("structuredContent") if isinstance(result.get("structuredContent"), dict) else None
     blocks = _text_blocks(result)
