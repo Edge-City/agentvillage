@@ -1559,7 +1559,11 @@ class BridgeTest(unittest.TestCase):
              'kismet-village.vercel.app/\tu/av-test-0000','kismet-vil\r\nlage.vercel.app/u/x','kismet-village.vercel.app/u\t/x',
              'kismet-village.vercel.app/./u/x','kismet-village.vercel.app/a/b/../../u/x','kismet-village.vercel.app/%2e/u/x',
              'kismet-village.vercel.app/x/%2E%2E/u/x','kismet-village.vercel.app/u','see kismet-village.vercel.app/u?next=chat',
-             'kismet-village.vercel.app.:8443/./u#x']
+             'kismet-village.vercel.app.:8443/./u#x',
+             # security review on ov#601: IDNA dot equivalents; padding that would push "u" past a pre-resolution cap.
+             'kismet-village\u3002vercel\u3002app/u/x','kismet-village\uff61vercel\uff61app/u/x','kismet-village\uff0evercel\u2024app/u/x',
+             'kismet-village.vercel%E3%80%82app/u/x','kismet-village.vercel.app'+'/.'*5000+'/u/av-test-0000',
+             'kismet-village.vercel.app/'+'a/'*3000+'..'+'/..'*2999+'/u/x']
   for text in spellings:
    with self.subTest(text=text):
     self.assertTrue(bridge._names_kismet_link(text))
@@ -1649,15 +1653,27 @@ class BridgeTest(unittest.TestCase):
   with patch.object(bridge._mini_app_card,'projected_operation',return_value={'app':'acme','kind':'prepare'}),patch.object(bridge,'_generic_card_op',card):
    out=self.call({'operation':'acme.prepare','arguments':{'item':'Coffee','note':'https://kismet-village.vercel.app/u/av-test-0000'}})
   self.assertEqual(out,{'error':'invalid_arguments','instruction':bridge.KISMET_LINK_PRIVATE});card.assert_not_called()
+  with patch.object(bridge._mini_app_card,'projected_operation',return_value={'app':'acme','kind':'prepare'}),patch.object(bridge,'_generic_card_op',card):
+   out=self.call({'operation':'acme.prepare','arguments':{'item':'Coffee','extras':{'https://kismet-village.vercel.app/u/av-test-0000':'1'}}})
+  self.assertEqual(out,{'error':'invalid_arguments','instruction':bridge.KISMET_LINK_PRIVATE});card.assert_not_called()
  def test_the_kismet_link_matcher_is_one_file_in_both_plugins(self):
   root=Path(__file__).parents[1]
   bridge_copy=(root/'_kismet_link.py').read_bytes();events_copy=(root.parent/'av-events'/'_kismet_link.py').read_bytes()
   self.assertEqual(bridge_copy,events_copy)
   self.assertEqual(sys.modules['village_bridge._kismet_link'].INVISIBLE,bridge.INVISIBLE)
   self.assertIs(bridge._carries_kismet_link,bridge.carries_kismet_signin_link)
-  # Never throws, whatever it is handed; keys are not scanned (the payload's keys are the plugin's own).
-  for value in (None,1,1.5,b'kismet-village.vercel.app/u/x',object(),{'kismet-village.vercel.app/u/x':1},[[['%'*1000]]],'\udcff'*10,'%'*5000+'kismet'):
+  # Never throws, whatever it is handed.
+  for value in (None,1,1.5,b'kismet-village.vercel.app/u/x',object(),{1:None,None:'x'},[[['%'*1000]]],'\udcff'*10,'%'*5000+'kismet',
+                'kismet-village.vercel.app/'+'x'*4000+'?u'):
    self.assertFalse(bridge._carries_kismet_link(value))
+  # Dict keys are scanned too: generic args and card items carry agent-supplied keys.
+  for value in ({'kismet-village.vercel.app/u/x':1},[{'note':{'https://kismet-village.vercel.app/u/av-test-0000':'hi'}}]):
+   self.assertTrue(bridge._carries_kismet_link(value))
+  # A path longer than PATH_CHARS after the host fails closed; one that fits is resolved as usual.
+  cap=sys.modules['village_bridge._kismet_link'].PATH_CHARS
+  self.assertTrue(bridge._names_kismet_link('kismet-village.vercel.app/'+'x'*cap))
+  self.assertFalse(bridge._names_kismet_link('kismet-village.vercel.app/'+'x'*(cap-1)))
+  self.assertFalse(bridge._names_kismet_link('kismet-village.vercel.app/join'+'/.'*1000+'/u/../x'))
  # ---- zzzbot 1.1.0 (lead L30481): the agent's own retag and edit; 1.0.0 still accepted --------------------------------
  TAG={'operation':'zzz.tag_thread','arguments':{'thread':'thr_1','tags':['buildathon','lunch']}}
  EDIT={'operation':'zzz.edit_post','arguments':{'post':'pst_1','body':'See you at 7pm.'}}
