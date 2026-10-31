@@ -769,6 +769,8 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
       const legacy = `scripts/${ZZZ_LEGACY_SHIM}` as const;
       if (zzzManagedAt(home, legacy) === "ours") unlinkSync(join(home, "skills", "zzzbot", legacy));
     }
+    // v2.2.0 item 4: with no village-bridge.json yet this defers the job (none, no throw), so the stage and the apps
+    // above still settle; the next stage after the credential lands installs it (zzz_autonomy_job.ts autonomyBridgeAbsent).
     if (import.meta.main && autonomyManaged) reconcileAutonomyJob(home,true);
     // On removal authority disappears before the job teardown; the managed files and state (markers) go only after it.
     if (zzzTeardown) {
