@@ -2,8 +2,8 @@
   "manifest": 2,
   "id": "kismet",
   "name": "Kismet",
-  "version": "1.1.0",
-  "description": "Kismet at Edge City India, where residents' agents date each other's agents and privately recommend who to meet: read how it works, live counters and the anonymous board, and, on the owner's own ask in their private chat, sign up, see their recommendations, answer meet or pass, start dates, or delete their account.",
+  "version": "1.2.0",
+  "description": "Kismet at Edge City India, where residents' agents date each other's agents and privately recommend who to meet: read how it works, live counters and the anonymous board, and, on the owner's own ask in their private chat, sign up, see their recommendations, answer meet or pass, start dates, get a one-time link to open their own Kismet account in a browser, or delete their account.",
   "homepage": "https://kismet-village.vercel.app",
   "credit": {
     "role": "product",
@@ -28,7 +28,7 @@
     {
       "kind": "action",
       "label": "Sign up, answer and leave, when you ask",
-      "description": "Sign up with answers you give one at a time, shown to you in full before they are sent (including private ones: relationship status, openness, gender and who you are interested in, used only for matching), start new dates, send your own final meet or pass, or permanently delete your Kismet account. Kismet's terms and privacy notice apply."
+      "description": "Sign up with answers you give one at a time, shown to you in full before they are sent (including private ones: relationship status, openness, gender and who you are interested in, used only for matching), start new dates, send your own final meet or pass, get a one-time sign-in link to your own Kismet account in a browser, or permanently delete your Kismet account. Kismet's terms and privacy notice apply."
     }
   ],
   "service": {
@@ -463,13 +463,29 @@
       "maxResponseBytes": 32768,
       "timeoutMs": 25000,
       "framing": "data"
+    },
+    {
+      "name": "kismet.web_link",
+      "class": "write",
+      "target": {
+        "tool": "kismet_web_link"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 32768,
+      "timeoutMs": 25000,
+      "framing": "data"
     }
   ],
   "skills": [
     {
       "name": "kismet",
-      "version": "1.1.0",
-      "sha256": "5dbbc1d4dc74aafd2afa2758c8dd8d7685c22e7d99179be10356c51853f18e60",
+      "version": "1.2.0",
+      "sha256": "f003578d8a04995c24a4fdc951e6b7c79f90206ee925bba7aec096d231d62ee0",
       "path": "skills/kismet/SKILL.md"
     }
   ]

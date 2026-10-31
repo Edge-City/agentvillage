@@ -175,9 +175,9 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
   expect(gold.operations.slice(0, 8)).toEqual([...restored.operations]);
   expect(gold.operations.slice(0, 6)).toEqual([...previous.operations]);
-  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's, the fifth zzzbot's five (1.0.0), the sixth kismet's Part 1 read
-  // (each asserted in its own test below).
-  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(6);
+  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's, the fifth zzzbot's five (1.0.0), the sixth kismet's eight
+  // (1.1.0), the seventh kismet's Part 1 read (each asserted in its own test below).
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(7);
   expect(PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "gold-stars").length).toBe(2);
   for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
   // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
@@ -677,12 +677,17 @@ test("DreamStarter (adapted from ov#393): the manifest and native allowlist pin 
   expect(existsSync(join(root, "skills", "dreamstarter", "SKILL.md"))).toBe(false);
 });
 
-test("kismet 1.1.0: the eight named operations (Part 2) and Part 1's public read alone, staged and removed", () => {
+test("kismet 1.2.0: the nine named operations (Part 2 + kismet.web_link), with 1.1.0's eight and Part 1's public read alone, staged and removed", () => {
   const kismet = REVIEWED_MINI_APPS.find((x) => x.id === "kismet")!;
-  const previous = PREVIOUS_REVIEWED_MINI_APPS.find((x) => x.id === "kismet")!;
+  const earlier = PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "kismet");
+  const eight = earlier.find((x) => x.version === "1.1.0")!;
+  const previous = earlier.find((x) => x.version === "1.0.0")!;
   const reads = ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary"];
-  const writes = ["kismet.signup", "kismet.go", "kismet.decide", "kismet.delete"];
-  expect([kismet.id, kismet.version, [...kismet.skills], [...kismet.operations]]).toEqual(["kismet", "1.1.0", ["kismet"], [...reads, ...writes]]);
+  const writes = ["kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link"];
+  expect(earlier.length).toBe(2);
+  expect([kismet.id, kismet.version, [...kismet.skills], [...kismet.operations]]).toEqual(["kismet", "1.2.0", ["kismet"], [...reads, ...writes]]);
+  // 1.1.0 stays stageable byte for byte (the cp serves it to every box below the v2.2.1 floor): the nine minus web_link.
+  expect([eight.id, eight.version, [...eight.skills], [...eight.operations]]).toEqual(["kismet", "1.1.0", ["kismet"], [...reads, ...writes.slice(0, 4)]]);
   expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["kismet", "1.0.0", ["kismet"], ["mini-app.read"]]);
   expect(EDGE_SKILL_NAMES).not.toContain("kismet");
   // The rename leaves no alias: the old id is neither reviewed nor stageable. Not being reviewed, it is a generic
@@ -708,31 +713,42 @@ test("kismet 1.1.0: the eight named operations (Part 2) and Part 1's public read
   expect(v2.operations.map((op: { class: string }) => op.class)).toEqual([...reads.map(() => "read"), ...writes.map(() => "write")]);
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
   expect(plugin).toContain('KISMET_READ_OPERATIONS = ("kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary")');
-  expect(plugin).toContain('KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete")');
+  expect(plugin).toContain('KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link")');
+  expect(plugin).toContain('KISMET_120 = {"version": "1.2.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}');
+  expect(plugin).toContain('KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, "kismet.signup", "kismet.go", "kismet.decide",');
+  expect(/^KISMET_ACCEPTED = \(KISMET_120, KISMET, KISMET_PUBLIC\)$/m.test(plugin)).toBe(true);
+  // kismet.web_link: Deon's kismet_web_link, a closed {} input, a write (not readOnly, not idempotent), the manifest's last op.
+  expect(v2.operations.at(-1)).toEqual({ name: "kismet.web_link", class: "write", target: { tool: "kismet_web_link" },
+    input: { type: "object", properties: {}, additionalProperties: false }, maxRequestBytes: 4096, maxResponseBytes: 32768, timeoutMs: 25000, framing: "data" });
   const skill = readFileSync(join(REPO, "skills", "kismet", "SKILL.md"), "utf8");
-  expect(skill).toMatch(/^---\r?\nname: kismet\r?\n[\s\S]*\r?\nversion: 1\.1\.0\r?\n/);
+  expect(skill).toMatch(/^---\r?\nname: kismet\r?\n[\s\S]*\r?\nversion: 1\.2\.0\r?\n/);
   expect(skill).not.toContain(v2.service.baseUrl); // the endpoint lives in the reviewed manifest only
   expect(skill).not.toContain("/api/"); // no service API: the app server owns every call
   expect(skill).not.toContain("MINI_APP_KISMET_KEY"); // the key is named only in the manifest, never valued anywhere
   for (const op of [...reads, ...writes]) expect(skill).toContain("`" + op + "`"); // the skill names each operation
   const root = installedBox();
-  for (const entry of [kismet, previous]) {
+  for (const entry of [kismet, eight, previous]) {
     const projection = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
     expect(validateProjection(projection)).toEqual(projection);
     const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
     expect(receipt.files.map((x) => x.path)).toEqual(["skills/kismet/SKILL.md"]);
     expect(readFileSync(join(root, "skills", "kismet", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "kismet", "SKILL.md")));
     expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
   }
   // Any other list is refused: a planted or unknown op, a reorder, a duplicate, a subset or none.
-  const all8 = [...kismet.operations];
+  const all9 = [...kismet.operations], all8 = [...eight.operations];
   // kismet.notes (live on Kismet's /mcp, not reviewed for Part 2, lead L29967) is refused like any unreviewed op.
-  for (const operations of [[...all8, "kismet.status"], [...all8, "kismet.notes"], ["mini-app.read", "kismet.notes"], [...all8, "mini-app.context.write"], [...all8, "mini-app.read"], [...all8].reverse(),
-    [...all8, "kismet.delete"], all8.slice(0, 7), reads, writes, ["mini-app.read", "kismet.signup"], ["mini-app.read", "mini-app.context.read"],
-    ["mini-app.read", "mini-app.read"], ["kismet.decide"], []]) {
+  for (const operations of [[...all9, "kismet.status"], [...all9, "kismet.notes"], [...all8, "kismet.status"], [...all8, "kismet.notes"], ["mini-app.read", "kismet.notes"],
+    [...all9, "mini-app.context.write"], [...all9, "mini-app.read"], [...all9].reverse(), [...all8].reverse(),
+    [...all9, "kismet.web_link"], [...all9, "kismet.delete"], all9.slice(0, 7), reads, writes, ["mini-app.read", "kismet.signup"], ["mini-app.read", "mini-app.context.read"],
+    ["mini-app.read", "mini-app.read"], ["kismet.decide"], ["kismet.web_link"], [...reads, "kismet.web_link"], [...all8.slice(0, 7), "kismet.web_link", "kismet.delete"],
+    ["kismet.web_link", ...all8], []]) {
     expect(() => validateProjection({ version: 1, apps: [{ ...kismet, operations }] })).toThrow("mini_apps_unreviewed_bundle");
   }
-  for (const changed of [{ ...kismet, version: "1.0.0" }, { ...previous, version: "1.1.0" }, { ...kismet, version: "1.1.1" }, { ...kismet, skills: ["other"] }]) {
+  // Each version only with its own list: 1.2.0 never with the eight, 1.1.0 never with the nine.
+  for (const changed of [{ ...kismet, version: "1.0.0" }, { ...kismet, version: "1.1.0" }, { ...eight, version: "1.2.0" }, { ...eight, version: "1.0.0" },
+    { ...previous, version: "1.1.0" }, { ...previous, version: "1.2.0" }, { ...kismet, version: "1.2.1" }, { ...kismet, version: "1.1.1" }, { ...kismet, skills: ["other"] }]) {
     expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
   }
   reconcileMiniApps({ version: 1, apps: [] }, root);

@@ -1,4 +1,5 @@
-"""Kismet Part 2 (lead L29830; product's build spec A.7): the box's half of the eight Kismet operations.
+"""Kismet Part 2 (lead L29830; product's build spec A.7) and 1.2.0's kismet.web_link (lead L36841): the box's half of the
+nine Kismet operations.
 
 Synthetic av-test-<name> data and the fictional fixtures under scripts/tests/fixtures/kismet only; no network (the
 transport is mocked, or urllib's opener is). No key anywhere: the box never holds one.
@@ -31,13 +32,16 @@ real_transport = bridge.transport
 MANIFEST = json.loads((REPO / 'mini-apps' / 'kismet' / 'manifest.json').read_text())
 FIXTURES = REPO / 'scripts' / 'tests' / 'fixtures' / 'kismet'
 READS = ['kismet.how_it_works', 'kismet.village_stats', 'kismet.public_board', 'kismet.summary']
-WRITES = ['kismet.signup', 'kismet.go', 'kismet.decide', 'kismet.delete']
+WRITES = ['kismet.signup', 'kismet.go', 'kismet.decide', 'kismet.delete', 'kismet.web_link']
+EIGHT = READS + WRITES[:4]  # kismet 1.1.0
+WEB_LINK = 'https://kismet-village.vercel.app/u/av-test-0000?next=chat'  # the fixture's fake link
 ANSWERS = {'name': 'av-test-river', 'status': 'single', 'lookingFor': ['friends', 'collaborators'],
            'interests': ['Music', 'Food', 'Books'], 'telegram': '@av_test_river', 'agreedToTerms': True, 'ageConfirmed': True}
 GOOD = {
     'kismet.how_it_works': {}, 'kismet.village_stats': {}, 'kismet.public_board': {'limit': 5}, 'kismet.summary': {},
     'kismet.signup': {'answers': ANSWERS}, 'kismet.go': {'targetId': '00000000-0000-4000-8000-0000000000aa'},
     'kismet.decide': {'dateId': '00000000-0000-4000-8000-000000000001', 'decision': 'meet'}, 'kismet.delete': {},
+    'kismet.web_link': {},
 }
 
 
@@ -82,7 +86,7 @@ class KismetTest(unittest.TestCase):
         self.addCleanup(logging.getLogger('village_bridge').removeHandler, self.records)
 
     def install(self, entry=None):
-        apps = [{'id': 'gold-stars', **mini.GOLD_STARS}, entry or {'id': 'kismet', **mini.KISMET}]
+        apps = [{'id': 'gold-stars', **mini.GOLD_STARS}, entry or {'id': 'kismet', **mini.KISMET_120}]
         (self.home / 'mini-apps.json').write_text(json.dumps({'version': 1, 'apps': apps}))
 
     def gate(self, switch='on', codes=()):
@@ -128,8 +132,12 @@ class KismetTest(unittest.TestCase):
 
     # ---- classification, install and manifest parity ------------------------------------------------------------
     def test_operations_are_classified_and_the_install_is_exact(self):
-        self.assertEqual(mini.KISMET, {'version': '1.1.0', 'skills': ['kismet'], 'operations': READS + WRITES})
+        self.assertEqual(mini.KISMET_120, {'version': '1.2.0', 'skills': ['kismet'], 'operations': READS + WRITES})
+        self.assertEqual(mini.KISMET, {'version': '1.1.0', 'skills': ['kismet'], 'operations': EIGHT})
         self.assertEqual(mini.KISMET_PUBLIC, {'version': '1.0.0', 'skills': ['kismet'], 'operations': ['mini-app.read']})
+        self.assertEqual(mini.KISMET_ACCEPTED, (mini.KISMET_120, mini.KISMET, mini.KISMET_PUBLIC))
+        self.assertIs(mini.REVIEWED_ENTRIES['kismet'], mini.KISMET_ACCEPTED)
+        self.assertEqual(mini.KISMET_OPERATIONS, frozenset(READS + WRITES))
         for op in READS:
             self.assertIn(op, mini.READ_OPERATIONS); self.assertNotIn(op, mini.WRITE_OPERATIONS)
         for op in WRITES:
@@ -137,21 +145,35 @@ class KismetTest(unittest.TestCase):
         self.assertFalse(mini.KISMET_OPERATIONS & mini.APP_SCOPED_OPERATIONS)
         self.assertIn('kismet', bridge._mini_app_card.REVIEWED_APPS)
         enum = bridge.SCHEMA['parameters']['properties']['operation']['enum']
-        # v2.1.22: Kismet's eight are appended after DreamStarter's nine, then Edge Library's eight, then (ov#556) Favor Loop's eight, then (J3) zzz.schedule_posts, then (ov#450) Edge City Volunteers' twelve (an open chat keeps its pinned tools[]; the enum only grows at its tail).
-        self.assertEqual(enum[-37:-29], READS + WRITES); self.assertEqual(enum[-46:-37], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
-        for op in mini.KISMET['operations']:
+        # v2.1.22: Kismet's eight are appended after DreamStarter's nine, then Edge Library's eight, then (ov#556) Favor Loop's eight, then (J3) zzz.schedule_posts (an open chat keeps its pinned tools[]; the enum only grows at its tail).
+        # 1.2.0: kismet.web_link is appended after them all; then (ov#450) Edge City Volunteers' twelve follow it, last.
+        self.assertEqual(enum[-38:-30], EIGHT); self.assertEqual(enum[-47:-38], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
+        self.assertEqual(enum[-14:-12], ['zzz.schedule_posts', 'kismet.web_link']); self.assertEqual(enum[-12:], mini.ECI_VOLUNTEERS['operations'])
+        for op in mini.KISMET_120['operations']:
             self.assertTrue(mini.installed(self.home, 'kismet', op))
         self.assertFalse(mini.installed(self.home, 'kismet', 'mini-app.read'))
+        # 1.1.0 (the cp's entry for a box below the v2.2.1 floor) stays accepted: its eight, never kismet.web_link.
+        self.install({'id': 'kismet', **mini.KISMET})
+        for op in EIGHT:
+            self.assertTrue(mini.installed(self.home, 'kismet', op))
+        self.assertFalse(mini.installed(self.home, 'kismet', 'kismet.web_link')); self.assertFalse(mini.installed(self.home, 'kismet', 'mini-app.read'))
+        self.assertTrue(mini.installed(self.home, 'gold-stars', 'gold-stars.quota'))
         # Part 1's entry (ov#533) stays accepted: its public relay read only, no named operation.
         self.install({'id': 'kismet', **mini.KISMET_PUBLIC})
         self.assertTrue(mini.installed(self.home, 'kismet', 'mini-app.read'))
-        for op in mini.KISMET['operations']:
+        for op in mini.KISMET_120['operations']:
             self.assertFalse(mini.installed(self.home, 'kismet', op))
-        base = {'id': 'kismet', **mini.KISMET}
+        base, eight = {'id': 'kismet', **mini.KISMET_120}, {'id': 'kismet', **mini.KISMET}
         for changed in [{**base, 'operations': base['operations'] + ['kismet.status']}, {**base, 'operations': list(reversed(base['operations']))},
                         {**base, 'operations': base['operations'] + ['mini-app.context.write']}, {**base, 'operations': base['operations'][:7]},
                         {**base, 'operations': base['operations'] + ['kismet.delete']}, {**base, 'operations': []},
-                        {**base, 'version': '1.1.1'}, {**base, 'skills': ['other']}, {**base, 'operations': ['mini-app.read', 'kismet.signup']}]:
+                        {**base, 'version': '1.1.1'}, {**base, 'skills': ['other']}, {**base, 'operations': ['mini-app.read', 'kismet.signup']},
+                        # 1.2.0 with a tenth op, reordered, or with only the eight; 1.1.0 with the nine or web_link anywhere in it.
+                        {**base, 'operations': base['operations'] + ['kismet.notes']}, {**base, 'operations': base['operations'] + ['kismet.web_link']},
+                        {**base, 'operations': EIGHT[:7] + ['kismet.web_link', 'kismet.delete']}, {**base, 'operations': ['kismet.web_link'] + EIGHT},
+                        {**base, 'operations': EIGHT}, {**base, 'version': '1.1.0'}, {**base, 'version': '1.2.1'},
+                        {**eight, 'version': '1.2.0'}, {**eight, 'operations': EIGHT + ['kismet.web_link']},
+                        {**eight, 'operations': EIGHT + ['kismet.status']}, {**eight, 'operations': list(reversed(EIGHT))}]:
             with self.subTest(changed=changed):
                 self.install(changed)
                 # A planted or reordered list refuses the whole projection, Gold Stars included.
@@ -160,8 +182,12 @@ class KismetTest(unittest.TestCase):
     def test_input_checks_mirror_the_reviewed_manifest(self):
         ops = {op['name']: op for op in MANIFEST['operations']}
         self.assertEqual(list(ops), READS + WRITES)
+        self.assertEqual(MANIFEST['version'], '1.2.0'); self.assertEqual(MANIFEST['skills'][0]['version'], '1.2.0')
         self.assertEqual({name: op['target']['tool'] for name, op in ops.items()}, kis.KISMET_TOOLS)
-        self.assertEqual([op['class'] for op in ops.values()], ['read'] * 4 + ['write'] * 4)
+        self.assertEqual(kis.KISMET_TOOLS['kismet.web_link'], 'kismet_web_link')
+        self.assertEqual([op['class'] for op in ops.values()], ['read'] * 4 + ['write'] * 5)
+        self.assertEqual(ops['kismet.web_link']['input'], {'type': 'object', 'properties': {}, 'additionalProperties': False})
+        self.assertEqual([ops['kismet.web_link'][k] for k in ('maxResponseBytes', 'timeoutMs')], [32768, 25000])
         self.assertEqual(MANIFEST['service'], {'kind': 'mcp', 'baseUrl': 'https://kismet-village.vercel.app/mcp',
                                                'auth': {'mode': 'app-token', 'secretRef': 'MINI_APP_KISMET_KEY'}})
         for name, op in ops.items():
@@ -237,6 +263,12 @@ class KismetTest(unittest.TestCase):
                                                                          'turnId': self.draft_turn(draft)})
             for value in sent:
                 self.assertEqual(str(uuid.UUID(value)), value)
+            # web_link: a plain gated write like go, keyed on this request in this turn.
+            self.transport.reset_mock(); self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+            self.assertIn('data', self.call({'operation': 'kismet.web_link', 'arguments': {}}))
+            message = self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].get()
+            self.transport.assert_called_once_with(self.config, {'operation': 'kismet.web_link', 'arguments': {},
+                                                                 'turnId': self.turn('kismet.web_link', {}, message)})
 
     # ---- stage then send (lead L29897) -----------------------------------------------------------------------------
     def test_step_one_saves_a_private_draft_and_sends_nothing(self):
@@ -611,9 +643,11 @@ class KismetTest(unittest.TestCase):
                 with self.subTest(fixture=str(path.relative_to(FIXTURES))):
                     result = json.loads(path.read_text()); self.transport.return_value = frame(op, result)
                     out = self.send(op, GOOD[op])
-                    self.assertEqual(set(out), {'data', 'handling'}); self.assertEqual(out['handling'], kis.KISMET_HANDLING)
+                    self.assertEqual(set(out), {'data', 'handling'})
+                    self.assertEqual(out['handling'], kis.KISMET_HANDLING + ' ' + kis.WEB_LINK_HANDLING if op == 'kismet.web_link' else kis.KISMET_HANDLING)
                     self.assertEqual(out['data']['text'], result['structuredContent']['text'])
                     self.assertNotIn('content', out['data'])
+        self.transport.return_value = frame('kismet.summary', fixture('kismet.summary', 'live-success.json'))
         out = self.call({'operation': 'kismet.summary', 'arguments': {}})
         self.assertEqual([r['dateId'] for r in out['data']['summary']['recommendations']], ['00000000-0000-4000-8000-000000000001'])
 
@@ -726,6 +760,217 @@ class KismetTest(unittest.TestCase):
         self.install()
         self.assertEqual(self.call({'operation': 'mini-app.read', 'appId': 'kismet', 'tool': 'how_it_works', 'arguments': {}}),
                          {'error': 'mini_app_not_installed'})
+
+
+    # ---- kismet.web_link (Kismet 1.2.0, lead L36841) ----------------------------------------------------------------
+    def files(self):
+        return sorted(str(p.relative_to(self.home)) for p in self.home.rglob('*'))
+
+    def test_web_link_sends_exactly_an_empty_input_with_the_writes_turn_id_and_saves_nothing(self):
+        before = self.files()
+        with self.gate(), patch.object(bridge, 'remember_shown', side_effect=AssertionError('dateIds only, for kismet.summary')):
+            self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+            for args in ({'operation': 'kismet.web_link', 'arguments': {}}, {'operation': 'kismet.web_link'}):
+                with self.subTest(args=args):
+                    self.transport.reset_mock()
+                    self.assertIn('data', self.call(args))
+                    self.transport.assert_called_once_with(self.config, {'operation': 'kismet.web_link', 'arguments': {},
+                                                                         'turnId': self.turn('kismet.web_link', {})})
+            # The same request retried in this turn keeps its key; the owner's next message is a new request (a new link).
+            first = self.transport.call_args.args[1]['turnId']; self.next_message()
+            self.call({'operation': 'kismet.web_link', 'arguments': {}})
+            later = self.transport.call_args.args[1]['turnId']
+            self.assertNotEqual(first, later); self.assertEqual(later, self.turn('kismet.web_link', {}, '10'))
+        # No draft, no shown date, no file of any kind: the link is never written to this box.
+        self.assertEqual(self.files(), before)
+        self.assertEqual(kis.kismet_write(self.home, 'kismet.web_link', {'operation': 'kismet.web_link', 'arguments': {}}, {}, self.config),
+                         ({'operation': 'kismet.web_link', 'arguments': {}}, None, None))
+
+    def test_web_link_refuses_any_argument_before_any_call(self):
+        bad = [{'x': 1}, {'next': 'chat'}, {'draftId': str(uuid.uuid4())}, {'targetId': '00000000-0000-4000-8000-0000000000aa'},
+               {'email': 'av-test@example.com'}, {'webLink': WEB_LINK}, {'arguments': {}}, {'': None}]
+        with self.gate():
+            for body in bad:
+                with self.subTest(body=body):
+                    out = self.call({'operation': 'kismet.web_link', 'arguments': body})
+                    self.assertEqual(out['error'], 'invalid_arguments'); self.assertIn('Nothing was sent', out['instruction'])
+                    self.assertIn('kismet.web_link accepts only: ' + kis.OP_ARGUMENTS['kismet.web_link'], out['instruction'])
+            for args in ({'operation': 'kismet.web_link', 'arguments': []}, {'operation': 'kismet.web_link', 'arguments': None},
+                         {'operation': 'kismet.web_link', 'arguments': 'link'}, {'operation': 'kismet.web_link', 'arguments': {}, 'appId': 'kismet'},
+                         {'operation': 'kismet.web_link', 'arguments': {}, 'turnId': str(uuid.uuid4())},
+                         {'operation': 'kismet.web_link', 'tool': 'kismet_web_link', 'arguments': {}}):
+                with self.subTest(args=args):
+                    self.assertEqual(self.call(args)['error'], 'invalid_arguments')
+            # A key naming a resident, at any depth or at the top: the identity text, before the gate is even read.
+            for args in ({'operation': 'kismet.web_link', 'arguments': {'residentId': 'av-test-river'}},
+                         {'operation': 'kismet.web_link', 'arguments': {'subject': 'av-test-river'}},
+                         {'operation': 'kismet.web_link', 'arguments': {'userId': '42'}},
+                         {'operation': 'kismet.web_link', 'arguments': {'telegram_id': '42'}},
+                         {'operation': 'kismet.web_link', 'arguments': {'X-Village-Subject': 'x'}},
+                         {'operation': 'kismet.web_link', 'subject': 'av-test-river'}):
+                with self.subTest(args=args):
+                    self.assertEqual(self.call(args), {'error': 'invalid_arguments', 'instruction': kis.KISMET_IDENTITY})
+        with self.gate('off'):
+            self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {'userId': '42'}})['instruction'], kis.KISMET_IDENTITY)
+        self.transport.assert_not_called()
+
+    def test_web_link_needs_the_verified_gate(self):
+        for switch, codes in (('off', ()), ('unset', ()), ('on', ('hook-missing:village',))):
+            with self.gate(switch, codes), self.subTest(switch=switch, codes=codes):
+                self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}}),
+                                 {'error': 'approval_unavailable', 'instruction': kis.KISMET_GATE})
+        with patch.object(mini.importlib, 'import_module', side_effect=ImportError('no av-approval')):
+            self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}})['error'], 'approval_unavailable')
+        self.assertIn('kismet.web_link', mini.WRITE_OPERATIONS); self.assertNotIn('kismet.web_link', mini.READ_OPERATIONS)
+        self.transport.assert_not_called()
+
+    def test_web_link_runs_only_in_the_owners_private_chat(self):
+        zm = sys.modules['village_bridge._zzz_managed']
+        self.assertNotIn('kismet.web_link', zm.CRON_OPS)
+        refused = {'error': 'private_owner_chat_required'}
+        with self.gate():
+            for key, value in [('CHAT_TYPE', 'group'), ('CHAT_TYPE', 'supergroup'), ('CHAT_TYPE', 'channel'), ('CHAT_ID', '-12'),
+                               ('USER_ID', '99'), ('PLATFORM', 'discord')]:
+                var = self.sc._VAR_MAP['HERMES_SESSION_' + key]; token = var.set(value)
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}}), refused)
+                var.reset(token)
+            # Another resident paired to this box is not the owner.
+            (self.home / 'village-bridge.json').write_text(json.dumps({**self.config, 'ownerTelegramId': '77'}))
+            self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}}), refused)
+            (self.home / 'village-bridge.json').write_text(json.dumps(self.config))
+            # A scheduled run (with a cron job's own session and task ids) and a delegated child: never, not even the managed path.
+            token = self.sc._VAR_MAP['HERMES_CRON_SESSION'].set('1')
+            self.assertEqual(json.loads(bridge.handle({'operation': 'kismet.web_link', 'arguments': {}}, session_id='cron_0123456789ab_20261031_101500',
+                                                      task_id='cron:0123456789ab:00000000-0000')), refused)
+            self.sc._VAR_MAP['HERMES_CRON_SESSION'].reset(token)
+            self.delegation.is_delegated_child_context = lambda: True
+            self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}}), refused)
+            self.delegation.is_delegated_child_context = lambda: False
+        # The managed cron context is never built for it: refused before the projection or any job is read.
+        participation = unittest.mock.Mock(return_value=True)
+        with patch.object(zm, 'participation_on', participation):
+            self.assertIsNone(zm.managed_context(self.home, 'kismet.web_link', 'cron_0123456789ab_20261031_101500', 'cron:0123456789ab:00000000-0000'))
+        participation.assert_not_called()
+        self.transport.assert_not_called()
+        # The owner's own private chat ("private" or "dm") gets it.
+        self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+        for chat_type in ('private', 'dm'):
+            token = self.sc._VAR_MAP['HERMES_SESSION_CHAT_TYPE'].set(chat_type)
+            with self.gate(), self.subTest(chat_type=chat_type):
+                self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}})['data']['webLink'], WEB_LINK)
+            self.sc._VAR_MAP['HERMES_SESSION_CHAT_TYPE'].reset(token)
+
+    def test_web_link_is_refused_on_a_1_1_0_or_1_0_0_projection_and_allowed_on_1_2_0(self):
+        self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+        for entry in (mini.KISMET, mini.KISMET_PUBLIC):
+            with self.subTest(version=entry['version']), self.gate():
+                self.install({'id': 'kismet', **entry})
+                self.assertEqual(self.call({'operation': 'kismet.web_link', 'arguments': {}}), {'error': 'mini_app_not_installed'})
+                self.assertTrue(mini.installed(self.home, 'gold-stars', 'gold-stars.quota'))  # the projection itself stays accepted
+        self.transport.assert_not_called()
+        # Under 1.1.0 the other eight still work exactly as before.
+        self.install({'id': 'kismet', **mini.KISMET})
+        self.transport.return_value = frame('kismet.summary', fixture('kismet.summary', 'live-success.json'))
+        self.assertIn('data', self.call({'operation': 'kismet.summary', 'arguments': {}}))
+        self.install()
+        self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+        with self.gate():
+            self.assertIn('data', self.call({'operation': 'kismet.web_link', 'arguments': {}}))
+
+    def test_web_link_success_relays_structured_content_with_the_link_and_no_log_line_carries_it(self):
+        logger = logging.getLogger('village_bridge'); level = logger.level; logger.setLevel(logging.DEBUG); self.addCleanup(logger.setLevel, level)
+        root = Records(); logging.getLogger().addHandler(root); self.addCleanup(logging.getLogger().removeHandler, root)
+        result = fixture('kismet.web_link', 'live-success.json')
+        self.assertNotIn(WEB_LINK, result['content'][0]['text'])  # Deon: content[0] never carries the link
+        self.assertIn(WEB_LINK, result['content'][1]['text'])  # content[1] (the JSON copy) does, and is never relayed
+        self.transport.return_value = frame('kismet.web_link', result)
+        with self.gate():
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+        self.assertEqual(out, {'data': result['structuredContent'], 'handling': kis.KISMET_HANDLING + ' ' + kis.WEB_LINK_HANDLING})
+        self.assertEqual(out['data']['webLink'], WEB_LINK)
+        self.assertEqual(out['data']['webSignIns'], [{'email': 'ca\u2026@example.com', 'joinedAt': '2026-10-30T08:00:00.000Z'}])
+        self.assertEqual(json.dumps(out).count('av-test-0000'), 1)  # once: the structured field, never the raw content
+        # Deon's other shape: structuredContent without its own text takes content[0], never content[1].
+        bare = {k: v for k, v in result['structuredContent'].items() if k != 'text'}
+        self.transport.return_value = frame('kismet.web_link', {**result, 'structuredContent': bare})
+        with self.gate():
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+        self.assertEqual(out['data'], {**bare, 'text': result['content'][0]['text']})
+        # Errors: rate_limited relays Kismet's text (30 links an hour); nothing else of the answer.
+        self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'error-rate-limited.json'))
+        with self.gate():
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+        self.assertEqual(out, {'error': 'rate_limited', 'instruction': kis.KISMET_CODES['rate_limited'][1],
+                               'text': 'Too many web links this hour. Try again later.', 'handling': kis.KISMET_HANDLING})
+        for line in self.records.lines + root.lines:
+            self.assertNotIn('av-test-0000', line); self.assertNotIn('webLink', line); self.assertNotIn('example.com', line)
+        self.assertEqual([l for l in self.records.lines if 'kismet' in l], [])
+
+    def test_only_the_web_link_answer_carries_the_link_handling_line(self):
+        line = kis.WEB_LINK_HANDLING
+        for words in ('private one-time sign-in link', 'in this private chat only', 'never pass it to any other tool, app, room, post, memory or profile',
+                      'expires in 15 minutes', 'a new kismet.web_link call makes a new one'):
+            self.assertIn(words, line)
+        with self.gate():
+            self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+            self.assertEqual(out['handling'], kis.KISMET_HANDLING + ' ' + line)
+            for op in READS + WRITES[:4]:
+                with self.subTest(op=op):
+                    self.transport.return_value = frame(op, {'structuredContent': {'ok': True, 'text': 'av-test answer'}})
+                    out = self.send(op, GOOD[op])
+                    self.assertEqual(out['handling'], kis.KISMET_HANDLING); self.assertNotIn(line, json.dumps(out))
+            # An error answer (even a relayed one) carries only KISMET_HANDLING: there is no link in it.
+            self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'error-rate-limited.json'))
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+            self.assertEqual(out['handling'], kis.KISMET_HANDLING)
+
+    def test_an_unclear_web_link_answer_gets_the_unavailable_text_and_go_keeps_the_unclear_one(self):
+        # web_link changes nothing in the owner's account: never "a sign-up, date, answer or deletion may have gone through".
+        want = {'kismet.web_link': kis.UNAVAILABLE, 'kismet.go': kis.KISMET_UNCLEAR}
+        self.assertEqual(kis.KISMET_UNAVAILABLE, kis.UNAVAILABLE); self.assertIn('not available from here right now', kis.UNAVAILABLE)
+        with self.gate():
+            for op, text in want.items():
+                for answer, code in ((RuntimeError('socket closed'), 'village_unavailable'),
+                                     ({'error': 'connection_or_request_refused', 'status': 502}, 'connection_or_request_refused'),
+                                     ({'error': 'mini_app_upstream_unconfirmed', 'instruction': 'x'}, 'mini_app_upstream_unconfirmed'),
+                                     ({'error': 'made_up'}, 'connection_or_request_refused'), ({'ok': True}, 'kismet_invalid_answer')):
+                    with self.subTest(op=op, code=code):
+                        if isinstance(answer, Exception):
+                            self.transport.side_effect = answer
+                        else:
+                            self.transport.side_effect = None; self.transport.return_value = answer
+                        self.assertEqual(self.call({'operation': op, 'arguments': {}}), {'error': code, 'instruction': text})
+            self.transport.side_effect = None
+        # The transport's own answers (an HTTP refusal from the app server), the same split.
+        response = unittest.mock.MagicMock(); response.__enter__.return_value = response
+        opener = unittest.mock.Mock(); config = {'origin': 'https://agents.edgecity.live', 'token': 'not-logged'}
+        def refuse(code, status):
+            def raise_it(*_args, **_kwargs):
+                raise HTTPError('https://agents.edgecity.live/api/v1/village-bridge/tool', status, 'refused', {},
+                                io.BytesIO(json.dumps({'code': code}).encode()))
+            return raise_it
+        with patch.object(bridge, 'build_opener', return_value=opener):
+            for op, text in want.items():
+                for code, status, expect in (('mini_app_upstream_unconfirmed', 502, {'error': 'mini_app_upstream_unconfirmed', 'instruction': text}),
+                                             ('VALIDATION_ERROR', 422, {'error': 'connection_or_request_refused', 'status': 422, 'instruction': text})):
+                    with self.subTest(op=op, transport=code):
+                        opener.open.side_effect = refuse(code, status)
+                        self.assertEqual(real_transport(config, {'operation': op, 'arguments': {}}), expect)
+
+    def test_web_link_projections_are_exact(self):
+        accepted = [{'id': 'kismet', **entry} for entry in (mini.KISMET_120, mini.KISMET, mini.KISMET_PUBLIC)]
+        for entry in accepted:
+            with self.subTest(version=entry['version']):
+                self.install(entry)
+                self.assertEqual([a['id'] for a in mini.projection(self.home)], ['gold-stars', 'kismet'])
+                self.assertEqual(mini.installed(self.home, 'kismet', 'kismet.web_link'), entry['version'] == '1.2.0')
+        nine = READS + WRITES
+        for operations in (nine + ['kismet.status'], nine[:4] + nine[8:] + nine[4:8], list(reversed(nine)), nine + ['kismet.web_link']):
+            with self.subTest(operations=operations):
+                self.install({'id': 'kismet', **mini.KISMET_120, 'operations': operations})
+                self.assertIsNone(mini.projection(self.home)); self.assertFalse(mini.installed(self.home, 'gold-stars', 'gold-stars.quota'))
 
 
 class KismetTransportTest(unittest.TestCase):

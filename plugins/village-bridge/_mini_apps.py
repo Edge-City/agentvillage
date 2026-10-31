@@ -70,8 +70,10 @@ DS_WRITE_OPERATIONS = ("dreamstarter.discover", "dreamstarter.grant_prepare")
 # Kismet Part 2 (lead L29830, product's build spec): its three public reads and the owner's own summary (reads), and
 # the owner's own sign-up, new dates, meet or pass and account deletion (writes). The writes take zzz's path
 # (gate_verified), never a manual grant, a card or a new class: each happens only on the owner's own ask in this chat.
+# Kismet 1.2.0 (Deon's kismet_web_link, lead L36841): kismet.web_link mints the owner's own one-time sign-in link to
+# their Kismet account (not readOnly, not idempotent), so it is a WRITE on the same gated path, appended last.
 KISMET_READ_OPERATIONS = ("kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary")
-KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete")
+KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link")
 # Edge Library (Naman, adapted from ov#506): the village knowledge graph's eight reads. 1.0.0 is READS ONLY (Carter,
 # CD-44): Edge Library's three writes are not exposed, so none is in WRITE_OPERATIONS. The reads join the existing read
 # class: no new class, row, gate or card.
@@ -113,12 +115,19 @@ ZZZBOT_ACCEPTED = (ZZZBOT, ZZZBOT_PREVIOUS)
 # list_rooms install permission; it is deliberately absent from the CP catalog.
 ZZZ_OPERATIONS = frozenset((*ZZZBOT["operations"], "zzz.pairs", *ZZZ_TEAM_READ_OPERATIONS, *ZZZ_TEAM_WRITE_OPERATIONS,
                             *ZZZ_OWNER_WRITE_OPERATIONS))
-# The kismet install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order), and Part 1's
-# public read alone (ov#533), still accepted while the CP catalog serves it. Under 1.0.0 the named operations stay
-# refused (mini_app_not_installed); under 1.1.0 mini-app.read is refused for kismet.
-KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}
+# The kismet install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order). 1.2.0: the eight
+# of 1.1.0, then kismet.web_link (the manifest's order). 1.1.0 (the eight alone) and Part 1's public read alone (1.0.0,
+# ov#533) stay accepted, so this overlay rolls out BEFORE the CP serves 1.2.0 to a box (overlay first, then the catalog
+# per box; never the reverse: an older overlay refuses a 1.2.0 entry, and with it the whole projection). Under 1.1.0
+# kismet.web_link stays refused (mini_app_not_installed); under 1.0.0 every named operation does; under 1.1.0 and 1.2.0
+# mini-app.read is refused for kismet.
+KISMET_120 = {"version": "1.2.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}
+KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, "kismet.signup", "kismet.go", "kismet.decide",
+                                                                     "kismet.delete"]}
 KISMET_PUBLIC = {"version": "1.0.0", "skills": ["kismet"], "operations": ["mini-app.read"]}
-KISMET_OPERATIONS = frozenset(KISMET["operations"])
+# Every kismet entry this overlay accepts, each by exact equality (newest first).
+KISMET_ACCEPTED = (KISMET_120, KISMET, KISMET_PUBLIC)
+KISMET_OPERATIONS = frozenset(KISMET_120["operations"])
 SLOPFOLIO = {"version": "1.0.0", "skills": ["slopfolio"], "operations": ["slopfolio.prepare", "slopfolio.status"]}
 # The dreamstarter install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order).
 DREAMSTARTER = {"version": "2.0.0", "skills": ["dreamstarter"], "operations": [
@@ -256,7 +265,7 @@ def _card_entry_ok(app) -> bool:
 # object or has no string id, a duplicate id, and a reviewed id failing its exact equality (the tamper signal).
 REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": ZZZBOT_ACCEPTED, ZZZ_BRIDGE_ID: (ZZZ_BRIDGE,),
                     ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,),
-                    "dreamstarter": (DREAMSTARTER,), "kismet": (KISMET, KISMET_PUBLIC),
+                    "dreamstarter": (DREAMSTARTER,), "kismet": KISMET_ACCEPTED,
                     "library": (LIBRARY,), "favorloop": (FAVORLOOP,), "eci-volunteers": (ECI_VOLUNTEERS,)}
 LOGGED_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 LOG = logging.getLogger("village_bridge")

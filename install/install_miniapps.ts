@@ -42,8 +42,9 @@ export const REVIEWED_MINI_APPS = [
   // (_mini_apps.py DREAMSTARTER, exact; the manifest's order).
   { id: "dreamstarter", version: "2.0.0", operations: ["dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare", "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"], skills: ["dreamstarter"] },
   // Kismet Part 2 (lead L29830): its three public reads and the owner's own summary, then the owner's own sign-up, new
-  // dates, meet or pass and deletion (gated writes); _mini_apps.py KISMET, exact. Part 1's read alone is below.
-  { id: "kismet", version: "1.1.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete"], skills: ["kismet"] },
+  // dates, meet or pass and deletion (gated writes). 1.2.0 (lead L36841): then kismet.web_link, the owner's own one-time
+  // web sign-in link (a gated write); _mini_apps.py KISMET_120, exact. 1.1.0 (the eight) and Part 1's read are below.
+  { id: "kismet", version: "1.2.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link"], skills: ["kismet"] },
   // Edge Library (Naman, adapted from ov#506): READS ONLY in 1.0.0 (CD-44), the village knowledge graph's eight reads;
   // its writes are not exposed (_mini_apps.py LIBRARY, exact).
   { id: "library", version: "1.0.0", operations: ["library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history", "library.changes_since", "library.proposals"], skills: ["library"] },
@@ -61,7 +62,8 @@ export const REVIEWED_MINI_APPS = [
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
  * projects the context operations), and mosaic's the same way, and zzzbot's five (1.0.0, _mini_apps.py ZZZBOT_PREVIOUS: the
- * CP's entry until its catalog serves 1.1.0; the two edits refused under it), and kismet's Part 1 read (ov#533). Remove each after the CP catalog serves a newer
+ * CP's entry until its catalog serves 1.1.0; the two edits refused under it), and kismet's eight (1.1.0, _mini_apps.py KISMET: the CP's entry for a box
+ * until it serves that box 1.2.0; kismet.web_link refused under it) and its Part 1 read (ov#533). Remove each after the CP catalog serves a newer
  * list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
@@ -72,6 +74,9 @@ export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
   // ZZZBOT: the five named operations alone (v2.1.3 to v2.1.19), the CP's entry until its catalog serves 1.1.0.
   { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
+  // KISMET: the eight of 1.1.0 (_mini_apps.py KISMET), the CP's entry for a box until it serves that box 1.2.0 (per box, from
+  // the v2.2.1 floor tag); kismet.web_link is refused under it.
+  { id: "kismet", version: "1.1.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete"], skills: ["kismet"] },
   // KISMET: Part 1's public relay read alone (ov#533), the CP's entry until its catalog serves 1.1.0 (_mini_apps.py KISMET_PUBLIC).
   { id: "kismet", version: "1.0.0", operations: ["mini-app.read"], skills: ["kismet"] },
 ] as const;
