@@ -643,7 +643,8 @@ class KismetTest(unittest.TestCase):
                 with self.subTest(fixture=str(path.relative_to(FIXTURES))):
                     result = json.loads(path.read_text()); self.transport.return_value = frame(op, result)
                     out = self.send(op, GOOD[op])
-                    self.assertEqual(set(out), {'data', 'handling'}); self.assertEqual(out['handling'], kis.KISMET_HANDLING)
+                    self.assertEqual(set(out), {'data', 'handling'})
+                    self.assertEqual(out['handling'], kis.KISMET_HANDLING + ' ' + kis.WEB_LINK_HANDLING if op == 'kismet.web_link' else kis.KISMET_HANDLING)
                     self.assertEqual(out['data']['text'], result['structuredContent']['text'])
                     self.assertNotIn('content', out['data'])
         self.transport.return_value = frame('kismet.summary', fixture('kismet.summary', 'live-success.json'))
@@ -886,7 +887,7 @@ class KismetTest(unittest.TestCase):
         self.transport.return_value = frame('kismet.web_link', result)
         with self.gate():
             out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
-        self.assertEqual(out, {'data': result['structuredContent'], 'handling': kis.KISMET_HANDLING})
+        self.assertEqual(out, {'data': result['structuredContent'], 'handling': kis.KISMET_HANDLING + ' ' + kis.WEB_LINK_HANDLING})
         self.assertEqual(out['data']['webLink'], WEB_LINK)
         self.assertEqual(out['data']['webSignIns'], [{'email': 'ca\u2026@example.com', 'joinedAt': '2026-10-30T08:00:00.000Z'}])
         self.assertEqual(json.dumps(out).count('av-test-0000'), 1)  # once: the structured field, never the raw content
@@ -905,6 +906,25 @@ class KismetTest(unittest.TestCase):
         for line in self.records.lines + root.lines:
             self.assertNotIn('av-test-0000', line); self.assertNotIn('webLink', line); self.assertNotIn('example.com', line)
         self.assertEqual([l for l in self.records.lines if 'kismet' in l], [])
+
+    def test_only_the_web_link_answer_carries_the_link_handling_line(self):
+        line = kis.WEB_LINK_HANDLING
+        for words in ('private one-time sign-in link', 'in this private chat only', 'never pass it to any other tool, app, room, post, memory or profile',
+                      'expires in 15 minutes', 'a new kismet.web_link call makes a new one'):
+            self.assertIn(words, line)
+        with self.gate():
+            self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'live-success.json'))
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+            self.assertEqual(out['handling'], kis.KISMET_HANDLING + ' ' + line)
+            for op in READS + WRITES[:4]:
+                with self.subTest(op=op):
+                    self.transport.return_value = frame(op, {'structuredContent': {'ok': True, 'text': 'av-test answer'}})
+                    out = self.send(op, GOOD[op])
+                    self.assertEqual(out['handling'], kis.KISMET_HANDLING); self.assertNotIn(line, json.dumps(out))
+            # An error answer (even a relayed one) carries only KISMET_HANDLING: there is no link in it.
+            self.transport.return_value = frame('kismet.web_link', fixture('kismet.web_link', 'error-rate-limited.json'))
+            out = self.call({'operation': 'kismet.web_link', 'arguments': {}})
+            self.assertEqual(out['handling'], kis.KISMET_HANDLING)
 
     def test_web_link_projections_are_exact(self):
         accepted = [{'id': 'kismet', **entry} for entry in (mini.KISMET_120, mini.KISMET, mini.KISMET_PUBLIC)]
