@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, parse } from "node:path";
 import { EDGE_SKILL_NAMES, hermesHome, RETIRED_SKILL_DIRS } from "./paths";
-import { reconcileZzzManagedJob, verifyZzzManagedJob, zzzShippedFile, type ZzzShippedKind } from "./zzz_managed_job";
+import { OWNED_FILE_MAX_BYTES, reconcileZzzManagedJob, verifyZzzManagedJob, zzzShippedFile, type ZzzShippedKind } from "./zzz_managed_job";
 import { AUTONOMY_FILES, AUTONOMY_GATE, autonomyMarkers, reconcileAutonomyJob, verifyAutonomyJob,
   removeAutonomyFiles, removeAutonomyState, removeAutonomyShim } from "./zzz_autonomy_job";
 
@@ -623,6 +623,15 @@ export function parseSkillDelivery(delivery: SkillDelivery = {}): { offer: strin
   }
   return { offer, entries };
 }
+/**
+ * An installer-owned ZZZ file's shipped bytes. One over OWNED_FILE_MAX_BYTES would read as "not_ours" once written (never
+ * upgraded, verified or torn down), so the stage refuses it here, before anything is written, and fails closed.
+ */
+function ownedSource(path: string): Buffer {
+  const content = readFileSync(path);
+  if (content.length > OWNED_FILE_MAX_BYTES) throw new Error("mini_apps_owned_file_oversize");
+  return content;
+}
 export function reconcileMiniApps(value: unknown, home = hermesHome(), source = resolve(import.meta.dir, "../skills"), verify = false, delivery: SkillDelivery = {}) {
   const served = parseSkillDelivery(delivery);
   const target = join(home, "mini-apps.json");
@@ -689,7 +698,7 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   const zzzFiles = zzzManaged ? ZZZ_STAGE_FILES.map(relative => {
     const sourcePath = join(source, "zzzbot", relative);
     regular(sourcePath);
-    const content = readFileSync(sourcePath);
+    const content = ownedSource(sourcePath);
     const path = `skills/zzzbot/${relative}`;
     files.push({ path, sha256: hash(content) });
     return { path: join(home, path), content };
@@ -698,7 +707,7 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   const autonomyFiles = autonomyManaged ? AUTONOMY_FILES.map(relative => {
     const sourcePath = join(source, "zzzbot", relative);
     regular(sourcePath);
-    const content = readFileSync(sourcePath);
+    const content = ownedSource(sourcePath);
     const path = `skills/zzzbot/${relative}`;
     files.push({path, sha256:hash(content)});
     return {path:join(home,path),content};
@@ -760,6 +769,8 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
       const legacy = `scripts/${ZZZ_LEGACY_SHIM}` as const;
       if (zzzManagedAt(home, legacy) === "ours") unlinkSync(join(home, "skills", "zzzbot", legacy));
     }
+    // v2.2.0 item 4: with no village-bridge.json yet this defers the job (none, no throw), so the stage and the apps
+    // above still settle; the next stage after the credential lands installs it (zzz_autonomy_job.ts autonomyBridgeAbsent).
     if (import.meta.main && autonomyManaged) reconcileAutonomyJob(home,true);
     // On removal authority disappears before the job teardown; the managed files and state (markers) go only after it.
     if (zzzTeardown) {

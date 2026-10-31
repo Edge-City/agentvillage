@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
-import { jobApi, jobPython, parseHermesJobs, replaceFileNoFollow } from "./zzz_managed_job";
+import { jobApi, jobPython, OWNED_FILE_MAX_BYTES, parseHermesJobs, replaceFileNoFollow } from "./zzz_managed_job";
 
 export const AUTONOMY_GATE = "zzz-autonomy-runner";
 export const AUTONOMY_JOB_NAME = "Edge — zzz event autonomy";
@@ -30,6 +30,7 @@ export const AUTONOMY_SHIPPED = {
     "0fb7fbc2a1b652ce4d5ecbf64a292c0af0879d436942d2962599642b06c24450", // + ODIN's seat_answer posted as given or silent with no model call (data L32206, context L32211) + resident_brief grounding (lead L32261, data L32263) + one run deadline, context read up to 75 s for the seat hold (review-b S1 on app#932) + brief name/voice may be null (review-b ov#554 S1) + thread_replies grounding (lead L32986) + context reply cap 64 KiB (review-b ov#554 L33044 S1)
     "135a21654534a6afa2096d59f99444a9e673e52e756586134fa4fb050db35a6a", // + owner_instruction read from the context reply, appended last to the system message (lead L34271, release L34319); the header forbids quoting or revealing it in a post (review-b ov#579 N1)
     "72aa8562ddb0b3b70c828dc30aafa8914bc9a3471e0c8aea2390acf172af9488", // + village_knowledge from the context reply after the room data, one guidance line before the owner's instruction (lead L34507 + L34517; ov#582) + the no-filler-opener SYSTEM line (lead L34643 (4)) and the app's versioned `instructions` block replaces the prompt wording when valid, a fixed SAFETY tail always after it (VILLAGE_GUIDANCE stays built-in, before SAFETY), built-in prompt byte for byte otherwise (lead L34695; ov#584) + the seat box's daily cap from the app's claim-reply `seat` (up to 150; lead L34728) + 120 model turns per box per UTC day, was 48 (lead L34801; ov#585) + comments trimmed to fit the 65,536-byte cap (review-b set M1)
+    "84fd99eae798c4f5447392781557565f4cc03e4ef2361f5bacb59815877caf59", // + the full agent turn, ON by default (lead L34283 + L35716; ov#580 on ov#592): one Hermes cron run_job after the context reply unless it says agent_turn: false, HERMES_SAFE_MODE (no plugin, hook or poller in the runner; review-b S2), memory/SOUL/context files/session store off, one read-only tool village_skill over shipped SKILL.md bytes only (digest-checked, opened O_NOFOLLOW per component), private lines left out (review-b S1), max_iterations 3, one claimed turn each within a 40/day agent budget (lead L36075 S1), skill text usable in a post (S2), the agent built with its Hermes home scoped to a temp logs folder (derived log paths checked), removed after the turn with any <home>/sessions file named for its session, leak + Private-mark + echo + invisible checks on the post and each tag (lead L36453 N1; a tag that is a room tag skips only the echo check, L36472), the folder also removed when the run fails (N2), reasoning pinned low (L36453), today's one model call as the fallback
   ],
   "prompts/autonomy.md": ["93b8442797de1957ac5e64eb7477e1288601654fdaccb56fc4791f0bfd608587"],
 } as const;
@@ -37,7 +38,7 @@ export const AUTONOMY_SHIPPED = {
 function ownedFile(path: string, relative: typeof AUTONOMY_FILES[number]): "absent" | "ours" | "not_ours" {
   let meta;
   try { meta = lstatSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "not_ours"; }
-  if (!meta.isFile() || meta.size > 65536) return "not_ours";
+  if (!meta.isFile() || meta.size > OWNED_FILE_MAX_BYTES) return "not_ours";
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -142,6 +143,21 @@ export function autonomySchedule(token: string): string {
   return `${phase}-59/5 * * * *`;
 }
 
+/**
+ * v2.2.0 item 4 (lead L35683; release L34172/L34181/L34199 (c)): the runner job's schedule is the bridge token's
+ * phase, and the cp issues village-bridge.json only to a box with an ACTIVE app (village-bridge.js, 409
+ * village_apps_not_active), which needs a good stage first. So a box with NOTHING at village-bridge.json (lstat ENOENT,
+ * not even a dangling link) stages the runner job DEFERRED: no job and no shim (one left by an earlier stage is removed,
+ * as on teardown), while the gate and the runner's skill files stage as usual, so the receipt is the same bytes and the
+ * other apps apply. The next stage after the credential lands installs the job; verify accepts exactly that deferred
+ * state while the file is absent. Anything else at that name (a symlink, a non-file, oversize, unreadable, bad JSON or
+ * a bad token) still throws, as before: no new leniency for a bad credential.
+ */
+export function autonomyBridgeAbsent(home: string): boolean {
+  try { lstatSync(join(home, "village-bridge.json")); return false; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
+}
+
 function bridgeToken(home: string): string {
   const path = join(home, "village-bridge.json");
   const meta = lstatSync(path);
@@ -174,7 +190,8 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
   const jobs = store(home).jobs;
   const dir = realDir(home, "scripts");
   const shim = dir ? join(dir, AUTONOMY_JOB_SCRIPT) : null;
-  if (!installed) {
+  // Deferred (no village-bridge.json): exactly the teardown's end state, no job and no shim of ours.
+  if (!installed || autonomyBridgeAbsent(home)) {
     if (jobs.length || (shim && ownedFile(shim, AUTONOMY_FILES[0]) === "ours")) throw new Error("zzz_autonomy_removal_pending");
     return;
   }
@@ -186,7 +203,8 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
 
 export function reconcileAutonomyJob(home: string, installed: boolean): void {
   const current = store(home), jobs=current.jobs;
-  if (!installed) {
+  // Deferred (autonomyBridgeAbsent): the teardown below, so no job runs without its credential; the files stay staged.
+  if (!installed || autonomyBridgeAbsent(home)) {
     if (jobs.length) {
       const bin = hermesBin();
       if (!hermesAvailable(bin, 15000, hermesExecEnv())) throw new Error("zzz_autonomy_hermes_missing");
