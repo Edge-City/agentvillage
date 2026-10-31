@@ -810,10 +810,21 @@ def test_a_map_expiry_moved_past_seven_days_is_refused(tctx, serve, mods, av, pl
     ("", "text_required"), (None, "text_required"), ("x" * 501, "text_too_long"), ("a\u202eb", "text_invalid"),
     ("?!", "text_no_letter_or_digit"), ("use Bearer abcdefghijklmnop to log in", "text_sanitized"),
     ("key sk-or-v1-abcdefghijklmnopqrstuvwxyz", "text_sanitized"),
+    # ov#599 N1: a Kismet one-time sign-in link, in any spelling the shared matcher (_kismet_link.py) folds.
+    ("my Kismet: https://kismet-village.vercel.app/u/av-test-0000?next=chat", "text_sanitized"),
+    ("kismet-village.vercel.app%252Fu%252Fav-test-0000", "text_sanitized"),
+    ("\uff4b\uff49\uff53\uff4d\uff45\uff54\uff0d\uff56\uff49\uff4c\uff4c\uff41\uff47\uff45\uff0e\uff56\uff45\uff52\uff43\uff45\uff4c\uff0e\uff41\uff50\uff50\uff0f\uff55\uff0f\uff58", "text_sanitized"),
+    ("kismet-village.vercel.app\\u\\av-test-0000", "text_sanitized"),
+    ("kismet-village.vercel.app/\tu/x and kismet-village.vercel.app/a/../u/y", "text_sanitized"),
 ])
 def test_text_the_door_or_the_sanitiser_would_change_is_refused(tctx, serve, text, code):
     assert call(tctx, "share_digest", {"action": "share", "text": text})["error"] == code
     assert serve.calls == []
+
+
+def test_a_digest_naming_kismet_but_no_sign_in_link_is_proposed(tctx, serve):
+    out = call(tctx, "share_digest", {"action": "share", "text": "Kismet matched me today: https://kismet-village.vercel.app/join"})
+    assert out.get("error") is None and out["state"] == "requested" and len(serve.proposals()) == 1
 
 
 @pytest.mark.parametrize("scope", ["Village", "service:", "service:Odin", "everyone", "service:a b"])
