@@ -1254,7 +1254,9 @@ class TestResidentBrief(unittest.TestCase):
         self.assertIsNone(runner._resident_brief(self.brief([{"source": "claim", "text": "x"}] * 50))[1])
 
     def test_a_malformed_brief_still_completes_the_turn(self):
-        # Grounding, not a gate: run() still claims, calls the model once and completes, and exits cleanly.
+        # Grounding, not a gate: run() still claims, calls the model once and completes, and exits cleanly. These run()
+        # tests pin today's one model call, which the full agent turn (ON by default, ov#580) leaves to an app
+        # `agent_turn: false`; test_zzz_autonomy_runner_full_agent.py covers the default.
         test = TestAutonomyRunner("test_seat_answer_absent_keeps_the_model_path")
         test.setUp()
         self.addCleanup(test.tearDown)
@@ -1264,7 +1266,7 @@ class TestResidentBrief(unittest.TestCase):
             if operation == "claim":
                 return {"candidate": dict(test.CANDIDATE)}
             if operation == "context":
-                return {**plain, "resident_brief": {"agent_name": "SECRET-NAME-91", "voice": 5, "snippets": []}}
+                return {**plain, "agent_turn": False, "resident_brief": {"agent_name": "SECRET-NAME-91", "voice": 5, "snippets": []}}
             sent.append(args["output"])
             return {"state": "silent", "post_id": None, "thread_id": None, "replayed": False}
         with patch.object(runner, "_activity", side_effect=activity), \
@@ -1475,7 +1477,7 @@ class TestThreadReplies(unittest.TestCase):
             if operation == "claim":
                 return {"candidate": dict(test.CANDIDATE)}
             if operation == "context":
-                return {**plain, "thread_replies": [reply(n, body="SECRET-REPLY-77") for n in range(13)]}
+                return {**plain, "agent_turn": False, "thread_replies": [reply(n, body="SECRET-REPLY-77") for n in range(13)]}
             sent.append(args["output"])
             return {"state": "silent", "post_id": None, "thread_id": None, "replayed": False}
         with patch.object(runner, "_activity", side_effect=activity), \
@@ -1894,7 +1896,7 @@ class TestInstructions(unittest.TestCase):
             if operation == "claim":
                 return {"candidate": dict(test.CANDIDATE)}
             if operation == "context":
-                return {**plain, "instructions": block("SECRET-WORDING-77 \ud800")}
+                return {**plain, "agent_turn": False, "instructions": block("SECRET-WORDING-77 \ud800")}
             sent.append(args["output"])
             return {"state": "silent", "post_id": None, "thread_id": None, "replayed": False}
         with patch.object(runner, "_activity", side_effect=activity), \
