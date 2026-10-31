@@ -154,8 +154,8 @@ OPEN_APPROVALS_CHAT = "Open approvals chat: " + APPROVALS_CHAT_URL
 # Appended where the instruction asks the agent to send the owner to the bot.
 APPROVALS_CHAT_LINE = " End that message with this line on its own: \"" + OPEN_APPROVALS_CHAT + "\"."
 
-# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
-# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py). With the
+# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap: the daemon's
+# "not granted yet" only (the app's 403 star_approval_required has its own text, __init__.py). With the
 # member row autonomous (the shipped template, B-133) the daemon answers "autonomous" and no card is
 # shown; a policy that still says manual for the member class (an older box) keeps the card and this text.
 APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "

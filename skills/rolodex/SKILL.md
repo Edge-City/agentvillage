@@ -114,8 +114,9 @@ Disambiguate names; an Index identifier is not a Rolodex attendee identifier.
   “Did you meet?” question can start reflection; ask before recording it if
   the request to update the Rolodex is unclear.
 - After they describe a meaningful interaction, load `gold-stars` and optionally
-  ask whether they'd like to thank the person. A meeting or a chat yes is never
-  a star approval: a star needs its exact preview and real manual approval.
+  ask whether they'd like to thank the person. A chat yes to “did you meet” is
+  not an ask to send a star; load `gold-stars` and send only when they ask (or
+  say yes to your specific offer).
 
 Use one natural follow-up at a time, not a meeting questionnaire after every
 message. Skip it if already answered, declined, unrelated to what they need,

@@ -180,7 +180,10 @@ class ForKicksOnGrantTest(unittest.TestCase):
         ap.configured = lambda: True
         ap.process_env = lambda name: os.environ.get(name, '').strip()
         ap.register_pass, ap.ensure_poller = Mock(), Mock(return_value=True)
-        with patch.dict(sys.modules, {'hermes_plugins.av_events._approval': ap}), patch.object(bridge, '_ensure_forkicks_pass', ENSURE):
+        # The tracked card below would start the real forkicks-fast-poll thread on this stub (no poller_alive): 2 s
+        # later it raised into whichever test was running (test_zzz_autonomy_runner_model_route's sys.modules churn).
+        with patch.dict(sys.modules, {'hermes_plugins.av_events._approval': ap}), patch.object(bridge, '_ensure_forkicks_pass', ENSURE), \
+                patch.object(bridge, '_ensure_forkicks_ticker'):
             for off in ('0', 'false', 'No', ' off '):
                 with self.subTest(off=off), patch.dict(os.environ, {'AV_APPROVAL_POLLER': off}):
                     self.assertFalse(bridge._ensure_forkicks_pass())

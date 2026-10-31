@@ -383,7 +383,9 @@ test("Favor Loop 1.0.0 (ov#556): the manifest and native allowlist pin exactly i
   expect(app).toEqual({ id: "favorloop", version: "1.0.0", operations: ops, skills: ["favorloop"] });
   expect(manifest).toMatchObject({ ...app, homepage: "https://favorloop.fly.dev/" });
   // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
-  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  // Builder credit (role "app"), the cp's bytes (cp#521); display only, the installer never reads it.
+  expect(Object.keys(manifest).sort()).toEqual(["credit", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest.credit.role).toBe("app");
   expect(manifest).not.toHaveProperty("mcp");
   expect(manifest).not.toHaveProperty("auth");
   const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "favorloop", "manifest.json"), "utf8"));
