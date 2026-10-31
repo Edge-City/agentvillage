@@ -61,7 +61,7 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(receipt).toEqual(reconcileMiniApps(all, root));
   expect(receipt).toEqual(reconcileMiniApps(all, root, undefined, true));
   expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(all)).digest("hex"));
-  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md", "skills/dreamstarter/SKILL.md", "skills/kismet/SKILL.md", "skills/library/SKILL.md", "skills/favorloop/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md"]);
+  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md", "skills/dreamstarter/SKILL.md", "skills/kismet/SKILL.md", "skills/library/SKILL.md", "skills/favorloop/SKILL.md", "skills/eci-volunteers/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md"]);
   expect(receipt).not.toHaveProperty("active");
   writeFileSync(join(root, "skills", "gold-stars", "SKILL.md"), "tampered");
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
@@ -415,6 +415,46 @@ test("Favor Loop 1.0.0 (ov#556): the manifest and native allowlist pin exactly i
   expect(skill).toMatch(/^name: favorloop$/m);
   reconcileMiniApps({ version: 1, apps: [] }, root);
   expect(existsSync(join(root, "skills", "favorloop", "SKILL.md"))).toBe(false);
+});
+
+test("Edge City Volunteers 1.0.0 (ov#450, lead RULING L35456): the manifest and native allowlist pin exactly its twelve operations (no relay read), subject only, and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "eci-volunteers")!;
+  const ops = ["eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose", "eci-volunteers.confirm", "eci-volunteers.link"];
+  const manifest = reviewedManifest("eci-volunteers");
+  expect(app).toEqual({ id: "eci-volunteers", version: "1.0.0", operations: ops, skills: ["eci-volunteers"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://edge-city-volunteers.vercel.app/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "eci-volunteers", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://edge-city-volunteers.vercel.app/api/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_ECI_VOLUNTEERS_TOKEN" } });
+  expect(v2.operations.map((op: { name: string }) => op.name)).toEqual(ops);
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual([...Array(10).fill("read"), "write", "write"]);
+  // The install card never says ECV receives a Telegram id (subject only).
+  expect(JSON.stringify(v2.permissions)).not.toMatch(/receives your Telegram/);
+  expect(EDGE_SKILL_NAMES).not.toContain("eci-volunteers");
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "mini-app.read"] },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ops.slice(0, -1) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.0.1" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/eci-volunteers/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "eci-volunteers", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "eci-volunteers", "SKILL.md")));
+  expect(statSync(join(root, "skills", "eci-volunteers", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  const skill = readFileSync(join(REPO, "skills", "eci-volunteers", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget/);
+  expect(skill).toMatch(/^name: eci-volunteers$/m);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "eci-volunteers", "SKILL.md"))).toBe(false);
 });
 
 test("ov#441 S1: managed ZZZ participation is the cp projection's zzzbot + zzz-bridge pair and nothing else", () => {

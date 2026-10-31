@@ -606,6 +606,50 @@ app half (the `subject` separation entry and the vendored manifest), then Edge
 City staff set `MINI_APP_FAVORLOOP_KEY` on the app service. The contract is in
 [favorloop/README.md](favorloop/README.md).
 
+## Edge City Volunteers: a volunteer's own schedule
+
+The [v2 manifest](eci-volunteers/manifest.json) and the native bundle
+allowlist (`_mini_apps.py` `ECI_VOLUNTEERS`, exact equality, in this order)
+expose twelve named operations, each mapped by the app to one ECV volunteer MCP
+tool: nine reads (`eci-volunteers.initialize`, `.guide`, `.my_hours`,
+`.my_shifts`, `.get_shift`, `.plan_view`, `.open_shifts`, `.my_requests`,
+`.move_targets`), `eci-volunteers.propose` (ECV's check: a summary and a code,
+nothing changes) and two writes, `eci-volunteers.confirm` and
+`eci-volunteers.link`. `mini-app.read` refuses `eci-volunteers`. The id is
+`eci-volunteers` because the validator reserves `edge-`.
+
+Identity is Favor Loop's (lead RULING L35456): the service is `app-token`
+(`MINI_APP_ECI_VOLUNTEERS_TOKEN`) with the app's `subject` separation, so every
+call carries `X-Village-Subject`, an opaque per-app reference, and never a
+Telegram id or username. ECV links that reference to a volunteer once: the
+owner sends `/agentvillage` to the Edge City Volunteers bot, which replies with a
+one-time 8-character code, and the agent sends it with `eci-volunteers.link`.
+Until then every operation answers `not_connected`.
+
+Input rides the existing `arguments` object and is checked in
+`plugins/village-bridge/_ecv.py` against ECV's published volunteer schemas (the
+manifest's `input` schemas say the same): exact keys, ECV's uuid/date/time
+patterns and ranges, the link-code pattern, and only the seven volunteer actions
+(at most three changes under one yes). Any key naming a resident is refused at
+any depth. Anything else is `invalid_ecv_arguments` before transport.
+
+The confirm rule is on the box (the Kismet shown-date pattern): the overlay
+remembers the sha256 of each code a propose answer showed (never the code), and
+sends `eci-volunteers.confirm` only for such a code, in the same conversation, in
+a later owner message, within 15 minutes; otherwise it answers
+`eci_volunteers_confirmation_required`, `eci_volunteers_proposal_unknown` or
+`eci_volunteers_proposal_expired` and sends nothing. A propose carries no
+`turnId` (it is a read); confirm's `turnId`, the app's Idempotency-Key, is fixed
+per code. Both writes need the verified gate (`gate_verified`, zzz's path), no
+manual grant, card or class of their own. Results are scrubbed and framed as
+untrusted; v2's generic codes map to ECV-only text, for these operations only.
+
+`confirm` is a `write`, not `needs-card`: the volunteer's own reversible
+scheduling change, not a payment. Overlay first, then the CP catalog row
+(restricted, at its own release floor), then the app's vendored manifest and
+`subject` declaration, then staff set `MINI_APP_ECI_VOLUNTEERS_TOKEN`. The ECV
+contract is in [eci-volunteers/README.md](eci-volunteers/README.md).
+
 ## Slopfolio: connected private drafts
 
 The [reviewed manifest](slopfolio/manifest.json) and native bundle allowlist

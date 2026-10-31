@@ -1,0 +1,800 @@
+{
+  "manifest": 2,
+  "id": "eci-volunteers",
+  "name": "Edge City Volunteers",
+  "version": "1.0.0",
+  "description": "See your own Edge City volunteer shifts, hours and plan, the open shifts you could claim and your cover requests. Ask for scheduling changes in chat; each one is made only after you say yes to its summary.",
+  "homepage": "https://edge-city-volunteers.vercel.app/",
+  "owner": {
+    "github": "Nhajela",
+    "org": "Edge City Volunteers"
+  },
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Read your schedule and hours",
+      "description": "Your own shifts (coming and past), this week's hours, your plan for the next days, the open shifts you could claim and your own cover requests. The data comes from Edge City Volunteers, which knows you only by a private Agent Village reference that you link to your volunteer account once, with a code from the Edge City Volunteers bot. Agent Village never sends it your Telegram id or username."
+    },
+    {
+      "kind": "action",
+      "label": "Make scheduling changes you approve",
+      "description": "Link this agent to your volunteer account with a code you get from the Edge City Volunteers bot, then claim an open shift, move or open one of your shifts for cover, cancel a cover request, mark a rest day, plan your free hours and ranked shifts, or take extra shifts on or off. Each change is checked first and made only after you say yes in this chat. Edge City Volunteers receives your link code and your requests."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://edge-city-volunteers.vercel.app/api/mcp",
+    "auth": {
+      "mode": "app-token",
+      "secretRef": "MINI_APP_ECI_VOLUNTEERS_TOKEN"
+    }
+  },
+  "operations": [
+    {
+      "name": "eci-volunteers.initialize",
+      "class": "read",
+      "target": {
+        "tool": "eciv_initialize"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.guide",
+      "class": "read",
+      "target": {
+        "tool": "eciv_guide"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "enum": [
+              "planning",
+              "cover",
+              "hours",
+              "requests",
+              "labels",
+              "shifts",
+              "limits",
+              "changes"
+            ]
+          },
+          "topics": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "enum": [
+                "planning",
+                "cover",
+                "hours",
+                "requests",
+                "labels",
+                "shifts",
+                "limits",
+                "changes"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false,
+        "maxProperties": 1
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.my_hours",
+      "class": "read",
+      "target": {
+        "tool": "eciv_my_hours"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "week": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.my_shifts",
+      "class": "read",
+      "target": {
+        "tool": "eciv_my_shifts"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.get_shift",
+      "class": "read",
+      "target": {
+        "tool": "eciv_get_shift"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+          }
+        },
+        "required": [
+          "slot_id"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.plan_view",
+      "class": "read",
+      "target": {
+        "tool": "eciv_plan_view"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.open_shifts",
+      "class": "read",
+      "target": {
+        "tool": "eciv_list_open_shifts"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.my_requests",
+      "class": "read",
+      "target": {
+        "tool": "eciv_my_requests"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.move_targets",
+      "class": "read",
+      "target": {
+        "tool": "eciv_move_targets"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "slot_id"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.propose",
+      "class": "read",
+      "target": {
+        "tool": "eciv_propose"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "claim_shift",
+              "set_rest_day",
+              "set_extra_hours",
+              "plan_days",
+              "move_shift",
+              "ask_cover",
+              "cancel_cover_request"
+            ]
+          },
+          "params": {
+            "type": "object"
+          },
+          "then": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "enum": [
+                    "claim_shift",
+                    "set_rest_day",
+                    "set_extra_hours",
+                    "plan_days",
+                    "move_shift",
+                    "ask_cover",
+                    "cancel_cover_request"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "action",
+                "params"
+              ],
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "properties": {
+                    "action": {
+                      "const": "claim_shift"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "request_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                        }
+                      },
+                      "required": [
+                        "request_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "set_rest_day"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "rest": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "date",
+                        "rest"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "set_extra_hours"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "on": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "on"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "plan_days"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "array",
+                          "minItems": 1,
+                          "maxItems": 7,
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              "rank": {
+                                "type": "array",
+                                "maxItems": 30,
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                                }
+                              },
+                              "free_hours": {
+                                "type": "array",
+                                "maxItems": 8,
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "start": {
+                                      "type": "string",
+                                      "pattern": "^\\d{2}:\\d{2}$"
+                                    },
+                                    "end": {
+                                      "type": "string",
+                                      "pattern": "^\\d{2}:\\d{2}$"
+                                    }
+                                  },
+                                  "required": [
+                                    "start",
+                                    "end"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "date",
+                              "rank"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "days"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "move_shift"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "slot_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                        },
+                        "to_slot_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                        }
+                      },
+                      "required": [
+                        "slot_id",
+                        "to_slot_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "ask_cover"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "slot_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                        }
+                      },
+                      "required": [
+                        "slot_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "action": {
+                      "const": "cancel_cover_request"
+                    },
+                    "params": {
+                      "type": "object",
+                      "properties": {
+                        "request_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                        }
+                      },
+                      "required": [
+                        "request_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "action",
+          "params"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "claim_shift"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                  }
+                },
+                "required": [
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "set_rest_day"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "rest": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "date",
+                  "rest"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "set_extra_hours"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "on": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "on"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "plan_days"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "days": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 7,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "rank": {
+                          "type": "array",
+                          "maxItems": 30,
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                          }
+                        },
+                        "free_hours": {
+                          "type": "array",
+                          "maxItems": 8,
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "string",
+                                "pattern": "^\\d{2}:\\d{2}$"
+                              },
+                              "end": {
+                                "type": "string",
+                                "pattern": "^\\d{2}:\\d{2}$"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "date",
+                        "rank"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "days"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "move_shift"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "slot_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                  },
+                  "to_slot_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                  }
+                },
+                "required": [
+                  "slot_id",
+                  "to_slot_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "ask_cover"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "slot_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                  }
+                },
+                "required": [
+                  "slot_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "cancel_cover_request"
+              },
+              "params": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                  }
+                },
+                "required": [
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.confirm",
+      "class": "write",
+      "target": {
+        "tool": "eciv_confirm"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 50000,
+            "pattern": "^[ -~]+$"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "eci-volunteers.link",
+      "class": "write",
+      "target": {
+        "tool": "eciv_link"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[2-9A-HJKMNP-TV-Z]{8}$"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    }
+  ],
+  "skills": [
+    {
+      "name": "eci-volunteers",
+      "version": "1.0.0",
+      "sha256": "ef0f2365d98853cd63f03934fe1fd1c58c262f0d6c006d99bdce73697080f5cc",
+      "path": "skills/eci-volunteers/SKILL.md"
+    }
+  ]
+}

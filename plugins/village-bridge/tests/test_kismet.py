@@ -146,9 +146,9 @@ class KismetTest(unittest.TestCase):
         self.assertIn('kismet', bridge._mini_app_card.REVIEWED_APPS)
         enum = bridge.SCHEMA['parameters']['properties']['operation']['enum']
         # v2.1.22: Kismet's eight are appended after DreamStarter's nine, then Edge Library's eight, then (ov#556) Favor Loop's eight, then (J3) zzz.schedule_posts (an open chat keeps its pinned tools[]; the enum only grows at its tail).
-        # 1.2.0: kismet.web_link is appended after them all, last.
-        self.assertEqual(enum[-26:-18], EIGHT); self.assertEqual(enum[-35:-26], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
-        self.assertEqual(enum[-2:], ['zzz.schedule_posts', 'kismet.web_link'])
+        # 1.2.0: kismet.web_link is appended after them all; then (ov#450) Edge City Volunteers' twelve follow it, last.
+        self.assertEqual(enum[-38:-30], EIGHT); self.assertEqual(enum[-47:-38], mini.DREAMSTARTER['operations']); self.assertEqual(len(enum), len(set(enum)))
+        self.assertEqual(enum[-14:-12], ['zzz.schedule_posts', 'kismet.web_link']); self.assertEqual(enum[-12:], mini.ECI_VOLUNTEERS['operations'])
         for op in mini.KISMET_120['operations']:
             self.assertTrue(mini.installed(self.home, 'kismet', op))
         self.assertFalse(mini.installed(self.home, 'kismet', 'mini-app.read'))

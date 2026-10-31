@@ -84,14 +84,22 @@ LIBRARY_READ_OPERATIONS = ("library.initialize", "library.search", "library.get"
 # grant, a card or a new class: each happens only on the owner's own ask in this chat.
 FAVORLOOP_READ_OPERATIONS = ("favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.my_loops")
 FAVORLOOP_WRITE_OPERATIONS = ("favorloop.join", "favorloop.answer", "favorloop.confirm", "favorloop.leave")
+# Edge City Volunteers (Naman, ov#450; lead RULING L35456: subject + one-time link, the Favor Loop pattern): the owner's
+# own shifts, hours and plan, and ECV's propose (reads: propose checks a change and changes nothing), and the owner's
+# own confirm and link (writes). The writes take zzz's path (gate_verified), never a manual grant, a card or a new
+# class; confirm is sent only for a code a propose showed in an earlier owner message (_ecv.confirm_check).
+ECV_READ_OPERATIONS = ("eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts",
+                       "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts",
+                       "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose")
+ECV_WRITE_OPERATIONS = ("eci-volunteers.confirm", "eci-volunteers.link")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
                              "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", "zzz.pairs", *ZZZ_READ_OPERATIONS,
                              *ZZZ_TEAM_READ_OPERATIONS, *DS_READ_OPERATIONS, *KISMET_READ_OPERATIONS, *LIBRARY_READ_OPERATIONS,
-                             *FAVORLOOP_READ_OPERATIONS})
+                             *FAVORLOOP_READ_OPERATIONS, *ECV_READ_OPERATIONS})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
                               "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_POST_WRITES,
                               *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS,
-                              *FAVORLOOP_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS})
+                              *FAVORLOOP_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS, *ECV_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
@@ -135,6 +143,10 @@ FAVORLOOP = {"version": "1.0.0", "skills": ["favorloop"], "operations": [
     "favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops",
     "favorloop.answer", "favorloop.confirm", "favorloop.leave"]}
 FAVORLOOP_OPERATIONS = frozenset(FAVORLOOP["operations"])
+# The eci-volunteers install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order).
+# No mini-app.read: the generic relay never reaches Edge City Volunteers.
+ECI_VOLUNTEERS = {"version": "1.0.0", "skills": ["eci-volunteers"], "operations": [*ECV_READ_OPERATIONS, *ECV_WRITE_OPERATIONS]}
+ECV_OPERATIONS = frozenset(ECI_VOLUNTEERS["operations"])
 # ov#441 S1 (lead RULING CLAIMS L16692, reaffirmed L16696): managed private-pair participation is gated ONLY by a
 # separate cp catalog/allowlist entry, projected in `apps` beside zzzbot and granted per tenant at activation (the
 # Mosaic restricted-entry pattern). Id `zzz-bridge`: cp and app validate app ids with ^[a-z0-9][a-z0-9-]{0,39}$,
@@ -254,7 +266,7 @@ def _card_entry_ok(app) -> bool:
 REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": ZZZBOT_ACCEPTED, ZZZ_BRIDGE_ID: (ZZZ_BRIDGE,),
                     ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,),
                     "dreamstarter": (DREAMSTARTER,), "kismet": KISMET_ACCEPTED,
-                    "library": (LIBRARY,), "favorloop": (FAVORLOOP,)}
+                    "library": (LIBRARY,), "favorloop": (FAVORLOOP,), "eci-volunteers": (ECI_VOLUNTEERS,)}
 LOGGED_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 LOG = logging.getLogger("village_bridge")
 _REFUSED_LOGGED = set()

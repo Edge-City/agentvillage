@@ -592,7 +592,7 @@ class BridgeTest(unittest.TestCase):
                                           'dreamstarter.discover','dreamstarter.grant_prepare',
                                           'kismet.signup','kismet.go','kismet.decide','kismet.delete',
                                           'favorloop.join','favorloop.answer','favorloop.confirm','favorloop.leave','zzz.schedule_posts',
-                                          'kismet.web_link'})
+                                          'kismet.web_link','eci-volunteers.confirm','eci-volunteers.link'})
   self.assertIn('rolodex.meeting is a write',bridge.SCHEMA['description']);self.assertIn('skylight.status is a read',bridge.SCHEMA['description'])
   attendee='550e8400-e29b-41d4-a716-446655440000'
   # The gate is off, unverified or absent: the write is refused before any network call.
@@ -654,10 +654,10 @@ class BridgeTest(unittest.TestCase):
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
   self.assertEqual(set(enum),set(mini.GOLD_STARS['operations'])|set(mini.FORKICKS['operations'])|{'mini-app.read','mini-app.context.read','mini-app.context.write','slopfolio.prepare','slopfolio.status','zzz.pairs'}|set(mini.ZZZBOT['operations'])
                    |{'zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite','zzz.add_team_members'}|set(mini.DREAMSTARTER['operations'])|set(mini.KISMET_120['operations'])|set(mini.LIBRARY['operations'])|set(mini.FAVORLOOP['operations'])
-                   |{'zzz.schedule_posts'})
-  # J3: zzz.schedule_posts is appended after every earlier name, then (Kismet 1.2.0) kismet.web_link, last (an older chat's
-  # pinned enum keeps every earlier name in place).
-  self.assertEqual(enum[-2:],['zzz.schedule_posts','kismet.web_link'])
+                   |{'zzz.schedule_posts'}|set(mini.ECI_VOLUNTEERS['operations']))
+  # J3: zzz.schedule_posts is appended after every earlier name, then (Kismet 1.2.0) kismet.web_link, then Edge City
+  # Volunteers' twelve (ov#450), last (an older chat's pinned enum keeps every earlier name in place).
+  self.assertEqual(enum[-14:-12],['zzz.schedule_posts','kismet.web_link']);self.assertEqual(enum[-12:],mini.ECI_VOLUNTEERS['operations'])
   self.assertEqual(bridge.SCHEMA['parameters']['properties']['met'],{'type':'boolean','description':bridge.SCHEMA['parameters']['properties']['met']['description']})
   self.assertFalse({'humanId','tenantId','userId','ownerTelegramId','requestId','turnId'}&set(bridge.SCHEMA['parameters']['properties']))
   approval=(Path(__file__).parents[2]/'av-approval'/'__init__.py').read_text()
@@ -2363,22 +2363,24 @@ class BridgeTest(unittest.TestCase):
   enum=bridge.SCHEMA['parameters']['properties']['operation']['enum']
   # Team rooms (zzz#32 + app#842) are appended after zzz.pairs, again written out; the add (v2.1.22) follows zzzbot 1.1.0's two edits, then DreamStarter's nine, then Kismet's eight, then Edge Library's eight.
   # J3 (lead L36170): zzz.schedule_posts is appended after them all, so every earlier position moves by one; Kismet 1.2.0's
-  # kismet.web_link is appended after it, last, so every earlier position moves by one more.
-  self.assertEqual(enum[-47:-42],mini.ZZZBOT_PREVIOUS['operations']);self.assertEqual(enum[-42],'zzz.pairs');self.assertEqual(len(enum),len(set(enum)))
-  self.assertEqual(enum[-41:-38],['zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite'])
+  # kismet.web_link is appended after it, moving every earlier position by one more; then Edge City Volunteers' twelve
+  # (ov#450, lead RULING L35456; tail order lead L37332) are appended after it, last, moving every earlier position by twelve more.
+  self.assertEqual(enum[-59:-54],mini.ZZZBOT_PREVIOUS['operations']);self.assertEqual(enum[-54],'zzz.pairs');self.assertEqual(len(enum),len(set(enum)))
+  self.assertEqual(enum[-53:-50],['zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite'])
   # zzzbot 1.1.0's two edits are appended after them, written out (an open chat keeps its pinned tools[]; the enum is fixed).
-  self.assertEqual(enum[-38:-36],['zzz.tag_thread','zzz.edit_post'])
+  self.assertEqual(enum[-50:-48],['zzz.tag_thread','zzz.edit_post'])
   # TEAM-ADD-MEMBER (v2.1.22): the add is appended after them, written out.
-  self.assertEqual(enum[-36],'zzz.add_team_members')
-  self.assertEqual(enum[-35:-26],mini.DREAMSTARTER['operations'])
+  self.assertEqual(enum[-48],'zzz.add_team_members')
+  self.assertEqual(enum[-47:-38],mini.DREAMSTARTER['operations'])
   # Kismet Part 2's eight (1.1.0) follow DreamStarter's nine (v2.1.22), appended likewise.
-  self.assertEqual(enum[-26:-18],mini.KISMET['operations'])
+  self.assertEqual(enum[-38:-30],mini.KISMET['operations'])
   # Edge Library's eight reads follow, then Favor Loop's eight (ov#556), then the owner's schedule (J3), then kismet.web_link
-  # (Kismet 1.2.0), appended last.
-  self.assertEqual(enum[-18:-10],mini.LIBRARY['operations'])
-  self.assertEqual(enum[-10:-2],mini.FAVORLOOP['operations'])
-  self.assertEqual(enum[-2],'zzz.schedule_posts')
-  self.assertEqual(enum[-1],'kismet.web_link')
+  # (Kismet 1.2.0), then Edge City Volunteers' twelve (ov#450), appended last.
+  self.assertEqual(enum[-30:-22],mini.LIBRARY['operations'])
+  self.assertEqual(enum[-22:-14],mini.FAVORLOOP['operations'])
+  self.assertEqual(enum[-14],'zzz.schedule_posts')
+  self.assertEqual(enum[-13],'kismet.web_link')
+  self.assertEqual(enum[-12:],mini.ECI_VOLUNTEERS['operations'])
   # v2.1.20 (lead L30644): the description surfaces the team-room operations, and only those zzz names.
   # TEAM-ADD-MEMBER: and the add, with its never-re-open rule.
   desc=bridge.SCHEMA['description'];self.assertEqual(sorted(set(re.findall(r'zzz\.[a-z]+_[a-z_]+',desc))),['zzz.add_team_members','zzz.list_team_invites','zzz.open_team_room','zzz.respond_team_invite','zzz.schedule_posts'])

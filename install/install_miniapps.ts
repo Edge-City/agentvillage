@@ -51,6 +51,9 @@ export const REVIEWED_MINI_APPS = [
   // Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops, and the owner's own join, yes or
   // no, confirmation and leave (gated writes); _mini_apps.py FAVORLOOP, exact (the manifest's order). No mini-app.read.
   { id: "favorloop", version: "1.0.0", operations: ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"], skills: ["favorloop"] },
+  // Edge City Volunteers (Naman, ov#450; lead RULING L35456): the owner's own reads, ECV's propose (a read) and two gated
+  // writes, confirm and the one-time link (_mini_apps.py ECI_VOLUNTEERS, exact). ECV knows the owner only by X-Village-Subject.
+  { id: "eci-volunteers", version: "1.0.0", operations: ["eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose", "eci-volunteers.confirm", "eci-volunteers.link"], skills: ["eci-volunteers"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
