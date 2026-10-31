@@ -302,16 +302,40 @@ def _utc_time(value):
     return True
 
 
-# A Kismet one-time sign-in link (kismet.web_link's webLink) never goes into a zzz post, title or edit: matched after
-# dropping format/invisible characters, case-folded and percent-decoded, so a split or encoded copy is refused too.
-KISMET_SIGNIN_LINK = "kismet-village.vercel.app/u/"
+# A Kismet one-time sign-in link (kismet.web_link's webLink) never goes into anything a zzz write sends (every string, at
+# any depth, of every zzz write op). Plain text only, never a URL parser, so it cannot throw: NFKC, format/invisible
+# characters dropped, percent-decoded until stable, backslashes as slashes, case-folded; then the host (a trailing dot and
+# a port allowed; any scheme or "//" before it does not matter to a search) followed by "/u/". No state is kept.
+KISMET_SIGNIN_LINK = re.compile(r"(?<![a-z0-9-])kismet-village\.vercel\.app\.?(?::[0-9]{0,5})?/+u/")
 ZZZ_KISMET_LINK = ("Nothing was sent. A Kismet sign-in link is private to the owner: never post it to zzz.bot. Give it to "
                    "the owner only in their private chat.")
+ZZZ_LINK_GUARDED = frozenset((*ZZZ_POST_WRITES, *ZZZ_TEAM_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS))
+
+
+def _plain(value):
+    return "".join(c for c in unicodedata.normalize("NFKC", value)
+                   if unicodedata.category(c) not in ("Cf", "Cn", "Co", "Cs") and c not in INVISIBLE)
 
 
 def _names_kismet_link(value):
-    plain = "".join(c for c in value if unicodedata.category(c) not in ("Cf", "Cn", "Co") and c not in INVISIBLE)
-    return KISMET_SIGNIN_LINK in unquote(plain).casefold()
+    text = _plain(value)
+    for _ in range(8):  # percent-decoding until stable (bounded: each pass only shortens the text)
+        decoded = _plain(unquote(text))
+        if decoded == text:
+            break
+        text = decoded
+    return KISMET_SIGNIN_LINK.search(text.replace("\\", "/").casefold()) is not None
+
+
+def _carries_kismet_link(value):
+    """True when any string at any depth (dict keys included) names a Kismet sign-in link."""
+    if isinstance(value, str):
+        return _names_kismet_link(value)
+    if isinstance(value, dict):
+        return any(_carries_kismet_link(k) or _carries_kismet_link(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_carries_kismet_link(v) for v in value)
+    return False
 
 
 def zzz_payload(op, args, context):
@@ -373,7 +397,7 @@ def zzz_payload(op, args, context):
         raise ValueError("invalid_zzz_arguments")  # exactly one of the two (contract section 2)
     if op == "zzz.schedule_posts" and ("about" not in out if out["every_minutes"] is not None else len(out) > 1):
         raise ValueError("invalid_zzz_arguments")  # a set needs its topic; a stop carries nothing else
-    if op in ZZZ_POST_WRITES and any(isinstance(v, str) and _names_kismet_link(v) for v in (out.get("body"), out.get("title"))):
+    if op in ZZZ_LINK_GUARDED and _carries_kismet_link(out):
         raise ValueError("kismet_link_private")  # data minimisation at the room sink (security review, app#1092's spirit)
     if op in ZZZ_POST_WRITES:
         # Stable on retries in this originating turn, distinct across later turns: the app's idempotency key input.

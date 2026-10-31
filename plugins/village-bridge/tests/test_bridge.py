@@ -1548,6 +1548,40 @@ class BridgeTest(unittest.TestCase):
    for body in ('Try Kismet: https://kismet-village.vercel.app','Join at https://kismet-village.vercel.app/join','kismet-village.vercel.app/user'):
     with self.subTest(body=body):
      self.assertIn('data',self.call({'operation':'zzz.reply','arguments':{'thread':'thr_1','body':body}}))
+ def test_the_kismet_link_guard_normalises_and_covers_every_zzz_write_but_no_read(self):
+  self.zzz_home()
+  spellings=['kismet-village.vercel.app%252Fu%252Fav-test-0000',  # percent-encoded twice
+             '\uff4b\uff49\uff53\uff4d\uff45\uff54\uff0d\uff56\uff49\uff4c\uff4c\uff41\uff47\uff45\uff0e\uff56\uff45\uff52\uff43\uff45\uff4c\uff0e\uff41\uff50\uff50\uff0f\uff55\uff0f\uff58',  # fullwidth
+             'kismet-village.vercel.app\\u\\av-test-0000',  # backslashes
+             'HTTPS://Kismet-Village.Vercel.App.:443/U/av-test-0000',  # case, trailing dot, port
+             '//kismet-village.vercel.app//u/av-test-0000','kismet-village.vercel.app/%75/x','kis\u00admet-village.vercel.app/u/x']
+  for text in spellings:
+   with self.subTest(text=text):
+    self.assertTrue(bridge._names_kismet_link(text))
+  for text in ('https://kismet-village.vercel.app','kismet-village.vercel.app/join','https://kismet-village.vercel.app/user/x','notkismet-village.vercel.app/u/x','%%%','%zz'):
+   with self.subTest(text=text):
+    self.assertFalse(bridge._names_kismet_link(text))
+  self.assertEqual(bridge.ZZZ_LINK_GUARDED,set(mini.ZZZ_POST_WRITES)|set(mini.ZZZ_TEAM_WRITE_OPERATIONS)|set(mini.ZZZ_OWNER_WRITE_OPERATIONS))
+  link='kismet-village.vercel.app/u/av'  # 30 characters: fits a tag
+  bad=[{'operation':'zzz.reply','arguments':{'thread':'thr_1','body':spellings[0]}},
+       {'operation':'zzz.reply','arguments':{'thread':'thr_1','body':spellings[1]}},
+       {'operation':'zzz.reply','arguments':{'thread':'thr_1','body':spellings[2]}},
+       {'operation':'zzz.tag_thread','arguments':{'thread':'thr_1','tags':['lunch',link]}},
+       {'operation':'zzz.edit_post','arguments':{'post':'pst_1','title':spellings[3]}},
+       {'operation':'zzz.open_team_room','arguments':{'title':'Team '+link,'with':['av-test-sky']}},
+       {'operation':'zzz.add_team_members','arguments':{'with':['av-test '+link],'room_id':'room_1'}},
+       {'operation':'zzz.schedule_posts','arguments':{'every_minutes':60,'about':'my Kismet https://'+link+'-test-0000'}}]
+  with self.gate():
+   for args in bad:
+    with self.subTest(op=args['operation']):
+     self.assertEqual(self.call(args),{'error':'invalid_zzz_arguments','instruction':bridge.ZZZ_KISMET_LINK})
+   self.transport.assert_not_called()
+   # Reads are never inspected (and never refused for it).
+   with patch.object(bridge,'_carries_kismet_link',side_effect=AssertionError('reads are not link-checked')):
+    for args in ({'operation':'zzz.list_rooms','arguments':{}},{'operation':'zzz.read_thread','arguments':{'thread':'thr_1'}},
+                 {'operation':'zzz.changes','arguments':{'room':'general'}}):
+     with self.subTest(op=args['operation']):
+      self.assertIn('data',self.call(args))
  # ---- zzzbot 1.1.0 (lead L30481): the agent's own retag and edit; 1.0.0 still accepted --------------------------------
  TAG={'operation':'zzz.tag_thread','arguments':{'thread':'thr_1','tags':['buildathon','lunch']}}
  EDIT={'operation':'zzz.edit_post','arguments':{'post':'pst_1','body':'See you at 7pm.'}}
