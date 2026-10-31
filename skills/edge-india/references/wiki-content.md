@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-13T18:14:32.822Z
+Source updated: 2026-10-26T04:14:01.501Z
 
-Last content change indexed: 2026-10-13T18:28:19.266Z
+Last content change indexed: 2026-10-26T04:28:17.012Z
 
 ---
 
@@ -27,6 +27,8 @@ Edge City India 2026 is a 3 week-long popup village (October 11 - November 1) in
 - **[Community Calendar](https://portal.edgecity.live/portal/edge-india/events)****:** browse all events of Edge City India 2026 here. Once you have a ticket, you can create and host your own sessions too.
 
 - **[Edge City India 2026 Blog](https://edgecityindia2026.substack.com/)****:** Search through this if you have further questions!
+
+- **Share feedback on Edge City India:** Tell us what’s working and what we could improve. Name and contact details are optional. Open the feedback form: `https://edgecity.notion.site/6ff34bfc6c0a44daa9be8899d2debe53?pvs=105`
 
 ---
 
@@ -126,19 +128,11 @@ Once it's created, you can invite people by email, see who has RSVPed, edit any 
 
 Every attendee needs to check in to collect their wristband. Please bring your ticket QR code. **PLEASE NOTE: There is a $50 USD charge for lost wristbands.** **If your wristband is too tight, needs to be cut or you need a replacement with your original one in hand, you can exchange it complimentary.**
 
-**Opening day (Oct 12)**
-
-- **Mon, Oct 12:**
-
-  - 9am–1pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
-
-  - 1pm–5pm, co-working ([The Circle.Work)](https://maps.app.goo.gl/bC2hau5M8MrRsJdm8)
-
-**From Oct 13 onward:**
-
 - **Mon–Fri:** 10am–12pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
 
-- **Sat–Sun:** 12pm–2pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
+- **Sat:** 12pm–2pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
+
+- **Sun:** 12pm–6pm, [Riva Beach Resort (Garden Oasis Banquet Hall](https://maps.app.goo.gl/povPE89dFNAFtz5x6))
 
 **Arriving outside these hours?** You can join sessions before checking in - keep your ticket QR code handy.
 
@@ -316,15 +310,13 @@ We've partnered with local restaurants and businesses to offer ECI26 participant
 
 **Lunch Meal Plans**
 
-TLDR;
-
-We’ve partnered with [Om Kafe](https://share.google/uhNPlKfRJ9AzUd34Z) and [Hari Cafe](https://www.haricafe.com/) to provide fresh and healthy lunches Monday - Friday delivered to The Circle.Work from 1:00-2:00 PM!
+We’ve partnered with [Hari Cafe](https://www.haricafe.com/) to provide fresh and healthy lunches Monday - Friday delivered to RIVA Beach Resort from 12:00-1:00 PM! If you wish to have your meal delivered to Circle Co.Work, please use Telegram to communicate.
 
 Participants must pay for a pre-purchased meal ticket [here](https://portal.edgecity.live/checkout/edge-india/lunch-tickets).
 
 ₹3,000 per week ($36) - 5 lunches, Monday - Friday.
 
-⚠️_Order deadline:_ Week 1 orders close **Oct 10 at 10am IST**. Week 2 closes **Oct 16 at 10am IST** and week 3 closes Oct 21, so the kitchens know how much to cook.
+⚠️ _Order deadline:_ Week 3 closes **Oct 24 at 10am IST.**
 
 We have a no refund policy once you’ve purchased a meal plan for a given week: this keeps waste down and lets the restaurants plan properly.
 
@@ -336,15 +328,13 @@ Dinners are pay-as-you-go and rotate across partner venues so you can explore th
 
 Join the Edge City India community at 7:00pm, Monday to Thursday, to unwind and connect over shared meals! Just show up, order off the menu and show your wristband for the discount.
 
-- **Mondays** at [Oo! Olivia](https://maps.google.com/?q=Oo+Olivia+Mandrem+Goa) for 15% off
+- **Mondays** at [Cuebebar on the Beach](https://maps.app.goo.gl/pYAKNo1tQhK1NZX36) for 15% off
 
-- **Tuesdays** at [Ashwe 351](https://maps.google.com/?q=Ashwe+351+Palma+Beach+Resort+Ashvem+Goa) (inside Palma Beach Resort) for 10% off
+- **Tuesdays** at [Cuebebar on the Beach](https://maps.app.goo.gl/pYAKNo1tQhK1NZX36) for 15% off
 
-- **Wednesdays** at [Brisa by the Beach](https://maps.app.goo.gl/Takho1eVV5XxEwNR7) for 20% off
+- **Wednesdays** at [Prana Cafe](https://maps.app.goo.gl/ic5HquVKgzwtDASt8) for 10% off
 
 - **Thursdays** at [Prana Cafe](https://maps.app.goo.gl/ic5HquVKgzwtDASt8) for 10% off
-
-- **Sunday Oct 18** at [Jadugari](https://maps.google.com/?q=Jadugari+Morjim+Goa) for 20% off
 
 - **Sunday Oct 25** at [Morjim Culture](https://maps.app.goo.gl/cEsyyW2Rp81frcuN7) for 10% off
 
@@ -352,13 +342,83 @@ All dinners are on the [calendar](https://portal.edgecity.live/portal/edge-india
 
 #### Shuttle Service & Taxi Information during Edge City India
 
-We will offer a shuttle service on weekdays.
+**Shuttle Schedule | Oct 21–23 & Oct 26–30**
 
-Shuttle runs 11am-7pm in 20 min loops with a driver break from 4-4:30 PM
+📍 **Nanu → Riva → Circle.Work → Namaka (Mandrem), then back via Circle.Work and Riva**
 
-Shuttle stops include RIVA Beach Resort > The Circle Coworking > RIVA Beach Resort.
+Each round trip takes approximately **90 minutes**, allowing 10 minutes between stops and 5 minutes for boarding.
 
-Shuttle times will be approximate to traffic.\
+**Circle.Work ↔️ Namaka travel time is estimated and still needs confirmation.**
+
+Please allow flexibility for traffic.
+
+🚐 **Bus 1 | 8 AM–4 PM**
+
+☕️ Break: 11 AM–12 PM
+
+**Outbound: Nanu → Riva → Circle.Work → Namaka**
+
+8:00 AM → 8:15 AM → 8:30 AM → 8:45 AM
+
+9:30 AM → 9:45 AM → 10:00 AM → 10:15 AM
+
+**Return: Namaka → Circle.Work → Riva → Nanu arrival**
+
+8:45 AM → 9:00 AM → 9:15 AM → 9:25 AM
+
+10:15 AM → 10:30 AM → 10:45 AM → 10:55 AM
+
+☕️ **Break: 11 AM–12 PM**
+
+**Outbound: Nanu → Riva → Circle.Work → Namaka**
+
+12:00 PM → 12:15 PM → 12:30 PM → 12:45 PM
+
+1:30 PM → 1:45 PM → 2:00 PM → 2:15 PM
+
+**Return: Namaka → Circle.Work → Riva → Nanu arrival**
+
+12:45 PM → 1:00 PM → 1:15 PM → 1:25 PM
+
+2:15 PM → 2:30 PM → 2:45 PM → 2:55 PM
+
+🚐 **Bus 2 | 2 PM–10 PM**
+
+☕️ Break: 4–5 PM
+
+**Outbound: Nanu → Riva → Circle.Work → Namaka**
+
+2:00 PM → 2:15 PM → 2:30 PM → 2:45 PM
+
+**Return: Namaka → Circle.Work → Riva → Nanu arrival**
+
+2:45 PM → 3:00 PM → 3:15 PM → 3:25 PM
+
+☕️ **Break: 4–5 PM**
+
+**Outbound: Nanu → Riva → Circle.Work → Namaka**
+
+5:00 PM → 5:15 PM → 5:30 PM → 5:45 PM
+
+6:30 PM → 6:45 PM → 7:00 PM → 7:15 PM
+
+8:00 PM → 8:15 PM → 8:30 PM → 8:45 PM
+
+**Return: Namaka → Circle.Work → Riva → Nanu arrival**
+
+5:45 PM → 6:00 PM → 6:15 PM → 6:25 PM
+
+7:15 PM → 7:30 PM → 7:45 PM → 7:55 PM
+
+8:45 PM → 9:00 PM → 9:15 PM → 9:25 PM
+
+📍**Track your shuttle:** @eci\_shuttles\_bot
+
+\[Live shuttle map\](https://eci-shuttle.positivesumcompany.com/)
+
+The tracker is new, so there may be a few quirks 💜 Please arrive a few minutes early and plan around driver breaks!
+
+Shuttle times will be approximate to traffic. Tips are not required, but always appreciated!\
 Please plan accordingly so you do not miss your next session!
 
 Additionally, aligned prices for taxis are below - you can find these outside of Riva and around town.
@@ -368,8 +428,6 @@ Please note the prices below are negotiated prices for ongoing relationships wit
 **A few of our taxi driver friends include:**
 
 - Prasad Gadekar - WhatsApp: +91 98503 91950
-
-- Umesh Naik - WhatsApp: +91 83297 44359
 
 - Jitendra Deuskar - WhatsApp: +91 97644 13710
 

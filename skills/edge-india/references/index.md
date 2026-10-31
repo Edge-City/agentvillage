@@ -36,6 +36,6 @@ Timestamps below record the last indexed content change, not the latest successf
 | [Welcome to Edge City India](./newsletter/welcome-to-edge-city-india.md) | newsletter | — | 2026-10-08T09:58:22.660Z | Current source |
 | [Announcing the Community Builders Residency   Blog   Edge City](./residencies/community-builders.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
 | [Creative Residency Edge City: Modern Renaissance   Blog   Edge City](./residencies/creator-residency.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
-| [Edge City India 2026](./website-content.md) | website | — | 2026-10-08T19:43:20.805Z | Current source |
+| [Edge City India 2026](./website-content.md) | website | — | 2026-10-15T18:43:20.840Z | Current source |
 | [About   Edge City](./website/about.md) | website | — | 2026-09-30T21:28:06.827Z | Current source |
-| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-13T18:28:19.266Z | Current source |
+| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-26T04:28:17.012Z | Current source |
