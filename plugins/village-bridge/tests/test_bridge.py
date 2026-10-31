@@ -1526,6 +1526,28 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(sent[1],{'operation':'zzz.create_thread','room':'general','title':'Lunch?','body':'Who is around?','turnId':self.zzz_turn('9')})
   # A later owner message is a new turn: a different idempotency input, never the earlier post's.
   self.assertEqual(sent[2]['turnId'],self.zzz_turn('10'));self.assertNotEqual(sent[2]['turnId'],sent[0]['turnId'])
+ def test_a_kismet_sign_in_link_never_goes_into_a_zzz_post_title_or_edit(self):
+  # Data minimisation at the room sink (security review on kismet.web_link; app#1092's spirit): refused before the gate or
+  # any send, with the existing invalid_zzz_arguments code and the plugin's own line; a plain Kismet link still posts.
+  self.zzz_home()
+  link='https://kismet-village.vercel.app/u/av-test-0000?next=chat'
+  bad=[{'operation':'zzz.reply','arguments':{'thread':'thr_1','body':'My Kismet: '+link}},
+       {'operation':'zzz.create_thread','arguments':{'room':'general','title':'Lunch?','body':'Sign in at '+link}},
+       {'operation':'zzz.create_thread','arguments':{'room':'general','title':'kismet-village.vercel.app/u/av-test-0000','body':'Who is around?'}},
+       {'operation':'zzz.edit_post','arguments':{'post':'pst_1','body':'Here: '+link}},
+       {'operation':'zzz.edit_post','arguments':{'post':'pst_1','title':'KISMET-VILLAGE.VERCEL.APP/U/AV-TEST-0000'}},
+       {'operation':'zzz.reply','arguments':{'thread':'thr_1','body':'kismet-village.vercel\u200b.app/u/av-test-0000'}},
+       {'operation':'zzz.reply','arguments':{'thread':'thr_1','body':'kismet-village.vercel.app%2Fu%2Fav-test-0000'}}]
+  with self.gate():
+   for args in bad:
+    with self.subTest(args=args):
+     self.assertEqual(self.call(args),{'error':'invalid_zzz_arguments','instruction':bridge.ZZZ_KISMET_LINK})
+   self.transport.assert_not_called()
+   self.assertIn('A Kismet sign-in link is private to the owner',bridge.ZZZ_KISMET_LINK)
+   # Not a sign-in link: the website, its join page or a /u-less path still post as before.
+   for body in ('Try Kismet: https://kismet-village.vercel.app','Join at https://kismet-village.vercel.app/join','kismet-village.vercel.app/user'):
+    with self.subTest(body=body):
+     self.assertIn('data',self.call({'operation':'zzz.reply','arguments':{'thread':'thr_1','body':body}}))
  # ---- zzzbot 1.1.0 (lead L30481): the agent's own retag and edit; 1.0.0 still accepted --------------------------------
  TAG={'operation':'zzz.tag_thread','arguments':{'thread':'thr_1','tags':['buildathon','lunch']}}
  EDIT={'operation':'zzz.edit_post','arguments':{'post':'pst_1','body':'See you at 7pm.'}}

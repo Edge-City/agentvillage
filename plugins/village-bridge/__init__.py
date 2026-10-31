@@ -302,6 +302,18 @@ def _utc_time(value):
     return True
 
 
+# A Kismet one-time sign-in link (kismet.web_link's webLink) never goes into a zzz post, title or edit: matched after
+# dropping format/invisible characters, case-folded and percent-decoded, so a split or encoded copy is refused too.
+KISMET_SIGNIN_LINK = "kismet-village.vercel.app/u/"
+ZZZ_KISMET_LINK = ("Nothing was sent. A Kismet sign-in link is private to the owner: never post it to zzz.bot. Give it to "
+                   "the owner only in their private chat.")
+
+
+def _names_kismet_link(value):
+    plain = "".join(c for c in value if unicodedata.category(c) not in ("Cf", "Cn", "Co") and c not in INVISIBLE)
+    return KISMET_SIGNIN_LINK in unquote(plain).casefold()
+
+
 def zzz_payload(op, args, context):
     """The exact forwarded fields for one zzz operation, or ValueError. A write carries the trusted turn id."""
     if not set(args) <= {"operation", "arguments"}:
@@ -361,6 +373,8 @@ def zzz_payload(op, args, context):
         raise ValueError("invalid_zzz_arguments")  # exactly one of the two (contract section 2)
     if op == "zzz.schedule_posts" and ("about" not in out if out["every_minutes"] is not None else len(out) > 1):
         raise ValueError("invalid_zzz_arguments")  # a set needs its topic; a stop carries nothing else
+    if op in ZZZ_POST_WRITES and any(isinstance(v, str) and _names_kismet_link(v) for v in (out.get("body"), out.get("title"))):
+        raise ValueError("kismet_link_private")  # data minimisation at the room sink (security review, app#1092's spirit)
     if op in ZZZ_POST_WRITES:
         # Stable on retries in this originating turn, distinct across later turns: the app's idempotency key input.
         out["turnId"] = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(["zzz-turn", context["SESSION_KEY"], context["MESSAGE_ID"]])))
@@ -1207,7 +1221,9 @@ def handle(args, **kwargs):
         elif op in ZZZ_OPERATIONS:
             try:
                 payload.update(zzz_payload(op, args, context))
-            except ValueError:
+            except ValueError as refused:
+                if str(refused) == "kismet_link_private":
+                    return json.dumps({"error": "invalid_zzz_arguments", "instruction": ZZZ_KISMET_LINK})
                 if op in ZZZ_TEAM_INPUT or op in ZZZ_EDIT_INPUT or op in ZZZ_SCHEDULE_INPUT:
                     rule = ZZZ_TEAM_INPUT.get(op) or ZZZ_SCHEDULE_INPUT.get(op) or ZZZ_EDIT_INPUT[op]
                     return json.dumps({"error": "invalid_zzz_arguments", "instruction": "Nothing was sent. " + rule})
