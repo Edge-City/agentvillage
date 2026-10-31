@@ -996,7 +996,7 @@ class KismetTransportTest(unittest.TestCase):
                                 io.BytesIO(json.dumps({'code': code, 'detail': 'upstream text not shown'}).encode()))
             return raise_it
         with patch.object(bridge, 'build_opener', return_value=opener):
-            # With MINI_APP_KISMET_KEY unset the app answers mini_app_unconfigured for the five authenticated ops.
+            # With MINI_APP_KISMET_KEY unset the app answers mini_app_unconfigured for the six authenticated ops.
             opener.open.side_effect = refuse('mini_app_unconfigured', 503)
             for op in ['kismet.summary', *WRITES]:
                 result = real_transport(config, {'operation': op, 'arguments': {}})

@@ -1554,14 +1554,19 @@ class BridgeTest(unittest.TestCase):
              '\uff4b\uff49\uff53\uff4d\uff45\uff54\uff0d\uff56\uff49\uff4c\uff4c\uff41\uff47\uff45\uff0e\uff56\uff45\uff52\uff43\uff45\uff4c\uff0e\uff41\uff50\uff50\uff0f\uff55\uff0f\uff58',  # fullwidth
              'kismet-village.vercel.app\\u\\av-test-0000',  # backslashes
              'HTTPS://Kismet-Village.Vercel.App.:443/U/av-test-0000',  # case, trailing dot, port
-             '//kismet-village.vercel.app//u/av-test-0000','kismet-village.vercel.app/%75/x','kis\u00admet-village.vercel.app/u/x']
+             '//kismet-village.vercel.app//u/av-test-0000','kismet-village.vercel.app/%75/x','kis\u00admet-village.vercel.app/u/x',
+             # ov#599 N1 probes (review-b L37096): a tab, CR or LF inside; "." and ".." segments (raw or encoded); host-only forms.
+             'kismet-village.vercel.app/\tu/av-test-0000','kismet-vil\r\nlage.vercel.app/u/x','kismet-village.vercel.app/u\t/x',
+             'kismet-village.vercel.app/./u/x','kismet-village.vercel.app/a/b/../../u/x','kismet-village.vercel.app/%2e/u/x',
+             'kismet-village.vercel.app/x/%2E%2E/u/x','kismet-village.vercel.app/u','see kismet-village.vercel.app/u?next=chat',
+             'kismet-village.vercel.app.:8443/./u#x']
   for text in spellings:
    with self.subTest(text=text):
     self.assertTrue(bridge._names_kismet_link(text))
-  for text in ('https://kismet-village.vercel.app','kismet-village.vercel.app/join','https://kismet-village.vercel.app/user/x','notkismet-village.vercel.app/u/x','%%%','%zz'):
+  for text in ('https://kismet-village.vercel.app','kismet-village.vercel.app/join','https://kismet-village.vercel.app/user/x','notkismet-village.vercel.app/u/x','%%%','%zz',
+               'kismet-village.vercel.app/u/../join','kismet-village.vercel.app u/x','',None,7):
    with self.subTest(text=text):
     self.assertFalse(bridge._names_kismet_link(text))
-  self.assertEqual(bridge.ZZZ_LINK_GUARDED,set(mini.ZZZ_POST_WRITES)|set(mini.ZZZ_TEAM_WRITE_OPERATIONS)|set(mini.ZZZ_OWNER_WRITE_OPERATIONS))
   link='kismet-village.vercel.app/u/av'  # 30 characters: fits a tag
   bad=[{'operation':'zzz.reply','arguments':{'thread':'thr_1','body':spellings[0]}},
        {'operation':'zzz.reply','arguments':{'thread':'thr_1','body':spellings[1]}},
@@ -1582,6 +1587,77 @@ class BridgeTest(unittest.TestCase):
                  {'operation':'zzz.changes','arguments':{'room':'general'}}):
      with self.subTest(op=args['operation']):
       self.assertIn('data',self.call(args))
+ def test_every_write_but_kismets_refuses_a_kismet_sign_in_link_with_its_familys_code(self):
+  # ov#599 N1 (review-b L37096, ruling L37099): the guard is in handle()'s shared write path, after each op's payload is
+  # built and before any gate, card or send; every WRITE_OPERATIONS op but Kismet's own; reads are never inspected.
+  home=Path(self.tmp.name);link='https://kismet-village.vercel.app/u/av-test-0000?next=chat';short='kismet-village.vercel.app/u/av'
+  apps=[{'id':'gold-stars',**mini.GOLD_STARS},{'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':['mini-app.read','mini-app.context.read','mini-app.context.write']},
+        {'id':'forkicks',**mini.FORKICKS},{'id':'slopfolio',**mini.SLOPFOLIO},{'id':'dreamstarter',**mini.DREAMSTARTER},{'id':'favorloop',**mini.FAVORLOOP},
+        {'id':'eci-volunteers',**mini.ECI_VOLUNTEERS},{'id':'zzzbot',**mini.ZZZBOT},{'id':'kismet',**mini.KISMET_120}]
+  Path(self.tmp.name,'mini-apps.json').write_text(json.dumps({'version':1,'apps':apps}))
+  for app in apps:self.assertTrue(mini.installed(home,app['id'],app['operations'][-1]),app['id'])
+  attendee='550e8400-e29b-41d4-a716-446655440000'
+  cases=[  # (family's code, a write carrying the link, the same write with clean text)
+   ('invalid_arguments',{'operation':'gold-stars.prepare','attendeeId':attendee,'note':'Thanks! '+link,'visibility':'named'},
+    {'operation':'gold-stars.prepare','attendeeId':attendee,'note':'Thanks for the walk!','visibility':'named'}),
+   ('invalid_arguments',{'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['likes jazz',{'note':short}],'mode':'add'}},
+    {'operation':'mini-app.context.write','appId':'dizko','arguments':{'claims':['likes jazz'],'mode':'add'}}),
+   ('invalid_arguments',{'operation':'slopfolio.prepare','paste':'# My app\n\nLogin: '+link},{'operation':'slopfolio.prepare','paste':'# My app\n\nIt works.'}),
+   ('invalid_arguments',{'operation':'forkicks.order.prepare','items':[{'itemId':'i1','qty':1,'optionIds':[]}],'fulfilment':{'type':'pickup','locationId':'loc1'},
+     'paymentMethod':'upi','note':short},
+    {'operation':'forkicks.order.prepare','items':[{'itemId':'i1','qty':1,'optionIds':[]}],'fulfilment':{'type':'pickup','locationId':'loc1'},'paymentMethod':'upi','note':'less ice'}),
+   ('invalid_dreamstarter_arguments',{'operation':'dreamstarter.discover','arguments':{'about':'av-test-ds lines '+link}},
+    {'operation':'dreamstarter.discover','arguments':{'about':'av-test-ds lines'}}),
+   ('invalid_zzz_arguments',{'operation':'zzz.open_team_room','arguments':{'title':'Team '+short,'with':['av-test-sky']}},
+    {'operation':'zzz.open_team_room','arguments':{'title':'Team lunch','with':['av-test-sky']}}),
+   ('invalid_zzz_arguments',{'operation':'zzz.schedule_posts','arguments':{'every_minutes':60,'about':'my link '+link}},
+    {'operation':'zzz.schedule_posts','arguments':{'every_minutes':60,'about':'the community garden'}}),
+  ]
+  with patch.object(bridge,'gate_verified',return_value=None),patch.object(bridge,'_forkicks_card_at_prepare',return_value={}),patch.object(bridge,'save_preview',return_value=None):
+   for code,bad,clean in cases:
+    with self.subTest(op=bad['operation']):
+     self.transport.reset_mock()
+     out=self.call(bad)
+     self.assertEqual(out,{'error':code,'instruction':bridge.ZZZ_KISMET_LINK if code=='invalid_zzz_arguments' else bridge.KISMET_LINK_PRIVATE})
+     self.transport.assert_not_called()
+     out=self.call(clean)
+     self.assertNotIn(out.get('instruction'),(bridge.ZZZ_KISMET_LINK,bridge.KISMET_LINK_PRIVATE));self.transport.assert_called()
+  self.assertIn('A Kismet sign-in link is private to the owner',bridge.KISMET_LINK_PRIVATE)
+  # Favor Loop and ECV writes take only patterned fields (enums, uuids, handles, codes): their own input check refuses a
+  # link before the guard can see it, nothing is sent; the guard's refusal for them would be their family's code.
+  self.transport.reset_mock()
+  for args,code in (({'operation':'favorloop.join','arguments':{'offers':['coffee'],'contactHandle':short}},'invalid_favorloop_arguments'),
+                    ({'operation':'eci-volunteers.link','arguments':{'code':short}},'invalid_ecv_arguments')):
+   with self.subTest(op=args['operation']):
+    self.assertEqual(self.call(args)['error'],code)
+  self.transport.assert_not_called()
+  for op,code in (('favorloop.join','invalid_favorloop_arguments'),('eci-volunteers.confirm','invalid_ecv_arguments'),('dreamstarter.grant_prepare','invalid_dreamstarter_arguments'),
+                  ('zzz.reply','invalid_zzz_arguments'),('gold-stars.send','invalid_arguments'),('rolodex.meeting','invalid_arguments'),('acme.prepare','invalid_arguments')):
+   self.assertEqual(bridge.kismet_link_refusal(op)['error'],code)
+  # Kismet's own ops are never inspected (kismet.web_link's answer is the link's one home; a sign-up's text goes to Kismet).
+  with patch.object(bridge,'_carries_kismet_link',side_effect=AssertionError('kismet ops are not link-checked')),patch.object(bridge,'gate_verified',return_value=None):
+   self.transport.return_value={'kind':'mini-app','appId':'kismet','operation':'kismet.go','asOf':'2026-10-31T00:00:00Z','result':{'structuredContent':{'ok':True,'text':'ok'}}}
+   self.assertIn('data',self.call({'operation':'kismet.go','arguments':{}}))
+   self.transport.return_value={'kind':'mini-app','appId':'kismet','operation':'kismet.summary','asOf':'2026-10-31T00:00:00Z','result':{'structuredContent':{'ok':True,'text':'ok'}}}
+   self.assertIn('data',self.call({'operation':'kismet.summary','arguments':{}}))
+   # and no read of any app: the generic relay read and a Rolodex search.
+   self.transport.return_value={'ok':True}
+   self.assertIn('data',self.call({'operation':'mini-app.read','appId':'dizko','tool':'search','arguments':{'q':link}}))
+   self.assertIn('data',self.call({'operation':'rolodex.search','query':'av-test river'}))
+ def test_a_generic_apps_card_op_refuses_a_kismet_sign_in_link_before_anything_runs(self):
+  card=unittest.mock.Mock(side_effect=AssertionError('nothing proposed or sent'))
+  with patch.object(bridge._mini_app_card,'projected_operation',return_value={'app':'acme','kind':'prepare'}),patch.object(bridge,'_generic_card_op',card):
+   out=self.call({'operation':'acme.prepare','arguments':{'item':'Coffee','note':'https://kismet-village.vercel.app/u/av-test-0000'}})
+  self.assertEqual(out,{'error':'invalid_arguments','instruction':bridge.KISMET_LINK_PRIVATE});card.assert_not_called()
+ def test_the_kismet_link_matcher_is_one_file_in_both_plugins(self):
+  root=Path(__file__).parents[1]
+  bridge_copy=(root/'_kismet_link.py').read_bytes();events_copy=(root.parent/'av-events'/'_kismet_link.py').read_bytes()
+  self.assertEqual(bridge_copy,events_copy)
+  self.assertEqual(sys.modules['village_bridge._kismet_link'].INVISIBLE,bridge.INVISIBLE)
+  self.assertIs(bridge._carries_kismet_link,bridge.carries_kismet_signin_link)
+  # Never throws, whatever it is handed; keys are not scanned (the payload's keys are the plugin's own).
+  for value in (None,1,1.5,b'kismet-village.vercel.app/u/x',object(),{'kismet-village.vercel.app/u/x':1},[[['%'*1000]]],'\udcff'*10,'%'*5000+'kismet'):
+   self.assertFalse(bridge._carries_kismet_link(value))
  # ---- zzzbot 1.1.0 (lead L30481): the agent's own retag and edit; 1.0.0 still accepted --------------------------------
  TAG={'operation':'zzz.tag_thread','arguments':{'thread':'thr_1','tags':['buildathon','lunch']}}
  EDIT={'operation':'zzz.edit_post','arguments':{'post':'pst_1','body':'See you at 7pm.'}}
