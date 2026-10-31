@@ -1,17 +1,19 @@
-"""Kismet (Deon): its three public reads and, on the owner's own ask, their own sign-up, summary, dates, meet or pass
-and account deletion.
+"""Kismet (Deon): its three public reads and, on the owner's own ask, their own sign-up, summary, dates, meet or pass,
+one-time web sign-in link and account deletion.
 
 The Agent Village app server holds Kismet's one app token (manifest v2 auth mode app-token, secretRef
-MINI_APP_KISMET_KEY) and calls https://kismet-village.vercel.app/mcp with it for the five authenticated tools, with
+MINI_APP_KISMET_KEY) and calls https://kismet-village.vercel.app/mcp with it for the six authenticated tools, with
 X-Village-Subject: the app's opaque, stable, per-app reference for this resident (Kismet stores only its SHA-256). The
 three public reads go with no token and no subject. The box never sees a token, an endpoint, a header or a resident id,
 and never sends one: any residentId, subject, userId or telegramId key, at any depth, is refused before anything is
 sent. Every other input is checked here against the reviewed manifest's `input` schema (mini-apps/kismet/manifest.json
-1.1.0), additionalProperties false at every level, so a bad call is refused before anything is sent.
+1.2.0), additionalProperties false at every level, so a bad call is refused before anything is sent.
 
 An answer is relayed as untrusted data: Kismet's `structuredContent` (its `text` first), never the raw MCP `content`.
 `matchWith` (a match's name and Telegram handle) passes through only on the owner's own kismet.decide, and nothing
-here ever logs it: the only log line is an error code.
+here ever logs it: the only log line is an error code. kismet.web_link's `webLink` (the owner's own single-use sign-in
+link, 15 minutes) reaches the model in `structuredContent` only, in the owner's private chat only (bound_context);
+nothing here logs, saves or re-sends it.
 """
 from __future__ import annotations
 import json
@@ -36,6 +38,7 @@ KISMET_TOOLS = {
     "kismet.go": "kismet_go",
     "kismet.decide": "kismet_decide",
     "kismet.delete": "kismet_delete",
+    "kismet.web_link": "kismet_web_link",
 }
 # The three public tools a Part 1 install (1.0.0) may read through mini-app.read; never a resident tool. kismet_notes
 # (live on Deon's /mcp since 28 Oct) is not reviewed for Part 2 (lead L29967): no operation, tool or path reaches it.
@@ -139,8 +142,10 @@ KISMET_INPUTS = {
     "kismet.go": ((), {"targetId": _string(36, 36, ID)}),
     "kismet.decide": (("dateId", "decision"), {"dateId": _string(36, 36, ID), "decision": _enum("meet", "pass")}),
     "kismet.delete": ((), {"draftId": _string(36, 36, DRAFT_ID)}),
+    # Deon's kismet_web_link takes {} and refuses ANY argument: so does the box (no key, before anything is sent).
+    "kismet.web_link": ((), {}),
 }
-KISMET_WRITES = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete")
+KISMET_WRITES = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link")
 
 
 class KismetRefused(ValueError):
@@ -163,6 +168,7 @@ OP_ARGUMENTS = {
     "kismet.decide": ("arguments with dateId, exactly as a kismet.summary shown to the owner in an earlier message returned "
                       "it, and decision \"meet\" or \"pass\""),
     "kismet.delete": "arguments {} for step 1, or for step 2 draftId alone",
+    "kismet.web_link": "arguments {} (nothing else)",
 }
 
 
@@ -199,7 +205,7 @@ def kismet_payload(op, args, context):
 # kismet.signup and kismet.delete are two steps. Step 1 saves the exact request on this box (nothing is sent) and returns
 # a draftId and a preview; step 2 is that draftId alone, in a LATER owner message of the same conversation, within an
 # hour, and sends the SAVED request, never model-supplied answers. kismet.decide takes only a dateId that a
-# kismet.summary showed the owner in an earlier message. kismet.go is a plain gated write.
+# kismet.summary showed the owner in an earlier message. kismet.go and kismet.web_link are plain gated writes.
 DRAFTS = "kismet-drafts"
 SHOWN = "kismet-shown"
 DRAFT_TTL_SECONDS = 3600
@@ -430,7 +436,8 @@ def kismet_write(home, op, payload, context, config):
     so the same draftId may be retried once, under the same Idempotency-Key."""
     body = payload["arguments"]
     try:
-        if op == "kismet.go":
+        if op in ("kismet.go", "kismet.web_link"):
+            # Plain gated writes: no draft, no shown-date check, nothing saved on this box, no settle.
             return payload, None, None
         if op == "kismet.decide":
             if not _seen(home, body["dateId"], context, config):
