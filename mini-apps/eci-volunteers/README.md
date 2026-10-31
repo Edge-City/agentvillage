@@ -113,14 +113,16 @@ schemas (ECV 0.45.0) before sending, and the app server checks each operation's
 `input` schema in the manifest again:
 
 - Reads: exactly the keys in the skill's table. Ids match ECV's uuid pattern,
-  dates `YYYY-MM-DD`, `before` is 1–500 characters, `limit` and `days` are
+  dates `YYYY-MM-DD`, `before` is 1–500 printable ASCII characters (else
+  `eci_volunteers_invalid_cursor`), `limit` and `days` are
   integers in the stated ranges, `topic` or `topics` (not both) from ECV's eight
   topics.
 - `propose`: `{action, params, then?}`, each step one of the seven volunteer
   actions with exactly its params; `then` is 1–2 more steps (3 changes in all).
   The manifest gives `params` as a `oneOf` per action.
 - `confirm`: `{code}`, printable ASCII, 20–50,000 characters.
-- `link`: `{code}`, exactly 8 of the bot alphabet above.
+- `link`: `{code}`, exactly 8 of the bot alphabet above, and only a code the
+  owner typed (the link rule, below).
 - Any key naming a resident (a Telegram id or username, a user, volunteer or
   subject id), at any depth, is refused before anything is sent.
 
@@ -147,6 +149,18 @@ makes "a later owner reply" a rule:
 
 ECV still checks the code itself: it belongs to this volunteer, it is unexpired,
 and it was not invalidated by a PIN reset.
+
+## The link rule
+
+The box sends `link` only for a code the owner typed in their own private chat
+in the last 10 minutes. The plugin's `pre_gateway_dispatch` hook reads each
+plain text message the paired owner sends in their Telegram private chat (not a
+forward, a photo, a file or a message Hermes injected, and never the quoted
+message it replies to) and keeps an HMAC of each code-shaped token, under a key
+made fresh in that process, in memory only. A code from anywhere else (a group,
+a forward, a web page, a tool result or the model's own text) is refused with
+`eci_volunteers_link_code_not_from_owner`, and nothing is sent. A gateway
+restart forgets the codes, so the owner sends the code again.
 
 ## Answers and refusals
 

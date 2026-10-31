@@ -3,8 +3,10 @@ the twelve ECV operations.
 
 The standard reviewed-app path: the exact reviewed entry (no mini-app.read), the manifest's inputs checked before anything
 is sent, any key naming a resident refused (Telegram id and username included), propose sent as a read (no turnId, no
-gate), the two writes (confirm, link) through gate_verified() like every app's (no card, no class), and the box-side
-confirm rule: a confirm is sent only for a code a propose showed in this conversation, in an earlier owner message.
+gate), the two writes (confirm, link) through gate_verified() like every app's (no card, no class), the box-side
+confirm rule: a confirm is sent only for a code a propose showed in this conversation, in an earlier owner message, and
+the box-side link rule (review-b L35677 N3): a link is sent only for a code the owner typed in this private chat, as the
+gateway's pre_gateway_dispatch hook saw it. A `before` cursor is printable ASCII, 1-500 characters (N2).
 
 Synthetic av-test data and the fixtures under scripts/tests/fixtures/eci-volunteers only (fictional: no real volunteer,
 handle or Telegram id); no network (the transport is mocked, or urllib's opener is). No key anywhere.
@@ -101,6 +103,25 @@ class ECVTest(unittest.TestCase):
                   patch.object(bridge, 'transport', return_value=frame('eci-volunteers.initialize', ok_result({'text': 'av-test hello'})))]:
             p.start(); self.addCleanup(p.stop)
         self.transport = bridge.transport
+        ecv.forget_link_codes(); self.addCleanup(ecv.forget_link_codes)
+
+    def owner_types(self, text, chat='42', user=None, chat_type='dm', platform='telegram', message_type='text', media=(),
+                    forwarded=False, internal=False, is_bot=False, reply_to_text=None):
+        """The gateway's inbound hook, as Hermes calls it, for one Telegram message (synthetic; no network)."""
+        event = types.SimpleNamespace(
+            text=text, message_type=types.SimpleNamespace(value=message_type), media_urls=list(media), internal=internal,
+            reply_to_text=reply_to_text, reply_to_message_id='3' if reply_to_text else None,
+            raw_message=types.SimpleNamespace(forward_origin=types.SimpleNamespace(type='user') if forwarded else None),
+            source=types.SimpleNamespace(platform=types.SimpleNamespace(value=platform), chat_type=chat_type, chat_id=chat,
+                                         user_id=chat if user is None else user, is_bot=is_bot))
+        self.assertIsNone(bridge._ecv_on_pre_gateway_dispatch(event=event, gateway=None, session_store=None,
+                                                              telemetry_schema_version=1))
+
+    def link(self, code=LINK_CODE):
+        self.transport.reset_mock()
+        self.transport.return_value = frame('eci-volunteers.link', ok_result({'text': 'Linked (av-test).'}))
+        with self.gate():
+            return self.call({'operation': 'eci-volunteers.link', 'arguments': {'code': code}})
 
     def install(self, entry=None):
         apps = [{'id': 'gold-stars', **mini.GOLD_STARS}, entry or {'id': 'eci-volunteers', **mini.ECI_VOLUNTEERS}]
@@ -195,6 +216,7 @@ class ECVTest(unittest.TestCase):
 
     # ---- writes: gate_verified only ----------------------------------------------------------------------------
     def test_link_is_sent_once_with_a_turn_while_the_gate_is_verified(self):
+        self.owner_types('Here it is: 7KQ2-M9XA')
         self.transport.return_value = frame('eci-volunteers.link', ok_result({'text': 'Linked (av-test).'}))
         with self.gate():
             out = self.call({'operation': 'eci-volunteers.link', 'arguments': {'code': LINK_CODE}})
@@ -310,7 +332,7 @@ class ECVTest(unittest.TestCase):
     def test_inputs_outside_the_manifest_are_refused(self):
         bad = [('eci-volunteers.guide', {'topic': 'cover', 'topics': ['cover']}), ('eci-volunteers.guide', {'topic': 'staff'}),
                ('eci-volunteers.my_hours', {'week': '2-11-2026'}), ('eci-volunteers.my_shifts', {'limit': 21}),
-               ('eci-volunteers.my_shifts', {'limit': True}), ('eci-volunteers.my_shifts', {'before': ''}),
+               ('eci-volunteers.my_shifts', {'limit': True}), ('eci-volunteers.my_hours', {'before': 'c1'}),
                ('eci-volunteers.get_shift', {}), ('eci-volunteers.get_shift', {'slot_id': 'not-a-uuid'}),
                ('eci-volunteers.plan_view', {'days': 9}), ('eci-volunteers.open_shifts', {'limit': 0}),
                ('eci-volunteers.move_targets', {'date': '2026-11-03'}), ('eci-volunteers.initialize', {'x': 1}),
@@ -342,8 +364,148 @@ class ECVTest(unittest.TestCase):
         big = 'a' * 50000
         self.assertEqual(ecv.ecv_payload('eci-volunteers.confirm', {'arguments': {'code': big}}, {'SESSION_KEY': 's', 'MESSAGE_ID': '1'})['arguments'], {'code': big})
 
+    # ---- the before cursor (review-b L35677 N2) -------------------------------------------------------------------
+    def test_a_good_cursor_is_forwarded_verbatim(self):
+        cursor = 'av-test:2026-11-02T09:00:00.000Z|' + SLOT + '|~ !'
+        for op, extra in (('eci-volunteers.my_shifts', {}), ('eci-volunteers.open_shifts', {}), ('eci-volunteers.my_requests', {}),
+                          ('eci-volunteers.move_targets', {'slot_id': SLOT})):
+            self.transport.reset_mock()
+            self.transport.return_value = frame(op, ok_result({'text': 'More (av-test).'}))
+            self.assertIn('data', self.call({'operation': op, 'arguments': {**extra, 'before': cursor}}))
+            self.assertEqual(self.transport.call_args.args[1], {'operation': op, 'arguments': {**extra, 'before': cursor}})
+        self.assertEqual(ecv.ecv_payload('eci-volunteers.my_shifts', {'arguments': {'before': 'x' * 500}}, {})['arguments'],
+                         {'before': 'x' * 500})
+
+    def test_a_bad_or_over_long_cursor_is_refused_and_nothing_is_sent(self):
+        bad = ['', 'x' * 501, 'c1\nnext', 'c1\x00', '\t', 'c1\x7f', 'curs\u00e9r', '\u202ec1', 5, None, ['c1'], {'c': 1}]
+        for op in ('eci-volunteers.my_shifts', 'eci-volunteers.open_shifts', 'eci-volunteers.my_requests', 'eci-volunteers.move_targets'):
+            for cursor in bad:
+                body = {'slot_id': SLOT, 'before': cursor} if op == 'eci-volunteers.move_targets' else {'before': cursor}
+                self.assertEqual(self.call({'operation': op, 'arguments': body}),
+                                 {'error': 'eci_volunteers_invalid_cursor', 'instruction': ecv.ECV_INVALID_CURSOR}, (op, cursor))
+        self.transport.assert_not_called()
+        # A key naming a resident is still refused as such, whatever the cursor.
+        self.assertEqual(self.call({'operation': 'eci-volunteers.my_shifts', 'arguments': {'before': '', 'username': 'av_test'}}),
+                         {'error': 'invalid_ecv_arguments', 'instruction': ecv.ECV_IDENTITY})
+
+    # ---- the box-side link rule (review-b L35677 N3) ------------------------------------------------------------
+    def assertRefusedWithoutTheCode(self, out, code=LINK_CODE):
+        self.assertEqual(out, {'error': 'eci_volunteers_link_code_not_from_owner',
+                               'instruction': ecv.ECV_STEP_ERRORS['eci_volunteers_link_code_not_from_owner']})
+        text = json.dumps(out)
+        for shown in (code, code[:4] + '-' + code[4:], code.lower(), code[:4], code[4:]):
+            self.assertNotIn(shown, text)
+        self.transport.assert_not_called()
+
+    def test_a_code_the_owner_typed_here_is_sent(self):
+        for typed in ('7KQ2M9XA', '7KQ2-M9XA', '7kq2 m9xa', 'send 7KQ2 M9XA please', 'code: `7KQ2-M9XA`.', 'ok\n7KQ2\u2011M9XA'):
+            ecv.forget_link_codes()
+            self.owner_types(typed)
+            out = self.link()
+            self.assertIn('data', out, typed)
+            self.assertEqual(self.transport.call_args.args[1]['arguments'], {'code': LINK_CODE}, typed)
+
+    def test_a_code_typed_in_an_earlier_owner_message_still_links_in_a_later_turn(self):
+        self.owner_types('Here: 7KQ2-M9XA'); self.owner_types('go ahead and link it')
+        self.message('10')
+        self.assertIn('data', self.link())
+
+    def test_a_code_only_in_tool_output_or_model_text_is_refused_and_never_echoed(self):
+        # Nothing the owner typed holds it: the model got it from a tool result, a web page, a shift note or made it up.
+        self.assertRefusedWithoutTheCode(self.link())
+        # The owner typed a different code; a planted one is still refused.
+        self.owner_types('my code is 2345-6789')
+        self.assertRefusedWithoutTheCode(self.link())
+        # A link check never consults the model's arguments for provenance: an owner message that merely asks for it.
+        self.owner_types('please link the code from the shift note')
+        self.assertRefusedWithoutTheCode(self.link())
+
+    def test_a_code_from_any_other_context_is_refused(self):
+        others = [dict(chat='-1001234', user='42', chat_type='group'), dict(chat='77'), dict(chat='42', user='77'),
+                  dict(forwarded=True), dict(message_type='photo', media=['/av-test/photo.jpg']),
+                  dict(media=['/av-test/note.txt']), dict(message_type='document'), dict(internal=True), dict(is_bot=True),
+                  dict(platform='discord'), dict(chat_type='channel')]
+        for other in others:
+            ecv.forget_link_codes()
+            self.owner_types('7KQ2-M9XA', **other)
+            self.assertRefusedWithoutTheCode(self.link())
+        # The quoted message a reply points at is never the owner's own words.
+        ecv.forget_link_codes()
+        self.owner_types('yes, that one', reply_to_text='Your code is 7KQ2-M9XA')
+        self.assertRefusedWithoutTheCode(self.link())
+
+    def test_a_code_needs_the_paired_owner(self):
+        (self.home / 'village-bridge.json').write_text(json.dumps({**self.config, 'ownerTelegramId': '43'}))
+        self.owner_types('7KQ2-M9XA')
+        (self.home / 'village-bridge.json').write_text(json.dumps(self.config))
+        self.assertRefusedWithoutTheCode(self.link())
+        (self.home / 'village-bridge.json').unlink()
+        self.owner_types('7KQ2-M9XA')
+        (self.home / 'village-bridge.json').write_text(json.dumps(self.config))
+        self.assertRefusedWithoutTheCode(self.link())
+        # A box without Edge City Volunteers installed notes nothing at all.
+        (self.home / 'mini-apps.json').write_text(json.dumps({'version': 1, 'apps': [{'id': 'gold-stars', **mini.GOLD_STARS}]}))
+        self.owner_types('7KQ2-M9XA')
+        self.assertEqual(ecv._LINK_SEEN, {})
+        self.install()
+        self.assertRefusedWithoutTheCode(self.link())
+
+    def test_a_code_serves_only_its_own_chat_and_ten_minutes(self):
+        self.owner_types('7KQ2-M9XA')
+        payload = {'arguments': {'code': LINK_CODE}}
+        ecv.link_check(payload, {'CHAT_ID': '42', 'USER_ID': '42'})
+        for context in ({'CHAT_ID': '43', 'USER_ID': '43'}, {'CHAT_ID': '42', 'USER_ID': '43'}):
+            with self.assertRaises(ecv.ECVStep) as refused:
+                ecv.link_check(payload, context)
+            self.assertEqual(refused.exception.code, 'eci_volunteers_link_code_not_from_owner')
+        ecv.forget_link_codes()
+        ecv.note_link_codes(types.SimpleNamespace(
+            text='7KQ2-M9XA', message_type='text', media_urls=[], internal=False, raw_message=None,
+            source=types.SimpleNamespace(platform='telegram', chat_type='private', chat_id='42', user_id='42', is_bot=False)),
+            lambda: '42', now=1000.0)
+        ecv.link_check(payload, {'CHAT_ID': '42', 'USER_ID': '42'}, now=1000.0 + ecv.LINK_SEEN_SECONDS)
+        with self.assertRaises(ecv.ECVStep):
+            ecv.link_check(payload, {'CHAT_ID': '42', 'USER_ID': '42'}, now=1001.0 + ecv.LINK_SEEN_SECONDS)
+
+    def test_only_keyed_hashes_are_kept_in_memory_and_nothing_on_disk(self):
+        before = sorted(p.name for p in self.home.rglob('*'))
+        self.owner_types('7KQ2-M9XA')
+        self.assertEqual(sorted(p.name for p in self.home.rglob('*')), before)
+        held = repr(ecv._LINK_SEEN)
+        for shown in (LINK_CODE, '7KQ2', 'M9XA', hashlib.sha256(LINK_CODE.encode()).hexdigest()):
+            self.assertNotIn(shown, held)
+        self.assertEqual(list(ecv._LINK_SEEN), ['42'])
+
+    def test_the_store_is_bounded(self):
+        alphabet = '23456789ABCDEFGH'
+        codes = ['2345' + a + b + c + d for a, b, c, d in zip(alphabet[:9], alphabet[1:10], alphabet[2:11], alphabet[3:12])]
+        for code in codes:
+            self.owner_types('code ' + code)
+        self.assertEqual(len(ecv._LINK_SEEN['42']), ecv.LINK_SEEN_MESSAGES)
+        with self.assertRaises(ecv.ECVStep):
+            ecv.link_check({'arguments': {'code': codes[0]}}, {'CHAT_ID': '42', 'USER_ID': '42'})
+        ecv.link_check({'arguments': {'code': codes[-1]}}, {'CHAT_ID': '42', 'USER_ID': '42'})
+        many = ' '.join('%s%s' % ('2345', a + b + c + d) for a in 'ABCD' for b in 'EFGH' for c in 'JKMN' for d in 'PQ')
+        self.assertEqual(len(ecv.link_codes_in(many)), ecv.LINK_SCAN_CODES)
+
+    def test_the_hook_never_drops_or_rewrites_a_message_and_swallows_errors(self):
+        for event in (None, object(), types.SimpleNamespace(source=None), types.SimpleNamespace(text=7)):
+            self.assertIsNone(bridge._ecv_on_pre_gateway_dispatch(event=event))
+        self.assertIsNone(bridge._ecv_on_pre_gateway_dispatch())
+        (self.home / 'village-bridge.json').write_text('{not json')
+        self.owner_types('7KQ2-M9XA')
+        self.assertEqual(ecv._LINK_SEEN, {})
+
+    def test_register_adds_the_inbound_hook(self):
+        hooks = []
+        ctx = types.SimpleNamespace(register_tool=lambda **kwargs: None, register_hook=lambda name, fn: hooks.append((name, fn)))
+        with patch.object(bridge, '_REGISTERED', False), patch.object(bridge, '_gateway_argv', return_value=False):
+            bridge.register(ctx)
+        self.assertIn(('pre_gateway_dispatch', bridge._ecv_on_pre_gateway_dispatch), hooks)
+
     # ---- answers -----------------------------------------------------------------------------------------------
     def test_every_error_fixture_maps_to_the_plugins_own_text(self):
+        self.owner_types(LINK_CODE)
         for path in sorted(FIXTURES.glob('*/*.json')):
             op, body = path.parent.name, json.loads(path.read_text())
             self.assertIn(body['code'], ecv.ECV_CODES, path)
@@ -414,6 +576,7 @@ class ECVTest(unittest.TestCase):
             self.assertEqual(real_transport(self.config, read), {'error': 'connection_or_request_refused', 'status': 500, 'instruction': ecv.ECV_UNAVAILABLE})
 
     def test_a_transport_exception_is_unclear_for_a_write(self):
+        self.owner_types(LINK_CODE)
         self.transport.side_effect = OSError('boom')
         with self.gate():
             self.assertEqual(self.call({'operation': 'eci-volunteers.link', 'arguments': GOOD['eci-volunteers.link']}),

@@ -38,8 +38,9 @@ from ._library import (library_payload, library_answer, LibraryRefused, LIBRARY_
 from ._favorloop import (favorloop_payload, favorloop_answer, FavorLoopRefused, FAVORLOOP_APP_ERRORS, FAVORLOOP_GATE,
                          FAVORLOOP_IDENTITY, FAVORLOOP_INVALID, FAVORLOOP_UNAVAILABLE, FAVORLOOP_UNCLEAR)
 from ._ecv import (ecv_payload, ecv_answer, confirm_check as ecv_confirm_check, remember_proposed as ecv_remember_proposed,
-                   ECVRefused, ECVStep, ECV_APP_ERRORS, ECV_GATE, ECV_IDENTITY, ECV_INVALID, ECV_STEP_ERRORS, ECV_UNAVAILABLE,
-                   ECV_UNCLEAR)
+                   link_check as ecv_link_check, note_link_codes as ecv_note_link_codes,
+                   ECVRefused, ECVStep, ECV_APP_ERRORS, ECV_GATE, ECV_IDENTITY, ECV_INVALID, ECV_INVALID_CURSOR,
+                   ECV_STEP_ERRORS, ECV_UNAVAILABLE, ECV_UNCLEAR)
 from ._forkicks import save_preview, load_preview, authorize_order, is_flat, CARD_FALLBACK_ERRORS, ORDER_APPROVE_IN_BOT
 from . import _forkicks_grant
 from . import _mini_app_card, _mini_app_grant
@@ -1256,6 +1257,8 @@ def handle(args, **kwargs):
             try:
                 payload = ecv_payload(op, args, context)
             except ECVRefused as refused:
+                if refused.cursor:
+                    return json.dumps({"error": "eci_volunteers_invalid_cursor", "instruction": ECV_INVALID_CURSOR})
                 return json.dumps({"error": "invalid_ecv_arguments",
                                    "instruction": ECV_IDENTITY if refused.identity else ECV_INVALID})
         elif op == "slopfolio.prepare":
@@ -1425,11 +1428,18 @@ def handle(args, **kwargs):
                 return json.dumps({"error": "approval_unavailable", "instruction": FAVORLOOP_GATE})
         if op in ECV_WRITE_OPERATIONS:
             # The owner's own link or confirm: the same gated-write path (no card, no grant, no class of its own). A
-            # confirm is sent only for a code a propose showed in this conversation, in an earlier owner message.
+            # confirm is sent only for a code a propose showed in this conversation, in an earlier owner message; a
+            # link only for a code the owner typed in this private chat (review-b L35677 N3; _ecv.link_check).
             try:
                 gate_verified()
             except Exception:
                 return json.dumps({"error": "approval_unavailable", "instruction": ECV_GATE})
+            if op == "eci-volunteers.link":
+                try:
+                    ecv_link_check(payload, context)
+                except ECVStep:
+                    code = "eci_volunteers_link_code_not_from_owner"
+                    return json.dumps({"error": code, "instruction": ECV_STEP_ERRORS[code]})
             if op == "eci-volunteers.confirm":
                 try:
                     ecv_confirm_check(home, payload, context, config)
@@ -1947,6 +1957,29 @@ def _mini_apps_on_session_start(*_args, **kwargs):
         pass
 
 
+def _ecv_owner():
+    """The paired owner's Telegram id from village-bridge.json, or None (also while ECV's link is not installed, so a
+    box without Edge City Volunteers never notes anything)."""
+    home = hermes_home()
+    path = home / "village-bridge.json"
+    if not installed(home, "eci-volunteers", "eci-volunteers.link") or not path.is_file() or path.stat().st_size > 2048:
+        return None
+    owner = json.loads(path.read_text()).get("ownerTelegramId")
+    return owner if isinstance(owner, str) else None
+
+
+def _ecv_on_pre_gateway_dispatch(**kwargs):
+    """Edge City Volunteers' link rule (review-b L35677 N3): note the code-shaped tokens of a plain text message the
+    owner typed in their Telegram private chat (keyed hashes, in memory; _ecv.note_link_codes), so
+    eci-volunteers.link takes a code only from the owner's own words. Never drops, rewrites or delays a message: it
+    always returns None, and any error is swallowed."""
+    try:
+        ecv_note_link_codes(kwargs.get("event"), _ecv_owner)
+    except Exception:
+        pass
+    return None
+
+
 _REGISTERED = False
 def register(ctx):
     global _REGISTERED
@@ -1966,6 +1999,10 @@ def register(ctx):
             pass
         try:
             register_hook("on_session_start", _mini_apps_on_session_start)
+        except Exception:
+            pass
+        try:
+            register_hook("pre_gateway_dispatch", _ecv_on_pre_gateway_dispatch)
         except Exception:
             pass
     if _gateway_argv():
