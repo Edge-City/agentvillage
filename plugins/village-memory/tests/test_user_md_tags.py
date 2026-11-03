@@ -573,6 +573,23 @@ def test_a_dropped_line_is_fingerprinted_and_a_kept_one_is_not(g):
     assert not g.holds_private_entry(f"x\n{GOLDEN['constants']['entry_header']}")  # a structure line is no secret
 
 
+def test_what_the_entry_keeps_never_depends_on_the_fingerprint_set(g):
+    """Security review of 00a03e01: the keep decision is the entry's shape alone. A Shape I line whose digest
+    is already in the latch (another session saw it in a Private entry) is still kept, and the entry with
+    it, so a shared prompt never tells whether that line is Private elsewhere."""
+    line = "- Seed library for the harbour co-op (you, public)"
+    entry = tags("Here to:", line, note=True)
+    before = g.tags_entry_shared(entry)
+    g.remember_private_entries([f"[Edge City profile, written at setup]\n{line}"])
+    assert g.holds_private_entry(f"x\n{line}")  # the latch holds it
+    assert g.tags_entry_shared(entry) == before == entry
+    block = user_block(NOTE, entry)
+    assert g.shared_user_block(block) == block  # the same bytes (the header recounted to the same figure)
+    g.shared_user_block(user_block(tags("Here to:", "- Housing policy search (you, private)")))
+    assert g.shared_user_block(user_block(NOTE, tags("Here to:", "- Housing policy search (you, public)"))) == \
+        user_block(NOTE, tags("Here to:", "- Housing policy search (you, public)"))
+
+
 def test_a_memory_md_result_quoting_a_dropped_line_is_left_out_in_a_group(g, group_session):
     g.shared_user_block(user_block(NOTE, PRIVATE_TAGS))
     raw = _memory_result(success=False, error="x", current_entries=[f"A DM note:\n{DROPPED}", "Other note"])

@@ -38,8 +38,9 @@ from typing import Any, List, Optional, Tuple
 #   Edge City India 2026 on the resident's own marker (Shape I); an entry wholly in a second allowlist (no
 #   mark on any line, no sections note) keeps its stated unmarked items (Shape U), as Index's B3 reads it.
 #   An item stays only under a card heading and never beside its own removal, so nothing kept is wider
-#   than Index's `statedItems` on the same entry. Every dropped line is fingerprinted (below), and outside
-#   a private session a memory-tool result's tags entry that the allowlist would change is left out whole.
+#   than Index's `statedItems` on the same entry. What it keeps depends on the entry alone, never on the
+#   fingerprint set (no cross-session oracle). Every dropped line is fingerprinted (below), and outside a
+#   private session a memory-tool result's tags entry that the allowlist would change is left out whole.
 # - The memory tool (review-b #558 S2): its results carry whole entries (`current_entries`, `matches`,
 #   `replaced_entry`, `removed_entry`, ...). `transform_memory_result` (av-events' `transform_tool_result`)
 #   leaves Private entries out of them outside a private session, and `memory_write_directive` (av-events'
@@ -450,12 +451,12 @@ def tags_entry_shared(entry: str) -> str:
     folded to `\\n`). An entry made only of Shape S lines, Shape U lines and a Summary line, with no sections
     note, is unmarked: its `setup` / `you` / `telegram` items with no `, guess` stay. Any other entry is
     marked: only its Shape I items stay. Either way an item stays only under a card heading, never beside a
-    removal of it, never when it is a fingerprinted line; the structure lines stay, a heading only over a
-    kept item. Every other line goes and is fingerprinted (FINGERPRINT_MIN_CHARS or longer), so a memory
-    result quoting it is judged as one quoting a Private entry."""
+    removal of it; the structure lines stay, a heading only over a kept item. The keep decision is the
+    entry's shape alone, never the fingerprint set (what other sessions saw marked: no cross-session
+    oracle, security review of 00a03e01). Every other line goes and is fingerprinted (FINGERPRINT_MIN_CHARS
+    or longer), so a memory result quoting it is judged as one quoting a Private entry."""
     lines = entry.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     shape = TAGS_UNMARKED_ITEM if _tags_unmarked(lines) else TAGS_SHARED_ITEM
-    digests = _private_line_digests()
     section: Optional[str] = None
     removals: List[Tuple[str, bool]] = []
     reads: List[Tuple[str, str, Any]] = []  # (stripped line, kind, item key or heading) per line
@@ -483,8 +484,8 @@ def tags_entry_shared(entry: str) -> str:
     def removed(key: str) -> bool:
         return any(key == gone or (cut and key.startswith(gone)) for gone, cut in removals)
 
-    reads = [(line, "drop", None) if kind == "item" and (removed(key) or _line_digest(line) in digests)
-             else (line, kind, key) for line, kind, key in reads]
+    reads = [(line, "drop", None) if kind == "item" and removed(key) else (line, kind, key)
+             for line, kind, key in reads]
     kept: List[str] = []
     dropped: List[str] = []
     pending: Optional[str] = None  # a heading, kept only once an item under it is
@@ -508,6 +509,7 @@ def tags_entry_shared(entry: str) -> str:
     fresh = {_line_digest(line) for line in dropped
              if len(line.strip()) >= FINGERPRINT_MIN_CHARS and not _tags_structure(line)} - shown
     if fresh:
+        digests = _private_line_digests()
         with _GATE_LATCH_LOCK:
             digests.update(fresh)
     return "\n".join(kept).strip()
@@ -543,9 +545,12 @@ def shared_user_block(block: Any) -> Any:
     kept = []
     for entry in entries:
         if holds_tags_entry(entry) and not holds_private_mark(entry):
+            # Judged on its shape alone: a fingerprint test here would drop the whole entry for a line some
+            # other session saw marked (the oracle the keep decision avoids).
             entry = tags_entry_shared(entry)
-            if not entry:
-                continue
+            if entry and not holds_private_mark(entry):
+                kept.append(entry)
+            continue
         if not holds_private_entry(entry):
             kept.append(entry)
     if kept == entries and not holds_private_entry(block):
