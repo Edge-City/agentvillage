@@ -103,6 +103,10 @@ plugins/village-memory/
     mark: then "That text carries a private-entry mark; only your private chat can write it." The mark is
     a constant the session itself supplied, so the refusal answers nothing about the Private text; it
     stops a forged setup entry and a whole reproduced one (Hermes would answer "Entry already exists").
+    The same refusal meets a USER.md add whose text has a line that opens (after Python's and
+    JavaScript's whitespace) with the app's tags mark or the setup mark (`opens_app_entry`, R2): Hermes
+    would append it, and the Index readers take the LAST entry starting with the mark (as the app and the
+    cp keep it), so the appended one would stand as the app's tags entry. A note naming the mark inside a line, and every MEMORY.md write, go through as before.
     `transform_tool_result`
     leaves Private entries out of every result (`current_entries`, `matches`, `replaced_entry`,
     `removed_entry`, `replaced_entries`, ...), USER.md and MEMORY.md alike, by marks and fingerprints,

@@ -11,6 +11,7 @@
  *                    every group, contextInterests, contextPreferences and contextHolds of every
  *                    line's words.
  *   pyOutputs()      what the gate (memory_signal_gate.py) gives: context_tags and stated_goals.
+ *   pyRun()          the gate's harness: also context_tags_entry of a whole USER.md text (R2).
  *
  * The golden holds sha256s only (goldenFor): the entry's, and each reader's output's. Regenerate it
  * only from origin/main's readers (never from a branch that changes them), and only when the readers'
@@ -178,6 +179,9 @@ for line in req.get("lines", []):
     out["lines"].append(None if parse is None else parse(line))
 for groups, removed in req.get("goals_of", []):
     out.setdefault("goals_of", []).append(gate.stated_goals({k: [tuple(i) for i in v] for k, v in groups.items()}, removed))
+entry_of = getattr(gate, "context_tags_entry", None)
+for text in req.get("tags_entry_of", []):
+    out.setdefault("tags_entry_of", []).append(None if entry_of is None else entry_of(text))
 vis = getattr(gate, "mark_visibility", None)
 for mark, guess in req.get("marks", []):
     out["marks"].append(None if vis is None else vis(mark, guess))
@@ -187,6 +191,7 @@ if req.get("constants"):
         "ids": list(getattr(gate, "VISIBILITY_IDS", ()) or ()),
         "marks": dict(getattr(gate, "MARK_VISIBILITY", {}) or {}),
         "pattern": gate.ITEM_LINE.pattern,
+        "js_trim": getattr(gate, "JS_TRIM_CHARS", None),
     }
 print(json.dumps(out, ensure_ascii=False))
 `;
@@ -195,12 +200,20 @@ export interface PyAnswer {
   entries: string[];
   lines: (null | [string, string, string | null, string])[];
   marks: (string | null)[];
-  constants?: { vocab: string | null; ids: string[]; marks: Record<string, string>; pattern: string };
+  constants?: { vocab: string | null; ids: string[]; marks: Record<string, string>; pattern: string; js_trim: string | null };
   goals_of?: string[][];
+  tags_entry_of?: (string | null)[];
 }
 
 /** Run the Python harness once over every request (one python3 process). */
-export function pyRun(req: { entries?: string[]; lines?: string[]; marks?: [string | null, boolean][]; constants?: boolean; goals_of?: [Record<string, string[][]>, string[]][] }): PyAnswer {
+export function pyRun(req: {
+  entries?: string[];
+  lines?: string[];
+  marks?: [string | null, boolean][];
+  constants?: boolean;
+  goals_of?: [Record<string, string[][]>, string[]][];
+  tags_entry_of?: string[];
+}): PyAnswer {
   const proc = Bun.spawnSync(["python3", "-I", "-B", "-c", PY_HARNESS, GATE], { stdin: Buffer.from(JSON.stringify(req)), stdout: "pipe", stderr: "pipe" });
   if (proc.exitCode !== 0) throw new Error(`python3 harness exited ${proc.exitCode}: ${proc.stderr.toString().slice(0, 2000)}`);
   return JSON.parse(proc.stdout.toString()) as PyAnswer;

@@ -127,6 +127,10 @@ CONTEXT_TAGS_MARK = "[Context tags, kept in the Agent Village app]"
 SETUP_PROFILE_MARK = "[Edge City profile, written at setup]"
 #: Entries that are the resident's profile, kept by the app or the control plane: never inference input.
 PROFILE_ENTRY_MARKS = (CONTEXT_TAGS_MARK, SETUP_PROFILE_MARK)
+#: JavaScript's `String.prototype.trim` set (its `\s`, U+FEFF among it, and none of Python's own extra
+#: `\x1c`-`\x1f` and `\x85`): the tags entry is chosen on this trim, as context-tags.ts `contextTagsEntry`
+#: trims, so both readers name the same entry whatever whitespace leads it (R2).
+JS_TRIM_CHARS = "\t\n\v\f\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 # ---- Evidence and caps ------------------------------------------------------
 
@@ -598,8 +602,24 @@ def parse_item_line(line: str) -> Optional[tuple[str, str, Optional[str], str]]:
     return text, marker, mark, mark_visibility(mark, guess)
 
 
+def context_tags_entry(user_text: Optional[str]) -> Optional[str]:
+    """The app's Context tags entry: the LAST entry that starts with CONTEXT_TAGS_MARK, JavaScript-trimmed
+    (context-tags.ts `contextTagsEntry`, the same entry for every text); None without one. LAST because
+    that is the entry the app and the control plane keep: app context.ts `tagsEntryText` reads the last,
+    and the cp ENTRY route (memory-entry.js ENTRY_PY, `found[-1]`) replaces the last in place, so after any
+    app write the last one is the app's (lead ruling, R2). An entry a session that is not private appends
+    with the mark is refused at the write (the USER.md gate's `opens_app_entry`, ov#604 item 6)."""
+    found: Optional[str] = None
+    for entry in split_entries(user_text or ""):
+        trimmed = entry.strip(JS_TRIM_CHARS)
+        if trimmed.startswith(CONTEXT_TAGS_MARK):
+            found = trimmed
+    return found
+
+
 def context_tags(user_text: Optional[str]) -> tuple[dict[str, list[tuple[str, ...]]], list[str]]:
-    """(group -> [(text, marker)], removed texts) of the last Context tags entry; empty without one.
+    """(group -> [(text, marker)], removed texts) of the Context tags entry (`context_tags_entry`: the last
+    one); empty without one.
     VISIBILITY B3 (`context-tags.ts` parseContextTags): when any item line carries a mark, every item is
     (text, marker, visibility), an unmarked line, a guess or a chat line being Private; an entry with no
     marks at all keeps (text, marker), exactly as before."""
@@ -609,11 +629,11 @@ def context_tags(user_text: Optional[str]) -> tuple[dict[str, list[tuple[str, ..
     removed: list[str] = []
     if not user_text:
         return groups, removed
-    entries = [e.strip() for e in split_entries(user_text) if e.strip().startswith(CONTEXT_TAGS_MARK)]
-    if not entries:
+    entry = context_tags_entry(user_text)
+    if entry is None:
         return groups, removed
     group: Optional[str] = None
-    for raw in entries[-1].split("\n"):
+    for raw in entry.split("\n"):
         line = raw.strip()
         lower = line.lower()
         if lower.endswith(":") and lower[:-1] in ALL_HEADINGS | {REMOVED_HEADING}:

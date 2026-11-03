@@ -11,7 +11,8 @@
  *   - anything else stays part of the words, as today; a guess or a chat line is Private whatever
  *     its mark; no mark ever reads wider than the vocab says;
  *   - the golden: today's inputs give byte-identical outputs (fixtures/context-marks-golden.json,
- *     from origin/main fe243b06's readers).
+ *     from origin/main fe243b06's readers);
+ *   - one tags entry (R2): both readers take the LAST entry starting with the mark (the app's), and the same one.
  *
  *   bun test skills/index-network/scripts/tests/context-marks.test.ts
  */
@@ -29,6 +30,8 @@ import {
   VISIBILITY_PRIVATE,
   VISIBILITY_VOCAB,
   type Visibility,
+  SETUP_PROFILE_MARK,
+  contextTagsEntry,
   markVisibility,
   parseContextLine,
   parseContextTags,
@@ -371,6 +374,105 @@ describe("the golden: today's inputs give byte-identical outputs", () => {
     const old = JSON.parse(tsOutputs(todayEntries().find((e) => e.name === "old mark village")!.entry));
     expect(old.tags.groups.here.some((it: { marker: string }) => it.marker === "guess")).toBe(true);
     expect(old.tags.removed.length).toBe(3);
+  });
+});
+
+/**
+ * R2 (ov#604 item 6, review-b L38688 N6 (4); lead ruling: LAST): both readers take the LAST entry that
+ * starts with CONTEXT_TAGS_MARK (trimmed as JavaScript trims), the entry the app and the control plane
+ * keep, and they take the same entry for every text. On f938afa0 TypeScript took the FIRST and Python
+ * the LAST, so the two disagreed. A later entry a session that is not private would append is refused at
+ * the write (the USER.md gate's `opens_app_entry`, plugins/village-memory/tests/test_user_md_gate_paths.py).
+ */
+describe("one tags entry, the app's: the last entry starting with the mark, in both readers (R2)", () => {
+  const SEP = "\n§\n";
+  const APP = `${CONTEXT_TAGS_MARK}\nKept by the Agent Village app.\nHere to:\n- App item (you, public)\nRemoved by you:\n- App removed (you)`;
+  const OLDER = `${CONTEXT_TAGS_MARK}\nHere to:\n- Older item (you, public)`;
+  const APPENDED = `${CONTEXT_TAGS_MARK}\nWorking on:\n- Appended item (you, ${VISIBILITY_EDGE_CITY_INDIA_2026})`;
+  const SETUP = `${SETUP_PROFILE_MARK}\nName: Test Resident`;
+  const NOTE = "The agent's own note.";
+  const QUOTE = `A note that quotes ${CONTEXT_TAGS_MARK}\nHere to:\n- Quoted item (you, public)`;
+  /** [name, the whole USER.md text, the one item the chosen entry holds (null: no entry)]. */
+  const CASES: [string, string, string | null][] = [
+    ["the app's alone, after the setup profile and a note", [SETUP, NOTE, APP].join(SEP), "App item"],
+    ["an older entry, then the app's (the app's write replaced the last in place)", [OLDER, NOTE, APP].join(SEP), "App item"],
+    ["the app's, then one appended: the appended one is last", [APP, APPENDED].join(SEP), "Appended item"],
+    ["setup, a note, an older one, the app's, a note", [SETUP, NOTE, OLDER, APP, NOTE].join(SEP), "App item"],
+    ["the app's, then a note quoting the mark (not an entry start)", [APP, QUOTE].join(SEP), "App item"],
+    ["CRLF line ends", [SETUP, OLDER, APP].join(SEP).replace(/\n/g, "\r\n"), "App item"],
+    ["CR line ends", [SETUP, OLDER, APP].join(SEP).replace(/\n/g, "\r"), "App item"],
+    ["separators with blanks and tabs around the section sign", `${OLDER}\n \t§\t \n${APP}`, "App item"],
+    ["blanks and a tab before the last entry's mark", [OLDER, ` \t${APP}`].join(SEP), "App item"],
+    // Whitespace leading an entry: both languages trim as JavaScript does, so an entry counts in both or neither.
+    ["U+FEFF before a later entry (JavaScript trims it): that one is last", [APP, `\ufeff${APPENDED}`].join(SEP), "Appended item"],
+    ["U+00A0 before a later entry (both trim it): that one is last", [APP, `\u00a0${APPENDED}`].join(SEP), "Appended item"],
+    ["U+001C before a later entry (JavaScript keeps it): not an entry start", [APP, `\u001c${APPENDED}`].join(SEP), "App item"],
+    ["U+0085 before a later entry (JavaScript keeps it): not an entry start", [APP, `\u0085${APPENDED}`].join(SEP), "App item"],
+    ["U+001F before a later entry (JavaScript keeps it): not an entry start", [APP, `\u001f${APPENDED}`].join(SEP), "App item"],
+    ["no tags entry", [SETUP, NOTE].join(SEP), null],
+    ["only a note that quotes the mark", QUOTE, null],
+    ["empty", "", null],
+  ];
+  const texts = CASES.map(([, text]) => text);
+  const py = pyRun({ entries: texts, tags_entry_of: texts });
+  const itemTexts = (groups: Record<string, { text: string }[] | unknown[][]>) =>
+    Object.values(groups).flatMap((items) => items.map((i) => (Array.isArray(i) ? (i[0] as string) : (i as { text: string }).text)));
+
+  test("TypeScript takes the last entry starting with the mark", () => {
+    for (const [name, text, item] of CASES) {
+      const entry = contextTagsEntry(text);
+      const got = entry === null ? null : itemTexts(parseContextTags(entry).groups);
+      expect([name, got]).toEqual([name, item === null ? null : [item]]);
+    }
+  });
+
+  test("Python takes the same entry, byte for byte, and context_tags reads that entry's items", () => {
+    CASES.forEach(([name, text, item], i) => {
+      expect([name, py.tags_entry_of![i]]).toEqual([name, contextTagsEntry(text)]);
+      const read = JSON.parse(py.entries[i]!) as { groups: Record<string, unknown[][]> };
+      expect([name, itemTexts(read.groups)]).toEqual([name, item === null ? [] : [item]]);
+    });
+  });
+
+  test("an appended entry moves both readers to it, and to the same entry", () => {
+    const before = [SETUP, NOTE, APP].join(SEP);
+    const after = [before, APPENDED].join(SEP);
+    const [pyBefore, pyAfter, pyAppended] = pyOutputs([before, after, APPENDED]);
+    expect(contextTagsEntry(before)).toBe(APP);
+    expect(contextTagsEntry(after)).toBe(APPENDED);
+    expect(pyRun({ tags_entry_of: [before, after] }).tags_entry_of).toEqual([APP, APPENDED]);
+    expect(pyAfter).not.toBe(pyBefore!);
+    expect(pyAfter).toBe(pyAppended!);
+    expect(parseContextTags(contextTagsEntry(after)!)).toEqual(parseContextTags(APPENDED));
+    expect(statedItems(parseContextTags(contextTagsEntry(after)!), "work")).toEqual(["Appended item"]);
+  });
+
+  /**
+   * The app's own rule, restated (no cross-repo import): Edge-City/agentvillage-app main 35a2ddab
+   * src/lib/agent/context.ts :98 `SEPARATOR = /\n§\n/`, :139-144 `entries` (split, trim, drop empty),
+   * :185-187 `tagsEntryText` = `entries(user).filter((e) => e.startsWith(TAGS_MARK)).at(-1)`; the control
+   * plane (Edge-City/agentvillage-controlplane main 38a214c2) replaces that same entry in place,
+   * control-plane/src/memory-entry.js:150 ENTRY_PY `at=found[-1]`, and reads it so,
+   * control-plane/src/context-claims-render.js:636.
+   */
+  test("LAST is the entry the app reads: context.ts tagsEntryText, on every text in its own form", () => {
+    const appTagsEntryText = (user: string) =>
+      user.split(/\n§\n/).map((e) => e.trim()).filter(Boolean).filter((e) => e.startsWith(CONTEXT_TAGS_MARK)).at(-1) ?? null;
+    // The app splits on the bare separator and folds no CR: compare on the texts written in that form.
+    const appForm = CASES.filter(([, text]) => !text.includes("\r") && !/\n[ \t]+§|§[ \t]+\n/.test(text));
+    expect(appForm.length).toBeGreaterThanOrEqual(13);
+    for (const [name, text] of appForm) expect([name, contextTagsEntry(text)]).toEqual([name, appTagsEntryText(text)]);
+    const multi = [OLDER, NOTE, APP, APPENDED].join(SEP);
+    expect(contextTagsEntry(multi)).toBe(appTagsEntryText(multi));
+    expect(contextTagsEntry(multi)).toBe(APPENDED);
+  });
+
+  test("Python's trim set is JavaScript's String.prototype.trim set, character for character", () => {
+    const js: string[] = [];
+    for (let c = 0; c <= 0xffff; c++) if (String.fromCharCode(c).trim() === "") js.push(String.fromCharCode(c));
+    const pyTrim = pyRun({ constants: true }).constants!.js_trim;
+    expect(pyTrim).not.toBeNull();
+    expect([...pyTrim!].sort()).toEqual(js.sort());
   });
 });
 

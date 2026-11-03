@@ -220,13 +220,22 @@ export function parseContextTags(entry: string): ContextTags {
   return { groups, removed };
 }
 
-/** The entry headed CONTEXT_TAGS_MARK in a memory file's text, or null. Pure. */
+/**
+ * The app's entry headed CONTEXT_TAGS_MARK in a memory file's text: the LAST entry that starts with the
+ * mark, trimmed; null without one. Pure. LAST because that is the entry the app and the control plane
+ * keep: app context.ts `tagsEntryText` reads the last, and the cp ENTRY route (memory-entry.js ENTRY_PY,
+ * `found[-1]`) replaces the last in place, so after any app write the last one is the app's (lead ruling,
+ * R2). An entry a session that is not private appends with the mark is refused at the write (the USER.md
+ * gate's `opens_app_entry`, ov#604 item 6). memory_signal_gate.py `context_tags_entry` takes the same
+ * entry for every text (context-marks.test.ts pins the two together).
+ */
 export function contextTagsEntry(text: string): string | null {
   const entry = text
     .replace(/\r\n?/g, "\n")
     .split(ENTRY_SEPARATOR)
     .map((part) => part.trim())
-    .find((part) => part.startsWith(CONTEXT_TAGS_MARK));
+    .filter((part) => part.startsWith(CONTEXT_TAGS_MARK))
+    .at(-1);
   return entry ?? null;
 }
 
