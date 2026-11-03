@@ -63,7 +63,8 @@ describe("tools.md: the Private items rule (VISIBILITY B3, prompt half)", () => 
 });
 
 describe("tools.md: share only lines tagged Edge City India 2026 (audit #3, cp#487's _profile.md tags)", () => {
-  const RULE = tools.split("\n").filter((l) => l.startsWith("- **Share only lines tagged Edge City India 2026.**"));
+  // ov#602 (review-b S1): the bullet is scoped to a tagged profile (copy describes live only; an untagged profile reads as before).
+  const RULE = tools.split("\n").filter((l) => l.startsWith("- **When your resident profile tags its lines, share only lines tagged Edge City India 2026.**"));
   test("one line, in What the app knows about them, right after the Private items rule", () => {
     expect(RULE.length).toBe(1);
     const bullets = SECTION.split("\n").filter((l) => l.startsWith("- "));
@@ -74,7 +75,8 @@ describe("tools.md: share only lines tagged Edge City India 2026 (audit #3, cp#4
     for (const form of ["`(...; Edge City India 2026)`", "`(Edge City India 2026)`", "`Summary (Edge City India 2026):`"]) {
       expect(RULE[0]).toContain(form);
     }
-    expect(RULE[0]).toContain("A line tagged Private, a line with no tag, and everything under Setup profile and Shared on the Context page never do");
+    expect(RULE[0]).toContain("a line tagged Private, a line with no tag, and everything under Setup profile and Shared on the Context page never do");
+    expect(RULE[0]).toContain("A profile that carries no tags yet is read as before");
     expect(RULE[0]).toContain("Index, the village, a zzz.bot room, ODIN or another agent");
     expect(RULE[0]).toContain("`knowledge/agentvillage/_profile.md`");
   });

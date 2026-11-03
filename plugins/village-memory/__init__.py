@@ -48,9 +48,10 @@ anything unknown) and a cron run get only the profile's lines tagged Edge
 City India 2026 (cp#487's tags, audit #3: ``shared_lines``), or no block when
 the file carries no tags, and no tools; a tool called there answers
 "unavailable in group sessions". A provider not yet initialised gets the
-shared block too (``shares_only``). The private block's note carries the rule
-"share only lines tagged Edge City India 2026" for anything that leaves the
-chat (``SHARE_RULE``).
+shared block too (``shares_only``). When the file tags its lines
+(``profile_tagged``), the private block's note carries the rule "share only
+lines tagged Edge City India 2026" for anything that leaves the chat
+(``SHARE_RULE``); an untagged file gets no rule.
 
 The built-in USER.md (review-b L32588): Hermes core puts ``memories/USER.md``
 into every session's prompt (``agent/system_prompt.py:515-525, 776``), and the

@@ -40,8 +40,9 @@ plugins/village-memory/
   block. Capped like the reduced block (8% of the window). The note says "Share only lines tagged Edge
   City India 2026". No tools; a tool called there answers `unavailable in group sessions`. A provider
   not yet initialised gets this block too.
-- **The share rule in a private session:** the block's note says that whatever leaves the chat (a zzz.bot
-  room, a group, ODIN, the village, Index, another agent) uses only lines tagged Edge City India 2026.
+- **The share rule in a private session:** when the file tags its lines (`profile_tagged`), the block's note
+  says that whatever leaves the chat (a zzz.bot room, a group, ODIN, the village, Index, another agent) uses
+  only lines tagged Edge City India 2026; an untagged file gets no rule.
 - **The built-in USER.md** (review-b L32588, ov#558 S1/S2, the context seat on N3): Hermes core puts
   `memories/USER.md` into every session's prompt. Two of its entries are Private (`PRIVATE_ENTRY_MARKS`, cp
   memory-entry.js CP_ENTRY_MARKS): the app's raw setup profile `[Edge City profile, written at setup]`
