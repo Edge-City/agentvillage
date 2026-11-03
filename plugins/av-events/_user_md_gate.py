@@ -58,7 +58,8 @@ from typing import Any, List, Optional, Tuple
 #   group can forge a setup entry or reproduce a whole marked one to test it (MEMORY_MARK_REFUSAL). A
 #   call whose target is unknown (args missing or malformed) counts as USER.md. Nor may a USER.md add
 #   write a text with a line that opens with an app entry mark (TAGS_MARK, SETUP_PROFILE_MARK; R2, ov#604
-#   item 6): Hermes appends it, and it would stand as the app's tags entry where the file holds none, so
+#   item 6): Hermes appends it, and the readers take the LAST entry starting with the mark (as the app and
+#   cp keep it), so an appended one would stand as the app's tags entry; so
 #   only a private session writes one (`opens_app_entry`, MEMORY_MARK_REFUSAL, on the call's text alone).
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the

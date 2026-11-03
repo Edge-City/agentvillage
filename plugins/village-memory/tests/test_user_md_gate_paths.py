@@ -1256,7 +1256,8 @@ FORGING_TEXTS = [
 def test_a_group_add_opening_an_app_entry_is_refused(gate_copy, group_session, user_md, args):
     """R2: outside a private session an add to USER.md whose text has a line opening (after Python's and
     JavaScript's whitespace) with the tags mark or the setup mark is refused with the mark refusal: Hermes
-    would append it, and in a file with no app entry both Index readers would take it for the app's."""
+    would append it, and both Index readers take the LAST entry starting with the mark, so it would stand as
+    the app's."""
     user_md(SETUP, NOTE)
     assert gate_copy.memory_write_directive(tool_name="memory", args=args, session_id="tg-group") == {
         "action": "block", "message": MARK_REFUSAL_TEXT}
