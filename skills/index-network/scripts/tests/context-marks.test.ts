@@ -394,6 +394,9 @@ describe("writers are unchanged: nothing in the overlay writes a new id", () => 
     expect(hits.sort()).toEqual([
       // ov#431: the developer docs describe the vocabulary; write nothing.
       "docs/MINI-APPS-DEVELOPER.md",
+      // review-b ov#559 N4: village-memory's prompt notes name the shared id beside Edge City India 2026 (prose
+      // read by the agent; it writes nothing).
+      "plugins/village-memory/__init__.py",
       "scripts/tests/memory-signal-gate.test.ts",
       "skills/index-network/scripts/context-tags.ts",
       "skills/index-network/scripts/memory_signal_gate.py",
