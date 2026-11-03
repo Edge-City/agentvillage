@@ -5,9 +5,11 @@ Private-marked lines included. Outside a private session the gate now rebuilds i
 from what may STAY, never from a list of what to drop (closed ov#560, 52ef75ea, went that way):
 - Shape S: the mark, the app's header, either sections note, a card heading (or "Removed by you:"), a blank.
 - Shape I (a marked entry): `- <words> (<setup|you|telegram>[, intros chat <hex>], <public|village|
-  agentvillage/edgecityindia2026>)`, printable ASCII, no parenthesis in the words.
-- Shape U (an entry wholly in a second allowlist, no mark anywhere, no sections note): its `setup`, `you`
-  and `telegram` items with no `, guess`, as Index's B3 reads such an entry.
+  agentvillage/edgecityindia2026>)`: words with no parenthesis, line break or control character, a
+  printable-ASCII tail.
+- Shape U (an entry wholly in a second allowlist, no mark anywhere, no sections note; the app's gift, group
+  and Summary lines allowed): its `setup`, `you` and `telegram` items with no `, guess`, and its gift lines
+  under "Can offer:", as Index's B3 reads such an entry.
 Never wider than Index: every kept item is one `statedItems` takes from the same entry (a property test over
 the app's and the control plane's goldens and generated lines), and the read loss is counted. A private
 session is byte for byte, the same object, the new code not called. Synthetic fixtures only.
@@ -112,6 +114,8 @@ SHARED = [
     "- A seed library (you, agentvillage/edgecityindia2026)",
     "- x (you, public)",
     "- Words, with: commas; and [brackets] & 50% off (setup, village)",
+    "- Café crawl — every Friday (you, public)",  # Index judges the tail; the words may be any text
+    "- 日本語の本 (setup, village)",
 ]
 NOT_SHARED = [
     "- Housing policy (you, private)",
@@ -132,7 +136,9 @@ NOT_SHARED = [
     "- a (village) garden (you, public)",
     "- a (garden (you, public)",
     "- a ) garden (you, public)",
-    "- Café crawl (you, public)",                 # printable ASCII only
+    "- Ctrl\x01char (you, public)",              # a control character
+    "- Bom\ufeff (you, public)",                  # U+FEFF: JavaScript's \s holds it, Python's does not
+    "- Del\x7fete (you, public)",
     "- Tea - Secret (you, private) (you, public)",
     "- Tab\there (you, public)",
     "- Intro (telegram, intros chat 0A1B2C3D4E5F, village)",
@@ -165,8 +171,11 @@ def test_shape_i_takes_nothing_else(g, line):
 # ---- the generated line set: every kept line is one Index reads as shared (or stated) --------------------
 
 WORDS = ["Seed library", "x", "Words, with: commas; and [brackets]", "a (b) c", "a (you, private) b", "naïve",
-         " lead", "trail ", "two  spaces", "a)b", "(", "Tab\tin", "gift — 5 left", "100% sure!", "end."]
-MARKERS = ["setup", "you", "telegram", "guess", "chat", "Setup", "YOU", "group", "gift", "ſetup", ""]
+         " lead", "trail ", "two  spaces", "a)b", "(", "Tab\tin", "gift — 5 left", "100% sure!", "end.", "日本語",
+         "nb\u00a0sp", "zw\u200bsp", "nb\u00a0", "\x00nul", "e\u2028f", "e\x85f", "\ufeffbom", "bom\ufeff",
+         "del\x7f", "c1\x9bctl", "W\u212aord"]
+MARKERS = ["setup", "you", "telegram", "guess", "chat", "Setup", "YOU", "group", "gift", "ſetup", "gift 3fa2c1",
+           "gift 3FA2C1", "group 0a1b2c3d4e5f", ""]
 INTROS = ["", ", intros chat 0a1b2c3d4e5f", ", intros chat 0A1B2C3D4E5F", ",intros chat 0a1b2c3d4e5f"]
 GUESS = ["", ", guess", ",guess"]
 MARKS = ["", ", public", ", village", ", private", ", agentvillage/edgecityindia2026", ", agentvillage/private",
@@ -234,7 +243,9 @@ def _never_wider(g, index, entry: str) -> list:
             assert g._tags_structure(line), line
             continue
         words, marker, mark, visibility = index.parse_item_line(line)
-        if unmarked:
+        if unmarked and g._tags_item(line, g.TAGS_GIFT_ITEM) is not None:
+            assert mark is None and marker == "telegram" and words == line[2:], line  # Index: a stated item
+        elif unmarked:
             assert mark is None and marker in ("setup", "you", "telegram"), line
             assert g._tags_item(line, g.TAGS_UNMARKED_ITEM).group("guess") is None, line
         else:
@@ -262,8 +273,11 @@ def test_the_golden_entries_are_never_wider_than_index(g, index):
 
 
 def _line_kind(g, line: str) -> str:
-    """Why a line is outside the unmarked allowlist (S, U, a Summary line), or "" when it is in it."""
-    if (g._tags_structure(line) or g._tags_item(line, g.TAGS_UNMARKED_ITEM) is not None or g._tags_summary(line)) \
+    """Why a line is outside the unmarked allowlist, or "" when it is in it (a group post anywhere counts as
+    in it here: this only names a cause)."""
+    if (g._tags_structure(line) or g._tags_summary(line) or g._tags_group_heading(line)
+            or any(g._tags_item(line, shape) is not None
+                   for shape in (g.TAGS_UNMARKED_ITEM, g.TAGS_GIFT_ITEM, g.TAGS_GROUP_ITEM))) \
             and line.strip() not in g.TAGS_SECTIONS_NOTES:
         return ""
     stripped = line.strip()
@@ -273,12 +287,12 @@ def _line_kind(g, line: str) -> str:
         return "a gift line"
     if "(group " in stripped or stripped.lower() == "from the village group:":
         return "the village group section"
-    if stripped.startswith("- ") and g._TAGS_PRINTABLE.fullmatch(line) is None:
-        return "an item line that is not printable ASCII"
+    if stripped.startswith("- ") and g._TAGS_BAD_CHARS.search(line) is not None:
+        return "an item line holding a control character"
     if stripped.startswith("- "):
         return "an item line with a mark or a parenthesis in its words"
     if stripped.startswith("Summary"):
-        return "a Summary line with a parenthesis"
+        return "a Summary line holding a line break"
     return "another line (an older header, ...)"
 
 
@@ -292,11 +306,16 @@ def _loss_cause(g, index, entry: str, item: tuple) -> str:
     match = g._tags_item(own, g.TAGS_UNMARKED_ITEM)
     if kind:
         return f"the line itself: {kind}"
+    if g._tags_unmarked(lines) and g._tags_item(own, g.TAGS_GIFT_ITEM) is not None:
+        return "the line itself: a gift line under another card than Can offer"
+    if g._tags_item(own, g.TAGS_GROUP_ITEM) is not None:
+        return "the line itself: a group post (never kept)"
     if match is not None and match.group("marker") is None:
         return "the line itself: a bare item (no marker)"
     if match is not None and (match.group("guess") is not None or " intros chat " in own and match.group("marker") != "telegram"):
         return "the line itself: a marker list the writers never print"
-    first = next(k for k in (_line_kind(g, line) for line in lines) if k) if not g._tags_unmarked(lines) else "none"
+    first = (next((k for k in (_line_kind(g, line) for line in lines) if k), "a group post outside its heading")
+             if not g._tags_unmarked(lines) else "none")
     return f"its entry is marked by: {first}"
 
 
@@ -304,17 +323,13 @@ def _loss_cause(g, index, entry: str, item: tuple) -> str:
 #: in the 93 entries, the ones the allowlist keeps, and the ones it drops by cause.
 READ_LOSS = {
     "stated": 1121,
-    "kept": 165,
+    "kept": 1114,
     "lost": {
-        "its entry is marked by: a Summary line with a parenthesis": 27,
-        "its entry is marked by: a gift line": 529,
-        "its entry is marked by: an item line that is not printable ASCII": 298,
+        "its entry is marked by: a group post outside its heading": 3,
         "its entry is marked by: another line (an older header, ...)": 1,
-        "its entry is marked by: the village group section": 3,
+        "its entry is marked by: the sections note": 1,
         "the line itself: a bare item (no marker)": 1,
-        "the line itself: a gift line": 34,
-        "the line itself: an item line that is not printable ASCII": 62,
-        "the line itself: the village group section": 1,
+        "the line itself: a group post (never kept)": 1,
     },
 }
 
@@ -345,6 +360,23 @@ def test_a_marked_entry_keeps_only_its_shared_items(g):
                                               "- Tools (setup, village)", note=True)
 
 
+def test_an_unmarked_entry_keeps_its_gift_lines_under_can_offer_and_allows_the_apps_other_lines(g, index):
+    """Index's parseContextTags reads a gift line in an unmarked entry as a stated telegram item (its tail is no
+    marker); the gate keeps it under "Can offer:" only. The village-group section, a Summary line with any
+    words and non-ASCII words keep the entry unmarked; none of the first two is kept."""
+    entry = tags("Summary: Builds (secretly) seed libraries — São Paulo.", "From the village group:",
+                 "- Running a seed swap on Saturday (group 3fa2c1d4e5b6)", "Here to:", "- Café crawl — weekly (setup)",
+                 "- 2 surf lessons — 2 left (gift 0bfd50)", "Can offer:", "- 5 hours of advice — 5 left (gift 3fa2c1)",
+                 "- Spanish lessons (setup)", "Removed by you:", "- Old thing (setup)")
+    assert g._tags_unmarked(entry.split("\n"))
+    out = g.tags_entry_shared(entry)
+    assert out == tags("Here to:", "- Café crawl — weekly (setup)", "Can offer:",
+                       "- 5 hours of advice — 5 left (gift 3fa2c1)", "- Spanish lessons (setup)")
+    assert ("can offer", "5 hours of advice — 5 left (gift 3fa2c1)") in stated(index, entry)
+    marked = entry + "\n" + "- Shared (you, village)"
+    assert "gift" not in g.tags_entry_shared(marked) and "Café" not in g.tags_entry_shared(marked)
+
+
 def test_an_unmarked_entry_keeps_its_stated_items(g):
     """Index's B3: an entry with no mark on any line reads as before; the gate keeps its stated lines."""
     entry = tags("Summary: A synthetic resident.", "Here to:", "- Seed library (setup)", "- A guess (guess)",
@@ -361,9 +393,11 @@ def test_an_unmarked_entry_keeps_its_stated_items(g):
     "- Shared (you, village)",
     "- a (village) garden (setup)",               # a parenthesis in the words
     "- Hidden (you, private) - x (setup)",
-    "- Café crawl (setup)",                       # not printable ASCII
-    "- 5 hours of advice — 5 left (gift 3fa2c1)",
-    "Summary: Builds (secretly) seed libraries.",
+    "- Ctrl\x01char (setup)",                    # a control character
+    "- 5 hours of advice — 5 left (gift 3FA2C1)",  # a tail that is not the gift line's exact parenthesis
+    "- 5 hours of advice — 5 left (gift)",
+    "- Running a seed swap (group 3fa2c1d4e5b6)",  # a group post outside its own heading
+    "Summary: Builds seed libraries.\u2028- Secret (you, private)",
     "Something the gate does not know",
     "- Housing policy (you, Private)",
     "- Housing policy (you,private)",

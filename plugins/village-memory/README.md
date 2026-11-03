@@ -51,21 +51,25 @@ plugins/village-memory/
     - **Shape S**, kept: the mark, the app's header and either sections note (render.ts, byte for byte), a
       card heading or `Removed by you:` (any case, as Index compares it), a blank line.
     - **Shape I**, the only item a marked entry keeps: `- <words> (<setup|you|telegram>[, intros chat
-      <12 hex>], <public|village|agentvillage/edgecityindia2026>)`, printable ASCII, lower case as the
-      writers print it, no parenthesis in the words.
+      <12 hex>], <public|village|agentvillage/edgecityindia2026>)`, the tail lower case as the writers
+      print it. Words, here and in Shape U: any character but a parenthesis, a line break, a control
+      character or U+FEFF (Index judges visibility on the tail alone, which is printable ASCII).
     - **Unmarked mode** (Index's B3: an entry with no mark reads as before): when EVERY line is Shape S,
       Shape U (`- <words>` with an optional `(<setup|you|telegram|guess|chat>[, intros chat <hex>][,
-      guess])`, printable ASCII, no parenthesis in the words) or a Summary line with no parenthesis, and no
-      line is a sections note, the entry keeps its `setup`, `you` and `telegram` items with no `, guess`.
-      Any other line anywhere makes the entry marked (no third mode, no "mark attempt" test).
+      guess])`), a gift line (`- <words> (gift <hex>)`), a group post (`- <words> (group <12 hex>)`) under
+      `From the village group:` (and that heading), or a `Summary:` line (any words, no line break) or the
+      "Summary removed by you" line, and no line is a sections note, the entry keeps its `setup`, `you`
+      and `telegram` items with no `, guess`, and its gift lines under `Can offer:` (Index takes those there
+      as stated items). Summary and group lines are never kept. Any other line anywhere, a tail that is not
+      one of those exact parentheses included, makes the entry marked (no third mode, no "mark attempt"
+      test).
     - An item stays only under a card heading, never beside its own removal ("Removed by you" lines go:
       Index never takes them); after a line that is not printable
       ASCII and not an item line, nothing is kept until the next heading (a reader may read a heading
       there that the gate does not). A heading stays only over a kept item; an entry left with no item
       keeps its mark, header and note. So nothing kept is wider than Index's `statedItems` on the same
       entry (a property test over the app's and the cp's goldens and generated lines, which also counts
-      the read loss: 956 of the goldens' 1,121 stated lines, mostly because the goldens' gift lines and
-      em-dash items take their entries out of the unmarked mode).
+      the read loss: 7 of the goldens' 1,121 stated lines).
     - What the entry keeps depends on its own lines alone, never on the fingerprint set (what other
       sessions saw marked), so no shared prompt tells whether a line is Private elsewhere (security review
       of 00a03e01).

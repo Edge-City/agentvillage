@@ -619,7 +619,9 @@ def _norm(value: Any) -> str:
 #   ALLOWLIST of line shapes (`tags_entry_shared`), never filtered by a list of what to drop (closed ov#560
 #   went that way). Its structure lines stay (Shape S); a marked entry keeps only the items whose mark names
 #   Edge City India 2026 on the resident's own marker (Shape I); an entry wholly in a second allowlist (no
-#   mark on any line, no sections note) keeps its stated unmarked items (Shape U), as Index's B3 reads it.
+#   mark on any line, no sections note; gift, group and Summary lines allowed) keeps its stated unmarked
+#   items (Shape U) and its gift lines under "Can offer:", as Index's B3 reads it. Words may hold any
+#   character but a parenthesis, a line break or a control character; the tail is printable ASCII.
 #   An item stays only under a card heading and never beside its own removal, so nothing kept is wider
 #   than Index's `statedItems` on the same entry. What it keeps depends on the entry alone, never on the
 #   fingerprint set (no cross-session oracle). Every dropped line is fingerprinted (below), and outside a
@@ -746,19 +748,33 @@ TAGS_CARD_HEADINGS = ("Here to", "Working on", "Wants to meet", "Can offer", "Cu
 TAGS_REMOVED_HEADING = "Removed by you"
 TAGS_SUMMARY_LABEL = "Summary: "
 TAGS_SUMMARY_REMOVED = "Summary removed by you: the person said the app's summary of them was wrong or unwanted."
-#: Shape I, the one item line kept from a marked entry, matched whole: printable ASCII words, then the
-#: resident's own marker (`setup`, `you`, `telegram`, an intros-chat ref allowed) and a mark naming Edge City
-#: India 2026, lower case as the app and the control plane print them (the readers take more; this takes less).
-TAGS_SHARED_ITEM = re.compile(r"- (?P<words>[\x20-\x7e]+?) \((?P<marker>setup|you|telegram)(?:, intros chat [0-9a-f]{12})?"
+#: An item's words, as the readers take them: any character but a parenthesis, a line break, a control
+#: character or U+FEFF (JavaScript's `\s` holds it, Python's does not), so the line's one parenthesis is its
+#: tail. Index judges visibility on the tail alone, and the tail is matched whole in printable ASCII.
+_TAGS_WORDS = "(?P<words>[^()\x00-\x1f\x7f\x85\u2028\u2029\ufeff]+?)"
+#: A character no kept or judged line may hold anywhere (a line break or a control character, U+FEFF).
+_TAGS_BAD_CHARS = re.compile("[\x00-\x1f\x7f\x85\u2028\u2029\ufeff]")
+#: Shape I, the one item line kept from a marked entry, matched whole: the words, then the resident's own
+#: marker (`setup`, `you`, `telegram`, an intros-chat ref allowed) and a mark naming Edge City India 2026,
+#: lower case as the app and the control plane print them (the readers take more; this takes less).
+TAGS_SHARED_ITEM = re.compile("- " + _TAGS_WORDS + r" \((?P<marker>setup|you|telegram)(?:, intros chat [0-9a-f]{12})?"
                               r", (?P<mark>public|village|agentvillage/edgecityindia2026)\)")
-#: Shape U, an item line with no mark, matched whole: what an entry must be made of (with Shape S and a
-#: Summary line) to read as unmarked; only its `setup`, `you` and `telegram` lines with no `, guess` are kept.
-TAGS_UNMARKED_ITEM = re.compile(r"- (?P<words>[\x20-\x7e]+?)(?: \((?P<marker>setup|you|telegram|guess|chat)"
+#: Shape U, an item line with no mark, matched whole: what an unmarked entry is made of (with Shape S, the
+#: app's gift and group lines and its Summary line); only its `setup`, `you` and `telegram` lines with no
+#: `, guess` are kept.
+TAGS_UNMARKED_ITEM = re.compile("- " + _TAGS_WORDS + r"(?: \((?P<marker>setup|you|telegram|guess|chat)"
                                 r"(?:, intros chat [0-9a-f]{12})?(?P<guess>, guess)?\))?")
+#: The app's gift line (render.ts GIFT_LINE's tail) and the control plane's group post (`(group <12 hex>)`).
+#: Index takes a gift line in an unmarked entry as a stated item (its tail is no marker: the words hold it),
+#: so an unmarked entry keeps it under "Can offer:"; a group post is only allowed under its own heading.
+TAGS_GIFT_ITEM = re.compile("- " + _TAGS_WORDS + r" \(gift [0-9a-f]+\)")
+TAGS_GROUP_ITEM = re.compile("- " + _TAGS_WORDS + r" \(group [0-9a-f]{12}\)")
+TAGS_GROUP_HEADING = "From the village group"
+TAGS_GIFT_CARD = "Can offer"
 TAGS_STATED_MARKERS = frozenset({"setup", "you", "telegram"})
 _TAGS_PRINTABLE = re.compile(r"[\x20-\x7e]*")
 #: Line breaks other than `\n` that some reader may split on (str.splitlines' set, less `\n` and `\r`).
-_TAGS_OTHER_BREAKS = re.compile("[\v\f\x1c\x1d\x1e\x85  ]")
+_TAGS_OTHER_BREAKS = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 #: The section state after a line that is not printable ASCII and not an item line: no reader's heading is
 #: known there, so no line is kept until the next heading the gate reads.
 _TAGS_UNKNOWN_SECTION = "?"
@@ -985,9 +1001,10 @@ def _tags_structure(raw: str) -> bool:
 
 
 def _tags_item(raw: str, shape: Any) -> Any:
-    """`shape` (TAGS_SHARED_ITEM or TAGS_UNMARKED_ITEM) matched whole on the printable-ASCII line, its words
-    holding no parenthesis and no blank at either end (so the line's only parenthesis is its tag), or None."""
-    match = shape.fullmatch(raw.strip()) if _TAGS_PRINTABLE.fullmatch(raw) is not None else None
+    """`shape` (an item shape above) matched whole on the stripped line, the line holding no line break, no
+    control character and no U+FEFF anywhere, its words no parenthesis and no blank at either end (so the
+    line's only parenthesis is its tail), or None."""
+    match = shape.fullmatch(raw.strip()) if _TAGS_BAD_CHARS.search(raw) is None else None
     if match is None:
         return None
     words = match.group("words")
@@ -995,19 +1012,37 @@ def _tags_item(raw: str, shape: Any) -> Any:
 
 
 def _tags_summary(raw: str) -> bool:
-    """The app's Summary line holding no parenthesis and no other line break, or its "Summary removed by you"
-    line: allowed in an unmarked entry, never kept (the readers do not take it)."""
+    """The app's Summary line (any words, no other line break), or its "Summary removed by you" line: allowed
+    in an unmarked entry, never kept (the readers do not take it)."""
     stripped = raw.strip()
     return stripped == TAGS_SUMMARY_REMOVED or (
-        stripped.startswith(TAGS_SUMMARY_LABEL) and "(" not in raw and ")" not in raw
-        and _TAGS_OTHER_BREAKS.search(raw) is None)
+        stripped.startswith(TAGS_SUMMARY_LABEL) and _TAGS_OTHER_BREAKS.search(raw) is None)
+
+
+def _tags_group_heading(raw: str) -> bool:
+    """The control plane's "From the village group:" heading, as the app compares it (stripped, any case)."""
+    return _TAGS_PRINTABLE.fullmatch(raw) is not None and raw.strip().lower() == f"{TAGS_GROUP_HEADING.lower()}:"
 
 
 def _tags_unmarked(lines: List[str]) -> bool:
-    """The whole entry is in the second allowlist (Shape S, Shape U, a Summary line), with no sections note:
-    the Index readers read it as unmarked (VISIBILITY B3)."""
-    return all((_tags_structure(raw) or _tags_item(raw, TAGS_UNMARKED_ITEM) is not None or _tags_summary(raw))
-               and raw.strip() not in TAGS_SECTIONS_NOTES for raw in lines)
+    """The whole entry is in the second allowlist, with no sections note: the Index readers read it as
+    unmarked (VISIBILITY B3). Allowed: Shape S, Shape U, a gift line, a group post under the village-group
+    heading (and that heading), a Summary line. Any other line, a tail that is not one of those exact
+    parentheses included, makes the entry marked."""
+    village = False
+    for raw in lines:
+        if raw.strip() in TAGS_SECTIONS_NOTES:
+            return False
+        if _tags_structure(raw):
+            village = village and _tags_heading(raw.strip()) is None
+            continue
+        if _tags_group_heading(raw):
+            village = True
+            continue
+        if (_tags_item(raw, TAGS_UNMARKED_ITEM) is None and _tags_item(raw, TAGS_GIFT_ITEM) is None
+                and not (village and _tags_item(raw, TAGS_GROUP_ITEM) is not None) and not _tags_summary(raw)):
+            return False
+    return True
 
 
 def _tags_key(text: str) -> str:
@@ -1033,13 +1068,15 @@ def tags_entry_shared(entry: str) -> str:
     shapes, never a list of what to drop. Lines are split as the Index readers split them (`\\r\\n`, `\\r`
     folded to `\\n`). An entry made only of Shape S lines, Shape U lines and a Summary line, with no sections
     note, is unmarked: its `setup` / `you` / `telegram` items with no `, guess` stay. Any other entry is
-    marked: only its Shape I items stay. Either way an item stays only under a card heading, never beside a
+    marked: only its Shape I items stay. An unmarked entry also keeps its gift lines under "Can offer:" (Index
+    takes them there). Either way an item stays only under a card heading, never beside a
     removal of it; the structure lines stay, a heading only over a kept item. The keep decision is the
     entry's shape alone, never the fingerprint set (what other sessions saw marked: no cross-session
     oracle, security review of 00a03e01). Every other line goes and is fingerprinted (FINGERPRINT_MIN_CHARS
     or longer), so a memory result quoting it is judged as one quoting a Private entry."""
     lines = entry.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    shape = TAGS_UNMARKED_ITEM if _tags_unmarked(lines) else TAGS_SHARED_ITEM
+    unmarked = _tags_unmarked(lines)
+    shape = TAGS_UNMARKED_ITEM if unmarked else TAGS_SHARED_ITEM
     section: Optional[str] = None
     removals: List[Tuple[str, bool]] = []
     reads: List[Tuple[str, str, Any]] = []  # (stripped line, kind, item key or heading) per line
@@ -1062,7 +1099,12 @@ def tags_entry_shared(entry: str) -> str:
         match = _tags_item(raw, shape) if section in TAGS_CARD_HEADINGS else None
         stated = match is not None and (shape is TAGS_SHARED_ITEM or (
             match.group("marker") in TAGS_STATED_MARKERS and match.group("guess") is None))
-        reads.append((stripped, "item", _tags_key(match.group("words"))) if stated else (stripped, "drop", None))
+        if stated:
+            reads.append((stripped, "item", _tags_key(match.group("words"))))
+        elif unmarked and section == TAGS_GIFT_CARD and _tags_item(raw, TAGS_GIFT_ITEM) is not None:
+            reads.append((stripped, "item", _tags_key(stripped[2:])))  # Index's words: the whole rest
+        else:
+            reads.append((stripped, "drop", None))
 
     def removed(key: str) -> bool:
         return any(key == gone or (cut and key.startswith(gone)) for gone, cut in removals)
