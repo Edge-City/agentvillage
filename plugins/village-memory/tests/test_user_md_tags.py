@@ -168,6 +168,24 @@ def test_shape_i_takes_nothing_else(g, line):
     assert g._tags_item(line, g.TAGS_SHARED_ITEM) is None
 
 
+# ---- review-b ov#604 N1: the two bad-character layers back each other up, so each gets its own test -------
+
+BAD_CHAR_LINES = ["- Tab\tin (you, public)", "- nul\x00 (you, public)", "- del\x7f (you, public)", "- nel\x85 (you, public)",
+                  "- ls\u2028 (you, public)", "- ps\u2029 (you, public)", "- bom\ufeff (you, public)", "- ok (you,\tpublic)"]
+
+
+@pytest.mark.parametrize("line", BAD_CHAR_LINES)
+def test_the_words_regex_alone_refuses_a_bad_character(g, line):
+    """Layer D: TAGS_SHARED_ITEM's words class refuses control characters, NEL, LS/PS and U+FEFF by itself."""
+    assert g.TAGS_SHARED_ITEM.fullmatch(line.strip()) is None
+
+
+@pytest.mark.parametrize("line", BAD_CHAR_LINES)
+def test_the_bad_character_scan_alone_catches_it(g, line):
+    """Layer E: _TAGS_BAD_CHARS finds the same characters anywhere on the raw line, words or tail."""
+    assert g._TAGS_BAD_CHARS.search(line) is not None
+
+
 # ---- the generated line set: every kept line is one Index reads as shared (or stated) --------------------
 
 WORDS = ["Seed library", "x", "Words, with: commas; and [brackets]", "a (b) c", "a (you, private) b", "naïve",
