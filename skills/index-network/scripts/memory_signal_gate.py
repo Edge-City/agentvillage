@@ -603,19 +603,22 @@ def parse_item_line(line: str) -> Optional[tuple[str, str, Optional[str], str]]:
 
 
 def context_tags_entry(user_text: Optional[str]) -> Optional[str]:
-    """The app's Context tags entry: the FIRST entry that starts with CONTEXT_TAGS_MARK, JavaScript-trimmed
-    (context-tags.ts `contextTagsEntry`, the same entry for every text); None without one. Any later entry
-    starting with the mark is ignored: Hermes's memory `add` appends, so an entry added after the app's
-    (a note a session wrote that opens with the mark) never stands in for it (R2, ov#604 item 6)."""
+    """The app's Context tags entry: the LAST entry that starts with CONTEXT_TAGS_MARK, JavaScript-trimmed
+    (context-tags.ts `contextTagsEntry`, the same entry for every text); None without one. LAST because
+    that is the entry the app and the control plane keep: app context.ts `tagsEntryText` reads the last,
+    and the cp ENTRY route (memory-entry.js ENTRY_PY, `found[-1]`) replaces the last in place, so after any
+    app write the last one is the app's (lead ruling, R2). An entry a session that is not private appends
+    with the mark is refused at the write (the USER.md gate's `opens_app_entry`, ov#604 item 6)."""
+    found: Optional[str] = None
     for entry in split_entries(user_text or ""):
         trimmed = entry.strip(JS_TRIM_CHARS)
         if trimmed.startswith(CONTEXT_TAGS_MARK):
-            return trimmed
-    return None
+            found = trimmed
+    return found
 
 
 def context_tags(user_text: Optional[str]) -> tuple[dict[str, list[tuple[str, ...]]], list[str]]:
-    """(group -> [(text, marker)], removed texts) of the Context tags entry (`context_tags_entry`: the first
+    """(group -> [(text, marker)], removed texts) of the Context tags entry (`context_tags_entry`: the last
     one); empty without one.
     VISIBILITY B3 (`context-tags.ts` parseContextTags): when any item line carries a mark, every item is
     (text, marker, visibility), an unmarked line, a guess or a chat line being Private; an entry with no
