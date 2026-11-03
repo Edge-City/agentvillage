@@ -56,7 +56,10 @@ from typing import Any, List, Optional, Tuple
 #   unless the text it writes (content or new_text, of the call or an op) holds a Private MARK: a public
 #   constant the session itself supplied, so refusing it answers nothing about the Private text, and no
 #   group can forge a setup entry or reproduce a whole marked one to test it (MEMORY_MARK_REFUSAL). A
-#   call whose target is unknown (args missing or malformed) counts as USER.md.
+#   call whose target is unknown (args missing or malformed) counts as USER.md. Nor may a USER.md add
+#   write a text with a line that opens with an app entry mark (TAGS_MARK, SETUP_PROFILE_MARK; R2, ov#604
+#   item 6): Hermes appends it, and it would stand as the app's tags entry where the file holds none, so
+#   only a private session writes one (`opens_app_entry`, MEMORY_MARK_REFUSAL, on the call's text alone).
 # - A Private entry is known by its mark, or by a fingerprint (the sha256 of each of its lines of at least
 #   FINGERPRINT_MIN_CHARS) taken whenever this process sees it marked (`MemoryStore.load_from_disk`, the
 #   prompt gate), so text derived from one is still known after its mark has gone. One fingerprint set per
@@ -914,6 +917,28 @@ def uniform_result(result: Any) -> Optional[str]:
     return None if uniform == payload else json.dumps(uniform, ensure_ascii=False)
 
 
+#: The marks an app entry of USER.md opens with (R2, ov#604 item 6): the app's tags entry and the control
+#: plane's setup profile. Outside a private session no add to USER.md may write a text with a line that
+#: opens with one (`opens_app_entry`); the setup mark is refused anywhere in a written text already.
+APP_ENTRY_MARKS = (TAGS_MARK, SETUP_PROFILE_MARK)
+#: What leads an entry and is trimmed off before the readers look for its mark: Python's whitespace
+#: (memory_signal_gate.py, this block) and JavaScript's (context-tags.ts trims U+FEFF too), together.
+_ENTRY_LEAD = re.compile("^[\\s\ufeff]+")
+
+
+def opens_app_entry(text: Any) -> bool:
+    """`text` has a line that, with Python's and JavaScript's whitespace trimmed from its start, opens with
+    an app entry mark (APP_ENTRY_MARKS). Every entry the Index readers can find in USER.md starts on a line
+    (they fold CR and CRLF, split on Hermes's `§` line and trim), so this holds for every way the text,
+    once Hermes appends it, could carry an entry the readers take for the app's (one opening the text, or
+    one after a `§` line inside it), whatever the separators around it. The text alone decides: a
+    public constant the session itself supplied, so the answer tells it nothing about the file."""
+    if not isinstance(text, str):
+        return False
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return any(_ENTRY_LEAD.sub("", line).startswith(APP_ENTRY_MARKS) for line in lines)
+
+
 def adds_only(args: Any) -> bool:
     """The call only adds, as Hermes runs it: a batch (a non-empty `operations`, whatever `action` says)
     whose every op is a dict with action add, else `action` add."""
@@ -932,7 +957,9 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
     and on whether the text it writes holds a Private mark (a public constant), never on a fingerprint
     (review-b ov#563 S1-d, ov#565 N1-r3): the answer never tells a group whether a guess is in the setup
     text (no membership oracle). MEMORY_WRITE_REFUSAL for a USER.md change (N3-d), MEMORY_MARK_REFUSAL for
-    a marked write. An allowed call's whole texts that hold a fingerprinted line are recorded as
+    a marked write, and for a USER.md add whose text has a line opening with an app entry mark
+    (`opens_app_entry`, R2: no session that is not private forges the app's tags entry). An allowed call's
+    whole texts that hold a fingerprinted line are recorded as
     self-written (S1-r3, S1-r4 (b)); if that fails, the call is refused (fail closed). A DM is never
     refused."""
     block = {"action": "block", "message": MEMORY_WRITE_REFUSAL}
@@ -947,6 +974,8 @@ def memory_write_directive(tool_name: Any = None, args: Any = None, session_id: 
         if memory_call_target(args) == "user" and not adds_only(args):
             return block
         if any(holds_private_mark(text) for text in _call_texts(args, WRITTEN_FIELDS)):
+            return {"action": "block", "message": MEMORY_MARK_REFUSAL}
+        if memory_call_target(args) == "user" and any(opens_app_entry(text) for text in _call_texts(args, WRITTEN_FIELDS)):
             return {"action": "block", "message": MEMORY_MARK_REFUSAL}
         remember_self_written(args)
         return None
