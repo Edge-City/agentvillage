@@ -394,9 +394,14 @@ describe("writers are unchanged: nothing in the overlay writes a new id", () => 
     expect(hits.sort()).toEqual([
       // ov#431: the developer docs describe the vocabulary; write nothing.
       "docs/MINI-APPS-DEVELOPER.md",
-      // review-b ov#559 N4: village-memory's prompt notes name the shared id beside Edge City India 2026 (prose
-      // read by the agent; it writes nothing).
+      // Lead L32765 R1 (ov#604): the USER.md gate's tags allowlist (one block, byte-identical in both plugins) keeps a
+      // line whose mark names Edge City India 2026 (`agentvillage/edgecityindia2026` among them) outside a
+      // private session; it reads the id, writes nothing. Its README and tests name the ids. village-memory's
+      // prompt notes also name the shared id beside Edge City India 2026 (review-b ov#559 N4, ov#602): prose.
+      "plugins/av-events/_user_md_gate.py",
+      "plugins/village-memory/README.md",
       "plugins/village-memory/__init__.py",
+      "plugins/village-memory/tests/test_user_md_tags.py",
       "scripts/tests/memory-signal-gate.test.ts",
       "skills/index-network/scripts/context-tags.ts",
       "skills/index-network/scripts/memory_signal_gate.py",
