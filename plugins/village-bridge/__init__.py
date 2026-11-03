@@ -31,6 +31,7 @@ from ._mini_apps import (installed, authorize_send, gate_verified, READ_OPERATIO
                          ORDER_APPROVAL_UNAVAILABLE, ORDER_ALREADY_TOLD)
 from ._dreamstarter import (ds_payload, DS_APP_CODES, DS_ERRORS, DS_HANDLING, DS_INVALID, DS_CONTACT, DS_UNCLEAR,
                             DS_WRITE_UNAVAILABLE)
+from ._kismet_link import names_kismet_signin_link, carries_kismet_signin_link
 from ._kismet import (kismet_payload, kismet_answer, kismet_write, remember_shown, KismetRefused, KISMET_ERRORS, KISMET_GATE, KISMET_IDENTITY, KISMET_UNCLEAR, KISMET_UNAVAILABLE,
                       OP_ARGUMENTS as KISMET_OP_ARGUMENTS, PUBLIC_TOOLS as KISMET_PUBLIC_TOOLS, unclear_text as kismet_unclear)
 from ._library import (library_payload, library_answer, LibraryRefused, LIBRARY_APP_ERRORS, LIBRARY_IDENTITY, LIBRARY_INVALID,
@@ -307,40 +308,26 @@ def _utc_time(value):
     return True
 
 
-# A Kismet one-time sign-in link (kismet.web_link's webLink) never goes into anything a zzz write sends (every string, at
-# any depth, of every zzz write op). Plain text only, never a URL parser, so it cannot throw: NFKC, format/invisible
-# characters dropped, percent-decoded until stable, backslashes as slashes, case-folded; then the host (a trailing dot and
-# a port allowed; any scheme or "//" before it does not matter to a search) followed by "/u/". No state is kept.
-KISMET_SIGNIN_LINK = re.compile(r"(?<![a-z0-9-])kismet-village\.vercel\.app\.?(?::[0-9]{0,5})?/+u/")
+# A Kismet one-time sign-in link (kismet.web_link's webLink) never goes out in any other write (ov#599 N1, review-b
+# CLAIMS L37096 / ruling L37099): handle() checks every string, at any depth, of every WRITE_OPERATIONS op except
+# Kismet's own (and of a generic app's card op) once its payload is built, before any gate or send; reads are never
+# inspected. The matcher (_kismet_link.py, byte-identical in av-events for share_digest) is plain text, never throws and
+# keeps no state. The refusal is each family's existing invalid-arguments code with one plain line.
+_names_kismet_link = names_kismet_signin_link
+_carries_kismet_link = carries_kismet_signin_link
 ZZZ_KISMET_LINK = ("Nothing was sent. A Kismet sign-in link is private to the owner: never post it to zzz.bot. Give it to "
                    "the owner only in their private chat.")
-ZZZ_LINK_GUARDED = frozenset((*ZZZ_POST_WRITES, *ZZZ_TEAM_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS))
+KISMET_LINK_PRIVATE = ("Nothing was sent. A Kismet sign-in link is private to the owner: never send it to another app, room "
+                       "or post. Give it to the owner only in their private chat.")
 
 
-def _plain(value):
-    return "".join(c for c in unicodedata.normalize("NFKC", value)
-                   if unicodedata.category(c) not in ("Cf", "Cn", "Co", "Cs") and c not in INVISIBLE)
-
-
-def _names_kismet_link(value):
-    text = _plain(value)
-    for _ in range(8):  # percent-decoding until stable (bounded: each pass only shortens the text)
-        decoded = _plain(unquote(text))
-        if decoded == text:
-            break
-        text = decoded
-    return KISMET_SIGNIN_LINK.search(text.replace("\\", "/").casefold()) is not None
-
-
-def _carries_kismet_link(value):
-    """True when any string at any depth (dict keys included) names a Kismet sign-in link."""
-    if isinstance(value, str):
-        return _names_kismet_link(value)
-    if isinstance(value, dict):
-        return any(_carries_kismet_link(k) or _carries_kismet_link(v) for k, v in value.items())
-    if isinstance(value, list):
-        return any(_carries_kismet_link(v) for v in value)
-    return False
+def kismet_link_refusal(op):
+    """The refusal for a write that carries a Kismet sign-in link: the op family's existing code and one plain line."""
+    if op in ZZZ_OPERATIONS:
+        return {"error": "invalid_zzz_arguments", "instruction": ZZZ_KISMET_LINK}
+    code = ("invalid_dreamstarter_arguments" if op in DS_OPERATIONS else "invalid_favorloop_arguments" if op in FAVORLOOP_OPERATIONS
+            else "invalid_ecv_arguments" if op in ECV_OPERATIONS else "invalid_arguments")
+    return {"error": code, "instruction": KISMET_LINK_PRIVATE}
 
 
 def zzz_payload(op, args, context):
@@ -402,8 +389,6 @@ def zzz_payload(op, args, context):
         raise ValueError("invalid_zzz_arguments")  # exactly one of the two (contract section 2)
     if op == "zzz.schedule_posts" and ("about" not in out if out["every_minutes"] is not None else len(out) > 1):
         raise ValueError("invalid_zzz_arguments")  # a set needs its topic; a stop carries nothing else
-    if op in ZZZ_LINK_GUARDED and _carries_kismet_link(out):
-        raise ValueError("kismet_link_private")  # data minimisation at the room sink (security review, app#1092's spirit)
     if op in ZZZ_POST_WRITES:
         # Stable on retries in this originating turn, distinct across later turns: the app's idempotency key input.
         out["turnId"] = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(["zzz-turn", context["SESSION_KEY"], context["MESSAGE_ID"]])))
@@ -1207,6 +1192,8 @@ def handle(args, **kwargs):
         if datetime.fromisoformat(config["expiresAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
             return json.dumps({"error": "sign_in_expired", "signInUrl": SIGNIN, "instruction": "Sign in to Agent Village again; the paired agent updates automatically. Never ask for codes or credentials in chat."})
         if generic is not None:
+            if _carries_kismet_link(args):
+                return json.dumps(kismet_link_refusal(op))  # a generic app's prepare / card op is a write too
             return _generic_card_op(home, context, config, generic, args)
         payload = {"operation": op}
         if op == "rolodex.search" and set(args) == {"operation", "query"}:
@@ -1258,9 +1245,7 @@ def handle(args, **kwargs):
         elif op in ZZZ_OPERATIONS:
             try:
                 payload.update(zzz_payload(op, args, context))
-            except ValueError as refused:
-                if str(refused) == "kismet_link_private":
-                    return json.dumps({"error": "invalid_zzz_arguments", "instruction": ZZZ_KISMET_LINK})
+            except ValueError:
                 if op in ZZZ_TEAM_INPUT or op in ZZZ_EDIT_INPUT or op in ZZZ_SCHEDULE_INPUT:
                     rule = ZZZ_TEAM_INPUT.get(op) or ZZZ_SCHEDULE_INPUT.get(op) or ZZZ_EDIT_INPUT[op]
                     return json.dumps({"error": "invalid_zzz_arguments", "instruction": "Nothing was sent. " + rule})
@@ -1408,6 +1393,9 @@ def handle(args, **kwargs):
             payload["orderId"] = args["orderId"]
         elif op not in ("gold-stars.quota", "skylight.status") or set(args) != {"operation"}:
             raise _InvalidArguments(op)
+        if op in WRITE_OPERATIONS and op not in KISMET_OPERATIONS and _carries_kismet_link(payload):
+            # ov#599 N1: no write but Kismet's own carries the owner's sign-in link, before any gate, card or send.
+            return json.dumps(kismet_link_refusal(op))
         if op == "rolodex.meeting":
             # A write through the gated `village` entry: refuse it while that gate is off or unverified.
             try:

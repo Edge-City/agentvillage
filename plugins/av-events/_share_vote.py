@@ -167,6 +167,7 @@ except ImportError:  # pragma: no cover - Windows
 from . import _approval
 from . import _village_question as vq
 from ._core import DIR_MODE, FILE_MODE, derived_uuid7, epoch_from_iso, hermes_home, iso_from_epoch, sanitize, uuid7
+from ._kismet_link import names_kismet_signin_link
 
 logger = logging.getLogger("av-events")
 
@@ -1814,6 +1815,9 @@ def _share(args: dict) -> dict:
     if problem is not None:
         return _refuse(problem)
     if sanitize(text) != text:
+        return _refuse("text_sanitized")
+    if names_kismet_signin_link(text):
+        # ov#599 N1: the owner's one-time Kismet sign-in link is a credential; it never goes into a shared digest.
         return _refuse("text_sanitized")
     scope = args.get("scope")
     scope = "village" if scope is None or (isinstance(scope, str) and not scope.strip()) else scope
