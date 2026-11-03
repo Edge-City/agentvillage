@@ -186,6 +186,33 @@ def test_the_bad_character_scan_alone_catches_it(g, line):
     assert g._TAGS_BAD_CHARS.search(line) is not None
 
 
+#: Each BAD_CHAR_LINES line, and the same line with no mark (Shape U's form).
+BAD_CHAR_ITEMS = BAD_CHAR_LINES + [line.replace(", public)", ")") for line in BAD_CHAR_LINES]
+
+
+@pytest.mark.parametrize("shape_name", ["TAGS_SHARED_ITEM", "TAGS_UNMARKED_ITEM"])
+def test_tags_item_refuses_a_bad_character_even_with_the_words_class_widened(g, shape_name):
+    """Review-b L38718 (ov#604 N1, half), structural: `_tags_item` itself refuses every BAD_CHAR_LINES line
+    when the shape's words class is widened to any character (here, in the test only), so its own
+    `_TAGS_BAD_CHARS` guard is what refuses; a mutant removing that guard dies here alone, whatever the
+    words class still refuses (layer D above). Not vacuous: the widened shape matches most of these lines
+    whole, with clean words, so nothing else in `_tags_item` would refuse them."""
+    shape = getattr(g, shape_name)
+    assert g._TAGS_WORDS in shape.pattern
+    widened = re.compile(shape.pattern.replace(g._TAGS_WORDS, "(?P<words>.+?)"), re.DOTALL)
+    assert widened.pattern != shape.pattern
+    only_the_guard = 0
+    for line in BAD_CHAR_ITEMS:
+        assert g._tags_item(line, widened) is None, repr(line)
+        match = widened.fullmatch(line.strip())
+        if match is not None and "(" not in match.group("words") and ")" not in match.group("words") \
+                and match.group("words") == match.group("words").strip():
+            only_the_guard += 1
+    assert only_the_guard >= 4
+    clean = {"TAGS_SHARED_ITEM": "- Seed library (you, public)", "TAGS_UNMARKED_ITEM": "- Seed library (you)"}[shape_name]
+    assert g._tags_item(clean, widened) is not None  # the widened shape still keeps a clean line
+
+
 # ---- the generated line set: every kept line is one Index reads as shared (or stated) --------------------
 
 WORDS = ["Seed library", "x", "Words, with: commas; and [brackets]", "a (b) c", "a (you, private) b", "naïve",
