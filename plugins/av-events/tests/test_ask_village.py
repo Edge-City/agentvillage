@@ -875,7 +875,7 @@ def test_b120_withheld_logs_the_code_only(tctx, cp, caplog):
 
 
 def test_description_shares_only_lines_tagged_edge_city_india_2026(av_mod):
-    """Audit #3: the question carries only what the resident shares (cp#487 tags in _profile.md)."""
-    assert "share only lines tagged Edge City India 2026 in their profile" in av_mod.TOOL_DESCRIPTION
-    assert "never a line tagged Private, an untagged line, their setup profile or their Context page files" in (
-        av_mod.TOOL_DESCRIPTION)
+    """Audit #3: the question carries only what the resident shares (cp#487 tags in _profile.md); ov#602: the rule
+    is conditional on a tagged profile (copy describes live only) and short (the findable tests rank by BM25)."""
+    assert ("once their profile tags its lines share only lines tagged Edge City India 2026, never a Private or "
+            "untagged line, their setup profile or their Context page files") in av_mod.TOOL_DESCRIPTION
