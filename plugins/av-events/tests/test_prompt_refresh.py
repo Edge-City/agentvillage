@@ -1418,6 +1418,65 @@ def test_a_group_whose_user_md_is_only_the_setup_profile_has_no_user_block_and_i
     assert not refresh_lines(caplog)
 
 
+# ---- lead L32765 R1: the tags entry outside a private session is an allowlist --------------------------
+
+TAGS_ENTRY = "\n".join([
+    "[Context tags, kept in the Agent Village app]",
+    "Card items marked public or village (not guesses) are shared with Edge City India 2026: residents may see them "
+    "in Skylight and other residents' agents may use them; private items stay between you and the person. An item "
+    "with no mark: treat it as private. Gift lines are offers the person chose to share.",
+    "Here to:",
+    "- Two collaborators for a seed library (setup, public)",
+    "- Housing co-op search for my sister (you, private)",
+])
+
+
+@pytest.mark.parametrize("order", ["tags-last", "tags-middle", "tags-first"])
+def test_a_group_prompt_still_holding_a_dropped_tags_line_is_refreshed_once(hermes, caplog, order):
+    """A group session whose stored prompt carries the tags entry whole (built before the roll) reads as stale
+    at its next turn, is rebuilt without the Private line, then stays put. With the entry last the gated
+    block is close to a prefix of the old one; the recounted header tells them apart."""
+    entries = {"tags-last": ["Name: Test Resident", "Likes kites", TAGS_ENTRY],
+               "tags-middle": ["Name: Test Resident", TAGS_ENTRY, "Likes kites"],
+               "tags-first": [TAGS_ENTRY, "Name: Test Resident", "Likes kites"]}[order]
+    write("memories/USER.md", "\n§\n".join(entries))
+    old = FakeAgent(hermes.db, f"tg-group-tags-{order}")
+    old._memory_manager = FakeMemoryManager()
+    old._chat_type = "dm"  # its prompt was built as before the allowlist: whole
+    stored = run_turn(hermes.loop, old, "hello", [])["system"]
+    assert "Housing co-op search" in stored
+    agent = gated_agent(hermes, f"tg-group-tags-{order}", "group")
+    pr(hermes.plugin).reset()  # a new process after the roll
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        got = run_turn(hermes.loop, agent, "hi", HISTORY)["system"]
+        again = run_turn(hermes.loop, agent, "hi again", HISTORY)["system"]
+    assert "Housing co-op search" not in got and "seed library (setup, public)" in got and again == got
+    assert "Likes kites" in got
+    assert [REFRESH_LINE.match(line).group(1) for line in refresh_lines(caplog)] == ["user_md"]
+
+
+def test_a_group_session_with_the_allowlisted_tags_entry_is_not_stale_every_turn(hermes, caplog):
+    write("memories/USER.md", f"Name: Test Resident\n§\n{TAGS_ENTRY}")
+    agent = gated_agent(hermes, "tg-group-tags-stable", "group")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "Housing co-op search" not in first and "seed library (setup, public)" in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, gated_agent(hermes, "tg-group-tags-stable", "group")):
+            assert run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
+
+
+def test_a_dm_keeps_the_whole_tags_entry_and_never_refreshes_for_it(hermes, caplog):
+    write("memories/USER.md", f"Name: Test Resident\n§\n{TAGS_ENTRY}")
+    agent = gated_agent(hermes, "tg-dm-tags", "dm")
+    first = run_turn(hermes.loop, agent, "hello", [])["system"]
+    assert "Housing co-op search" in first and "seed library (setup, public)" in first
+    with caplog.at_level(logging.INFO, logger="av-events"):
+        for turn_agent in (agent, gated_agent(hermes, "tg-dm-tags", "dm")):
+            assert run_turn(hermes.loop, turn_agent, "hi", HISTORY)["system"] == first
+    assert not refresh_lines(caplog)
+
+
 
 # ---- MINIAPP-PICKUP (v2.1.5): an install or removal reaches an open chat at its next turn --------------
 

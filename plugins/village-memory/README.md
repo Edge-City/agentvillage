@@ -44,6 +44,33 @@ plugins/village-memory/
   - **Fail closed:** a Hermes without that seam gets the store gate instead: `MemoryStore.format_for_system_prompt`
     leaves the Private entries out of the USER.md block for EVERY session (the DM still has the setup text
     under `_profile.md` "## Setup profile"). One WARNING.
+  - **The app's tags entry** (lead L32765 R1, `[Context tags, kept in the Agent Village app]`): outside a
+    private session it is rebuilt from an ALLOWLIST of line shapes (`tags_entry_shared`), the opposite of
+    closed ov#560's denylist. Lines are split as the Index readers split them (`\r\n`, `\r` folded) and
+    matched whole:
+    - **Shape S**, kept: the mark, the app's header and either sections note (render.ts, byte for byte), a
+      card heading or `Removed by you:` (any case, as Index compares it), a blank line.
+    - **Shape I**, the only item a marked entry keeps: `- <words> (<setup|you|telegram>[, intros chat
+      <12 hex>], <public|village|agentvillage/edgecityindia2026>)`, printable ASCII, lower case as the
+      writers print it, no parenthesis in the words.
+    - **Unmarked mode** (Index's B3: an entry with no mark reads as before): when EVERY line is Shape S,
+      Shape U (`- <words>` with an optional `(<setup|you|telegram|guess|chat>[, intros chat <hex>][,
+      guess])`, printable ASCII, no parenthesis in the words) or a Summary line with no parenthesis, and no
+      line is a sections note, the entry keeps its `setup`, `you` and `telegram` items with no `, guess`.
+      Any other line anywhere makes the entry marked (no third mode, no "mark attempt" test).
+    - An item stays only under a card heading, never beside its own removal ("Removed by you" lines go:
+      Index never takes them), never when it is a fingerprinted line; after a line that is not printable
+      ASCII and not an item line, nothing is kept until the next heading (a reader may read a heading
+      there that the gate does not). A heading stays only over a kept item; an entry left with no item
+      keeps its mark, header and note. So nothing kept is wider than Index's `statedItems` on the same
+      entry (a property test over the app's and the cp's goldens and generated lines, which also counts
+      the read loss: 956 of the goldens' 1,121 stated lines, mostly because the goldens' gift lines and
+      em-dash items take their entries out of the unmarked mode).
+    - Every dropped line of 24 characters or more is fingerprinted, at load too, so a memory result or an
+      agent note quoting one is judged as one quoting a Private entry; a memory-tool result's tags entry
+      that the allowlist would change is left out whole (a shorter dropped line has no fingerprint). A
+      failing gate leaves the tags entry out, as it does the Private entries. A private session never
+      runs any of it.
   - **The memory tool** (av-events hooks), outside a private session only. The write check is keyed on
     the call's target and action and on the Private marks (public constants), never on a fingerprint
     (review-b ov#563 S1-d): `pre_tool_call` refuses a USER.md change or removal (a replace, a remove, a
@@ -108,8 +135,8 @@ plugins/village-memory/
   - **Limits:** a group prompt stored before the roll keeps the entries until it is rebuilt (its next turn
     where F1 is on, team tenants; elsewhere its next compaction or `/new`: review-b #558 S3, a roll decision).
     Fingerprints do not survive a restart, so a mark stripped in a DM and a restart later leave that text
-    unknown to the gate. The agent's own notes and the tags entry's Private-marked lines are not filtered
-    here (ov#560).
+    unknown to the gate. The agent's own notes are not filtered for marks; a line once dropped from the tags
+    entry stays fingerprinted until a restart, so a later copy of it under a card heading is dropped too.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and
