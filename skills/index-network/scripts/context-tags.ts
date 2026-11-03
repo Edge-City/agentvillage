@@ -220,7 +220,13 @@ export function parseContextTags(entry: string): ContextTags {
   return { groups, removed };
 }
 
-/** The entry headed CONTEXT_TAGS_MARK in a memory file's text, or null. Pure. */
+/**
+ * The app's entry headed CONTEXT_TAGS_MARK in a memory file's text: the FIRST entry that starts with
+ * the mark, trimmed; null without one. Pure. Any later entry starting with the mark is ignored: Hermes's
+ * memory `add` appends, so an entry added after the app's (a note a session wrote that opens with the
+ * mark) never stands in for it. memory_signal_gate.py `context_tags_entry` takes the same entry for every
+ * text (context-marks.test.ts pins the two together; R2, ov#604 item 6).
+ */
 export function contextTagsEntry(text: string): string | null {
   const entry = text
     .replace(/\r\n?/g, "\n")
