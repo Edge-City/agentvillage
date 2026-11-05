@@ -145,6 +145,12 @@ class TestAutonomyRunner(unittest.TestCase):
         self.save_job()
         self.assertEqual(runner._job(self.home, self.cfg), "a" * 12)
 
+    def test_any_slot_marker_line_is_in_the_shipped_bytes(self):
+        """A-93 contract for cp (review-b cp#555 S1): cp greps this exact line in a box's runner bytes."""
+        line = b"RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line"
+        self.assertEqual(SCRIPT.read_bytes().split(b"\n").count(line), 1)
+        self.assertIs(runner.RUNNER_ACCEPTS_ANY_SLOT, True)
+
     def test_a_malformed_schedule_still_fails_job_shape_before_any_claim(self):
         for schedule in ({"kind": "cron", "expr": "5-59/5 * * * *"}, {"kind": "cron", "expr": "3-59/10 * * * *"},
                          {"kind": "cron", "expr": "3-59/5 * * *"}, {"kind": "cron", "expr": "x"},

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REVIEWED_MINI_APPS } from "../install_miniapps";
 import { AUTONOMY_FILES, AUTONOMY_GATE, AUTONOMY_JOB_NAME, AUTONOMY_JOB_SCRIPT,
-  AUTONOMY_SHIPPED, autonomyMarkers, autonomySchedule, reconcileAutonomyJob } from "../zzz_autonomy_job";
+  AUTONOMY_SHIPPED, autonomyMarkers, autonomySchedule, INSTALLER_ACCEPTS_ANY_SLOT, reconcileAutonomyJob } from "../zzz_autonomy_job";
 import { withSymlinkPlantedAfterCheck } from "./plant_after_check";
 import { OWNED_FILE_MAX_BYTES } from "../zzz_managed_job";
 import { createHash } from "node:crypto";
@@ -178,6 +178,18 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(existsSync(shim)).toBe(false);
   expect(autonomyMarkers(home)).toBe(false);
   expect(stage([zzzbot],["--verify"]).status).toBe(0);
+});
+
+// A-93 contract for cp (review-b cp#555 S1): cp tells from a box's runner bytes whether it accepts any slot by grepping
+// one literal line; a later edit must not drop it silently.
+test("the any-slot marker lines are in the shipped bytes, and v2.2.2's runner has none",()=>{
+  const line="RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line\n";
+  const runner=readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT),"utf8");
+  expect(runner.split("\n").filter(l=>l+"\n"===line)).toHaveLength(1);
+  expect(readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v222.py.fixture"),"utf8")).not.toContain("RUNNER_ACCEPTS_ANY_SLOT");
+  expect(INSTALLER_ACCEPTS_ANY_SLOT).toBe(true);
+  expect(readFileSync(join(repo,"install/zzz_autonomy_job.ts"),"utf8").split("\n"))
+    .toContain("export const INSTALLER_ACCEPTS_ANY_SLOT = true;");
 });
 
 // A-93 (lead L41427 on review-a L41367): the job's phase is the bridge token's at install, but a token rotation with no

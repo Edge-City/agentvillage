@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 JOB_NAME = "Edge — zzz event autonomy"
+RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line
 JOB_SCRIPT = "zzz_autonomy_runner.py"
 # Any of the five 5-minute phases (lead L41427, A-93): the installer arms a NEW job on the bridge token's phase, but a
 # token rotation without a re-stage must never stop a job armed on an earlier token's phase.
