@@ -27,7 +27,9 @@ snapshots stay blind to the resident's ratings.
 **Wiring** (Hermes v2026.9.24, av-vote's and av-rate's): ``ctx.register_platform_handler("telegram", factory)``; one
 ``CallbackQueryHandler`` scoped to ``^gcb:`` with ``block=False``; a pass every ``PASS_INTERVAL_S`` on PTB's job queue,
 else an asyncio task. The pass reads (at most every ``POLL_ACTIVE_S`` while a ballot is open on this box, else every
-``POLL_IDLE_S``) and then starts, advances, re-marks or ends the cards.
+``POLL_IDLE_S``) and then starts, advances, re-marks or ends the cards. A second job every ``SEND_NOW_CHECK_S`` looks
+for the control plane's send-now marker (the resident pressed "Rate in Telegram" on the web, DATA-541) and, when there
+is a fresh one, reads at once and sends past the daytime hours and an earlier Stop (``send_now_once``).
 
 **Taps**: owner only (the box's own resident in their own DM: av-vote's rule); the card's session nonce must be the
 ledger's; the save goes to the control plane; the answer is "Saved: <label>", the card's tapped button is marked, and
@@ -179,6 +181,21 @@ _in_flight: set = set()
 _last_read = {"at": 0.0}
 #: (nonce, position) -> the value the card's check shows. Memory only: a restart forgets it and re-marks from the app.
 _SHOWN: dict = {}
+#: nonce -> (page, when) of the last page this box sent (memory only): a send-now press right after a send does not
+#: post the same cards twice (a kick racing a pass or a tap sends once).
+_PAGE_SENT: dict = {}
+
+#: The send-now marker (DATA-541): the control plane writes ``$HERMES_HOME/av-godconst/send-now`` (``{"at": ISO}``,
+#: no private data; 0600 in the 0700 directory, atomically) when the resident presses "Rate in Telegram" on the web.
+#: A light check every SEND_NOW_CHECK_S claims it (one marker, one send) and sends now (``send_now_once``).
+SEND_NOW_NAME = "send-now"
+SEND_NOW_CHECK_S = 10.0
+#: A marker older than this (its `at`, else its mtime) is dropped with no send: the press was long ago.
+SEND_NOW_STALE_S = 15 * 60.0
+SEND_NOW_MAX_BYTES = 1024
+#: A page sent less than this long ago is already at the bottom of the chat: a press does not re-post it.
+REPOST_GRACE_S = 60.0
+_kick_busy = {"on": False}
 
 
 # --------------------------------------------------------------------------- env, paths, logging
@@ -627,10 +644,12 @@ async def _send_page(bot: Any, chat: str, session: dict, view: dict, page: int, 
 
 
 async def sync(bot: Any, adapter: Any, view: dict, make_button: Callable, make_markup: Callable,
-               home: Optional[str] = None, now: Optional[float] = None, tick: bool = True) -> dict:
+               home: Optional[str] = None, now: Optional[float] = None, tick: bool = True, kick: bool = False) -> dict:
     """Apply a fresh read to this box's cards: start, advance, re-mark, end, or settle. Returns code -> count; never
     raises. The caller has checked the switch; texts and values in `view` are used here and never written. `tick`:
-    a pass drives it (every send waits for village daytime); False for the reply to the resident's own tap."""
+    a pass drives it (every send waits for village daytime); False for the reply to the resident's own tap. `kick`:
+    the resident pressed "Rate in Telegram" on the web (the send-now marker, DATA-541): no daytime hold, a stopped
+    session resumes, and an open page's unrated cards are re-posted at the bottom of the chat."""
     codes: dict = {}
     stamp = time.time() if now is None else now
 
@@ -639,7 +658,7 @@ async def sync(bot: Any, adapter: Any, view: dict, make_button: Callable, make_m
 
     try:
         async with _send_lock():
-            await _sync_locked(bot, adapter, view, make_button, make_markup, home, stamp, count, tick)
+            await _sync_locked(bot, adapter, view, make_button, make_markup, home, stamp, count, tick, kick)
     except Exception:  # noqa: BLE001
         logger.warning("av-godconst: tenant=%s outcome=sync_error", tenant_id8())
         count("sync_error")
@@ -649,13 +668,14 @@ async def sync(bot: Any, adapter: Any, view: dict, make_button: Callable, make_m
 
 
 async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable, make_markup: Callable,
-                       home: Optional[str], now: float, count: Callable, tick: bool = True) -> None:
+                       home: Optional[str], now: float, count: Callable, tick: bool = True, kick: bool = False) -> None:
     with _LEDGER_LOCK:
         ledger, why = load_ledger(home)
     if why not in (None, "missing"):
         count(f"ledger_{why}")
         return
     session = ledger.get("session")
+    started = False
     # What this pass loaded: each write-back merges into the ledger as it is then (S1, `_store`).
     base = {"nonce": session.get("nonce"), "status": session.get("status")} if isinstance(session, dict) else {"nonce": None, "status": None}
     state = view["state"]
@@ -687,7 +707,7 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
         if closes is not None and now >= closes:
             count("window_over")
             return
-        if not L.in_send_window(now):  # a new ballot's first card: daytime, tick or tap
+        if not kick and not L.in_send_window(now):  # a new ballot's first card: daytime, tick or tap (a kick: any hour)
             count("waiting_daytime")
             return
         session = new_session(view, now)
@@ -707,6 +727,7 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
             return  # nothing kept: the next pass starts again
         session["header_message_id"] = header
         _store(ledger, home, now, base)
+        started = True
         count("started")
         _log("order", rule=session["order_rule"], n=len(session["order"]))
     if session["order"] != [s["id"] for s in view["statements"]]:
@@ -717,10 +738,93 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
     session["rated"] = sorted(rated)
     await _remark(bot, chat, session, view, make_button, make_markup, count)
     # The re-marks awaited: a tap may have stopped, resumed or ended the session meanwhile; the merge takes it in.
-    if not _store(ledger, home, now, base) or session["status"] != ACTIVE:
+    if not _store(ledger, home, now, base):
         return
-    await _advance(bot, chat, session, view, rated, closes, now, home, make_button, make_markup, count, tick)
+    if kick and session["status"] == STOPPED:
+        # The press overrides an earlier Stop for this send: resume, as the header's Resume button does.
+        if not _kick_resume(session, home, base, count):
+            return
+        await _edit_header(bot, chat, session, make_button, make_markup, count)
+    if session["status"] != ACTIVE:
+        if kick:
+            count(f"status_{session['status']}")
+        return
+    if kick and not started:
+        n = len(session["order"])
+        page = int(session["page"])
+        if page >= 0 and not L.page_done(page, n, rated):
+            # A page still open: its unrated cards again, as new messages at the bottom of the chat.
+            await _repost(bot, chat, session, view, rated, home, now, make_button, make_markup, count)
+            _store(ledger, home, now, base)
+            return
+        if L.next_page(page, n, rated) is None:
+            count("all_rated")  # nothing left to card; the final line stays a pass's (daytime) send
+            return
+    # A kick sends at any hour (as the reply to a tap does): the resident just asked for the cards.
+    await _advance(bot, chat, session, view, rated, closes, now, home, make_button, make_markup, count, tick and not kick)
     _store(ledger, home, now, base)
+
+
+def _kick_resume(session: dict, home: Optional[str], base: dict, count: Callable) -> bool:
+    """A send-now press on a stopped session: the ledger's status back to active (under ``_LEDGER_LOCK``, as the Resume
+    button writes it). False when the session changed meanwhile (nothing then)."""
+    with _LEDGER_LOCK:
+        disk, why = load_ledger(home)
+        current = disk.get("session") if why is None else None
+        if not isinstance(current, dict) or current.get("nonce") != session["nonce"] or current.get("status") != STOPPED:
+            count("session_changed")
+            return False
+        current["status"] = ACTIVE
+        save_ledger(disk, home)
+    session["status"] = ACTIVE
+    base["status"] = ACTIVE
+    count("resumed")
+    return True
+
+
+async def _edit_header(bot: Any, chat: str, session: dict, make_button: Callable, make_markup: Callable, count: Callable) -> None:
+    """After a kick's resume, the header's button reads Stop again (cosmetic; a failure is only counted)."""
+    if session.get("header_message_id") is None:
+        return
+    try:
+        await bot.edit_message_reply_markup(chat_id=int(chat), message_id=int(session["header_message_id"]),
+                                            reply_markup=make_markup(L.control_rows(session["nonce"], make_button, stopped=False)))
+    except Exception:  # noqa: BLE001
+        count("header_edit_failed")
+
+
+async def _repost(bot: Any, chat: str, session: dict, view: dict, rated: set, home: Optional[str], now: float,
+                  make_button: Callable, make_markup: Callable, count: Callable) -> None:
+    """A kick on an open page: its unrated cards sent again as new messages (texts from the fresh read), the ledger's
+    message ids moved to them so a re-mark targets the new cards. The old cards keep working: they carry the same
+    nonce and position. A page this box sent less than ``REPOST_GRACE_S`` ago is already at the bottom: not again."""
+    page = int(session["page"])
+    last = _PAGE_SENT.get(session["nonce"])
+    if last is not None and last[0] == page and 0 <= now - last[1] < REPOST_GRACE_S:
+        count("just_sent")
+        return
+    n = len(session["order"])
+    texts = {s["id"]: s for s in view["statements"]}
+    positions = [p for p in L.page_positions(page, n) if p not in rated]
+    for position in positions:
+        statement = texts.get(session["order"][position])
+        if statement is None:
+            count("order_mismatch")
+            return
+        submit = position == positions[-1]
+        label = view["categories"].get(statement["category"], "Other")
+        message_id = await _send(bot, chat, L.card_text(position, n, label, statement["text"]),
+                                 make_markup(L.rating_rows(session["nonce"], position, make_button, submit=submit)))
+        if message_id is None:
+            _send_failed(session, count)
+            return
+        session["cards"][str(position)] = {"message_id": message_id, "submit": submit}
+        _SHOWN[(session["nonce"], position)] = None
+        set_page_open(True, home, touch=True)
+        count("reposted")
+        await asyncio.sleep(SEND_GAP_S)
+    session["send_failures"] = 0
+    _PAGE_SENT[session["nonce"]] = (page, now)
 
 
 def _store(ledger: dict, home: Optional[str], now: Optional[float], base: dict) -> bool:
@@ -786,6 +890,7 @@ async def _advance(bot: Any, chat: str, session: dict, view: dict, rated: set, c
         if not await _send_page(bot, chat, session, view, page, rated, home, make_button, make_markup, count):
             _send_failed(session, count)
             return
+        _PAGE_SENT[session["nonce"]] = (page, now)
     if not L.page_done(page, n, rated):
         return
     nxt = L.next_page(page, n, rated)
@@ -808,6 +913,7 @@ async def _advance(bot: Any, chat: str, session: dict, view: dict, rated: set, c
         return
     if await _send_page(bot, chat, session, view, nxt, rated, home, make_button, make_markup, count):
         session["send_failures"] = 0
+        _PAGE_SENT[session["nonce"]] = (nxt, now)
         count("page_sent")
     else:
         _send_failed(session, count)
@@ -882,6 +988,128 @@ async def pass_once(bot: Any, adapter: Any, make_button: Callable, make_markup: 
     except Exception:  # noqa: BLE001 - the pass never raises into the gateway
         logger.warning("av-godconst: tenant=%s outcome=pass_error", tenant_id8())
         return "pass_error"
+
+
+# --------------------------------------------------------------------------- send now (DATA-541: "Rate in Telegram")
+
+
+def send_now_path(home: Optional[str] = None) -> str:
+    return os.path.join(state_dir(home), SEND_NOW_NAME)
+
+
+def claim_send_now(home: Optional[str] = None, now: Optional[float] = None) -> Optional[str]:
+    """Take the marker if there is one: None when there is none (the common case: one lstat), else ``"fresh"``,
+    ``"stale"`` or ``"bad_marker"``. The marker is renamed away before it is read, so one marker is one send and a
+    press made meanwhile writes a new marker (the next check's). Never raises."""
+    path = send_now_path(home)
+    if not os.path.lexists(path):
+        return None
+    stamp = time.time() if now is None else now
+    claimed = os.path.join(os.path.dirname(path), f".{SEND_NOW_NAME}.claimed")
+    try:
+        os.replace(path, claimed)  # a symlink is moved, never followed
+    except OSError:
+        try:
+            os.unlink(path)
+        except OSError:
+            return "unremovable"
+        return "bad_marker"
+    try:
+        st = os.lstat(claimed)
+        if not stat.S_ISREG(st.st_mode):
+            return "bad_marker"
+        at: Optional[float] = None
+        if st.st_size <= SEND_NOW_MAX_BYTES:
+            try:
+                fd = os.open(claimed, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+                with os.fdopen(fd, encoding="utf-8") as handle:
+                    data = json.loads(handle.read(SEND_NOW_MAX_BYTES + 1))
+                at = L.epoch_from_iso(data.get("at")) if isinstance(data, dict) else None
+            except (OSError, ValueError):
+                at = None
+        if at is None:
+            at = st.st_mtime
+        return "stale" if stamp - at > SEND_NOW_STALE_S else "fresh"
+    except OSError:
+        return "bad_marker"
+    finally:
+        try:
+            os.unlink(claimed)
+        except OSError:
+            pass
+
+
+#: The send-now outcome from sync's codes, first match wins.
+_KICK_OUTCOMES = (
+    ("started", "started"), ("resumed", "resumed"), ("reposted", "reposted"), ("page_sent", "sent"),
+    ("just_sent", "just_sent"), ("all_rated", "all_rated"), ("all_rated_on_web", "all_rated"),
+    ("ended_here", "ended"), ("ended_window", "window_over"), ("window_over", "window_over"),
+    ("status_done", "done"), ("status_undeliverable", "undeliverable"), ("send_failed", "send_failed"),
+    ("no_home_chat", "no_home_chat"), ("order_changed", "order_changed"), ("session_changed", "session_changed"),
+    ("sync_error", "sync_error"),
+)
+
+
+async def send_now_once(bot: Any, adapter: Any, make_button: Callable, make_markup: Callable, home: Optional[str] = None,
+                        now: Optional[float] = None, reader: Optional[Callable] = None) -> Optional[str]:
+    """The light check (every ``SEND_NOW_CHECK_S``): when the send-now marker is there, claim it and send now. Returns
+    None when there was no marker (or a check is running), else the outcome code, logged as
+    ``outcome=send_now_<code>``. Never raises.
+
+    A fresh marker with the ballot on forces a read through the control plane (the poll's ``not_due`` bypassed) and
+    syncs as a kick: a pool open with no session starts at any hour; a stopped session resumes; an open page's
+    unrated cards are re-posted at the bottom; the next page goes if the current one is rated. Everything rated, done,
+    submitted, closed, not a participant or no pool: nothing new is sent. The send lock and the ledger lock are the
+    pass's own, so a press racing a pass or a tap sends once."""
+    if _kick_busy["on"] or not os.path.lexists(send_now_path(home)):
+        return None
+    _kick_busy["on"] = True
+    stamp = time.time() if now is None else now
+    try:
+        outcome = await _send_now(bot, adapter, make_button, make_markup, home, stamp, reader)
+    except Exception:  # noqa: BLE001 - never raises into the gateway
+        outcome = "error"
+    finally:
+        _kick_busy["on"] = False
+    if outcome == "none":  # claimed by someone else between the look and the claim
+        return None
+    _log(f"send_now_{outcome}")
+    return outcome
+
+
+async def _send_now(bot: Any, adapter: Any, make_button: Callable, make_markup: Callable, home: Optional[str],
+                    stamp: float, reader: Optional[Callable]) -> str:
+    claim = claim_send_now(home, stamp)
+    if claim is None:
+        return "none"
+    if claim != "fresh":
+        return claim
+    if not ballot_on(home):
+        return "off"
+    with _LEDGER_LOCK:
+        ledger, why = load_ledger(home)
+    if why not in (None, "missing"):
+        return f"ledger_{why}"
+    session = ledger.get("session")
+    _last_read["at"] = stamp  # this read stands for the pass's next one
+    reply = await asyncio.to_thread(reader or cp_call, "read", {}, home)
+    if not reply.ok:
+        if session is not None and REFUSAL_STATUS.get(reply.code) == "withdrawn":
+            end_session(ledger, "withdrawn", home, stamp)
+        _log("read_failed", code=reply.code)
+        return "read_failed"
+    view = L.valid_view(reply.data)
+    if view is None:
+        return "bad_shape"
+    codes = await sync(bot, adapter, view, make_button, make_markup, home, stamp, tick=False, kick=True)
+    if view["state"] != "open":
+        return view["state"]
+    if "resumed" in codes and not ("reposted" in codes or "page_sent" in codes or "card_sent" in codes):
+        codes.pop("resumed")  # resumed, but nothing to send: the reason is the outcome
+    for code, outcome in _KICK_OUTCOMES:
+        if code in codes:
+            return outcome
+    return "nothing"
 
 
 # --------------------------------------------------------------------------- the tap
@@ -1007,8 +1235,14 @@ def make_handler(adapter: Any = None, *, make_button: Callable, make_markup: Cal
                 ledger, why = load_ledger(home)
                 fresh = ledger.get("session") if why is None else None
                 if fresh is not None and fresh.get("nonce") == session["nonce"]:
-                    if str(position) in fresh["cards"]:
+                    card = fresh["cards"].get(str(position))
+                    if isinstance(card, dict) and str(card.get("message_id")) == str(getattr(message, "message_id", "")):
                         _SHOWN[(fresh["nonce"], position)] = value
+                    else:
+                        # A tap on an older copy of a re-posted card (send-now, DATA-541): it saved like any card (same
+                        # nonce and position), but the ledger's card is the newer message, which still shows the old
+                        # check: forget what it shows, so the next read re-marks it.
+                        _SHOWN.pop((fresh["nonce"], position), None)
                     fresh["rated"] = sorted(L.rated_positions(fresh["order"], ratings))
                     save_ledger(ledger, home)
                     session = fresh
@@ -2312,28 +2546,38 @@ def _wire_telegram(application: Any, adapter: Any) -> None:
         await elicit_pass_once(application.bot, adapter, make_button, make_markup)
         await thor_pass_once(application.bot, adapter, make_button, make_markup)
 
+    async def kick(*_: Any) -> None:
+        # The send-now marker (DATA-541): one lstat when there is none; never raises.
+        await send_now_once(application.bot, adapter, make_button, make_markup)
+
+    _schedule(application, tick, PASS_INTERVAL_S, 10.0, "av-godconst-pass")
+    _schedule(application, kick, SEND_NOW_CHECK_S, 5.0, "av-godconst-send-now")
+
+
+def _schedule(application: Any, job: Callable, interval: float, first: float, name: str) -> None:
+    """`job` every `interval` s on PTB's job queue, else an asyncio loop task."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         job_queue = getattr(application, "job_queue", None)
     if job_queue is not None and callable(getattr(job_queue, "run_repeating", None)):
         try:
-            job_queue.run_repeating(tick, interval=PASS_INTERVAL_S, first=10.0, name="av-godconst-pass")
-            logger.info("av-godconst: pass on the job queue every %ss", int(PASS_INTERVAL_S))
+            job_queue.run_repeating(job, interval=interval, first=first, name=name)
+            logger.info("av-godconst: %s on the job queue every %ss", name, int(interval))
             return
         except Exception:  # noqa: BLE001
-            logger.info("av-godconst: job queue refused; using a loop task")
+            logger.info("av-godconst: job queue refused %s; using a loop task", name)
 
     async def loop() -> None:
-        await asyncio.sleep(10.0)
+        await asyncio.sleep(first)
         while True:
-            await tick()
-            await asyncio.sleep(PASS_INTERVAL_S)
+            await job()
+            await asyncio.sleep(interval)
 
     try:
-        asyncio.get_running_loop().create_task(loop(), name="av-godconst-pass")
-        logger.info("av-godconst: pass on a loop task every %ss", int(PASS_INTERVAL_S))
+        asyncio.get_running_loop().create_task(loop(), name=name)
+        logger.info("av-godconst: %s on a loop task every %ss", name, int(interval))
     except RuntimeError:
-        logger.warning("av-godconst: no running loop at wire time; cards advance on taps only")
+        logger.warning("av-godconst: no running loop at wire time; %s runs on taps only", name)
 
 
 def register(ctx: Any) -> None:
@@ -2361,7 +2605,7 @@ def register(ctx: Any) -> None:
 __all__ = [
     "Reply", "ballot_on", "cp_call", "cp_origin", "elicit_on", "elicit_pass_once", "home_chat_id", "is_owner_tap",
     "ledger_path", "load_elicit_ledger", "load_ledger", "make_elicit_handler", "make_handler", "mark_keyboard",
-    "new_session", "pass_once", "register", "save_ledger", "sync",
+    "new_session", "pass_once", "register", "save_ledger", "send_now_once", "sync",
     "load_thor_ledger", "make_thor_handler", "save_thor_ledger", "thor_active", "thor_cp_call", "thor_key",
     "thor_pass_once",
 ]
