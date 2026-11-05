@@ -405,6 +405,21 @@ def test_cards_first_a_pending_opener_no_longer_holds_the_cards(plugin, elicit):
     assert not hasattr(plugin, "opener_pending")
 
 
+def test_the_card_set_is_the_apps_read_not_the_files_list(plugin, elicit):
+    """The control plane's file lists every pool id; the app's read returns at most 10 (whole pairs). Only what the
+    read returns is shown, so a resident never sees more than the app's cap."""
+    bot, server = Bot(), Server(plugin, n=10)
+    write_trigger(elicit, ids=[f"s{i:03d}" for i in range(1, 31)])
+    assert pass_(plugin, bot, server) == "sent"
+    assert len(ledger(elicit)["session"]["order"]) == 10
+    for page in range(5):
+        a, b = bot.cards()[-2:]
+        tap(plugin, server, a, 3)
+        tap(plugin, server, b, 4)
+    assert len(bot.cards()) == 10 and [card_no(c) for c in bot.cards()] == list(range(1, 11))
+    assert bot.sent[-1].text == DONE and released(elicit) == EID
+
+
 def test_all_rated_releases_the_opener(plugin, elicit):
     bot, server = Bot(), Server(plugin)
     write_trigger(elicit)

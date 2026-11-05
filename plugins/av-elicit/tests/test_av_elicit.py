@@ -406,6 +406,21 @@ def test_a_held_opener_does_not_age_and_its_cap_counts_from_the_release(plugin, 
     assert plugin.inject_pass(ctx, now=NOON + 21 * 3600) == "injected" and len(ctx.calls) == 1
 
 
+def test_an_opener_held_23_hours_behind_the_cards_is_still_injected_after_release(plugin, home, db, cards_on):
+    """cp PR #559's case: the opener's name is claimed just before the cards file is written; held ~23 h, then
+    released, it must still go (time held never counts toward the 24 h age cap)."""
+    db.session("s-dm")
+    staged = NOON - 23 * 3600
+    stage(home, "open", OPENER, staged)
+    cards_file(home, staged)  # expires 24 h after the claim
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON - 60) == "held_elicit_cards"
+    release(home, at=NOON - 30)
+    # 25 h after the name's unix_ms: past the old cap, still injected.
+    assert plugin.inject_pass(ctx, now=NOON + 2 * 3600) == "injected" and len(ctx.calls) == 1
+    assert names(home, ".skipped") == []
+
+
 def test_a_freed_opener_still_ages_from_the_release(plugin, home, db, cards_on):
     db.session("s-dm")
     staged = NOON - 60
