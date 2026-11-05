@@ -72,6 +72,13 @@ CARDS_HOLD_MAX_S = 48 * 3600
 CARDS_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 CARDS_STATEMENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 CARDS_STATEMENTS_MAX = 500
+#: Cards first: the line appended to an opener that was held behind the cards, by how much the human rated. The
+#: control plane's opener instructions branch on these exact sentences; never a rating value or a statement text.
+CARDS_RATED_LINES = {
+    "all": "Your human just rated all of the private rating cards (you cannot see the ratings).",
+    "some": "Your human just rated some of the private rating cards (you cannot see the ratings).",
+    "none": "Your human did not rate the private rating cards.",
+}
 QUIET_START_HOUR = 22
 QUIET_END_HOUR = 8
 
@@ -313,10 +320,12 @@ def _positive_int(value: Any) -> bool:
 
 
 def cards_hold(home: Optional[str] = None, now: Optional[float] = None) -> Optional[dict]:
-    """Cards first: ``{"window_ms", "held", "freed_at"}`` for the cards file, or None when nothing can hold
+    """Cards first: ``{"window_ms", "held", "freed_at", "rated"}`` for the cards file, or None when nothing can hold
     (the switch is not exactly ``1``; the file missing, not a regular file, malformed, or expiring more than
     ``CARDS_HOLD_MAX_S`` ahead). ``held`` while unexpired and not released; ``freed_at`` is the release
-    file's mtime (released) or the expiry (expired), the start of the opener's age cap."""
+    file's mtime (released) or the expiry (expired), the start of the opener's age cap. ``rated`` (``all``,
+    ``some``, ``none``) comes from the release line ``<elicitation_id> <rated>``; a bare id, an unknown word or
+    an expiry with no release is ``none``."""
     if env(CARDS_SWITCH_ENV, home) != "1":
         return None
     stamp = time.time() if now is None else now
@@ -346,11 +355,13 @@ def cards_hold(home: Optional[str] = None, now: Optional[float] = None) -> Optio
         _log_cards("cards_file_too_far", home)
         return None
     raw, _ = _read_regular(cards_released_path(home), 256)
-    if raw is not None and raw.strip() == eid:
-        return {"window_ms": window, "held": False, "freed_at": _mtime(cards_released_path(home)) or stamp}
+    words = raw.split() if raw is not None else []
+    if words and words[0] == eid:
+        rated = words[1] if len(words) == 2 and words[1] in CARDS_RATED_LINES else "none"
+        return {"window_ms": window, "held": False, "freed_at": _mtime(cards_released_path(home)) or stamp, "rated": rated}
     if stamp * 1000.0 >= expires:
-        return {"window_ms": window, "held": False, "freed_at": expires / 1000.0}
-    return {"window_ms": window, "held": True, "freed_at": None}
+        return {"window_ms": window, "held": False, "freed_at": expires / 1000.0, "rated": "none"}
+    return {"window_ms": window, "held": True, "freed_at": None, "rated": None}
 
 
 def _cards_opener(name: str, cards: Optional[dict]) -> bool:
@@ -1193,6 +1204,10 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         _rename_now(claimed, ".skipped", home, stamp)
         _log("skipped", logging.WARNING, reason=code if raw is None else "invalid_inject")
         return "skipped_invalid"
+    if _cards_opener(fresh[0], cards) and cards.get("rated") in CARDS_RATED_LINES:
+        # An opener freed from behind the cards: one line on how much the human rated (a class, never a value).
+        text = text.rstrip("\n") + "\n" + CARDS_RATED_LINES[cards["rated"]]
+        _log("cards_rated_line", rated=cards["rated"])
     try:
         accepted = bool(inject_fn(text, session_key=key))
     except Exception as exc:  # noqa: BLE001

@@ -380,9 +380,13 @@ def elicit_card_text(text: str) -> str:
     return _esc([god_agent_text(text), "", SCALE_LINE])
 
 
+#: Cards first (DATA-547): the end lines say what comes next, the agent's questions (Amita, 5 Nov 2026).
+ELICIT_NEXT = "Next, your agent will share a few tough calls a god agent might face."
+
+
 def elicit_done_text() -> str:
-    return _esc(["All rated. Thank you!"])
+    return _esc([f"All rated. Thank you! {ELICIT_NEXT}"])
 
 
 def elicit_stopped_text() -> str:
-    return _esc(["Stopped. The ratings you gave are kept."])
+    return _esc([f"Stopped. The ratings you gave are kept. {ELICIT_NEXT}"])

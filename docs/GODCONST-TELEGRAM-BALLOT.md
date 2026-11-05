@@ -413,7 +413,9 @@ av-elicit opener no longer holds the cards (it did before cards first); the open
 
 **Cards first (DATA-547).** av-elicit holds its window's opener while `AV_GODCONST_ELICIT_CARDS` is exactly `1`,
 this file is valid and unexpired, and `$HERMES_HOME/av-events/godconst/cards-released` does not name its
-`elicitation_id`. This plugin writes that file (one line, the elicitation id; temp file and rename, 0600, in a 0700
+`elicitation_id`. This plugin writes that file (one line, `<elicitation_id> <all|some|none>`: how much was rated,
+`all` every card still in the window, `some` at least one, `none` nothing; a class, never a value; temp file and
+rename, 0600, in a 0700
 directory; idempotent, re-written by later passes if a write is lost) when the cards session for that id is:
 
 - done: every statement rated (or dropped), with the thank-you line;
@@ -424,7 +426,14 @@ directory; idempotent, re-written by later passes if a write is lost) when the c
   send). The session stays: the cards remain tappable and the next pair still follows a rated one, but a released
   session no longer keeps the page-open marker, so the agent's questions are not held behind it.
 
-The file's expiry releases too (av-elicit's side), so the opener never waits forever. With the switch off on the box,
+The file's expiry releases too (av-elicit's side, as `none`), so the opener never waits forever. A bare id (the
+first cut's format) reads as `none`. When av-elicit injects the opener it held, it appends one line after the
+notice, byte-exact (the control plane's opener instructions branch on it):
+`all`: `Your human just rated all of the private rating cards (you cannot see the ratings).`;
+`some`: `Your human just rated some of the private rating cards (you cannot see the ratings).`;
+`none`: `Your human did not rate the private rating cards.`.
+Nothing is appended when no cards file applied (switch off, no valid file, another window).
+A tombstone keeps the class (`rated`), so a lost release write is made good with it. With the switch off on the box,
 av-elicit never holds. The ledger keeps `last_activity_at` (epoch seconds) and `released` per session.
 
 **Flow.** On the plugin's 60 s pass (after the ballot's pass, each never raising):
@@ -450,7 +459,8 @@ av-elicit never holds. The ledger keeps `last_activity_at` (epoch seconds) and `
    to re-load the ledger, merge the rated position into the session that still has the tap's nonce (a session ended
    or replaced meanwhile is never brought back), save, and advance.
 4. When the current pair needs nothing more, the next pair goes at once (the reply to the resident's tap, any hour).
-   When every statement is rated, one line: `All rated. Thank you!` The session stays (status
+   When every statement is rated, one line: `All rated. Thank you! Next, your agent will share a few tough calls a
+   god agent might face.` The session stays (status
    `done`): re-taps keep saving as revisions until expiry or withdrawal, nothing more is sent, and the page-open
    marker is removed.
 5. A save refused `422 unknown_statement` is final for that statement only: the answer is `This statement is no
@@ -474,7 +484,7 @@ the elicitation never restarts and later taps answer `This rating has closed.` w
 | `expires_ms` passed | the pass or a tap | `expired` |
 | A file for another elicitation | the pass or a tap | `replaced` (the new one may then start) |
 | A final refusal of the read or a save | the pass or a tap | `refused` |
-| Stop on the header | a tap | `stopped` (the header's button goes; one line confirms; saved ratings stay) |
+| Stop on the header | a tap | `stopped` (the header's button goes; one line confirms: `Stopped. The ratings you gave are kept. Next, your agent will share a few tough calls a god agent might face.`; saved ratings stay) |
 | The participant's order of the shown ids changed | the pass or a tap | `order_changed` |
 | Every listed statement rated before the start / none listed in the read | the pass | `all_rated` / `empty` (nothing sent) |
 | Three failed sends in a row (header included) | the pass or a tap | `undeliverable` |

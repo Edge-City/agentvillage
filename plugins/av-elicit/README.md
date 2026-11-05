@@ -49,10 +49,17 @@ plugins/av-elicit/
    (av-godconst's own checks: a regular own file, not group or world writable, not followed through a link,
    `elicitation_id` and `pool_id` uuids, 1 to 500 unique statement ids, `window_ms` and `expires_ms` positive
    integers, expiring at most 48 h ahead), that file is unexpired, and `av-events/godconst/cards-released` does not
-   hold that `elicitation_id` (one line): hold (`held_elicit_cards`). av-godconst writes the release when the cards
+   hold that `elicitation_id` (one line, `<elicitation_id> <all|some|none>`; a bare id reads as `none`): hold
+   (`held_elicit_cards`). av-godconst writes the release when the cards
    for that id are all rated, stopped, ended (any tombstone) or idle for 3 h (no card sent, no tap). The file's
    expiry releases too. The switch off, the file missing or malformed, or another window's opener: no hold, so
    the opener can never wait forever. Follow-ups (`next`, `replan`) are never held by the cards.
+   When the opener freed from this hold is injected, one line is appended after the notice (byte-exact; the
+   control plane's instructions branch on it; an expiry with no release is `none`):
+   `all`: `Your human just rated all of the private rating cards (you cannot see the ratings).`;
+   `some`: `Your human just rated some of the private rating cards (you cannot see the ratings).`;
+   `none`: `Your human did not rate the private rating cards.`.
+   Nothing is appended when no cards file applied.
 6. No session key (`AV_ELICIT_SESSION_KEY`, else `agent:main:telegram:dm:<TELEGRAM_HOME_CHANNEL>`): wait.
 7. No row in `state.db` `sessions` with `source='telegram'` and that `session_key`: wait (the gateway can
    inject only into a session it can look up; one exists after the human's first message to the bot).

@@ -421,6 +421,60 @@ def test_an_opener_held_23_hours_behind_the_cards_is_still_injected_after_releas
     assert names(home, ".skipped") == []
 
 
+RATED_LINES = {
+    "all": "Your human just rated all of the private rating cards (you cannot see the ratings).",
+    "some": "Your human just rated some of the private rating cards (you cannot see the ratings).",
+    "none": "Your human did not rate the private rating cards.",
+}
+OPENER_BODY = OPENER.split("\n", 1)[1]
+
+
+@pytest.mark.parametrize("line,rated", [(CARDS_EID + " all", "all"), (CARDS_EID + " some", "some"),
+                                        (CARDS_EID + " none", "none"), (CARDS_EID, "none"),
+                                        (CARDS_EID + " most", "none")])
+def test_a_freed_opener_says_how_much_was_rated(plugin, home, db, cards_on, line, rated):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60)
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON) == "held_elicit_cards"
+    release(home, eid=line)
+    assert plugin.inject_pass(ctx, now=NOON + 60) == "injected"
+    assert ctx.calls[0][0] == OPENER_BODY + "\n" + RATED_LINES[rated]
+    assert plugin.CARDS_RATED_LINES == RATED_LINES  # byte-exact: the control plane branches on these
+
+
+def test_an_expired_cards_file_with_no_release_says_none(plugin, home, db, cards_on):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60, expires_s=NOON)
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON) == "injected"
+    assert ctx.calls[0][0] == OPENER_BODY + "\n" + RATED_LINES["none"]
+
+
+def test_nothing_is_appended_without_a_cards_file_for_this_window(plugin, home, db, monkeypatch):
+    db.session("s-dm")
+    ctx = Ctx()
+    stage(home, "open", OPENER, NOON - 600)  # no cards file
+    assert plugin.inject_pass(ctx, now=NOON) == "injected"
+    cards_file(home, NOON - 6000)
+    release(home, eid=CARDS_EID + " all")
+    stage(home, "open", OPENER, NOON - 60)  # another window's opener, switch on
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "1")
+    assert plugin.inject_pass(ctx, now=NOON + 1) == "injected"
+    cards_file(home, NOON - 30)
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "0")  # the cards switch off
+    stage(home, "open", OPENER, NOON - 30)
+    assert plugin.inject_pass(ctx, now=NOON + 2) == "injected"
+    cards_file(home, NOON - 6000)
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "1")
+    stage(home, "next", NEXT_IDLE, NOON)  # a follow-up of the cards' window
+    assert plugin.inject_pass(ctx, now=NOON + 3) == "injected"
+    assert len(ctx.calls) == 4
+    assert all(not any(line in text for line in RATED_LINES.values()) for text, _ in ctx.calls)
+
+
 def test_a_freed_opener_still_ages_from_the_release(plugin, home, db, cards_on):
     db.session("s-dm")
     staged = NOON - 60

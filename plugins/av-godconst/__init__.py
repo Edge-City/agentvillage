@@ -1259,8 +1259,23 @@ def read_elicit_trigger(home: Optional[str] = None) -> tuple:
     return (trigger, None) if trigger is not None else (None, "bad_shape")
 
 
-def cards_released_for(home: Optional[str] = None) -> Optional[str]:
-    """The elicitation id in ``cards-released``, or None (missing, not a regular file, unreadable)."""
+#: How much of the cards the resident rated, said in the release line (a class, never a value).
+RATED_CLASSES = ("all", "some", "none")
+
+
+def rated_class(session: Optional[dict]) -> str:
+    """``all`` (every card still in the window rated), ``some`` (at least one), else ``none``."""
+    if not isinstance(session, dict):
+        return "none"
+    rated = set(session.get("rated", []))
+    if not rated:
+        return "none"
+    live = set(range(len(session.get("order", [])))) - set(session.get("dropped", []))
+    return "all" if live <= rated else "some"
+
+
+def cards_released_line(home: Optional[str] = None) -> Optional[str]:
+    """The line in ``cards-released`` (``<elicitation_id> <all|some|none>``), or None."""
     path = cards_released_path(home)
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -1280,11 +1295,21 @@ def cards_released_for(home: Optional[str] = None) -> Optional[str]:
         return None
 
 
-def release_cards(elicitation_id: str, reason: str, home: Optional[str] = None) -> bool:
-    """Write ``cards-released`` = `elicitation_id` (temp file and rename, 0600, in a 0700 directory) unless it already
-    says so. Idempotent and never raises: a failed write is logged and made good by a later pass. True when the file
-    names this id afterwards."""
-    if cards_released_for(home) == elicitation_id:
+def cards_released_for(home: Optional[str] = None) -> Optional[str]:
+    """The elicitation id in ``cards-released``, or None (missing, not a regular file, unreadable)."""
+    line = cards_released_line(home)
+    return line.split()[0] if line else None
+
+
+def release_cards(elicitation_id: str, reason: str, home: Optional[str] = None, rated: str = "none") -> bool:
+    """Write ``cards-released`` = ``<elicitation_id> <rated>`` (temp file and rename, 0600, in a 0700 directory)
+    unless it already says so; `rated` is ``all``, ``some`` or ``none`` (av-elicit tells the agent which, never a
+    value). Idempotent and never raises: a failed write is logged and made good by a later pass. True when the file
+    says this afterwards."""
+    if rated not in RATED_CLASSES:
+        rated = "none"
+    line = f"{elicitation_id} {rated}"
+    if cards_released_line(home) == line:
         return True
     path = cards_released_path(home)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -1292,7 +1317,7 @@ def release_cards(elicitation_id: str, reason: str, home: Optional[str] = None) 
         os.makedirs(os.path.dirname(path), mode=DIR_MODE, exist_ok=True)
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), FILE_MODE)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(elicitation_id + "\n")
+            handle.write(line + "\n")
         os.chmod(tmp, FILE_MODE)
         os.replace(tmp, path)
     except OSError:
@@ -1302,7 +1327,7 @@ def release_cards(elicitation_id: str, reason: str, home: Optional[str] = None) 
             pass
         _log("elicit_release_unwritable", reason=reason)
         return False
-    _log("elicit_cards_released", reason=reason)
+    _log("elicit_cards_released", reason=reason, rated=rated)
     return True
 
 
@@ -1387,13 +1412,20 @@ def elicit_ended(ledger: dict, elicitation_id: Optional[str] = None, nonce: Opti
 
 
 def _tombstone(ledger: dict, elicitation_id: str, nonce: Optional[str], status: str, now: float,
-               home: Optional[str] = None) -> None:
-    """Record the ending; any ending releases av-elicit's opener for this elicitation."""
+               home: Optional[str] = None, rated: str = "none") -> None:
+    """Record the ending (with how much was rated: all, some, none); any ending releases av-elicit's opener."""
     ended = [e for e in ledger.get("ended") or () if isinstance(e, dict) and e.get("elicitation_id") != elicitation_id]
-    ended.append({"elicitation_id": elicitation_id, "nonce": nonce, "status": status, "at": now_iso(now)})
+    ended.append({"elicitation_id": elicitation_id, "nonce": nonce, "status": status, "at": now_iso(now), "rated": rated})
     ledger["ended"] = ended[-ELICIT_ENDED_MAX:]
     ledger.pop("start_failures", None)
-    release_cards(elicitation_id, "stopped" if status == "stopped" else "ended", home)
+    release_cards(elicitation_id, "stopped" if status == "stopped" else "ended", home, rated)
+
+
+def _tombstone_rated(ledger: dict, elicitation_id: str) -> str:
+    for item in ledger.get("ended") or ():
+        if isinstance(item, dict) and item.get("elicitation_id") == elicitation_id and item.get("rated") in RATED_CLASSES:
+            return item["rated"]
+    return "none"
 
 
 def end_elicit(ledger: dict, status: str, home: Optional[str] = None, now: Optional[float] = None) -> bool:
@@ -1403,7 +1435,7 @@ def end_elicit(ledger: dict, status: str, home: Optional[str] = None, now: Optio
         return False
     stamp = time.time() if now is None else now
     ledger["session"] = None
-    _tombstone(ledger, session["elicitation_id"], session.get("nonce"), status, stamp, home)
+    _tombstone(ledger, session["elicitation_id"], session.get("nonce"), status, stamp, home, rated_class(session))
     save_elicit_ledger(ledger, home)
     set_elicit_page_open(False, home)
     _log("elicit_ended", status=status)
@@ -1449,7 +1481,7 @@ def _elicit_release_due(ledger: dict, session: dict, home: Optional[str], now: f
     elicitation lock. Returns the reason released now, or None."""
     eid = session["elicitation_id"]
     if session.get("released") is True:
-        release_cards(eid, "done" if session.get("status") != ACTIVE else "idle", home)
+        release_cards(eid, "done" if session.get("status") != ACTIVE else "idle", home, rated_class(session))
         return None
     if session.get("status") != ACTIVE:
         reason = "done"
@@ -1466,7 +1498,7 @@ def _elicit_release_due(ledger: dict, session: dict, home: Optional[str], now: f
         reason = "idle"
     session["released"] = True
     save_elicit_ledger(ledger, home)
-    release_cards(eid, reason, home)
+    release_cards(eid, reason, home, rated_class(session))
     set_elicit_page_open(False, home)
     return reason
 
@@ -1557,7 +1589,7 @@ async def _elicit_advance(bot: Any, chat: str, session: dict, cards: list, ledge
         _log("elicit_all_rated")
     if session.get("released") is not True:
         session["released"] = True
-        release_cards(session["elicitation_id"], "done", home)
+        release_cards(session["elicitation_id"], "done", home, rated_class(session))
     save_elicit_ledger(ledger, home)
     set_elicit_page_open(False, home)
 
@@ -1621,7 +1653,8 @@ async def _elicit_pass_locked(bot: Any, adapter: Any, make_button: Callable, mak
         if _expired(trigger["expires_ms"], stamp):
             return "expired"
         if elicit_ended(ledger, elicitation_id=trigger["elicitation_id"]):
-            release_cards(trigger["elicitation_id"], "ended", home)  # idempotent: a lost write is made good
+            # Idempotent: a lost write is made good, with the class the tombstone kept.
+            release_cards(trigger["elicitation_id"], "ended", home, _tombstone_rated(ledger, trigger["elicitation_id"]))
             return "ended_here"
     elif session["status"] != ACTIVE:
         return "idle"  # all rated: re-taps still save; nothing more is sent
@@ -1652,7 +1685,7 @@ async def _elicit_pass_locked(bot: Any, adapter: Any, make_button: Callable, mak
         eid = trigger["elicitation_id"]
         if not cards or all(c["saved"] is not None for c in cards):
             status = "empty" if not cards else "all_rated"
-            _tombstone(ledger, eid, None, status, stamp, home)
+            _tombstone(ledger, eid, None, status, stamp, home, "all" if status == "all_rated" else "none")
             save_elicit_ledger(ledger, home)
             _log("elicit_not_started", status=status)
             return status
