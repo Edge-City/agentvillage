@@ -83,7 +83,7 @@ class StateDb:
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    for name in ("AV_ELICIT_SESSION_KEY", "TELEGRAM_HOME_CHANNEL"):
+    for name in ("AV_ELICIT_SESSION_KEY", "TELEGRAM_HOME_CHANNEL", "AV_GODCONST_ELICIT_CARDS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", OWNER)
     return tmp_path

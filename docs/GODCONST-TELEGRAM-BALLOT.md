@@ -296,7 +296,8 @@ Each page sent touches the marker (refreshes its mtime). At plugin start it is r
 unless a sent page has unrated cards inside an open window, so a crash or a restart never leaves it stale. The
 av-elicit plugin (GC-ELICIT, overlay PR #478) ignores a marker older than 12 h, and otherwise holds its opener while the file exists, so the agent's invitation to
 talk never lands in the middle of a pair. B7's control-plane path (the opener after a submit) is unaffected: a
-Telegram submit runs the same after-submit hook as the page's.
+Telegram submit runs the same after-submit hook as the page's. The elicitation cards (section 11) have a second,
+stronger hold on the opener of their own window (`cards-released`, section 11 "Cards first").
 
 The non-voter elicitation cards (section 11) share this one marker. Each mode decides only for itself and the marker
 is removed only when neither mode has an open page: the ballot mode's writes consult the elicitation ledger, and the
@@ -387,7 +388,8 @@ and call `residentOrder`, so both surfaces share one code path.
 
 A second, independent mode of the same plugin (overlay branch `feat/av-godconst-nv-cards`, plugin 0.2.0; app side
 draft app#601). After a non-voter's elicitation window (`prior_ballot = false`, opener `v4-nv`) has settled, the box
-offers the window's statements as rating cards. The ratings land in the app's `godconst_elicitation_ratings` (keyed
+offers the window's statements as rating cards. Since cards first (DATA-547, 5 Nov 2026) the cards come BEFORE the
+agent's questions: see "Cards first" below. The ratings land in the app's `godconst_elicitation_ratings` (keyed
 to the window), never on the official ballot. The ballot mode's state is only read (to hold, see below), never
 written, and its routes are never called.
 
@@ -398,26 +400,51 @@ like `AV_GODCONST_BALLOT`). The control plane writes it with `AV_GODCONST_BALLOT
 (av-approval custody, unchanged).
 
 **Trigger.** The control plane writes `$HERMES_HOME/av-events/godconst/elicit-cards.json` =
-`{"elicitation_id", "pool_id", "window_ms", "statement_ids": [...], "expires_ms"}` atomically at the window's close
-(24 h expiry) and removes it on withdrawal. The file is opened `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and checked on the
+`{"elicitation_id", "pool_id", "window_ms", "statement_ids": [...], "expires_ms"}` atomically, before it stages the
+window's opener `inject/<window_ms>-open.txt` (24 h expiry; cards first), and removes it on withdrawal. The file is opened `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and checked on the
 open descriptor: a regular file, owned by the box user, not group- or world-writable, at most 64 KiB, of that shape.
 The page is shown only when it passes, `now < expires_ms`, its elicitation has no tombstone here, and:
 
-- no av-elicit opener is pending (any `$HERMES_HOME/av-events/elicit/inject/*.txt` or `*.sending`; a listing that
-  fails counts as pending and logs `inject_list_failed`);
 - the ballot mode is not busy: no ballot page open and no ballot session `active` inside its window (a stopped,
   finished or ended ballot does not hold).
 
-Both holds apply to every elicitation send, the pass's and the one after a tap, and end nothing.
+The hold applies to every elicitation send, the pass's and the one after a tap, and ends nothing. A pending
+av-elicit opener no longer holds the cards (it did before cards first); the opener waits for the cards instead.
+
+**Cards first (DATA-547).** av-elicit holds its window's opener while `AV_GODCONST_ELICIT_CARDS` is exactly `1`,
+this file is valid and unexpired, and `$HERMES_HOME/av-events/godconst/cards-released` does not name its
+`elicitation_id`. This plugin writes that file (one line, `<elicitation_id> <all|some|none>`: how much was rated,
+`all` every card still in the window, `some` at least one, `none` nothing; a class, never a value; temp file and
+rename, 0600, in a 0700
+directory; idempotent, re-written by later passes if a write is lost) when the cards session for that id is:
+
+- done: every statement rated (or dropped), with the thank-you line;
+- stopped: Stop on the header;
+- ended: any tombstone (withdrawn, expired, replaced, refused, order changed, all rated or empty before the start,
+  undeliverable);
+- idle: no card sent and no tap for 3 h (`CARDS_HOLD_IDLE_S`) after the last send or tap (the header counts as a
+  send). The session stays: the cards remain tappable and the next pair still follows a rated one, but a released
+  session no longer keeps the page-open marker, so the agent's questions are not held behind it.
+
+The file's expiry releases too (av-elicit's side, as `none`), so the opener never waits forever. A bare id (the
+first cut's format) reads as `none`. When av-elicit injects the opener it held, it appends one line after the
+notice, byte-exact (the control plane's opener instructions branch on it):
+`all`: `Your human just rated all of the private rating cards (you cannot see the ratings).`;
+`some`: `Your human just rated some of the private rating cards (you cannot see the ratings).`;
+`none`: `Your human did not rate the private rating cards.`.
+Nothing is appended when no cards file applied (switch off, no valid file, another window).
+A tombstone keeps the class (`rated`), so a lost release write is made good with it. With the switch off on the box,
+av-elicit never holds. The ledger keeps `last_activity_at` (epoch seconds) and `released` per session.
 
 **Flow.** On the plugin's 60 s pass (after the ballot's pass, each never raising):
 
 1. Not started and eligible, in village daytime (08:00 to 21:30 IST, the ballot header's rule): read
    `POST /tenants/<own>/godconst/elicitation-cards` `{elicitation_id}` -> `{statements: [{statement_id, text,
    origin, saved_rating|null}]}`. Nothing is sent before a read succeeds. The read's order (the participant's) is
-   kept; only ids in the file's `statement_ids` are shown; `origin` is dropped (blind cards). Then a short header
-   headed `Optional follow-up: rate rules for a god agent`, one line (skip any, only the research team
-   sees the ratings) and the five labels; no
+   kept; only ids in the file's `statement_ids` are shown; `origin` is dropped (blind cards). Then a short header,
+   now the first message of the elicitation the resident sees, headed `Help shape the god agents for future Edge City
+   popup villages: rate a few rules (optional)`, one line (skip any, only the research team sees the ratings) and the
+   five labels; no count or number, no
    expiry time (the file's `expires_ms` is the box's offer window, not a deadline the app enforces), no reminders, no
    Submit, with one button, `Stop these cards`.
 2. Cards two at a time (the statement text, every `ODIN` shown as `the god agent` (display only: stored text, ids and
@@ -432,14 +459,14 @@ Both holds apply to every elicitation send, the pass's and the one after a tap, 
    to re-load the ledger, merge the rated position into the session that still has the tap's nonce (a session ended
    or replaced meanwhile is never brought back), save, and advance.
 4. When the current pair needs nothing more, the next pair goes at once (the reply to the resident's tap, any hour).
-   When every statement is rated, one line: `All rated. Thank you!` The session stays (status
+   When every statement is rated, one line: `All rated. Thank you! Next, your agent will share a few tough calls a
+   god agent might face.` The session stays (status
    `done`): re-taps keep saving as revisions until expiry or withdrawal, nothing more is sent, and the page-open
    marker is removed.
 5. A save refused `422 unknown_statement` is final for that statement only: the answer is `This statement is no
    longer available.`, its card's buttons go, and it counts as done for advancing (`dropped` in the ledger). A
    statement the read no longer returns is dropped the same way.
-6. The pass reads again only when something is due (a card whose send failed, a pair held by a pending opener, a busy
-   ballot or night). A temporary read failure waits 5 minutes and retries until expiry. Three failed sends in a row,
+6. The pass reads again only when something is due (a card whose send failed, a pair held by a busy ballot or night). A temporary read failure waits 5 minutes and retries until expiry. Three failed sends in a row,
    the header's included (counted in the ledger by elicitation id), end the cards (`undeliverable`).
 
 **Refusals** (app#601). Final, only on a 4xx: `not_non_voter`, `voter_window`, `withdrawn`, `elicitation_withdrawn`,
@@ -457,7 +484,7 @@ the elicitation never restarts and later taps answer `This rating has closed.` w
 | `expires_ms` passed | the pass or a tap | `expired` |
 | A file for another elicitation | the pass or a tap | `replaced` (the new one may then start) |
 | A final refusal of the read or a save | the pass or a tap | `refused` |
-| Stop on the header | a tap | `stopped` (the header's button goes; one line confirms; saved ratings stay) |
+| Stop on the header | a tap | `stopped` (the header's button goes; one line confirms: `Stopped. The ratings you gave are kept. Next, your agent will share a few tough calls a god agent might face.`; saved ratings stay) |
 | The participant's order of the shown ids changed | the pass or a tap | `order_changed` |
 | Every listed statement rated before the start / none listed in the read | the pass | `all_rated` / `empty` (nothing sent) |
 | Three failed sends in a row (header included) | the pass or a tap | `undeliverable` |
@@ -475,7 +502,8 @@ memory only. Nothing is injected into the agent's session, no event is emitted (
 `godconst.elicitation_rating_saved@1`), and logs carry codes and counts only (`av-godconst: tenant=<id8>
 outcome=elicit_* [k=v]`).
 
-**Page-open marker.** While a sent elicitation page has an unrated card (session `active`, before expiry), the shared
+**Page-open marker.** While a sent elicitation page has an unrated card (session `active`, not released, before
+expiry), the shared
 marker `$HERMES_HOME/av-events/godconst/page-open` exists (touched on each card sent), so av-elicit holds. See 7a for
 how the two modes share it. A ledger of either mode that cannot be read as the right types counts as not open (logged
 `page_marker_unknown`), so a corrupt ledger never pins the marker. The ballot ledger reader (`_read_private`) now also
