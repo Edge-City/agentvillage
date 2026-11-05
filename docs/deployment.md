@@ -223,6 +223,18 @@ rollback is an ordinary roll and restarts every resident in scope again. Going
 back to a release from before DATA-314 needs one more step per resident first;
 see "The proactive jobs" below.
 
+**Backing out the any-slot runner (A-93).** From v2.2.3 (#606) the zzz
+autonomy runner accepts any of the five schedule phases. Back it out with a
+forward tag whose `AUTONOMY_SHIPPED` (`install/zzz_autonomy_job.ts`) still
+lists runner digest `a99f640d`. Never roll v2.2.2 or earlier onto a box that
+has staged that runner: the older installer refuses the runner it does not
+know (`zzz_autonomy_shim_not_ours`), drops the `Edge — zzz event autonomy` and
+`Edge — zzz pairs` jobs, and every later stage fails the same way until the
+file is deleted by hand. A plain `git revert` of #606 does the same, so a
+revert must keep that digest. If v2.2.2 must be rolled anyway, first delete
+`$HERMES_HOME/scripts/zzz_autonomy_runner.py` (`~/.hermes` by default) on each
+autonomy box; the box then stages like one that never had the job.
+
 **What Roll does not guarantee.** That the agent answers. That Telegram
 messages sent during a restart arrive (Hermes drops them on a cold start; the
 installer's `drop_pending_on_cold_boot` fix needs a Hermes build from
