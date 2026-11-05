@@ -1101,7 +1101,7 @@ def test_the_factory_wires_all_three_handlers_and_passes(plugin, elicit):
     app = type("App", (), {"add_handler": lambda self, h: handlers.append(h), "job_queue": JobQueue(), "bot": Bot()})()
     plugin._wire_telegram(app, None)
     assert [h.pattern.pattern for h in handlers] == ["^gcb:", "^gce:", "^avt:"] and all(h.block is False for h in handlers)
-    assert len(jobs) == 1 and jobs[0][1] == plugin.PASS_INTERVAL_S
+    assert [(j[1], j[2]) for j in jobs] == [(plugin.PASS_INTERVAL_S, "av-godconst-pass"), (plugin.SEND_NOW_CHECK_S, "av-godconst-send-now")]
     seen = []
 
     async def fake_ballot(*a, **k):

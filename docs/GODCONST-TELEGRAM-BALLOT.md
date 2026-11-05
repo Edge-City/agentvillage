@@ -146,10 +146,11 @@ this channel. That is the reason for the departure from av-rate, which does inje
 | Submit | `[Submit my ratings]` on the header, on the last card of each page and on the final line. It asks to confirm, then `POST .../ballot/submit {pool_sha256}`: the app's `submitBallotFor` WITHOUT ratings, so the submitted ballot is the server's latest merged draft (page and Telegram), channel `telegram`, partial allowed (at least one rating, else "Rate at least one statement before you submit."). Telegram-only raters thus reach the submitted electorate (the primary analysis), not only `draft_ballots`. B7's after-submit hook runs as for the page. Submitting on the web page ends the cards the same way (`409 submitted` on the next tap or read). |
 | Stop / opt-out | `[Stop these cards]` on the header: no more pages, taps still save, one line confirms, and the button becomes `[Resume these cards]`. Owner level: `GODCONST_BALLOT_TENANTS=none` (no new cards anywhere), or the app flag off (every tap then answers "Rating by Telegram is off right now..."). |
 | Taps | Owner only: the box's own resident in their own DM (av-vote's rule: the home channel's ids, `TELEGRAM_HOME_CHANNEL`, Hermes's approved pairings; private chat, `chat == user`). A card from an earlier pool (another nonce) answers "This card is from an earlier ballot." |
+| Send now (DATA-541) | The resident presses "Rate in Telegram" on the web app's home page: app -> control plane -> the control plane writes `$HERMES_HOME/av-godconst/send-now` (as the hermes user, atomically: a dotfile then a rename; 0600 in the 0700 directory; content `{"at": "<ISO-8601 UTC>"}`, nothing private; a repeat press overwrites it). The box looks for it every 10 s (`SEND_NOW_CHECK_S`, its own job beside the 60 s pass). Found: it is claimed (renamed away, then deleted) before anything else, so one marker is one send; one whose `at` (its mtime when unreadable) is older than 15 min is dropped with no send (`send_now_stale`). Ballot off: logged, nothing else. Otherwise a read now (the 5 / 10 min poll bypassed; it stands for the pass's next read) and a sync that **overrides the daytime hours and an earlier Stop for this one send**: a pool open with no session starts (header and first page) at any hour; a stopped session resumes (as Resume does; the header's button reads Stop again) and sends; an active page with unrated statements has those cards **re-posted** as new messages at the bottom of the chat (the ledger's message ids move to them, so a web change re-marks the new copies; the old copies keep saving, same nonce and position, and a tap on one re-marks the new copy on the next read); a rated page brings the next one; with nothing left to card, the final line ("All N statements rated" / "You rated X of N", with `[Submit my ratings]`) goes now, at any hour, if it was not sent yet (also when everything was rated on the web before any card), and is **re-posted** at the bottom if it was, so the press lands on the Submit button. Nothing is sent when the session is undeliverable, or the read is submitted / closed / not_participant / no_pool, or the ballot ended on this box. A page or final line this box sent under 60 s ago (`REPOST_GRACE_S`) is not re-posted, and the send lock and ledger lock are the pass's, so a press racing a pass or a tap sends once. Log: `outcome=send_now_<code>` (`started`, `resumed`, `reposted`, `sent`, `final`, `final_reposted`, `just_sent`, `undeliverable`, `submitted`, `closed`, `not_participant`, `no_pool`, `ended`, `stale`, `off`, ...), codes only. |
 
 The box reads at most every 5 minutes while its ballot is open, and every 10 minutes otherwise, so the first cards
-reach a resident at most about 10 minutes after Open. A tap that completes a page reads once more, to get the next
-texts.
+reach a resident at most about 10 minutes after Open, unless they press "Rate in Telegram" on the web (above: within
+about 10 s). A tap that completes a page reads once more, to get the next texts.
 
 ## 4. The write path
 
@@ -264,9 +265,13 @@ not changed here.
 - `docs/RAILWAY.md`: the two variables.
 - Tests: `tests/godconst-ballot.test.js` (9), `tests/box-event-flags.test.js` (+1, the shared cases).
 
-There is no trigger and no worker: the box pulls. A push (the app or the control plane staging the ballot onto boxes
-at Open) would need an exec per box and would put statement text on disk. The pull needs neither, and the box's next
-read is within 10 minutes.
+There is no worker, and the box still pulls: the statements only ever reach it through its own read. A push (the app or
+the control plane staging the ballot onto boxes at Open) would need an exec per box and would put statement text on
+disk. The pull needs neither, and the box's next read is within 10 minutes. The one trigger is the resident's own
+press of "Rate in Telegram" on the web (DATA-541, section 3, "Send now"): the control plane writes a marker
+`$HERMES_HOME/av-godconst/send-now` (`{"at": ISO}`), which the box checks every 10 s; finding it, the box
+reads at once through the same route and sends. The marker carries no statement, no rating and no id; the read stays
+the box's own.
 
 **Overlay** (this branch)
 - `plugins/av-godconst/` (new): `__init__.py` (wiring, pass, sync, taps, submit, the control-plane client, the
