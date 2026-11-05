@@ -180,6 +180,62 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(stage([zzzbot],["--verify"]).status).toBe(0);
 });
 
+// A-93 (lead L41427 on review-a L41367): the job's phase is the bridge token's at install, but a token rotation with no
+// re-stage left the job on the old phase, and the strict phase check failed every tick. The installer (and the runner)
+// now accept any of the five phases: verify passes a job on another phase, a stage over it leaves it as it is with no
+// Hermes job call, and only an absent or unconfirmed job is installed, on the current token's phase.
+test("any of the five phases: verify and a stage leave a job on another phase as it is; a malformed expr is repaired",()=>{
+  const {home,stage,jobs}=box();
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  const own=autonomySchedule(token);
+  expect(own).toBe("4-59/5 * * * *");
+  expect(jobs()).toHaveLength(1);
+  expect(jobs()[0]).toMatchObject({name:AUTONOMY_JOB_NAME,schedule:{kind:"cron",expr:own}});
+  const id=jobs()[0].id;
+  // Count the fake Hermes job-API calls (python -c JOB_API); the hermes CLI probe is not one.
+  const calls=join(home,"job-api-calls");
+  writeFileSync(join(home,"venv/bin/python"),`#!/usr/bin/env bash\nif [ "$1" = "-c" ]; then\n echo call >> "${calls}"\n shift 2\n exec "${process.execPath}" "${join(import.meta.dir,"fake_hermes_job_python.ts")}" "$@"\nfi\nshift\nexec "${process.execPath}" "${join(import.meta.dir,"fake_hermes.ts")}" "$@"\n`);
+  const count=()=>existsSync(calls)?readFileSync(calls,"utf8").split("\n").filter(Boolean).length:0;
+  const store=join(home,"cron/jobs.json");
+  const setExpr=(expr:unknown)=>{
+    const doc=JSON.parse(readFileSync(store,"utf8"));
+    doc.jobs[0].schedule={...doc.jobs[0].schedule,expr};
+    writeFileSync(store,JSON.stringify(doc));
+  };
+  for (const slot of [0,1,2,3]) {
+    const expr=`${slot}-59/5 * * * *`;
+    setExpr(expr);
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+    expect(stage([zzzbot,autonomy]).status).toBe(0);
+    expect(jobs()).toHaveLength(1);
+    expect(jobs()[0]).toMatchObject({id,schedule:{kind:"cron",expr}});
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  }
+  expect(count()).toBe(0);
+  // The rotation itself: a new token wanting slot 0 over a job left on slot 3.
+  const rotated="avb_"+"b".repeat(43);
+  expect(autonomySchedule(rotated)).toBe("0-59/5 * * * *");
+  writeFileSync(join(home,"village-bridge.json"),JSON.stringify({origin:"https://agents.edgecity.live",token:rotated,
+    expiresAt:"2099-01-01T00:00:00Z"}));
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  expect(stage([zzzbot,autonomy]).status).toBe(0);
+  expect(jobs()[0]).toMatchObject({id,schedule:{kind:"cron",expr:"3-59/5 * * * *"}});
+  expect(count()).toBe(0);
+  // A malformed expr is not confirmed: verify fails and the next stage installs the job on the current token's phase
+  // (one Hermes job call: the counter's positive control).
+  for (const bad of ["5-59/5 * * * *","3-59/10 * * * *","3-59/5 * * *","x","3-59/5 * * * *\n",null]) {
+    setExpr(bad);
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+    const before=count();
+    expect(stage([zzzbot,autonomy]).status).toBe(0);
+    expect(count()).toBe(before+1);
+    expect(jobs()).toHaveLength(1);
+    expect(jobs()[0]).toMatchObject({name:AUTONOMY_JOB_NAME,schedule:{kind:"cron",expr:"0-59/5 * * * *"}});
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  }
+  expect(count()).toBe(6);
+}, 60_000);
+
 test("failed stage withdraws only the autonomy gate before tearing down its job",()=>{
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,pair,autonomy]).status).toBe(0);

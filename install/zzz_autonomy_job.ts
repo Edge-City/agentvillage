@@ -13,6 +13,9 @@ export const AUTONOMY_JOB_SCRIPT = "zzz_autonomy_runner.py";
 export const AUTONOMY_FILES = ["scripts/zzz_autonomy_runner.py", "prompts/autonomy.md"] as const;
 const ID = /^[0-9a-f]{12}$/;
 const TOKEN = /^avb_[A-Za-z0-9_-]{43}$/;
+// Any of the five 5-minute phases (lead L41427, A-93), as the runner's JOB_EXPR: a new job takes the bridge token's
+// phase (autonomySchedule), but a job on another phase is confirmed as it is, so a token rotation never stops it.
+const AUTONOMY_EXPR = /^[0-4]-59\/5 \* \* \* \*$/;
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const source = (relative: string) => readFileSync(join(import.meta.dir, "..", "skills", "zzzbot", relative));
 
@@ -176,7 +179,7 @@ function bridgeToken(home: string): string {
   return token;
 }
 
-function confirmed(job: Record<string, unknown>, schedule: string, prompt: string): boolean {
+function confirmed(job: Record<string, unknown>, prompt: string): boolean {
   const sch = job.schedule as {kind?: unknown;expr?: unknown} | undefined;
   const repeat = job.repeat as {times?: unknown} | undefined;
   const empty = (value: unknown) => value == null || value === "" || (Array.isArray(value) && value.length === 0);
@@ -184,7 +187,7 @@ function confirmed(job: Record<string, unknown>, schedule: string, prompt: strin
     job.script === AUTONOMY_JOB_SCRIPT && job.prompt === prompt && job.enabled === true && job.no_agent === true &&
     JSON.stringify(job.enabled_toolsets) === '["no_mcp"]' && job.deliver === "local" && job.failure_deliver === "local" &&
     !job.workdir && empty(job.skills) && empty(job.skill) && empty(job.context_from) && !job.monitor_script && !job.monitor_url &&
-    sch?.kind === "cron" && sch.expr === schedule && repeat?.times === null;
+    sch?.kind === "cron" && typeof sch.expr === "string" && AUTONOMY_EXPR.test(sch.expr) && repeat?.times === null;
 }
 
 export function verifyAutonomyJob(home: string, installed: boolean, script: Buffer | null): void {
@@ -197,7 +200,7 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
     return;
   }
   const prompt = source(AUTONOMY_FILES[1]).toString("utf8").trimEnd();
-  if (jobs.length !== 1 || !confirmed(jobs[0], autonomySchedule(bridgeToken(home)), prompt) ||
+  if (jobs.length !== 1 || !confirmed(jobs[0], prompt) ||
       !shim || !script || ownedFile(shim, AUTONOMY_FILES[0]) !== "ours" || !readFileSync(shim).equals(script))
     throw new Error("zzz_autonomy_job_not_confirmed");
 }
@@ -242,7 +245,10 @@ export function reconcileAutonomyJob(home: string, installed: boolean): void {
   replaceFileNoFollow(scripts, AUTONOMY_JOB_SCRIPT, script);
   const id = jobs[0]?.id;
   if (id !== undefined && (typeof id !== "string" || !ID.test(id))) throw new Error("zzz_autonomy_job_invalid");
-  jobApi(python, home, {action:"install",...(id?{id}:{}),name:AUTONOMY_JOB_NAME,prompt,
-    script:AUTONOMY_JOB_SCRIPT,schedule,toolsets:["no_mcp"]});
+  // A confirmed job on any phase is left as it is (lead L41427): no Hermes call, no re-phase. Only an absent or
+  // unconfirmed job is installed, on the current token's phase.
+  if (!(jobs.length === 1 && confirmed(jobs[0], prompt)))
+    jobApi(python, home, {action:"install",...(id?{id}:{}),name:AUTONOMY_JOB_NAME,prompt,
+      script:AUTONOMY_JOB_SCRIPT,schedule,toolsets:["no_mcp"]});
   verifyAutonomyJob(home,true,script);
 }
