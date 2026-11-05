@@ -420,7 +420,8 @@ Both holds apply to every elicitation send, the pass's and the one after a tap, 
    sees the ratings) and the five labels; no
    expiry time (the file's `expires_ms` is the box's offer window, not a deadline the app enforces), no reminders, no
    Submit, with one button, `Stop these cards`.
-2. Cards two at a time (the statement text and one scale line, `1 strongly oppose · 3 neutral · 5 strongly support`;
+2. Cards two at a time (the statement text, every `ODIN` shown as `the god agent` (display only: stored text, ids and
+   the official ballot's cards unchanged), and one scale line, `1 strongly oppose · 3 neutral · 5 strongly support`;
    no label, count or number, five buttons `1..5` with the ballot's labels). A statement with a `saved_rating` shows its check; a pair already fully rated is shown and the
    next pair follows at once.
 3. A tap (`gce:r:<nonce>:<position>:<value>`, its own `CallbackQueryHandler`, `block=False`, the ballot's owner rule:

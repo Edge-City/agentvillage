@@ -360,8 +360,22 @@ def elicit_header_text() -> str:
     return _esc(lines)
 
 
+#: "ODIN" (any case, whole word; a leading "the" and a trailing "agent" folded in) on a follow-up card reads "the god agent" (Amita, 5 Nov 2026:
+#: residents see "a god agent", never ODIN). Display only: the statement's stored text, its id and the official ballot's
+#: cards are unchanged, so ratings stay keyed to the same statement.
+_ODIN = re.compile(r"\b(?:the\s+)?odin(?:\s+agent)?\b", re.IGNORECASE)
+_SENTENCE_START = re.compile(r"(?:^|[.!?:]\s+|\n\s*|[\"'“‘(\[-]\s*)$")
+
+
+def god_agent_text(text: str) -> str:
+    """`text` with every ODIN as "the god agent" ("The god agent" where a sentence starts); "ODIN's" keeps its 's."""
+    def swap(m: "re.Match[str]") -> str:
+        return "The god agent" if _SENTENCE_START.search(text[:m.start()]) else "the god agent"
+    return _ODIN.sub(swap, text)
+
+
 def elicit_card_text(text: str) -> str:
-    return _esc([text, "", SCALE_LINE])
+    return _esc([god_agent_text(text), "", SCALE_LINE])
 
 
 def elicit_done_text() -> str:

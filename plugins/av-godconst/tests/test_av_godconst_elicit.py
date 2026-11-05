@@ -997,3 +997,23 @@ def test_the_ballot_key_stays_in_custody(plugin):
     assert plugin.CREDENTIAL_ENV == "AV_GODCONST_BALLOT_KEY"
     with open(os.path.join(root, "plugins", "av-approval", "_custody.py"), encoding="utf-8") as handle:
         assert '"AV_GODCONST_BALLOT_KEY"' in handle.read()
+
+
+def test_cards_say_the_god_agent_never_odin_and_only_on_screen():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gc_logic", os.path.join(os.path.dirname(__file__), "..", "_logic.py"))
+    L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
+    cases = {
+        "ODIN must ask first.": "The god agent must ask first.",
+        "Residents can overrule ODIN. ODIN's power ends there.": "Residents can overrule the god agent. The god agent's power ends there.",
+        "The ODIN agent logs nothing; the ODIN agent's notes stay private.": "The god agent logs nothing; the god agent's notes stay private.",
+        "Odin: be kind": "The god agent: be kind",
+        '"ODIN never lies."': '"The god agent never lies."',
+        "for the ODIN council": "for the god agent council",
+        "ODINSON and Odinic stay": "ODINSON and Odinic stay",
+        "No change here": "No change here",
+    }
+    for given, shown in cases.items():
+        assert L.god_agent_text(given) == shown
+    assert L.elicit_card_text("ODIN asks first & waits").splitlines()[0] == "The god agent asks first &amp; waits"
+    assert "ODIN" in L.card_text(0, 1, "c", "ODIN asks first")  # the official ballot's cards are not touched
