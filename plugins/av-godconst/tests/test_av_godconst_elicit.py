@@ -256,7 +256,9 @@ def assert_nothing_private_on_disk(home):
     assert not os.path.exists(os.path.join(home, "av-godconst", "ballot.json"))  # the ballot is never touched
 
 
-FU = "Follow-up (not your ballot)"
+FU = "Follow-up 2 of 2"
+SCALE = "1 strongly oppose · 3 neutral · 5 strongly support"
+DONE = "All rated. Thank you, that's the last follow-up."
 
 
 def first_line(msg):
@@ -418,12 +420,14 @@ def test_start_sends_a_labelled_header_and_the_first_pair_of_the_files_statement
     write_trigger(elicit, ids=["s005", "s002", "s003"])  # the read's order wins; s001, s004, s006 are never shown
     assert pass_(plugin, bot, server) == "sent"
     header, *cards = bot.sent
-    assert first_line(header) == f"{FU}: constitution statements to rate (optional)"
-    assert "separate from the official constitution ballot" in header.text and "Tap again to change a rating" in header.text
-    assert "5  Strongly support inclusion" in header.text and "Open until 10:30 IST, Sun 25 Oct." in header.text
+    assert first_line(header) == f"{FU} (the last one): rate statements for ODIN's constitution"
+    assert "Optional: rate as many as you like, skip any." in header.text and "5  Strongly support inclusion" in header.text
+    assert "Open until" not in header.text and "IST" not in header.text  # the box's file expiry is no deadline to show
+    assert len(header.text.split()) <= 45
     assert "Submit" not in header.text and "remind" not in header.text.lower()
     assert [[b.text for b in row] for row in header.reply_markup.inline_keyboard] == [["Stop these cards"]]
-    assert [first_line(c) for c in cards] == [FU, FU] and [card_no(c) for c in cards] == [1, 2]
+    assert [c.text.splitlines()[-1] for c in cards] == [SCALE, SCALE] and [card_no(c) for c in cards] == [1, 2]
+    assert all(FU not in c.text for c in cards)  # said once, in the header
     assert f"{TEXT} s002" in cards[0].text and f"{TEXT} s003" in cards[1].text
     assert "odin" not in cards[0].text.lower() and "agent" not in cards[0].text.lower()
     assert [b.text for b in cards[0].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
@@ -450,10 +454,9 @@ def test_taps_post_one_rating_advance_and_revisions_still_save_after_all_are_rat
     assert q.answers == ["Saved: Oppose inclusion (changed)"]
     tap(plugin, server, second, 5)
     third = bot.cards()[2]
-    assert first_line(third) == FU and card_no(third) == 3
+    assert first_line(third) == f"{TEXT} s003" and card_no(third) == 3
     tap(plugin, server, third, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated. Thank you: your ratings are saved.")
-    assert "change a rating until 10:30 IST, Sun 25 Oct." in bot.sent[-1].text
+    assert bot.sent[-1].text == DONE
     stored = ledger(elicit)
     assert stored["session"]["status"] == "done" and stored["ended"] == []
     assert not os.path.exists(marker(elicit))
@@ -487,7 +490,7 @@ def test_saved_ratings_are_prefilled_and_a_fully_rated_pair_moves_on(plugin, eli
     assert [b.text for b in cards[3].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
     assert ledger(elicit)["session"]["rated"] == [0, 1, 2]
     tap(plugin, server, cards[3], 3)
-    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated.")
+    assert bot.sent[-1].text == DONE
     bot2 = Bot()
     write_trigger(elicit, eid=EID2, ids=["s001"])
     assert pass_(plugin, bot2, server) == "all_rated"
@@ -511,7 +514,7 @@ def test_an_unknown_statement_drops_only_that_card(plugin, elicit):
     assert [card_no(c) for c in bot.cards()[-2:]] == [3, 4]
     for card in bot.cards()[-2:]:
         tap(plugin, server, card, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: every statement rated.")
+    assert bot.sent[-1].text == DONE
     assert_nothing_private_on_disk(elicit)
 
 
@@ -755,7 +758,7 @@ def test_stop_ends_it_and_keeps_what_was_saved(plugin, elicit):
     header = bot.header()
     q = tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
     assert q.answers == ["Stopped. The ratings you gave are kept."] and q.edited == [None]
-    assert bot.sent[-1].text == f"{FU}: stopped, no more statement cards. The ratings you gave are kept."
+    assert bot.sent[-1].text == "Stopped. The ratings you gave are kept, and that's the last follow-up."
     stored = ledger(elicit)
     assert stored["session"] is None and stored["ended"][-1]["status"] == "stopped"
     assert server.saved == {"s001": 4} and not os.path.exists(marker(elicit))
@@ -804,7 +807,7 @@ def test_both_modes_at_once_the_ballot_goes_first(plugin, elicit, monkeypatch):
     # A stopped ballot does not hold.
     open_ballot_page(plugin, elicit, status="stopped")
     assert pass_(plugin, bot, server) == "sent"
-    assert all(first_line(c).startswith(FU) for c in bot.cards())
+    assert all(c.text.splitlines()[-1] == SCALE for c in bot.cards())
     # The ballot active again mid-page: a tap saves, the next pair waits for the ballot.
     open_ballot_page(plugin, elicit)
     first, second = bot.cards()

@@ -416,11 +416,12 @@ Both holds apply to every elicitation send, the pass's and the one after a tap, 
    `POST /tenants/<own>/godconst/elicitation-cards` `{elicitation_id}` -> `{statements: [{statement_id, text,
    origin, saved_rating|null}]}`. Nothing is sent before a read succeeds. The read's order (the participant's) is
    kept; only ids in the file's `statement_ids` are shown; `origin` is dropped (blind cards). Then a short header
-   headed `Follow-up (not your ballot): N constitution statements to rate (optional)`, saying it is separate from the
-   official ballot and changes no ballot (labels, the expiry, privacy; no reminders, no Submit), with one button,
-   `Stop these cards`.
-2. Cards two at a time (`Follow-up (not your ballot) · Statement i of n`, the text, five buttons `1..5` with the
-   ballot's labels). A statement with a `saved_rating` shows its check; a pair already fully rated is shown and the
+   headed `Follow-up 2 of 2 (the last one): rate statements for ODIN's constitution` (the agent's questions are
+   follow-up 1 of 2), one line (optional, skip any, only the research team sees the ratings) and the five labels; no
+   expiry time (the file's `expires_ms` is the box's offer window, not a deadline the app enforces), no reminders, no
+   Submit, with one button, `Stop these cards`.
+2. Cards two at a time (the statement text and one scale line, `1 strongly oppose · 3 neutral · 5 strongly support`;
+   no label, count or number, five buttons `1..5` with the ballot's labels). A statement with a `saved_rating` shows its check; a pair already fully rated is shown and the
    next pair follows at once.
 3. A tap (`gce:r:<nonce>:<position>:<value>`, its own `CallbackQueryHandler`, `block=False`, the ballot's owner rule:
    the box's own resident in their own DM) posts `POST /tenants/<own>/godconst/elicitation-ratings`
@@ -430,8 +431,7 @@ Both holds apply to every elicitation send, the pass's and the one after a tap, 
    to re-load the ledger, merge the rated position into the session that still has the tap's nonce (a session ended
    or replaced meanwhile is never brought back), save, and advance.
 4. When the current pair needs nothing more, the next pair goes at once (the reply to the resident's tap, any hour).
-   When every statement is rated, one line: `Follow-up (not your ballot): all N statements rated. Thank you: your
-   ratings are saved. You can tap any card again to change a rating until <expiry>.` The session stays (status
+   When every statement is rated, one line: `All rated. Thank you, that's the last follow-up.` The session stays (status
    `done`): re-taps keep saving as revisions until expiry or withdrawal, nothing more is sent, and the page-open
    marker is removed.
 5. A save refused `422 unknown_statement` is final for that statement only: the answer is `This statement is no
