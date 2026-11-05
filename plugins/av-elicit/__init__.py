@@ -20,6 +20,12 @@ the session exists, so the loop waits until ``state.db`` has a Telegram session 
 injected between 22:00 and 08:00 IST, nor while av-godconst's ``av-events/godconst/page-open`` marker
 exists (a sent ballot card page still has unrated cards); the file is held, and only the 24 h age cap skips it.
 
+Cards first (DATA-547): while ``AV_GODCONST_ELICIT_CARDS`` is exactly ``1``, the opener whose ``<unix_ms>``
+equals the ``window_ms`` of a valid, unexpired ``av-events/godconst/elicit-cards.json`` is held until
+av-godconst writes that elicitation id to ``av-events/godconst/cards-released`` (cards done, stopped, ended or
+3 h idle) or the file expires; neither file present or valid means no hold, so it never deadlocks. While held
+the opener does not age; once freed, its 24 h age cap counts from the release (or the expiry).
+
 Fail-open: no hooks, one daemon thread, one tool; every failure is a log code, never an exception into the
 gateway. Logs carry codes and counts only, never a message's text. Python 3.9+, standard library only.
 """
@@ -58,6 +64,14 @@ AGE_CAP_S = 24 * 3600
 IST = timezone(timedelta(hours=5, minutes=30))
 #: av-godconst's page-open marker older than this no longer holds injection.
 BALLOT_PAGE_STALE_S = 12 * 3600
+#: Cards first: av-godconst's switch for the elicitation rating cards (exactly ``1`` = on). Off, nothing holds.
+CARDS_SWITCH_ENV = "AV_GODCONST_ELICIT_CARDS"
+CARDS_FILE_MAX_BYTES = 64 * 1024
+#: A cards file expiring further ahead than this is malformed and holds nothing (the hold is always bounded).
+CARDS_HOLD_MAX_S = 48 * 3600
+CARDS_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CARDS_STATEMENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+CARDS_STATEMENTS_MAX = 500
 QUIET_START_HOUR = 22
 QUIET_END_HOUR = 8
 
@@ -188,6 +202,8 @@ _RECORD_LOCK = threading.Lock()
 _STATE_LOCK = threading.RLock()
 #: The mtime of the stale page-open marker already logged (one line per stale marker).
 _STALE_BALLOT_LOGGED: Optional[float] = None
+#: The bad cards file already logged: (code, mtime).
+_CARDS_LOGGED: Optional[tuple] = None
 
 # --------------------------------------------------------------------------- env, paths, logging
 
@@ -271,6 +287,76 @@ def ballot_page_open(home: Optional[str] = None, now: Optional[float] = None) ->
             _log("stale_ballot_page", logging.WARNING, age_h=int((stamp - mtime) // 3600))
         return False
     return True
+
+
+def cards_file_path(home: Optional[str] = None) -> str:
+    """The control plane's ``elicit-cards.json`` (av-godconst shows its statements as rating cards)."""
+    return os.path.join(home or hermes_home(), "av-events", "godconst", "elicit-cards.json")
+
+
+def cards_released_path(home: Optional[str] = None) -> str:
+    """av-godconst's release signal: one line, the elicitation id whose cards no longer hold the opener."""
+    return os.path.join(home or hermes_home(), "av-events", "godconst", "cards-released")
+
+
+def _log_cards(outcome: str, home: Optional[str] = None) -> None:
+    """A bad cards file: one warning per file state (its mtime), apart from the loop's waiting codes."""
+    global _CARDS_LOGGED
+    key = (outcome, _mtime(cards_file_path(home)))
+    if _CARDS_LOGGED != key:
+        _CARDS_LOGGED = key
+        _log(outcome, logging.WARNING)
+
+
+def _positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
+
+
+def cards_hold(home: Optional[str] = None, now: Optional[float] = None) -> Optional[dict]:
+    """Cards first: ``{"window_ms", "held", "freed_at"}`` for the cards file, or None when nothing can hold
+    (the switch is not exactly ``1``; the file missing, not a regular file, malformed, or expiring more than
+    ``CARDS_HOLD_MAX_S`` ahead). ``held`` while unexpired and not released; ``freed_at`` is the release
+    file's mtime (released) or the expiry (expired), the start of the opener's age cap."""
+    if env(CARDS_SWITCH_ENV, home) != "1":
+        return None
+    stamp = time.time() if now is None else now
+    path = cards_file_path(home)
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+        # What av-godconst refuses to show must not hold either (it would never release).
+        _log_cards("cards_file_unsafe", home)
+        return None
+    data = _read_json(path, CARDS_FILE_MAX_BYTES)
+    if not isinstance(data, dict):
+        _log_cards("cards_file_invalid", home)
+        return None
+    eid, window, expires = data.get("elicitation_id"), data.get("window_ms"), data.get("expires_ms")
+    pool, ids = data.get("pool_id"), data.get("statement_ids")
+    if not (isinstance(eid, str) and CARDS_ID.match(eid) and isinstance(pool, str) and CARDS_ID.match(pool)
+            and _positive_int(window) and _positive_int(expires) and isinstance(ids, list)
+            and 0 < len(ids) <= CARDS_STATEMENTS_MAX
+            and all(isinstance(i, str) and CARDS_STATEMENT_ID.match(i) for i in ids) and len(set(ids)) == len(ids)):
+        # av-godconst's own checks (_logic.valid_trigger): a file it would only hold on never holds the opener.
+        _log_cards("cards_file_invalid", home)
+        return None
+    if expires / 1000.0 - stamp > CARDS_HOLD_MAX_S:
+        _log_cards("cards_file_too_far", home)
+        return None
+    raw, _ = _read_regular(cards_released_path(home), 256)
+    if raw is not None and raw.strip() == eid:
+        return {"window_ms": window, "held": False, "freed_at": _mtime(cards_released_path(home)) or stamp}
+    if stamp * 1000.0 >= expires:
+        return {"window_ms": window, "held": False, "freed_at": expires / 1000.0}
+    return {"window_ms": window, "held": True, "freed_at": None}
+
+
+def _cards_opener(name: str, cards: Optional[dict]) -> bool:
+    """`name` is the opener of the cards file's window."""
+    parsed = parse_stage_name(name)
+    return cards is not None and parsed is not None and parsed[1] == "open" and parsed[0] == cards["window_ms"]
 
 
 def state_db(home: Optional[str] = None) -> str:
@@ -1043,10 +1129,14 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         if not later:
             return "skipped_closed"
         pending = later
+    cards = cards_hold(home, stamp)
     fresh, aged = [], 0
     for name in pending:
         path = os.path.join(directory, name)
         at = staged_at(path)
+        if _cards_opener(name, cards):
+            # Held behind the cards: it does not age; once freed, the age cap counts from the release.
+            at = None if cards["held"] else max(at or 0.0, cards["freed_at"])
         if at is not None and stamp - at > AGE_CAP_S:
             aged += 1 if _rename_now(path, ".skipped", home, stamp) else 0
         else:
@@ -1062,6 +1152,10 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         # A ballot card page is open with unrated cards: hold, as in quiet hours (only the age cap skips).
         _log_once("held_ballot_page", pending=len(fresh))
         return "held_ballot_page"
+    if cards is not None and cards["held"] and _cards_opener(fresh[0], cards):
+        # Cards first: the rating cards go before the agent's questions, until av-godconst releases or expiry.
+        _log_once("held_elicit_cards", pending=len(fresh))
+        return "held_elicit_cards"
     key = session_key(home)
     if not key:
         _log_once("no_session_key", logging.WARNING)

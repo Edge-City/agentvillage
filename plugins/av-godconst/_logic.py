@@ -346,15 +346,17 @@ def valid_cards(data: Any, statement_ids: Iterable) -> Optional[list]:
 
 
 #: Said once, in the header. Residents' feedback, Nov 2026: the earlier texts were long, repeated a label on every card,
-#: and showed an "Open until" time that was only the box's 24 h file expiry (the app sets no deadline).
-FOLLOW_UP = "Optional follow-up"
+#: and showed an "Open until" time that was only the box's 24 h file expiry (the app sets no deadline). Since cards-first
+#: (DATA-547, 5 Nov 2026) the header is the first message of the elicitation the resident sees, before the agent's
+#: questions, so it says what the cards are for rather than calling them a follow-up.
+ELICIT_HEADLINE = "Help shape the god agents for future Edge City popup villages: rate a few rules (optional)"
 SCALE_LINE = "1 strongly oppose · 3 neutral · 5 strongly support"
 
 
 # The follow-up cards never count or number the statements: the whole pool is offered and the resident rates as many
 # as they like, so a total or a "Statement 3" reads as a chore (app's v5 pilot, 30 Oct 2026).
 def elicit_header_text() -> str:
-    lines = [f"{FOLLOW_UP}: rate rules for a god agent", "",
+    lines = [ELICIT_HEADLINE, "",
              "Rate as many as you like, skip any. Only the research team sees your ratings.", ""]
     lines += [f"{v}  {label}" for v, label in LABELS.items()]
     return _esc(lines)

@@ -261,6 +261,172 @@ def test_ballot_page_hold_still_honours_the_age_cap(plugin, home, db):
     assert [n.split("-", 1)[1] for n in names(home, ".txt")] == ["open.txt"] and ctx.calls == []
 
 
+# --------------------------------------------------------------------------- cards first (DATA-547)
+
+CARDS_EID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+def cards_file(home, window_s, expires_s=None, eid=CARDS_EID, raw=None):
+    """The control plane's elicit-cards.json for the window whose opener was staged at `window_s`."""
+    folder = home / "av-events" / "godconst"
+    folder.mkdir(parents=True, exist_ok=True)
+    body = raw if raw is not None else json.dumps({
+        "elicitation_id": eid, "pool_id": "11111111-2222-4333-8444-555555555555", "window_ms": int(window_s * 1000),
+        "statement_ids": ["s001", "s002"], "expires_ms": int(((window_s + 24 * 3600) if expires_s is None else expires_s) * 1000)})
+    (folder / "elicit-cards.json").write_text(body)
+    return folder / "elicit-cards.json"
+
+
+def release(home, eid=CARDS_EID, at=None):
+    path = home / "av-events" / "godconst" / "cards-released"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(eid + "\n")
+    if at is not None:
+        os.utime(path, (at, at))
+    return path
+
+
+@pytest.fixture
+def cards_on(monkeypatch):
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "1")
+
+
+def test_cards_hold_the_opener_until_released(plugin, home, db, cards_on, caplog):
+    caplog.set_level(logging.INFO, logger="av-elicit")
+    db.session("s-dm")
+    staged = NOON - 60
+    stage(home, "open", OPENER, staged)
+    cards_file(home, staged)
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON) == "held_elicit_cards"
+    assert plugin.inject_pass(ctx, now=NOON + 2 * 3600) == "held_elicit_cards"
+    assert ctx.calls == [] and len(names(home, ".txt")) == 1 and names(home, ".skipped") == []
+    assert sum("outcome=held_elicit_cards" in r.getMessage() for r in caplog.records) == 1
+    release(home, eid="99999999-bbbb-4ccc-8ddd-eeeeeeeeeeee")  # another elicitation's release frees nothing
+    assert plugin.inject_pass(ctx, now=NOON + 2 * 3600) == "held_elicit_cards"
+    release(home)
+    assert plugin.inject_pass(ctx, now=NOON + 2 * 3600) == "injected" and len(ctx.calls) == 1
+
+
+def test_expiry_of_the_cards_file_releases(plugin, home, db, cards_on):
+    db.session("s-dm")
+    staged = NOON - 60
+    stage(home, "open", OPENER, staged)
+    cards_file(home, staged, expires_s=NOON + 3600)
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON + 3599) == "held_elicit_cards"
+    assert plugin.inject_pass(ctx, now=NOON + 3600) == "injected"
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "true", "yes", "on", " 2"])
+def test_no_hold_unless_the_cards_switch_is_exactly_1(plugin, home, db, monkeypatch, value):
+    if value is not None:
+        monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", value)
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_the_cards_switch_can_come_from_the_dotenv(plugin, home, db):
+    (home / ".env").write_text("AV_GODCONST_ELICIT_CARDS=1\n")
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "held_elicit_cards"
+
+
+@pytest.mark.parametrize("bad", ["{", "[]", json.dumps({"elicitation_id": "x", "window_ms": 1, "expires_ms": 2}),
+                                 json.dumps({"elicitation_id": CARDS_EID, "window_ms": True, "expires_ms": 2})])
+def test_a_malformed_cards_file_never_holds(plugin, home, db, cards_on, bad):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60, raw=bad)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_a_cards_file_writable_by_others_never_holds(plugin, home, db, cards_on):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    path = cards_file(home, NOON - 60)
+    os.chmod(path, 0o666)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_a_cards_file_with_no_statements_never_holds(plugin, home, db, cards_on):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    body = {"elicitation_id": CARDS_EID, "pool_id": "11111111-2222-4333-8444-555555555555",
+            "window_ms": int((NOON - 60) * 1000), "statement_ids": [], "expires_ms": int((NOON + 3600) * 1000)}
+    cards_file(home, NOON - 60, raw=json.dumps(body))
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_a_cards_file_expiring_too_far_ahead_never_holds(plugin, home, db, cards_on):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60, expires_s=NOON + plugin.CARDS_HOLD_MAX_S + 60)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_a_symlinked_cards_file_never_holds(plugin, home, db, cards_on, tmp_path):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    real = cards_file(home, NOON - 60)
+    outside = tmp_path / "elsewhere.json"
+    outside.write_text(real.read_text())
+    real.unlink()
+    real.symlink_to(outside)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
+def test_only_the_cards_windows_opener_is_held(plugin, home, db, cards_on):
+    db.session("s-dm")
+    cards_file(home, NOON - 600)  # an earlier window's cards
+    stage(home, "open", OPENER, NOON - 60)  # this opener belongs to another window
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON) == "injected"
+    # A follow-up of the cards' own window is never held by them either.
+    cards_file(home, NOON - 60)
+    stage(home, "next", NEXT_IDLE, NOON)
+    assert plugin.inject_pass(ctx, now=NOON + 1) == "injected" and len(ctx.calls) == 2
+
+
+def test_a_held_opener_does_not_age_and_its_cap_counts_from_the_release(plugin, home, db, cards_on):
+    db.session("s-dm")
+    staged = NOON - 23 * 3600
+    stage(home, "open", OPENER, staged)
+    cards_file(home, staged, expires_s=NOON + 20 * 3600)
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON + 6 * 3600) == "held_elicit_cards"  # 29 h after staging: still held
+    assert names(home, ".skipped") == []
+    release(home, at=NOON + 6 * 3600)
+    # Released at 18:00 IST; at 23:00 quiet hours hold it, and the next morning (well past 24 h from staging) it goes.
+    assert plugin.inject_pass(ctx, now=NOON + 11 * 3600) == "held_quiet_hours"
+    assert plugin.inject_pass(ctx, now=NOON + 21 * 3600) == "injected" and len(ctx.calls) == 1
+
+
+def test_a_freed_opener_still_ages_from_the_release(plugin, home, db, cards_on):
+    db.session("s-dm")
+    staged = NOON - 60
+    stage(home, "open", OPENER, staged)
+    cards_file(home, staged, expires_s=NOON + 3600)  # expired, never released: freed at the expiry
+    ctx = Ctx()
+    assert plugin.inject_pass(ctx, now=NOON + 3600 + 25 * 3600) == "skipped_aged"
+    assert ctx.calls == [] and len(names(home, ".skipped")) == 1
+
+
+def test_the_ballot_page_marker_still_holds_beside_the_cards(plugin, home, db, cards_on):
+    db.session("s-dm")
+    stage(home, "open", OPENER, NOON - 60)
+    cards_file(home, NOON - 60)
+    release(home)
+    marker = ballot_page(home)
+    assert plugin.inject_pass(Ctx(), now=NOON) == "held_ballot_page"
+    marker.unlink()
+    assert plugin.inject_pass(Ctx(), now=NOON) == "injected"
+
+
 def test_closed_marker_skips_everything_pending(plugin, home, db):
     db.session("s-dm")
     stage(home, "open", OPENER, NOON - 120)
