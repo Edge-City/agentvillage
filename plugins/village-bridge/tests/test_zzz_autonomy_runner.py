@@ -155,6 +155,7 @@ class TestAutonomyRunner(unittest.TestCase):
         for schedule in ({"kind": "cron", "expr": "5-59/5 * * * *"}, {"kind": "cron", "expr": "3-59/10 * * * *"},
                          {"kind": "cron", "expr": "3-59/5 * * *"}, {"kind": "cron", "expr": "x"},
                          {"kind": "cron", "expr": "3-59/5 * * * *\n"}, {"kind": "cron", "expr": " 3-59/5 * * * *"},
+                         {"kind": "cron", "expr": "3-59/5  * * * *"}, {"kind": "cron", "expr": "3-59/5\t* * * *"},
                          {"kind": "cron", "expr": None}, {"kind": "cron"},
                          {"kind": "interval", "expr": "3-59/5 * * * *"}, {"kind": "once", "minutes": 5}):
             self.job["schedule"] = schedule

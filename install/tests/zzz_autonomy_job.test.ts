@@ -246,6 +246,22 @@ test("any of the five phases: verify and a stage leave a job on another phase as
     expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
   }
   expect(count()).toBe(6);
+  // review-b ov#606 S1: confirmed() alone now decides whether a stage repairs anything, so a job on another phase that is
+  // disabled or carries another prompt (the runner refuses it) must fail verify and be repaired with one Hermes call.
+  const prompt=readFileSync(join(repo,"skills/zzzbot",AUTONOMY_FILES[1]),"utf8").trimEnd();
+  for (const drift of [{enabled:false},{prompt:"another prompt"}]) {
+    const doc=JSON.parse(readFileSync(store,"utf8"));
+    Object.assign(doc.jobs[0],drift,{schedule:{...doc.jobs[0].schedule,expr:"3-59/5 * * * *"}});
+    writeFileSync(store,JSON.stringify(doc));
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+    const before=count();
+    expect(stage([zzzbot,autonomy]).status).toBe(0);
+    expect(count()).toBe(before+1);
+    expect(jobs()).toHaveLength(1);
+    expect(jobs()[0]).toMatchObject({name:AUTONOMY_JOB_NAME,enabled:true,prompt,schedule:{kind:"cron",expr:"0-59/5 * * * *"}});
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  }
+  expect(count()).toBe(8);
 }, 60_000);
 
 test("failed stage withdraws only the autonomy gate before tearing down its job",()=>{

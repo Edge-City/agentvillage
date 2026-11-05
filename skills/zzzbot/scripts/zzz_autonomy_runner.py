@@ -422,7 +422,7 @@ def _config(home: Path):
 
 
 def phase(token: str) -> int:
-    """Five minute cron phase for a new job; _job accepts any phase, so a token rotation never stops the job."""
+    """Mirror of the installer's phase formula (autonomySchedule); the job check no longer uses it: _job accepts any phase."""
     return hashlib.sha256(token.encode()).digest()[0] % 5
 
 
