@@ -719,6 +719,10 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
             session["status"] = "done"
             count("all_rated_on_web")
             _store(ledger, home, now, base)
+            if kick:
+                # A press with everything rated on the web already: the final line (with Submit) is what to land on.
+                await _kick_final(bot, chat, session, rated, now, make_button, make_markup, count)
+                _store(ledger, home, now, base)
             return
         header = await _send(bot, chat, L.header_text(len(session["order"]), closes),
                              make_markup(L.control_rows(session["nonce"], make_button, stopped=False)))
@@ -745,6 +749,11 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
         if not _kick_resume(session, home, base, count):
             return
         await _edit_header(bot, chat, session, make_button, make_markup, count)
+    if kick and session["status"] == "done":
+        # Every page and the final line sent: the press re-posts the final line (its Submit button) at the bottom.
+        await _kick_final(bot, chat, session, rated, now, make_button, make_markup, count)
+        _store(ledger, home, now, base)
+        return
     if session["status"] != ACTIVE:
         if kick:
             count(f"status_{session['status']}")
@@ -758,11 +767,34 @@ async def _sync_locked(bot: Any, adapter: Any, view: dict, make_button: Callable
             _store(ledger, home, now, base)
             return
         if L.next_page(page, n, rated) is None:
-            count("all_rated")  # nothing left to card; the final line stays a pass's (daytime) send
+            # Nothing left to card: the final line now (any hour), or again at the bottom if it went out before.
+            await _kick_final(bot, chat, session, rated, now, make_button, make_markup, count)
+            _store(ledger, home, now, base)
             return
     # A kick sends at any hour (as the reply to a tap does): the resident just asked for the cards.
     await _advance(bot, chat, session, view, rated, closes, now, home, make_button, make_markup, count, tick and not kick)
     _store(ledger, home, now, base)
+
+
+async def _kick_final(bot: Any, chat: str, session: dict, rated: set, now: float, make_button: Callable, make_markup: Callable,
+                      count: Callable) -> None:
+    """A press with nothing left to card: the final line ("All N rated" or "You rated X of N", with Submit) now, at any
+    hour; if it went out before, again at the bottom, unless it went out under ``REPOST_GRACE_S`` ago."""
+    was_sent = bool(session.get("final_sent"))
+    last = _PAGE_SENT.get(session["nonce"])
+    if was_sent and last is not None and last[0] == "final" and 0 <= now - last[1] < REPOST_GRACE_S:
+        count("just_sent")
+        return
+    n = len(session["order"])
+    text = L.done_text(n) if len(rated) == n else L.end_text(len(rated), n)
+    if await _send(bot, chat, text, make_markup(L.submit_rows(session["nonce"], make_button))) is None:
+        _send_failed(session, count)
+        return
+    session["final_sent"] = True
+    session["status"] = "done"
+    session["send_failures"] = 0
+    _PAGE_SENT[session["nonce"]] = ("final", now)
+    count("final_reposted" if was_sent else "final_sent")
 
 
 def _kick_resume(session: dict, home: Optional[str], base: dict, count: Callable) -> bool:
@@ -904,6 +936,7 @@ async def _advance(bot: Any, chat: str, session: dict, view: dict, rated: set, c
                 return
             session["final_sent"] = True
             session["status"] = "done"
+            _PAGE_SENT[session["nonce"]] = ("final", now)
             count("final_sent")
         return
     if closes is not None and now >= closes:
@@ -1042,6 +1075,7 @@ def claim_send_now(home: Optional[str] = None, now: Optional[float] = None) -> O
 #: The send-now outcome from sync's codes, first match wins.
 _KICK_OUTCOMES = (
     ("started", "started"), ("resumed", "resumed"), ("reposted", "reposted"), ("page_sent", "sent"),
+    ("final_reposted", "final_reposted"), ("final_sent", "final"),
     ("just_sent", "just_sent"), ("all_rated", "all_rated"), ("all_rated_on_web", "all_rated"),
     ("ended_here", "ended"), ("ended_window", "window_over"), ("window_over", "window_over"),
     ("status_done", "done"), ("status_undeliverable", "undeliverable"), ("send_failed", "send_failed"),
@@ -1058,8 +1092,9 @@ async def send_now_once(bot: Any, adapter: Any, make_button: Callable, make_mark
 
     A fresh marker with the ballot on forces a read through the control plane (the poll's ``not_due`` bypassed) and
     syncs as a kick: a pool open with no session starts at any hour; a stopped session resumes; an open page's
-    unrated cards are re-posted at the bottom; the next page goes if the current one is rated. Everything rated, done,
-    submitted, closed, not a participant or no pool: nothing new is sent. The send lock and the ledger lock are the
+    unrated cards are re-posted at the bottom; the next page goes if the current one is rated; with nothing left to
+    card, the final line (with Submit) goes now, or is re-posted at the bottom if it went out before. Submitted,
+    closed, ended here, not a participant or no pool: nothing is sent. The send lock and the ledger lock are the
     pass's own, so a press racing a pass or a tap sends once."""
     if _kick_busy["on"] or not os.path.lexists(send_now_path(home)):
         return None
@@ -1104,7 +1139,7 @@ async def _send_now(bot: Any, adapter: Any, make_button: Callable, make_markup: 
     codes = await sync(bot, adapter, view, make_button, make_markup, home, stamp, tick=False, kick=True)
     if view["state"] != "open":
         return view["state"]
-    if "resumed" in codes and not ("reposted" in codes or "page_sent" in codes or "card_sent" in codes):
+    if "resumed" in codes and not any(c in codes for c in ("reposted", "page_sent", "card_sent", "final_sent", "final_reposted")):
         codes.pop("resumed")  # resumed, but nothing to send: the reason is the outcome
     for code, outcome in _KICK_OUTCOMES:
         if code in codes:

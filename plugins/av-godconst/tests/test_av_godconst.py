@@ -1031,21 +1031,57 @@ def test_a_press_sends_the_next_pair_when_the_web_page_rated_this_one(plugin, ho
     assert [c.text.splitlines()[0] for c in bot.cards()[2:]] == ["Statement 3 of 6 · Care", "Statement 4 of 6 · Care"]
 
 
-def test_a_press_sends_nothing_new_when_there_is_nothing_to_rate(plugin, home):
-    # Everything rated on the web, the final line not yet sent (a pass's, in daytime): nothing new.
+def test_a_press_sends_the_final_line_at_once_and_re_posts_it_once_sent(plugin, home):
+    # Everything rated on the web, the final line not sent yet: a press sends it now, at night, with Submit.
     bot, server = Bot(), Server(plugin, n=2)
     start(plugin, bot, server)
     server.ratings.update({"s001": 2, "s002": 4})
     press(home, iso(NIGHT))
-    assert kick(plugin, bot, server, NIGHT) == "all_rated"
-    assert len(bot.sent) == 3
-    # Done (the final line went out).
-    start(plugin, bot, server, now=DAY + 1000)
-    assert json.loads(ledger_text(home))["session"]["status"] == "done"
-    sent = len(bot.sent)
+    assert kick(plugin, bot, server, NIGHT) == "final"
+    assert len(bot.sent) == 4 and bot.sent[-1].text.startswith("All 2 statements rated. Thank you.")
+    assert bot.sent[-1].reply_markup.inline_keyboard[0][0].text == "Submit my ratings"
+    stored = json.loads(ledger_text(home))["session"]
+    assert stored["status"] == "done" and stored["final_sent"] is True
+    # A pass afterwards never sends it a second time.
+    start(plugin, bot, server, now=DAY + 86400)
+    assert len(bot.sent) == 4
+    # Already sent: a press right after does not repeat it; a later press re-posts it at the bottom.
+    press(home, iso(NIGHT + 30))
+    assert kick(plugin, bot, server, NIGHT + 30) == "just_sent"
+    assert len(bot.sent) == 4
+    press(home, iso(NIGHT + 120))
+    assert kick(plugin, bot, server, NIGHT + 120) == "final_reposted"
+    assert len(bot.sent) == 5 and bot.sent[-1].text.startswith("All 2 statements rated.")
+    assert bot.sent[-1].reply_markup.inline_keyboard[0][0].text == "Submit my ratings"
+    assert_no_value_on_disk(home)
+    # The final line sent as the reply to the last tap: a press under 60 s later does not repeat it, a later one does.
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin, n=2)
+    start(plugin, bot, server)
+    first, second = bot.cards()
+    tap(plugin, bot, server, first, 4, clock=NIGHT)
+    tap(plugin, bot, server, second, 4, clock=NIGHT)
+    assert bot.sent[-1].text.startswith("All 2 statements rated.") and len(bot.sent) == 4
+    press(home, iso(NIGHT + 10))
+    assert kick(plugin, bot, server, NIGHT + 10) == "just_sent"
+    press(home, iso(NIGHT + 100))
+    assert kick(plugin, bot, server, NIGHT + 100) == "final_reposted"
+    assert len(bot.sent) == 5
+    # Everything rated on the web before any card: the press lands on the final line (no header, no cards), and its
+    # Submit works like any other (the session's nonce).
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin, n=2)
+    server.ratings = {"s001": 1, "s002": 1}
     press(home, iso(NIGHT))
-    assert kick(plugin, bot, server, NIGHT) == "done"
-    assert len(bot.sent) == sent
+    assert kick(plugin, bot, server, NIGHT) == "final"
+    assert len(bot.sent) == 1 and bot.sent[0].text.startswith("All 2 statements rated.")
+    submit = bot.sent[0].reply_markup.inline_keyboard[0][0]
+    assert submit.text == "Submit my ratings"
+    assert tap(plugin, bot, server, bot.sent[0], 1, data=submit.callback_data, clock=NIGHT + 1).answers == ["Confirm below."]
+    assert_no_value_on_disk(home)
+
+
+def test_a_press_sends_nothing_when_the_ballot_is_over_or_not_open(plugin, home):
     # Every pool state with nothing to card.
     for state in ("submitted", "closed", "not_participant", "no_pool"):
         plugin.save_ledger({"v": 1, "session": None})
@@ -1054,13 +1090,6 @@ def test_a_press_sends_nothing_new_when_there_is_nothing_to_rate(plugin, home):
         press(home, iso(NIGHT))
         assert kick(plugin, bot, server, NIGHT) == state
         assert bot.sent == [] and not marker_there(home)
-    # All rated on the web before any card: no session cards, nothing sent.
-    plugin.save_ledger({"v": 1, "session": None})
-    bot, server = Bot(), Server(plugin, n=2)
-    server.ratings = {"s001": 1, "s002": 1}
-    press(home, iso(NIGHT))
-    assert kick(plugin, bot, server, NIGHT) == "all_rated"
-    assert bot.sent == []
     # A ballot that ended on this box (submitted here) is never restarted by a press.
     plugin.save_ledger({"v": 1, "session": None})
     bot, server = Bot(), Server(plugin)
