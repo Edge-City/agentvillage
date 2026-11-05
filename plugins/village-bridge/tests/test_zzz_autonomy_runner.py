@@ -117,6 +117,61 @@ class TestAutonomyRunner(unittest.TestCase):
             {"id": "zzzbot", "version": "1.0.0", "operations": ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], "skills": ["zzzbot"]}]}))
         self.assertFalse(runner._installed(self.home))
 
+    def test_any_of_the_five_phases_passes_and_the_tick_claims(self):
+        """A-93 (lead L41427): a job armed on an earlier token's phase keeps running after a rotation with no re-stage."""
+        rotated = "avb_" + "b" * 43
+        self.assertEqual(runner.phase(rotated), 0)  # the new token wants slot 0
+        self.cfg["token"] = rotated
+        (self.home / "village-bridge.json").write_text(json.dumps(self.cfg))
+        self.job["schedule"] = {"kind": "cron", "expr": "3-59/5 * * * *"}  # the job stays on slot 3
+        self.save_job()
+        self.assertEqual(runner._job(self.home, self.cfg), "a" * 12)
+        ops = []
+        def activity(_http, _cfg, operation, **_args):
+            ops.append(operation)
+            return {"candidate": None, "next_check_at": "2026-10-28T00:00:00Z"}
+        with patch.dict(sys.modules, clients()), \
+                patch.object(runner, "_model_route", return_value=("https://openrouter.ai/api/v1", "fixture", "model")), \
+                patch.object(runner, "_activity", side_effect=activity), \
+                patch.object(runner, "_output", side_effect=AssertionError("model called")):
+            runner.run(self.home)
+        self.assertEqual(ops, ["claim"])
+        # Every slot 0-4 passes, the token's own slot included (the positive control).
+        for slot in range(5):
+            self.job["schedule"] = {"kind": "cron", "expr": f"{slot}-59/5 * * * *"}
+            self.save_job()
+            self.assertEqual(runner._job(self.home, self.cfg), "a" * 12)
+        self.job["schedule"] = {"kind": "cron", "expr": runner.schedule(rotated)}
+        self.save_job()
+        self.assertEqual(runner._job(self.home, self.cfg), "a" * 12)
+
+    def test_any_slot_marker_line_is_in_the_shipped_bytes(self):
+        """A-93 contract for cp (review-b cp#555 S1): cp greps this exact line in a box's runner bytes."""
+        line = b"RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line"
+        self.assertEqual(SCRIPT.read_bytes().split(b"\n").count(line), 1)
+        self.assertIs(runner.RUNNER_ACCEPTS_ANY_SLOT, True)
+
+    def test_a_malformed_schedule_still_fails_job_shape_before_any_claim(self):
+        for schedule in ({"kind": "cron", "expr": "5-59/5 * * * *"}, {"kind": "cron", "expr": "3-59/10 * * * *"},
+                         {"kind": "cron", "expr": "3-59/5 * * *"}, {"kind": "cron", "expr": "x"},
+                         {"kind": "cron", "expr": "3-59/5 * * * *\n"}, {"kind": "cron", "expr": " 3-59/5 * * * *"},
+                         {"kind": "cron", "expr": "3-59/5  * * * *"}, {"kind": "cron", "expr": "3-59/5\t* * * *"},
+                         {"kind": "cron", "expr": None}, {"kind": "cron"},
+                         {"kind": "interval", "expr": "3-59/5 * * * *"}, {"kind": "once", "minutes": 5}):
+            self.job["schedule"] = schedule
+            self.save_job()
+            with self.assertRaisesRegex(ValueError, "job-shape"):
+                runner._job(self.home, self.cfg)
+        self.job["schedule"] = {"kind": "cron", "expr": "5-59/5 * * * *"}
+        self.save_job()
+        ops = []
+        with patch.dict(sys.modules, clients()), \
+                patch.object(runner, "_model_route", return_value=("https://openrouter.ai/api/v1", "fixture", "model")), \
+                patch.object(runner, "_activity", side_effect=lambda *_a, **_k: ops.append("called")):
+            with self.assertRaisesRegex(ValueError, "job-shape"):
+                runner.run(self.home)
+        self.assertEqual(ops, [])
+
     def test_phase_stable_and_silent_output_strict(self):
         self.assertLess(runner.DEADLINE_SECONDS, 90)
         self.assertEqual(runner.schedule(TOKEN), runner.schedule(TOKEN))

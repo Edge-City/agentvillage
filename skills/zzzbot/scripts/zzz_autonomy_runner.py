@@ -27,7 +27,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 JOB_NAME = "Edge — zzz event autonomy"
+RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line
 JOB_SCRIPT = "zzz_autonomy_runner.py"
+# Any of the five 5-minute phases (lead L41427, A-93): the installer arms a NEW job on the bridge token's phase, but a
+# token rotation without a re-stage must never stop a job armed on an earlier token's phase.
+JOB_EXPR = re.compile(r"^[0-4]-59/5 \* \* \* \*$")
 DEADLINE_SECONDS = 85  # Below the service's 90-second claim lease.
 # The run deadline (review-b S1 on app#932): one time.monotonic() budget for the whole run, measured when run() starts
 # and 2 s under the alarm above, so it also sits under ZZZ's 90 s claim lease (a complete after it is refused) and
@@ -418,7 +422,7 @@ def _config(home: Path):
 
 
 def phase(token: str) -> int:
-    """Five minute cron phase; token rotation may move it, while D1 due suppresses bursts."""
+    """Mirror of the installer's phase formula (autonomySchedule); the job check no longer uses it: _job accepts any phase."""
     return hashlib.sha256(token.encode()).digest()[0] % 5
 
 
@@ -465,7 +469,7 @@ def _job(home: Path, cfg: dict):
             job.get("skills") or job.get("skill") or job.get("context_from") or
             job.get("monitor_script") or job.get("monitor_url") or
             not isinstance(job.get("schedule"), dict) or job["schedule"].get("kind") != "cron" or
-            job["schedule"].get("expr") != schedule(cfg["token"]) or
+            not isinstance(job["schedule"].get("expr"), str) or not JOB_EXPR.fullmatch(job["schedule"]["expr"]) or
             not isinstance(job.get("repeat"), dict) or job["repeat"].get("times") is not None):
         raise ValueError("job-shape")
     return job["id"]

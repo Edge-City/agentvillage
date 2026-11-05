@@ -8,11 +8,17 @@ import { jobApi, jobPython, OWNED_FILE_MAX_BYTES, parseHermesJobs, replaceFileNo
 
 export const AUTONOMY_GATE = "zzz-autonomy-runner";
 export const AUTONOMY_JOB_NAME = "Edge — zzz event autonomy";
+// A-93 contract for cp (review-b cp#555 S1): with the runner's RUNNER_ACCEPTS_ANY_SLOT line, it marks an installer
+// and runner that accept a job on any of the five phases. Used nowhere else; its value never changes meaning.
+export const INSTALLER_ACCEPTS_ANY_SLOT = true;
 export const AUTONOMY_JOB_SCRIPT = "zzz_autonomy_runner.py";
 // cp#467: the control plane mirrors these receipt paths (mini-apps-skills.js ZZZ_AUTONOMY_FILE_LISTS); change it first.
 export const AUTONOMY_FILES = ["scripts/zzz_autonomy_runner.py", "prompts/autonomy.md"] as const;
 const ID = /^[0-9a-f]{12}$/;
 const TOKEN = /^avb_[A-Za-z0-9_-]{43}$/;
+// Any of the five 5-minute phases (lead L41427, A-93), as the runner's JOB_EXPR: a new job takes the bridge token's
+// phase (autonomySchedule), but a job on another phase is confirmed as it is, so a token rotation never stops it.
+const AUTONOMY_EXPR = /^[0-4]-59\/5 \* \* \* \*$/;
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const source = (relative: string) => readFileSync(join(import.meta.dir, "..", "skills", "zzzbot", relative));
 
@@ -31,6 +37,7 @@ export const AUTONOMY_SHIPPED = {
     "135a21654534a6afa2096d59f99444a9e673e52e756586134fa4fb050db35a6a", // + owner_instruction read from the context reply, appended last to the system message (lead L34271, release L34319); the header forbids quoting or revealing it in a post (review-b ov#579 N1)
     "72aa8562ddb0b3b70c828dc30aafa8914bc9a3471e0c8aea2390acf172af9488", // + village_knowledge from the context reply after the room data, one guidance line before the owner's instruction (lead L34507 + L34517; ov#582) + the no-filler-opener SYSTEM line (lead L34643 (4)) and the app's versioned `instructions` block replaces the prompt wording when valid, a fixed SAFETY tail always after it (VILLAGE_GUIDANCE stays built-in, before SAFETY), built-in prompt byte for byte otherwise (lead L34695; ov#584) + the seat box's daily cap from the app's claim-reply `seat` (up to 150; lead L34728) + 120 model turns per box per UTC day, was 48 (lead L34801; ov#585) + comments trimmed to fit the 65,536-byte cap (review-b set M1)
     "84fd99eae798c4f5447392781557565f4cc03e4ef2361f5bacb59815877caf59", // + the full agent turn, ON by default (lead L34283 + L35716; ov#580 on ov#592): one Hermes cron run_job after the context reply unless it says agent_turn: false, HERMES_SAFE_MODE (no plugin, hook or poller in the runner; review-b S2), memory/SOUL/context files/session store off, one read-only tool village_skill over shipped SKILL.md bytes only (digest-checked, opened O_NOFOLLOW per component), private lines left out (review-b S1), max_iterations 3, one claimed turn each within a 40/day agent budget (lead L36075 S1), skill text usable in a post (S2), the agent built with its Hermes home scoped to a temp logs folder (derived log paths checked), removed after the turn with any <home>/sessions file named for its session, leak + Private-mark + echo + invisible checks on the post and each tag (lead L36453 N1; a tag that is a room tag skips only the echo check, L36472), the folder also removed when the run fails (N2), reasoning pinned low (L36453), today's one model call as the fallback
+    "a99f640dc63014d7ffa9ec5ea5da7b5f2ded90da4edd8b203ca9294aaeb51317", // + the job check accepts any of the five schedule phases `[0-4]-59/5 * * * *`, so a bridge-token rotation with no re-stage never stops the job (lead L41427, review-a A-93), marked by the RUNNER_ACCEPTS_ANY_SLOT line cp greps (review-b cp#555 S1)
   ],
   "prompts/autonomy.md": ["93b8442797de1957ac5e64eb7477e1288601654fdaccb56fc4791f0bfd608587"],
 } as const;
@@ -175,7 +182,7 @@ function bridgeToken(home: string): string {
   return token;
 }
 
-function confirmed(job: Record<string, unknown>, schedule: string, prompt: string): boolean {
+function confirmed(job: Record<string, unknown>, prompt: string): boolean {
   const sch = job.schedule as {kind?: unknown;expr?: unknown} | undefined;
   const repeat = job.repeat as {times?: unknown} | undefined;
   const empty = (value: unknown) => value == null || value === "" || (Array.isArray(value) && value.length === 0);
@@ -183,7 +190,7 @@ function confirmed(job: Record<string, unknown>, schedule: string, prompt: strin
     job.script === AUTONOMY_JOB_SCRIPT && job.prompt === prompt && job.enabled === true && job.no_agent === true &&
     JSON.stringify(job.enabled_toolsets) === '["no_mcp"]' && job.deliver === "local" && job.failure_deliver === "local" &&
     !job.workdir && empty(job.skills) && empty(job.skill) && empty(job.context_from) && !job.monitor_script && !job.monitor_url &&
-    sch?.kind === "cron" && sch.expr === schedule && repeat?.times === null;
+    sch?.kind === "cron" && typeof sch.expr === "string" && AUTONOMY_EXPR.test(sch.expr) && repeat?.times === null;
 }
 
 export function verifyAutonomyJob(home: string, installed: boolean, script: Buffer | null): void {
@@ -196,7 +203,7 @@ export function verifyAutonomyJob(home: string, installed: boolean, script: Buff
     return;
   }
   const prompt = source(AUTONOMY_FILES[1]).toString("utf8").trimEnd();
-  if (jobs.length !== 1 || !confirmed(jobs[0], autonomySchedule(bridgeToken(home)), prompt) ||
+  if (jobs.length !== 1 || !confirmed(jobs[0], prompt) ||
       !shim || !script || ownedFile(shim, AUTONOMY_FILES[0]) !== "ours" || !readFileSync(shim).equals(script))
     throw new Error("zzz_autonomy_job_not_confirmed");
 }
@@ -241,7 +248,10 @@ export function reconcileAutonomyJob(home: string, installed: boolean): void {
   replaceFileNoFollow(scripts, AUTONOMY_JOB_SCRIPT, script);
   const id = jobs[0]?.id;
   if (id !== undefined && (typeof id !== "string" || !ID.test(id))) throw new Error("zzz_autonomy_job_invalid");
-  jobApi(python, home, {action:"install",...(id?{id}:{}),name:AUTONOMY_JOB_NAME,prompt,
-    script:AUTONOMY_JOB_SCRIPT,schedule,toolsets:["no_mcp"]});
+  // A confirmed job on any phase is left as it is (lead L41427): no Hermes call, no re-phase. Only an absent or
+  // unconfirmed job is installed, on the current token's phase.
+  if (!(jobs.length === 1 && confirmed(jobs[0], prompt)))
+    jobApi(python, home, {action:"install",...(id?{id}:{}),name:AUTONOMY_JOB_NAME,prompt,
+      script:AUTONOMY_JOB_SCRIPT,schedule,toolsets:["no_mcp"]});
   verifyAutonomyJob(home,true,script);
 }
