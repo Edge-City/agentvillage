@@ -1124,6 +1124,42 @@ def test_a_double_press_is_one_send_and_a_press_racing_a_pass_sends_once(plugin,
     assert len(bot.sent) == 3 and len(bot.cards()) == 2
 
 
+def test_a_press_leaves_the_cards_first_elicitation_hold_alone(plugin, home, monkeypatch):
+    """#611 (cards first): av-elicit holds its opener until av-godconst writes cards-released. A send-now press is a
+    ballot send only: it never writes, removes or releases anything of the elicitation (no cards-released, the staged
+    opener and the cards file untouched), and while the ballot it started is active the follow-up cards wait, so the
+    two never interleave and the agent's questions never come before the cards."""
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "1")
+    events = os.path.join(home, "av-events")
+    godconst_dir = os.path.join(events, "godconst")
+    inject = os.path.join(events, "elicit", "inject")
+    for d in (events, godconst_dir, os.path.join(events, "elicit"), inject):
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)
+    trigger = os.path.join(godconst_dir, "elicit-cards.json")
+    with open(trigger, "w", encoding="utf-8") as handle:
+        json.dump({"elicitation_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "pool_id": POOL, "window_ms": 1761280000000,
+                   "statement_ids": ["s001", "s002"], "expires_ms": int(CLOSES * 1000)}, handle)
+    os.chmod(trigger, 0o600)
+    opener = os.path.join(inject, "1761280000000-open.txt")
+    with open(opener, "w", encoding="utf-8") as handle:
+        handle.write("opener")
+    before = {p: open(p, encoding="utf-8").read() for p in (trigger, opener)}
+    bot, server = Bot(), Server(plugin)
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "started"
+    assert len(bot.cards()) == 2 and all(c.reply_markup.inline_keyboard[0][0].callback_data.startswith("gcb:") for c in bot.cards())
+    assert not os.path.lexists(plugin.cards_released_path(home))
+    assert {p: open(p, encoding="utf-8").read() for p in (trigger, opener)} == before
+    assert not os.path.lexists(plugin.elicit_ledger_path(home))
+    # The ballot page is open: the follow-up cards hold (no interleaving), and nothing is released to av-elicit.
+    assert os.path.exists(os.path.join(godconst_dir, "page-open"))
+    calls = len(server.calls)
+    assert run(plugin.elicit_pass_once(bot, None, make_button, make_markup, now=NIGHT + 5, reader=server)) == "ballot_active"
+    assert len(server.calls) == calls and len(bot.sent) == 3
+    assert not os.path.lexists(plugin.cards_released_path(home))
+
+
 async def _two_checks(P, bot, server, now):
     return await asyncio.gather(P.send_now_once(bot, None, make_button, make_markup, now=now, reader=server),
                                 P.send_now_once(bot, None, make_button, make_markup, now=now, reader=server))
