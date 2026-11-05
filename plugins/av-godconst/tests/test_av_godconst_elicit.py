@@ -256,9 +256,9 @@ def assert_nothing_private_on_disk(home):
     assert not os.path.exists(os.path.join(home, "av-godconst", "ballot.json"))  # the ballot is never touched
 
 
-FU = "Follow-up 2 of 2"
+FU = "Optional follow-up"
 SCALE = "1 strongly oppose · 3 neutral · 5 strongly support"
-DONE = "All rated. Thank you, that's the last follow-up."
+DONE = "All rated. Thank you!"
 
 
 def first_line(msg):
@@ -420,8 +420,8 @@ def test_start_sends_a_labelled_header_and_the_first_pair_of_the_files_statement
     write_trigger(elicit, ids=["s005", "s002", "s003"])  # the read's order wins; s001, s004, s006 are never shown
     assert pass_(plugin, bot, server) == "sent"
     header, *cards = bot.sent
-    assert first_line(header) == f"{FU} (the last one): rate statements for ODIN's constitution"
-    assert "Optional: rate as many as you like, skip any." in header.text and "5  Strongly support inclusion" in header.text
+    assert first_line(header) == f"{FU}: rate rules for a god agent"
+    assert "Rate as many as you like, skip any." in header.text and "5  Strongly support inclusion" in header.text
     assert "Open until" not in header.text and "IST" not in header.text  # the box's file expiry is no deadline to show
     assert len(header.text.split()) <= 45
     assert "Submit" not in header.text and "remind" not in header.text.lower()
@@ -758,7 +758,7 @@ def test_stop_ends_it_and_keeps_what_was_saved(plugin, elicit):
     header = bot.header()
     q = tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
     assert q.answers == ["Stopped. The ratings you gave are kept."] and q.edited == [None]
-    assert bot.sent[-1].text == "Stopped. The ratings you gave are kept, and that's the last follow-up."
+    assert bot.sent[-1].text == "Stopped. The ratings you gave are kept."
     stored = ledger(elicit)
     assert stored["session"] is None and stored["ended"][-1]["status"] == "stopped"
     assert server.saved == {"s001": 4} and not os.path.exists(marker(elicit))

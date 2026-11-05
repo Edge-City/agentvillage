@@ -345,18 +345,17 @@ def valid_cards(data: Any, statement_ids: Iterable) -> Optional[list]:
     return out
 
 
-#: The cards are the second and last Telegram follow-up (the agent's questions are the first): said once, in the header,
-#: so the resident knows nothing recurs. Residents' feedback, Nov 2026: the earlier texts were long, repeated a label on
-#: every card, and showed an "Open until" time that was only the box's 24 h file expiry (the app sets no deadline).
-FOLLOW_UP = "Follow-up 2 of 2"
+#: Said once, in the header. Residents' feedback, Nov 2026: the earlier texts were long, repeated a label on every card,
+#: and showed an "Open until" time that was only the box's 24 h file expiry (the app sets no deadline).
+FOLLOW_UP = "Optional follow-up"
 SCALE_LINE = "1 strongly oppose · 3 neutral · 5 strongly support"
 
 
 # The follow-up cards never count or number the statements: the whole pool is offered and the resident rates as many
 # as they like, so a total or a "Statement 3" reads as a chore (app's v5 pilot, 30 Oct 2026).
 def elicit_header_text() -> str:
-    lines = [f"{FOLLOW_UP} (the last one): rate statements for ODIN's constitution", "",
-             "Optional: rate as many as you like, skip any. Only the research team sees your ratings.", ""]
+    lines = [f"{FOLLOW_UP}: rate rules for a god agent", "",
+             "Rate as many as you like, skip any. Only the research team sees your ratings.", ""]
     lines += [f"{v}  {label}" for v, label in LABELS.items()]
     return _esc(lines)
 
@@ -366,8 +365,8 @@ def elicit_card_text(text: str) -> str:
 
 
 def elicit_done_text() -> str:
-    return _esc(["All rated. Thank you, that's the last follow-up."])
+    return _esc(["All rated. Thank you!"])
 
 
 def elicit_stopped_text() -> str:
-    return _esc(["Stopped. The ratings you gave are kept, and that's the last follow-up."])
+    return _esc(["Stopped. The ratings you gave are kept."])
