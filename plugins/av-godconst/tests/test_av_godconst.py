@@ -883,3 +883,283 @@ def test_a_night_tick_holds_the_final_line_a_retry_and_a_resume(plugin, home):
     assert len(bot.cards()) == 2
     start(plugin, bot, server, now=MORNING)
     assert len(bot.cards()) == 4
+
+
+# --------------------------------------------------------------------------- send now (DATA-541: "Rate in Telegram")
+
+
+def press(home, at=None, raw=None):
+    """The control plane's write: a dotfile in the 0700 directory, then a rename onto `send-now` (0600)."""
+    directory = os.path.join(home, "av-godconst")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    tmp = os.path.join(directory, ".send-now.tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(raw if raw is not None else json.dumps({"at": at}))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, os.path.join(directory, "send-now"))
+
+
+def iso(epoch):
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def kick(P, bot, server, now):
+    return run(P.send_now_once(bot, None, make_button, make_markup, now=now, reader=server))
+
+
+def marker_there(home):
+    return os.path.lexists(os.path.join(home, "av-godconst", "send-now"))
+
+
+def test_no_marker_is_one_look_and_nothing_else(plugin, home):
+    bot, server = Bot(), Server(plugin)
+    assert kick(plugin, bot, server, NIGHT) is None
+    assert server.calls == [] and bot.sent == []
+
+
+def test_a_press_at_night_starts_the_ballot_at_once(plugin, home, caplog):
+    caplog.set_level(logging.INFO)
+    bot, server = Bot(), Server(plugin)
+    assert start(plugin, bot, server, now=NIGHT) == "open" and bot.sent == []  # the pass waits for daytime
+    press(home, iso(NIGHT - 5))
+    assert kick(plugin, bot, server, NIGHT) == "started"
+    assert not marker_there(home)
+    header, *cards = bot.sent
+    assert "Village constitution: 6 statements to rate" in header.text
+    assert [c.text.splitlines()[0] for c in cards] == ["Statement 1 of 6 · Care", "Statement 2 of 6 · Care"]
+    # The forced read bypassed the poll; it also stands for the pass's next read.
+    assert run(plugin.pass_once(bot, None, make_button, make_markup, now=NIGHT + 30, reader=server)) == "not_due"
+    # The marker is gone: the next checks send nothing.
+    assert kick(plugin, bot, server, NIGHT + 10) is None
+    assert len(bot.sent) == 3
+    lines = "\n".join(r.getMessage() for r in caplog.records)
+    assert "outcome=send_now_started" in lines and TEXT not in lines and str(OWNER) not in lines
+    assert_no_value_on_disk(home)
+
+
+def test_a_stale_press_is_dropped_without_a_read(plugin, home, caplog):
+    caplog.set_level(logging.INFO)
+    bot, server = Bot(), Server(plugin)
+    press(home, iso(DAY - 16 * 60))
+    assert kick(plugin, bot, server, DAY) == "stale"
+    assert not marker_there(home) and server.calls == [] and bot.sent == []
+    assert "outcome=send_now_stale" in "\n".join(r.getMessage() for r in caplog.records)
+    # Unreadable content: the file's mtime decides.
+    press(home, raw="not json")
+    os.utime(os.path.join(home, "av-godconst", "send-now"), (DAY - 20 * 60, DAY - 20 * 60))
+    assert kick(plugin, bot, server, DAY) == "stale"
+    press(home, raw="not json")
+    os.utime(os.path.join(home, "av-godconst", "send-now"), (DAY - 60, DAY - 60))
+    assert kick(plugin, bot, server, DAY) == "started"
+    assert not marker_there(home)
+
+
+def test_a_press_with_the_ballot_off_only_logs(plugin, home, monkeypatch):
+    monkeypatch.setenv("AV_GODCONST_BALLOT", "0")
+    bot, server = Bot(), Server(plugin)
+    press(home, iso(DAY))
+    assert kick(plugin, bot, server, DAY) == "off"
+    assert not marker_there(home) and server.calls == [] and bot.sent == []
+
+
+def test_a_press_resumes_a_stopped_ballot_and_sends(plugin, home):
+    bot, server = Bot(), Server(plugin)
+    start(plugin, bot, server)
+    header = bot.sent[0]
+    tap(plugin, bot, server, header, 1, data=header.reply_markup.inline_keyboard[0][1].callback_data)
+    assert json.loads(ledger_text(home))["session"]["status"] == "stopped"
+    old = bot.cards()
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "resumed"
+    assert json.loads(ledger_text(home))["session"]["status"] == "active"
+    # The open pair again, at the bottom, at night; the header's button reads Stop again.
+    assert [c.text.splitlines()[0] for c in bot.cards()[2:]] == ["Statement 1 of 6 · Care", "Statement 2 of 6 · Care"]
+    assert len(bot.cards()) == 4
+    message_id, markup = [e for e in bot.edits if e[0] == header.message_id][-1]
+    assert markup.inline_keyboard[0][1].text == "Stop these cards"
+    # A stopped ballot whose pair was rated: the press resumes and sends the next pair.
+    for card, value in zip(old, (2, 3)):  # rated on the old copies: the next pair follows (the reply to a tap)
+        tap(plugin, bot, server, card, value, clock=NIGHT + 1)
+    assert len(bot.cards()) == 6
+    nonce = json.loads(ledger_text(home))["session"]["nonce"]
+    tap(plugin, bot, server, header, 1, data=plugin.L.control_callback("x", nonce), clock=NIGHT + 3)
+    assert json.loads(ledger_text(home))["session"]["status"] == "stopped"
+    server.ratings.update({"s003": 1, "s004": 1})  # the open pair rated on the web while stopped
+    press(home, iso(NIGHT + 200))
+    assert kick(plugin, bot, server, NIGHT + 200) == "resumed"
+    assert [c.text.splitlines()[0] for c in bot.cards()[6:]] == ["Statement 5 of 6 · Care", "Statement 6 of 6 · Care"]
+    assert_no_value_on_disk(home)
+
+
+def test_a_press_reposts_the_open_pair_and_old_cards_keep_working(plugin, home):
+    bot, server = Bot(), Server(plugin)
+    start(plugin, bot, server)
+    first, second = bot.cards()
+    tap(plugin, bot, server, first, 4)  # one of the pair rated
+    # Right after the pair went out, a press does not send it twice.
+    press(home, iso(DAY + 20))
+    assert kick(plugin, bot, server, DAY + 20) == "just_sent"
+    assert len(bot.cards()) == 2
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "reposted"
+    new = bot.cards()[2:]
+    assert [c.text.splitlines()[0] for c in new] == ["Statement 2 of 6 · Care"]  # only the unrated card
+    assert new[0].reply_markup.inline_keyboard[1][0].text == "Submit my ratings"
+    cards = json.loads(ledger_text(home))["session"]["cards"]
+    assert cards["1"] == {"message_id": new[0].message_id, "submit": True}
+    assert cards["0"]["message_id"] == first.message_id
+    # The OLD copy still saves (same nonce, same position) and completes the pair: the next pair follows at once.
+    q = tap(plugin, bot, server, second, 5, clock=NIGHT + 5)
+    assert q.answers == ["Saved: Strongly support inclusion"] and server.ratings["s002"] == 5
+    assert [c.text.splitlines()[0] for c in bot.cards()[3:]] == ["Statement 3 of 6 · Care", "Statement 4 of 6 · Care"]
+    # The ledger's card (the new copy) is re-marked with the value tapped on the old copy.
+    message_id, markup = [e for e in bot.edits if e[0] == new[0].message_id][-1]
+    assert [b.text for b in markup.inline_keyboard[0]] == ["1", "2", "3", "4", "✅ 5"]
+    assert markup.inline_keyboard[1][0].text == "Submit my ratings"
+    # The new copy saves too, as a revision.
+    assert tap(plugin, bot, server, new[0], 3, clock=NIGHT + 6).answers == ["Saved: Neutral (changed)"]
+    assert_no_value_on_disk(home)
+
+
+def test_a_press_sends_the_next_pair_when_the_web_page_rated_this_one(plugin, home):
+    bot, server = Bot(), Server(plugin)
+    start(plugin, bot, server)
+    server.ratings.update({"s001": 2, "s002": 2})
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "sent"
+    assert [c.text.splitlines()[0] for c in bot.cards()[2:]] == ["Statement 3 of 6 · Care", "Statement 4 of 6 · Care"]
+
+
+def test_a_press_sends_the_final_line_at_once_and_re_posts_it_once_sent(plugin, home):
+    # Everything rated on the web, the final line not sent yet: a press sends it now, at night, with Submit.
+    bot, server = Bot(), Server(plugin, n=2)
+    start(plugin, bot, server)
+    server.ratings.update({"s001": 2, "s002": 4})
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "final"
+    assert len(bot.sent) == 4 and bot.sent[-1].text.startswith("All 2 statements rated. Thank you.")
+    assert bot.sent[-1].reply_markup.inline_keyboard[0][0].text == "Submit my ratings"
+    stored = json.loads(ledger_text(home))["session"]
+    assert stored["status"] == "done" and stored["final_sent"] is True
+    # A pass afterwards never sends it a second time.
+    start(plugin, bot, server, now=DAY + 86400)
+    assert len(bot.sent) == 4
+    # Already sent: a press right after does not repeat it; a later press re-posts it at the bottom.
+    press(home, iso(NIGHT + 30))
+    assert kick(plugin, bot, server, NIGHT + 30) == "just_sent"
+    assert len(bot.sent) == 4
+    press(home, iso(NIGHT + 120))
+    assert kick(plugin, bot, server, NIGHT + 120) == "final_reposted"
+    assert len(bot.sent) == 5 and bot.sent[-1].text.startswith("All 2 statements rated.")
+    assert bot.sent[-1].reply_markup.inline_keyboard[0][0].text == "Submit my ratings"
+    assert_no_value_on_disk(home)
+    # The final line sent as the reply to the last tap: a press under 60 s later does not repeat it, a later one does.
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin, n=2)
+    start(plugin, bot, server)
+    first, second = bot.cards()
+    tap(plugin, bot, server, first, 4, clock=NIGHT)
+    tap(plugin, bot, server, second, 4, clock=NIGHT)
+    assert bot.sent[-1].text.startswith("All 2 statements rated.") and len(bot.sent) == 4
+    press(home, iso(NIGHT + 10))
+    assert kick(plugin, bot, server, NIGHT + 10) == "just_sent"
+    press(home, iso(NIGHT + 100))
+    assert kick(plugin, bot, server, NIGHT + 100) == "final_reposted"
+    assert len(bot.sent) == 5
+    # Everything rated on the web before any card: the press lands on the final line (no header, no cards), and its
+    # Submit works like any other (the session's nonce).
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin, n=2)
+    server.ratings = {"s001": 1, "s002": 1}
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "final"
+    assert len(bot.sent) == 1 and bot.sent[0].text.startswith("All 2 statements rated.")
+    submit = bot.sent[0].reply_markup.inline_keyboard[0][0]
+    assert submit.text == "Submit my ratings"
+    assert tap(plugin, bot, server, bot.sent[0], 1, data=submit.callback_data, clock=NIGHT + 1).answers == ["Confirm below."]
+    assert_no_value_on_disk(home)
+
+
+def test_a_press_sends_nothing_when_the_ballot_is_over_or_not_open(plugin, home):
+    # Every pool state with nothing to card.
+    for state in ("submitted", "closed", "not_participant", "no_pool"):
+        plugin.save_ledger({"v": 1, "session": None})
+        bot, server = Bot(), Server(plugin)
+        server.state = state
+        press(home, iso(NIGHT))
+        assert kick(plugin, bot, server, NIGHT) == state
+        assert bot.sent == [] and not marker_there(home)
+    # A ballot that ended on this box (submitted here) is never restarted by a press.
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin)
+    start(plugin, bot, server)
+    server.refuse = (409, "submitted")
+    tap(plugin, bot, server, bot.cards()[0], 3)
+    server.refuse = None
+    sent = len(bot.sent)
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "ended"
+    assert len(bot.sent) == sent
+
+
+def test_a_double_press_is_one_send_and_a_press_racing_a_pass_sends_once(plugin, home):
+    bot, server = Bot(), Server(plugin)
+    press(home, iso(DAY))
+    press(home, iso(DAY + 1))  # the repeat press overwrites the marker
+    first, second = run(_two_checks(plugin, bot, server, DAY + 2))
+    assert {first, second} == {"started", None}
+    assert len(bot.sent) == 3 and len(server.calls) == 1
+    # A press and a pass at the same moment on a fresh box: one header, one pair.
+    plugin.save_ledger({"v": 1, "session": None})
+    bot, server = Bot(), Server(plugin)
+    plugin._last_read["at"] = 0.0
+    press(home, iso(DAY))
+
+    async def both():
+        return await asyncio.gather(plugin.pass_once(bot, None, make_button, make_markup, now=DAY, reader=server),
+                                    plugin.send_now_once(bot, None, make_button, make_markup, now=DAY, reader=server))
+
+    run(both())
+    assert len(bot.sent) == 3 and len(bot.cards()) == 2
+
+
+def test_a_press_leaves_the_cards_first_elicitation_hold_alone(plugin, home, monkeypatch):
+    """#611 (cards first): av-elicit holds its opener until av-godconst writes cards-released. A send-now press is a
+    ballot send only: it never writes, removes or releases anything of the elicitation (no cards-released, the staged
+    opener and the cards file untouched), and while the ballot it started is active the follow-up cards wait, so the
+    two never interleave and the agent's questions never come before the cards."""
+    monkeypatch.setenv("AV_GODCONST_ELICIT_CARDS", "1")
+    events = os.path.join(home, "av-events")
+    godconst_dir = os.path.join(events, "godconst")
+    inject = os.path.join(events, "elicit", "inject")
+    for d in (events, godconst_dir, os.path.join(events, "elicit"), inject):
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)
+    trigger = os.path.join(godconst_dir, "elicit-cards.json")
+    with open(trigger, "w", encoding="utf-8") as handle:
+        json.dump({"elicitation_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "pool_id": POOL, "window_ms": 1761280000000,
+                   "statement_ids": ["s001", "s002"], "expires_ms": int(CLOSES * 1000)}, handle)
+    os.chmod(trigger, 0o600)
+    opener = os.path.join(inject, "1761280000000-open.txt")
+    with open(opener, "w", encoding="utf-8") as handle:
+        handle.write("opener")
+    before = {p: open(p, encoding="utf-8").read() for p in (trigger, opener)}
+    bot, server = Bot(), Server(plugin)
+    press(home, iso(NIGHT))
+    assert kick(plugin, bot, server, NIGHT) == "started"
+    assert len(bot.cards()) == 2 and all(c.reply_markup.inline_keyboard[0][0].callback_data.startswith("gcb:") for c in bot.cards())
+    assert not os.path.lexists(plugin.cards_released_path(home))
+    assert {p: open(p, encoding="utf-8").read() for p in (trigger, opener)} == before
+    assert not os.path.lexists(plugin.elicit_ledger_path(home))
+    # The ballot page is open: the follow-up cards hold (no interleaving), and nothing is released to av-elicit.
+    assert os.path.exists(os.path.join(godconst_dir, "page-open"))
+    calls = len(server.calls)
+    assert run(plugin.elicit_pass_once(bot, None, make_button, make_markup, now=NIGHT + 5, reader=server)) == "ballot_active"
+    assert len(server.calls) == calls and len(bot.sent) == 3
+    assert not os.path.lexists(plugin.cards_released_path(home))
+
+
+async def _two_checks(P, bot, server, now):
+    return await asyncio.gather(P.send_now_once(bot, None, make_button, make_markup, now=now, reader=server),
+                                P.send_now_once(bot, None, make_button, make_markup, now=now, reader=server))
