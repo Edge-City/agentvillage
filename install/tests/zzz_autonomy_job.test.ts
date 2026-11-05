@@ -133,7 +133,11 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   const v2127=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v2127.py.fixture"));
   expect(digest(v2127)).toBe("72aa8562ddb0b3b70c828dc30aafa8914bc9a3471e0c8aea2390acf172af9488");
   expect(v2127.equals(current)).toBe(false);
-  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(current)]);
+  // v2.2.0-v2.2.2's bytes (main 8d2017b2); any-slot acceptance (lead L41427) appended a twelfth.
+  const v222=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v222.py.fixture"));
+  expect(digest(v222)).toBe("84fd99eae798c4f5447392781557565f4cc03e4ef2361f5bacb59815877caf59");
+  expect(v222.equals(current)).toBe(false);
+  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(v222),digest(current)]);
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const shim=join(home,"scripts",AUTONOMY_JOB_SCRIPT);
@@ -159,9 +163,9 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   expect(readFileSync(shim).equals(current)).toBe(true);
   expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
-  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's, ov#550's first head, ov#553's, v2.1.24's, ov#579's
-  // and v2.1.27's.
-  for (const older of [v2121,ov548,ov550,ov553,v2124,ov579,v2127]) {
+  // And from the v2.1.21 bytes (the fleet at v2.1.22's cut), ov#548's, ov#550's first head, ov#553's, v2.1.24's, ov#579's,
+  // v2.1.27's and v2.2.0-v2.2.2's.
+  for (const older of [v2121,ov548,ov550,ov553,v2124,ov579,v2127,v222]) {
     writeFileSync(shim,older,{mode:0o700});
     if (existsSync(skillCopy)) writeFileSync(skillCopy,older);
     expect(stage([zzzbot,autonomy]).status).toBe(0);
