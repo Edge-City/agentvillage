@@ -345,41 +345,42 @@ def valid_cards(data: Any, statement_ids: Iterable) -> Optional[list]:
     return out
 
 
-FOLLOW_UP = "Follow-up (not your ballot)"
+#: Said once, in the header. Residents' feedback, Nov 2026: the earlier texts were long, repeated a label on every card,
+#: and showed an "Open until" time that was only the box's 24 h file expiry (the app sets no deadline).
+FOLLOW_UP = "Optional follow-up"
+SCALE_LINE = "1 strongly oppose · 3 neutral · 5 strongly support"
 
 
 # The follow-up cards never count or number the statements: the whole pool is offered and the resident rates as many
 # as they like, so a total or a "Statement 3" reads as a chore (app's v5 pilot, 30 Oct 2026).
-def elicit_header_text(expires_at: Optional[float]) -> str:
-    lines = [
-        f"{FOLLOW_UP}: constitution statements to rate (optional)",
-        "",
-        "A research follow-up, separate from the official constitution ballot: these ratings do not change any ballot.",
-        "",
-        "Tap one button per statement, from 1 to 5. Rate as many as you like; skip any. "
-        "Tap again to change a rating. You won't see who wrote each statement.",
-        "",
-    ]
+def elicit_header_text() -> str:
+    lines = [f"{FOLLOW_UP}: rate rules for a god agent", "",
+             "Rate as many as you like, skip any. Only the research team sees your ratings.", ""]
     lines += [f"{v}  {label}" for v, label in LABELS.items()]
-    lines += ["", f"You'll get {PAGE_SIZE} statements at a time; the next ones arrive once you've rated these. "
-                  "Each tap is saved straight away."]
-    if expires_at is not None:
-        lines += ["", f"Open until {ist_label(expires_at)}."]
-    lines += ["", "Private: only you and the research team see your ratings. Your agent does not see these cards."]
     return _esc(lines)
+
+
+#: "ODIN" (any case, whole word; a leading "the" and a trailing "agent" folded in) on a follow-up card reads "the god agent" (Amita, 5 Nov 2026:
+#: residents see "a god agent", never ODIN). Display only: the statement's stored text, its id and the official ballot's
+#: cards are unchanged, so ratings stay keyed to the same statement.
+_ODIN = re.compile(r"\b(?:the\s+)?odin(?:\s+agent)?\b", re.IGNORECASE)
+_SENTENCE_START = re.compile(r"(?:^|[.!?:]\s+|\n\s*|[\"'“‘(\[-]\s*)$")
+
+
+def god_agent_text(text: str) -> str:
+    """`text` with every ODIN as "the god agent" ("The god agent" where a sentence starts); "ODIN's" keeps its 's."""
+    def swap(m: "re.Match[str]") -> str:
+        return "The god agent" if _SENTENCE_START.search(text[:m.start()]) else "the god agent"
+    return _ODIN.sub(swap, text)
 
 
 def elicit_card_text(text: str) -> str:
-    return _esc([FOLLOW_UP, "", text, "",
-                 "1 strongly oppose inclusion · 3 neutral · 5 strongly support inclusion"])
+    return _esc([god_agent_text(text), "", SCALE_LINE])
 
 
-def elicit_done_text(expires_at: Optional[float]) -> str:
-    lines = [f"{FOLLOW_UP}: every statement rated. Thank you: your ratings are saved."]
-    if expires_at is not None:
-        lines.append(f"You can tap any card again to change a rating until {ist_label(expires_at)}.")
-    return _esc(lines)
+def elicit_done_text() -> str:
+    return _esc(["All rated. Thank you!"])
 
 
 def elicit_stopped_text() -> str:
-    return _esc([f"{FOLLOW_UP}: stopped, no more statement cards. The ratings you gave are kept."])
+    return _esc(["Stopped. The ratings you gave are kept."])
