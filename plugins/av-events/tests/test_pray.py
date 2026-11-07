@@ -313,11 +313,11 @@ def test_manifest_lists_the_tool_and_the_switch(av):
     assert {"AV_PRAY", "CONTROL_PLANE_URL", "AV_EVENTS_TOKEN", "TENANT_ID", "AV_TENANT_ID"} <= set(manifest["optional_env"])
 
 
-def test_pray_stays_out_of_the_tool_category_seed(plugin):
-    """§2: tool_categories.json (frozen v3) is unchanged; `pray` leaves as `other` with a null name."""
+def test_pray_is_named_in_the_tool_category_seed(plugin):
+    """v4 (CLAIMS L28710): `pray` leaves by name under category `village`; the call's arguments never do."""
     tools = sys.modules[f"{plugin.__name__}._tools"]
-    assert "pray" not in tools.TOOL_CATEGORIES
-    assert tools.tool_category("pray") == "other" and tools.listed_tool_name("pray") is None
+    assert tools.TOOL_CATEGORIES["pray"] == "village"
+    assert tools.tool_category("pray") == "village" and tools.listed_tool_name("pray") == "pray"
 
 
 # --------------------------------------------------------------------------
@@ -866,7 +866,7 @@ def test_tool_call_telemetry_keeps_no_reason_and_pray_emits_no_event(tctx, cp, p
     events = av.read_buffer(plugin._COLLECTOR)
     calls = [e for e in events if e["event_type"] == "tool.call"]
     assert len(calls) == 1  # the observer saw the call: the check below is not vacuous
-    assert calls[0]["payload"]["tool_name"] is None and calls[0]["payload"]["tool_category"] == "other"
+    assert calls[0]["payload"]["tool_name"] == "pray" and calls[0]["payload"]["tool_category"] == "village"
     blob = json.dumps(events, ensure_ascii=False)
     assert REASON not in blob and TOKEN not in blob
     assert not [e for e in events if e["event_type"].startswith("prayer")]

@@ -191,7 +191,7 @@ def test_one_code_run_per_execute_code_with_exactly_the_contract_keys(live, ctx,
     assert first["risk_tags"] == ["dotenv_path", "gated_host", "os_environ", "subprocess"]
     assert first["scan_truncated"] is False
     assert first["rules_version"] == "code_run_tags_v1"
-    assert first["category_version"] == "tool_categories_v3"
+    assert first["category_version"] == "tool_categories_v4"
 
 
 def test_no_text_leaks_anywhere_in_the_serialised_event(live, ctx, av, on, monkeypatch):

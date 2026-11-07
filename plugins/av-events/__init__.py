@@ -62,6 +62,7 @@ from . import _code_run
 from . import _negotiator_llm
 # B-169b, on its own line for the same reason.
 from . import _skill_label
+from . import _llm_errors
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -445,8 +446,20 @@ def _hook_post_api_request(collector: Collector, **kwargs: Any) -> None:
         payload["assistant_content_chars"] = kwargs.get("assistant_content_chars")
         payload["assistant_tool_call_count"] = kwargs.get("assistant_tool_call_count")
         payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
+    if _after_failed_call_on_another_model(state, kwargs):
+        payload["error_code"] = _llm_errors.FALLBACK_ACTIVATED
+    state.llm_failed = None
 
     _emit_llm_call(collector, payload, stashed, kwargs)
+
+
+def _after_failed_call_on_another_model(state: Any, kwargs: dict) -> bool:
+    """This call is in the turn of the last failed call, on a different model:
+    Hermes's fallback chain took the turn (HOT-RASOOL F1)."""
+    failed = state.llm_failed
+    turn_id = kwargs.get("turn_id")
+    model = kwargs.get("model")
+    return bool(failed and turn_id and model and failed[0] == str(turn_id) and failed[1] != str(model))
 
 
 def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
@@ -477,6 +490,15 @@ def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
         # possibly carrying an unredacted provider dump, which can include the
         # prompt that caused the failure.
         "error_type": str(error.get("type") or kwargs.get("error_type") or "") or None,
+        # HOT-RASOOL F1: a token from `_llm_errors.FAILURE_CODES`. The message
+        # is read only for OpenRouter's fixed mixed-provider wording; no text
+        # of it is stored.
+        "error_code": _llm_errors.failure_code(
+            reason=kwargs.get("reason"),
+            status_code=kwargs.get("status_code"),
+            error_type=error.get("type") or kwargs.get("error_type"),
+            message=error.get("message"),
+        ),
         "status_code": kwargs.get("status_code"),
         "retryable": kwargs.get("retryable"),
         "tools_hash": stashed.get("tools_hash"),
@@ -489,6 +511,8 @@ def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
     if collector.config.capture != "metadata":
         payload["system_prompt_length"] = stashed.get("system_prompt_length")
         payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
+    turn_id, model = kwargs.get("turn_id"), kwargs.get("model")
+    state.llm_failed = (str(turn_id), str(model)) if turn_id and model else None
 
     _emit_llm_call(collector, payload, stashed, kwargs)
 

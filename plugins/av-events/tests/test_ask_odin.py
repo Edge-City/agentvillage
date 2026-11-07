@@ -286,12 +286,13 @@ def test_manifest_lists_the_tool_and_the_switch(av):
     assert {"AV_ASK_ODIN", "CONTROL_PLANE_URL", "EDGEOS_API_KEY"} <= set(manifest["optional_env"])
 
 
-def test_ask_odin_stays_out_of_the_tool_category_seed(plugin):
-    """As `pray` and `ask_village`: tool_categories.json (frozen v3) is unchanged; `ask_odin` leaves as
-    `other` with a null name."""
+def test_ask_odin_is_named_in_the_tool_category_seed(plugin):
+    """v4 (CLAIMS L28710): `ask_odin`, `ask_village`, `search_village`, `query_village` and `pray` leave by name
+    under category `village`, with the village-bridge tool `village`."""
     tools = sys.modules[f"{plugin.__name__}._tools"]
-    assert "ask_odin" not in tools.TOOL_CATEGORIES and "ask_village" not in tools.TOOL_CATEGORIES
-    assert tools.tool_category("ask_odin") == "other" and tools.listed_tool_name("ask_odin") is None
+    assert tools.TOOL_CATEGORY_VERSION == "tool_categories_v4"
+    for name in ("ask_odin", "ask_village", "search_village", "query_village", "pray", "village"):
+        assert tools.tool_category(name) == "village" and tools.listed_tool_name(name) == name, name
 
 
 def test_schema(odin_mod):
@@ -786,7 +787,8 @@ def test_tool_call_telemetry_keeps_no_question_or_answer(tctx, cp, plugin, av, m
               error_type=None, error_message=None)
     events = av.read_buffer(plugin._COLLECTOR)
     calls = [e for e in events if e["event_type"] == "tool.call"]
-    assert len(calls) == 1 and calls[0]["payload"]["tool_name"] is None
+    # v4 (CLAIMS L28710): the call leaves by name under `village`; never its arguments or result.
+    assert len(calls) == 1 and calls[0]["payload"]["tool_name"] == "ask_odin" and calls[0]["payload"]["tool_category"] == "village"
     blob = json.dumps(events, ensure_ascii=False)
     assert QUESTION not in blob and ANSWER_TEXT not in blob and KEY not in blob
 

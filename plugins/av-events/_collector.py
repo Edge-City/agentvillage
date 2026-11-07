@@ -390,6 +390,7 @@ class SessionState:
         "input_tokens",
         "output_tokens",
         "pending_llm",
+        "llm_failed",
         "ended",
         "failure_count",
         "failures_by_hook",
@@ -414,6 +415,9 @@ class SessionState:
         self.output_tokens = 0
         #: Hashes and request stamps left by pre_api_request for post to use.
         self.pending_llm: dict[str, dict] = {}
+        #: (turn_id, model) of the last failed `llm.call`, so the next call in
+        #: that turn on another model is marked `fallback_activated` (HOT-RASOOL F1).
+        self.llm_failed: Optional[tuple[str, str]] = None
         self.ended = False
         self.failure_count = 0
         self.failures_by_hook: dict[str, int] = {}
