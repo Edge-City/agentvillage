@@ -261,7 +261,7 @@ not changed here.
   stored hash, the env line beside `AV_GODCONST_BALLOT` (`tenants.js writeIngestEnv`).
 - `control-plane/src/index.js`: the three routes, dispatched before the API-key gate, as ask-village is.
 - `control-plane/src/box-event-flags.js`: `AV_GODCONST_BALLOT` by `GODCONST_BALLOT_TENANTS`, only while
-  `GODCONST_BALLOT_ENABLED=1` (as `AV_PRAY`).
+  `GODCONST_BALLOT_ENABLED=1` (as `AV_SEARCH_VILLAGE` by `VILLAGE_SEARCH`).
 - `docs/RAILWAY.md`: the two variables.
 - Tests: `tests/godconst-ballot.test.js` (9), `tests/box-event-flags.test.js` (+1, the shared cases).
 

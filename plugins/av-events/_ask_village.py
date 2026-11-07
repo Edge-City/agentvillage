@@ -18,8 +18,8 @@ the group?"): Carter's per-person ruling (CLAIMS L6484); there is no person-id
 field. `window`: `24h` (the app's default), `7d` or `all`; else
 `window_invalid`. Anything else is `invalid_body`.
 
-**Who may ask.** The same fail-closed helper as `pray`
-(`_pray.session_kind`): a task positively bound to a direct chat, or the
+**Who may ask.** The shared fail-closed helper
+(`_pray.session_kind`, direct messages only): a task positively bound to a direct chat, or the
 agent's own cron run whose auto-delivery target is positively the resident's
 Telegram DM (`_pray.cron_delivers_privately`, approval@edge's ruling, CLAIMS
 L6599). Everything else, including an empty, unknown or unreadable value or an
@@ -257,7 +257,7 @@ def validate(args: Any) -> tuple[Optional[dict], Optional[str]]:
 
 # ---- The wire ---------------------------------------------------------------
 
-#: Tests replace these (as in `_pray`).
+#: Tests replace these.
 _OPENER: Any = NO_REDIRECT_OPENER
 
 
