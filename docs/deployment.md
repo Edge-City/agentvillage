@@ -218,20 +218,25 @@ unreachable, busy, outcome unknown, or failed. Check every failed, unknown or
 busy resident by hand. To resume, start a new run with the same tag: healthy
 residents are skipped and the stopped one is updated again at its normal turn.
 
-**Roll back.** Run the workflow with the previous tag, test tenants first. A
+**Roll back.** Run the workflow with the previous tag, test tenants first; on
+a box that has run v2.2.5 or later, back out instead with a forward tag that
+keeps runner digest `a99f640d`, never the previous tag by number (see the A-93
+paragraph below). A
 rollback is an ordinary roll and restarts every resident in scope again. Going
 back to a release from before DATA-314 needs one more step per resident first;
 see "The proactive jobs" below.
 
-**Backing out the any-slot runner (A-93).** From v2.2.3 (#606) the zzz
+**Backing out the any-slot runner (A-93).** From v2.2.5 (rider #606; v2.2.3
+was never tagged) the zzz
 autonomy runner accepts any of the five schedule phases. Back it out with a
 forward tag whose `AUTONOMY_SHIPPED` (`install/zzz_autonomy_job.ts`) still
-lists runner digest `a99f640d`. Never roll v2.2.2 or earlier onto a box that
-has staged that runner: the older installer refuses the runner it does not
+lists runner digest `a99f640d`. Never roll v2.2.4, v2.2.2 or earlier onto a
+box that has staged that runner (v2.2.4 is the hotfix on v2.2.2 and carries
+its installer): the older installer refuses the runner it does not
 know (`zzz_autonomy_shim_not_ours`), drops the `Edge — zzz event autonomy` and
 `Edge — zzz pairs` jobs, and every later stage fails the same way until the
 file is deleted by hand. A plain `git revert` of #606 does the same, so a
-revert must keep that digest. If v2.2.2 must be rolled anyway, first delete
+revert must keep that digest. If one of them must be rolled anyway, first delete
 `$HERMES_HOME/scripts/zzz_autonomy_runner.py` (`~/.hermes` by default) on each
 autonomy box; the box then stages like one that never had the job.
 
