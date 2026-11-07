@@ -237,11 +237,11 @@ def test_switch_turned_off_after_registration(tctx, cp, monkeypatch):
     assert cp.requests == []
 
 
-def test_both_tools_on_together(plugin, av_mod, cp, on, monkeypatch):
-    monkeypatch.setenv("AV_PRAY", "1")
+def test_the_retired_pray_switch_registers_nothing_beside_it(plugin, av_mod, cp, on, monkeypatch):
+    monkeypatch.setenv("AV_PRAY", "1")  # PRAY-RETIRED: nothing reads it
     ctx = ToolFireCtx()
     plugin.register(ctx)
-    assert {"ask_village", "pray"} <= set(ctx.tools)
+    assert "ask_village" in ctx.tools and "pray" not in ctx.tools
     assert call(ctx, ARGS)["answer"] == EXPECTED["answer"]
 
 

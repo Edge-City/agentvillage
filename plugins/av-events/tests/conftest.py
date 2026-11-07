@@ -76,8 +76,7 @@ AV_ENV_VARS = (
     "AV_EVENTS_NEGOTIATOR_LLM_SCOPE",
     "AV_MORALMOD_OWN_KEY",
     "MORALMOD_LLM_API_KEY",
-    # PRAYER P3: the `pray` tool.
-    "AV_PRAY",
+    # The control plane's origin, read by the cp tools (ask_village, ask_odin, search_village, query_village).
     "CONTROL_PLANE_URL",
     # ASK-VILLAGE: the `ask_village` tool.
     "AV_ASK_VILLAGE",

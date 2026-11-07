@@ -64,7 +64,7 @@ def catalog(plugin, av) -> dict[str, list[str]]:
     entries["session_search"] = _tokenize(mirror._search_text("session_search", "session_search",
                                                               mirror.SESSION_SEARCH_DESCRIPTION,
                                                               mirror.SESSION_SEARCH_PARAMS))
-    assert {"ask_odin", "ask_village", "pray", "village"} <= set(entries)
+    assert {"ask_odin", "ask_village", "village"} <= set(entries) and "pray" not in entries  # PRAY-RETIRED
     return entries
 
 
@@ -93,13 +93,13 @@ def test_every_query_token_is_in_ask_odin_text(catalog, query):
     assert set(_tokenize(query)) <= set(catalog["ask_odin"]), query
 
 
-def test_pray_which_names_odin_stays_behind_ask_odin(catalog):
-    # pray's description names "Odin" (the god agents); a query for ODIN still ranks ask_odin first.
+def test_a_query_for_odin_finds_ask_odin_first_and_no_retired_pray(catalog):
+    # PRAY-RETIRED: `pray` (whose description named "Odin") is gone from the catalog; ODIN's query finds ask_odin.
     found = search_catalog(catalog, "odin")
-    assert found[0] == "ask_odin" and "pray" in found
+    assert found[0] == "ask_odin" and "pray" not in found
 
 
-@pytest.mark.parametrize("query", ["group chat", "group chat messages", "village group chat history", "chat history",
+@pytest.mark.parametrize("query", ["group chat", "group chat messages", "village group chat history",
                                    "what people said in the group chat", "telegram group conversation"])
 def test_village_group_queries_still_find_ask_village_or_search_village_first(catalog, query):
     found = search_catalog(catalog, query)

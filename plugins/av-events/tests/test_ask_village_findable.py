@@ -193,12 +193,22 @@ def test_description_leads_with_the_searchable_sentence(ask_mod):
 #: VILLAGE SEARCH: an explicit "search ... messages" query ranks `search_village` (the tool that returns the
 #: messages themselves) first; ask_village is still admitted right behind it (test below).
 SEARCH_QUERIES = ("search group chat messages", "search village messages", "search_village")
+#: PRAY-RETIRED: with the retired `pray` out of the catalog (one document fewer moves every IDF), the bare
+#: "chat history", which names no group or village, ranks Hermes's own `session_search` (past conversations)
+#: first; ask_village is still admitted. Every query that names the group or the village still ranks it first.
+AMBIGUOUS_QUERIES = ("chat history",)
 
 
-@pytest.mark.parametrize("query", [q for q in INTENT_QUERIES if q not in SEARCH_QUERIES])
+@pytest.mark.parametrize("query", [q for q in INTENT_QUERIES if q not in SEARCH_QUERIES + AMBIGUOUS_QUERIES])
 def test_tool_search_finds_ask_village_first(catalog, query):
     found = search_catalog(catalog, query)
     assert found and found[0] == "ask_village", (query, found)
+
+
+@pytest.mark.parametrize("query", AMBIGUOUS_QUERIES)
+def test_a_query_naming_no_group_admits_ask_village_second_to_session_search(catalog, query):
+    found = search_catalog(catalog, query)
+    assert found[:2] == ["session_search", "ask_village"], (query, found)
 
 
 @pytest.mark.parametrize("query", SEARCH_QUERIES)

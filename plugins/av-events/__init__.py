@@ -26,7 +26,6 @@ from ._ask_village import register_ask_village_tool
 from ._ask_odin import register_ask_odin_tool
 from ._search_village import register_search_village_tool
 from ._query_village import register_query_village_tool
-from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
 from . import _miniapp_epoch
@@ -1433,8 +1432,7 @@ def register(ctx) -> None:
     when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
     on — `record_intention` (`_record_intention.py`, DATA-212); and, behind
     `AV_DIGEST_SHARE` / `AV_VILLAGE_VOTE`, `share_digest` and `village_vote`
-    (`_share_vote.py`, lane O3); and, behind `AV_PRAY`, `pray` (`_pray.py`,
-    PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
+    (`_share_vote.py`, lane O3); and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
     `AV_SEARCH_VILLAGE`, `search_village` (`_search_village.py`) and `query_village`
     (`_query_village.py`). Those and village-bridge's `village` are kept out of Hermes's
     `tool_search` bridge (`_village_visible.py`, R-DEON). Behind `AV_ASK_ODIN`, `ask_odin`
@@ -1481,12 +1479,6 @@ def register(ctx) -> None:
     # (`AV_DIGEST_SHARE`, `AV_VILLAGE_VOTE`) and inert without approval.md.
     try:
         _share_vote.register_share_vote_tools(ctx, emit=_emit_share_vote, ready=_share_vote_emitter_ready)
-    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
-        pass
-    # PRAYER P3: `pray`, one request to the control plane for an admin to review,
-    # behind `AV_PRAY` (unset: not registered). Not routed through the approval gate.
-    try:
-        register_pray_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
     # ASK-VILLAGE (D): `ask_village`, one question about the main group to the control plane,
