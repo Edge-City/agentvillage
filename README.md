@@ -34,6 +34,14 @@ substitute selected drinks, the first board or a menu link. Internal structured
 reads for order preparation still omit image format. Image failures are
 disclosed and fall back to complete current text, never a photo-delivery claim.
 
+For Kicks skill 1.0.9 prepares before asking about payment, retaining an explicit
+method or defaulting to the existing `card_on_pickup` wire value. Only the quote
+establishes coverage: ₹0 means no payment question or payment instructions;
+positive totals disclose the amount and method before approval. The wire/card
+method is unchanged for compatibility with installed plugins and CP approvals.
+Release through reviewed skill re-vendoring and CP skill delivery; editing this
+source alone does not update resident sessions or production.
+
 AgentVillage never names the plumbing in chat. You see AgentVillage and (when relevant) your community.
 
 ## Architecture
