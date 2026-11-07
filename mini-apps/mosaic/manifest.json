@@ -5,7 +5,8 @@
   "version": "1.0.0",
   "description": "A guided way to add to your Context. Mosaic writes your agent a short summary.",
   "homepage": "https://agents.edgecity.live",
-  "visibility": "sandbox",
+  "visibility": "everyone",
+  "staff": true,
   "permissions": [
     {
       "kind": "read",
