@@ -285,7 +285,8 @@ test("zzz.bot manifest and native allowlist pin exactly its named operations (1.
     { ...app, operations: [...five, "zzz.edit_post", "zzz.tag_thread"] }])
     expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
   expect(manifest).toMatchObject({ ...app, homepage: "https://zzz.bot" });
-  expect(Object.keys(manifest).sort()).toEqual(["auth", "description", "homepage", "id", "name", "operations", "permissions", "provenance", "restricted", "skills", "version"]);
+  expect(Object.keys(manifest).sort()).toEqual(["auth", "description", "homepage", "id", "name", "operations", "permissions", "provenance", "skills", "version"]);
+  expect(manifest).not.toHaveProperty("restricted");
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
   expect(manifest).not.toHaveProperty("mcp");
   expect(EDGE_SKILL_NAMES).not.toContain("zzzbot");
