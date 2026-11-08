@@ -8,12 +8,12 @@
  * the `.recall` epoch marker, planted excludes of every kind (counted), a relative symlink, a hard-link pair,
  * a file larger than one test chunk, a real SQLite `state.db` whose writer was killed with rows still only in
  * its `-wal`, and a stand-in `/var/lib/approvald/<t>` OUTSIDE the home whose store the simulated root piece
- * tars (without the daemon's token files) into the nap dir.
+ * tars (without the daemon's token files), encrypts to the cp's key and stages with a member list.
  *
  * The control plane's other steps before an archive (review-a S-n1, S-n4) are `prepareRun`: the run file,
  * its copy of the path rules, and the WAL fold run as its own exec.
  */
-import { createHash, createPrivateKey, constants, generateKeyPairSync, privateDecrypt, randomBytes, createDecipheriv } from "node:crypto";
+import { createCipheriv, createHash, createPrivateKey, createPublicKey, constants, generateKeyPairSync, privateDecrypt, publicEncrypt, randomBytes, createDecipheriv } from "node:crypto";
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, lstatSync, symlinkSync, utimesSync, writeFileSync, readlinkSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -64,18 +64,70 @@ function put(root: string, rel: string, data: string | Uint8Array, mode?: number
   utimesSync(path, when, when);
 }
 
-/** The control plane's root piece (4.2): tar the approvald tenant directory over `./`, WITHOUT the
- * daemon's token files, staged 0600 in the nap dir. Returns the staged path. */
-export function stageApprovaldTar(h: NapHome): string {
-  const out = join(h.home, "av-events", "nap", "approvald-store.tar.gz");
-  mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
+/** The cp's encryption to its own key (here: an AES-256-GCM key wrapped RSA-OAEP to the test pair; the box
+ * never sees either). */
+function encryptToCp(plain: Buffer): Buffer {
+  const key = randomBytes(32);
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([c.update(plain), c.final()]);
+  const wrapped = publicEncrypt({ key: createPublicKey(wrapKeys().publicPem), padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, key);
+  const len = Buffer.alloc(2);
+  len.writeUInt16BE(wrapped.length);
+  return Buffer.concat([Buffer.from("TESTSTORE1"), len, wrapped, iv, c.getAuthTag(), ct]);
+}
+
+/** The control plane's root piece (4.2; review-a (b) at L43357, release L43372): tar the approvald tenant
+ * directory WITHOUT the daemon's token files, encrypt it to the cp's key, encrypt its member list (path,
+ * size, SHA-256) to the same key, and stage both 0600 in the nap dir. Returns the staged paths, the staged
+ * bytes, and the plaintext list and members (for the test's own checks only). */
+export const STORE_TOKEN_FILES = ["env", "hook-token", "run"];
+export function stageStoreCopy(h: NapHome) {
+  const dir = join(h.home, "av-events", "nap");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   // COPYFILE_DISABLE: macOS tar would add AppleDouble `._*` members; a box's GNU tar never does.
-  const p = spawnSync("tar", ["-czf", out, "--exclude=./env", "--exclude=./hook-token", "--exclude=./run", "-C", h.approvaldDir, "."], {
+  const p = spawnSync("tar", ["-czf", "-", ...STORE_TOKEN_FILES.map((n) => `--exclude=./${n}`), "-C", h.approvaldDir, "."], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
+    maxBuffer: 64 * 1024 * 1024,
   });
   if (p.status !== 0) throw new Error(`tar failed: ${p.stderr}`);
-  chmodSync(out, 0o600);
-  return out;
+  const blob = encryptToCp(p.stdout as Buffer);
+  const members: { path: string; bytes: number; sha256: string }[] = [];
+  const walk = (rel: string) => {
+    for (const name of readdirSync(rel ? join(h.approvaldDir, rel) : h.approvaldDir).sort()) {
+      const r = rel ? `${rel}/${name}` : name;
+      if (!rel && STORE_TOKEN_FILES.includes(name)) continue;
+      const st = lstatSync(join(h.approvaldDir, r));
+      if (st.isDirectory()) walk(r);
+      else members.push({ path: r, bytes: st.size, sha256: createHash("sha256").update(readFileSync(join(h.approvaldDir, r))).digest("hex") });
+    }
+  };
+  walk("");
+  members.sort((x, y) => (x.path < y.path ? -1 : 1));
+  const listPlain = Buffer.from(JSON.stringify({ members }));
+  const list = encryptToCp(listPlain);
+  const blobPath = join(dir, "approvald-store.enc");
+  const listPath = join(dir, "approvald-store.members.enc");
+  writeFileSync(blobPath, blob, { mode: 0o600 });
+  writeFileSync(listPath, list, { mode: 0o600 });
+  chmodSync(blobPath, 0o600);
+  chmodSync(listPath, 0o600);
+  return { blobPath, listPath, blob, list, listPlain, members };
+}
+
+/** The cp's root step on wake: decrypt the blob (with the cp's private key) back to the store tar.gz, or the
+ * encrypted list back to its JSON. */
+export function decryptStoreBlob(blob: Buffer): Buffer {
+  if (blob.subarray(0, 10).toString() !== "TESTSTORE1") throw new Error("not a test store blob");
+  const len = blob.readUInt16BE(10);
+  let off = 12;
+  const wrapped = blob.subarray(off, (off += len));
+  const iv = blob.subarray(off, (off += 12));
+  const tag = blob.subarray(off, (off += 16));
+  const key = privateDecrypt({ key: createPrivateKey(wrapKeys().privatePem), padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, wrapped);
+  const d = createDecipheriv("aes-256-gcm", key, iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(blob.subarray(off)), d.final()]);
 }
 
 export const STATE_DB_ROWS = 25;
@@ -206,7 +258,7 @@ export function buildNapHome(base: string, opts: { bigBytes?: number } = {}): Na
   put(approvaldDir, "env", `AGENT_TOKEN=${PLANTED.approvaldEnv}\n`, 0o600);
   put(approvaldDir, "hook-token", PLANTED.approvaldHook, 0o600);
   const h: NapHome = { base, root, home, approvaldDir, included, excluded };
-  stageApprovaldTar(h);
+  stageStoreCopy(h);
   return h;
 }
 

@@ -10,7 +10,7 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { MANIFEST_KEYS, MANIFEST_PAYLOAD_KEYS, MANIFEST_TREE_KEYS, toolSha256 } from "../nap-common";
 import { parseArgs, runArchive, type ArchiveHooks } from "../nap-archive";
-import { APPROVALD_STORE_ENTRY, BUNDLE_FILES, excludedBy, napStatePathsDocument } from "../nap-state-paths";
+import { BUNDLE_FILES, excludedBy, napStatePathsDocument, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
 import {
   buildNapHome,
   cleanup,
@@ -23,7 +23,8 @@ import {
   runFold,
   SERVED,
   snapshotTree,
-  stageApprovaldTar,
+  decryptStoreBlob,
+  stageStoreCopy,
   stagePaths,
   stagePutRun,
   STATE_DB_ROWS,
@@ -92,7 +93,7 @@ function prepare(h: Home, runId: string, o: { slots?: number; ttlS?: number } = 
   stagePutRun(stub, h.home, runId, o.slots ?? 64, o.ttlS ?? 3600);
   stagePaths(h.home);
   const fold = runFold(FOLD, h, runId);
-  stageApprovaldTar(h);
+  stageStoreCopy(h);
   return fold;
 }
 
@@ -108,7 +109,24 @@ async function cli(h: Home, runId: string, extra: string[] = [], env: Record<str
   return { code, line: lines.length ? JSON.parse(lines[lines.length - 1]) : null, stdout, stderr };
 }
 
-const storeTar = (h: NapHome) => join(napDir(h.home), "approvald-store.tar.gz");
+const storeBlob = (h: NapHome) => join(napDir(h.home), "approvald-store.enc");
+const storeList = (h: NapHome) => join(napDir(h.home), "approvald-store.members.enc");
+/** The plaintext member list's own bytes: its JSON key and every member's name-with-hash (release L43372). */
+const listNeedles = (h: NapHome) => [
+  '{"members":',
+  ...MEMBERS.map((m) => createHash("sha256").update(readFileSync(join(h.approvaldDir, m))).digest("hex")),
+];
+/** Neither the plaintext store nor its plaintext list ever appears under the home (review-a (b), release
+ * L43372): no member's bytes, no token, no member hash. */
+function expectNoPlaintextStore(h: NapHome) {
+  const needles = [PLANTED.approvaldEnv, PLANTED.approvaldHook, "# attested policy", '{"seq":0}', ...listNeedles(h)];
+  const tree = snapshotTree(h.root);
+  for (const rel of Object.keys(tree)) {
+    if (tree[rel] === "special" || tree[rel].startsWith("link:")) continue;
+    const text = readFileSync(join(h.root, rel)).toString("latin1");
+    for (const n of needles) expect([rel, n, text.includes(n)]).toEqual([rel, n, false]);
+  }
+}
 const progress = (h: NapHome) => JSON.parse(readFileSync(join(napDir(h.home), "progress.json"), "utf8"));
 const putsSince = (from: number) => stub.requests.slice(from).filter((r) => r.method === "PUT").map((r) => r.key.slice(r.key.lastIndexOf("/") + 1));
 const inProcess = (h: Home, runId: string, env: Record<string, string> = {}) => parseArgs(args(h, runId), envFor(h, env));
@@ -116,10 +134,11 @@ const inProcess = (h: Home, runId: string, env: Record<string, string> = {}) => 
 /** S-n3: after any exit the box reaches, no signing-key tar, run file or pid file is left in the home. */
 function expectStagingGone(h: NapHome) {
   expect({
-    tar: existsSync(storeTar(h)),
+    blob: existsSync(storeBlob(h)),
+    list: existsSync(storeList(h)),
     run: existsSync(join(napDir(h.home), "run.json")),
     pid: existsSync(join(napDir(h.home), "archive.pid")),
-  }).toEqual({ tar: false, run: false, pid: false });
+  }).toEqual({ blob: false, list: false, run: false, pid: false });
 }
 
 async function archived(h: Home, env: Record<string, string> = {}) {
@@ -139,7 +158,6 @@ async function archived(h: Home, env: Record<string, string> = {}) {
 const sidecars = (h: NapHome) => [".hermes/state.db-shm", ".hermes/state.db-wal"].filter((rel) => existsSync(join(h.root, rel)));
 
 const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
-const member = (m: string) => `/var/lib/approvald/${TENANT}/${m}`;
 
 // ---------------------------------------------------------------------------------------------------------
 // 1. the whole home against the exclude list (13 M1), classes (13 M3), the approvald store (S-n2)
@@ -191,30 +209,65 @@ test("1. every path under the home is archived except the exclude list, which is
   expectStagingGone(h);
 });
 
-test("S-n2: the approvald store is archived though av-events/nap/ is excluded; each member is listed with size and hash; no token file", async () => {
+test("(b), release L43372: the store copy is one opaque pair (encrypted blob, encrypted list); no member rows; the cp's counts as given; no plaintext", async () => {
   const h = fresh("store");
-  const { manifest, files, entries } = await archived(h);
-  const store = files.findIndex((f) => f.path === APPROVALD_STORE_ENTRY);
-  expect(store).toBeGreaterThan(0);
-  expect(files[store]).toMatchObject({ class: "state", mode: 0o600 });
-  // Its bytes are in the payload, as one data entry.
-  const data = entries.get(`data/${String(store).padStart(6, "0")}`)!;
-  expect(sha(data)).toBe(files[store].sha256);
-  // Its members, file by file, under the virtual prefix: exactly the store minus the daemon's token files.
-  const members = files.filter((f) => f.member_of !== undefined);
-  expect(members.map((f) => f.path)).toEqual(MEMBERS.map(member));
-  for (const m of MEMBERS) {
-    const f = members.find((x) => x.path === member(m));
-    const bytes = readFileSync(join(h.approvaldDir, m));
-    expect([m, f.bytes, f.sha256, f.class, f.member_of]).toEqual([m, bytes.length, sha(bytes), "state", APPROVALD_STORE_ENTRY]);
+  const runId = newRunId();
+  prepare(h, runId);
+  const staged = { blob: readFileSync(storeBlob(h)), list: readFileSync(storeList(h)) };
+  const r = await cli(h, runId, ["--store-count", "3", "--store-bytes", "4321"]);
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "archived" });
+  const manifest = JSON.parse(publishManifest(stub, r.line.manifest_key).toString("utf8"));
+  const { tar, entries } = decryptPayload(stub, manifest);
+  const files = JSON.parse(entries.get("files.json")!.toString()).files as any[];
+  // Both opaque entries, byte-for-byte as staged; their shas in the manifest.
+  const at = (p: string) => files.findIndex((f) => f.path === p);
+  for (const [path, bytes] of [[STORE_BLOB_ENTRY, staged.blob], [STORE_MEMBERS_ENTRY, staged.list]] as const) {
+    const i = at(path);
+    expect([path, files[i].class, entries.get(`data/${String(i).padStart(6, "0")}`)!.equals(bytes)]).toEqual([path, "state", true]);
   }
-  expect([manifest.tree.approvald_files, manifest.tree.approvald_bytes]).toEqual([3, members.reduce((n, f) => n + f.bytes, 0)]);
-  // Members ride inside the store's entry: no data entry of their own.
-  const dataEntries = [...entries.keys()].filter((k) => k.startsWith("data/")).map((k) => Number(k.slice(5)));
-  for (const f of members) expect(dataEntries).not.toContain(files.indexOf(f));
-  // The store's own listing, from the decrypted bytes, agrees (the parity the root count compares).
-  const listed = spawnSync("tar", ["-tzf", "-"], { input: data, encoding: "utf8" }).stdout.split("\n").filter((n) => n && !n.endsWith("/"));
-  expect(listed.map((n) => n.replace(/^\.\//, "")).sort()).toEqual(MEMBERS);
+  expect([manifest.store_copy, manifest.store_blob_sha256, manifest.store_members_sha256]).toEqual(["blob", sha(staged.blob), sha(staged.list)]);
+  expect([manifest.store_member_count, manifest.store_total_bytes]).toEqual([3, 4321]); // recorded as given, never checked
+  // The pair is the only thing outside the home: no member rows (the cp decrypts the list and does the parity).
+  expect(files.filter((f) => f.path.startsWith("/")).map((f) => f.path)).toEqual([STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY]);
+  expect(Object.keys(manifest.tree)).not.toContain("approvald_files");
+  // The list the cp staged is ciphertext: the cp's key opens it to its members, the box never did.
+  expect(JSON.parse(decryptStoreBlob(staged.list).toString()).members.map((m: any) => m.path)).toEqual(MEMBERS);
+  // No plaintext store or list byte in the payload or the home.
+  for (const n of ["# attested policy", '{"seq":0}', PLANTED.approvaldEnv, PLANTED.approvaldHook, ...listNeedles(h)]) {
+    expect(tar.toString("latin1")).not.toContain(n);
+  }
+  expectNoPlaintextStore(h);
+  expectStagingGone(h);
+});
+
+test("(b), release L43372: the box never parses the list; any bytes archive; no counts given records null", async () => {
+  const h = fresh("store-opaque");
+  const runId = newRunId();
+  prepare(h, runId);
+  writeFileSync(storeList(h), Buffer.from([0, 255, 1, 254, 0x7b]), { mode: 0o600 });
+  const r = await cli(h, runId);
+  expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 0, status: "archived", reason: undefined });
+  const manifest = JSON.parse(publishManifest(stub, r.line.manifest_key).toString("utf8"));
+  expect([manifest.store_members_sha256, manifest.store_member_count, manifest.store_total_bytes]).toEqual([sha(Buffer.from([0, 255, 1, 254, 0x7b])), null, null]);
+  expectStagingGone(h);
+});
+
+test("(a): with --no-store-copy and nothing staged the manifest records store_copy none, no rows; any partial staging refuses 64", async () => {
+  const h = fresh("no-store");
+  const runId = newRunId();
+  prepare(h, runId);
+  rmSync(storeBlob(h));
+  rmSync(storeList(h));
+  const r = await cli(h, runId, ["--no-store-copy"]);
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "archived" });
+  const manifest = JSON.parse(publishManifest(stub, r.line.manifest_key).toString("utf8"));
+  expect([manifest.store_copy, manifest.store_blob_sha256, manifest.store_members_sha256, manifest.store_member_count, manifest.store_total_bytes])
+    .toEqual(["none", null, null, null, null]);
+  const files = JSON.parse(decryptPayload(stub, manifest).entries.get("files.json")!.toString()).files as any[];
+  expect(files.filter((f) => f.path.startsWith("/"))).toEqual([]);
+  // Counts describe a store copy: with --no-store-copy they are a usage error (2), before anything runs.
+  const u = await cli(h, newRunId(), ["--no-store-copy", "--store-count", "1"]);
+  expect([u.code, u.line]).toEqual([2, null]);
 });
 
 test("the exclude list: rebuildable trees, installer-built trees, pids and the nap dir; never SQLite sidecars, media or unknown dirs", () => {
@@ -256,19 +309,20 @@ test("the shared path rules print as one JSON document for the control plane's c
 async function expectRefusal(
   h: Home,
   reason: string,
-  o: { env?: Record<string, string>; tool?: string; mode?: string; after?: (runId: string) => void } = {},
+  o: { env?: Record<string, string>; tool?: string; mode?: string; extra?: string[]; after?: (runId: string) => void } = {},
 ) {
   const runId = newRunId();
   prepare(h, runId);
   o.after?.(runId);
   const before = stub.requests.length;
-  const r = await cli(h, runId, [], o.env ?? {}, o);
+  const r = await cli(h, runId, o.extra ?? [], o.env ?? {}, o);
   expect({ reason, code: r.code, line: r.line }).toEqual({ reason, code: 64, line: { status: "refused", reason, chunks_acked: 0 } });
   expect(stub.requests.length).toBe(before);
   // Only the cp's own inputs and progress.json in the nap dir: no chunk, no pid, no run file, no store tar.
   const left = readdirSync(napDir(h.home)).filter((n) => !["progress.json", "nap-state-paths.json", "fold.json"].includes(n));
   expect([reason, left]).toEqual([reason, []]);
   expect(progress(h)).toMatchObject({ phase: "refused", reason });
+  expectNoPlaintextStore(h);
 }
 
 test("2. refusals exit 64 before any write: key, run file, URL, transport, bundle, rules, fold, WAL, writers, store tar, link", async () => {
@@ -304,19 +358,14 @@ test("2. refusals exit 64 before any write: key, run file, URL, transport, bundl
   writeFileSync(join(h.proc, "4242", "cmdline"), "bash\0-lc\0while true; do hermes gateway run; sleep 2; done\0");
   await expectRefusal(h, "writers_alive");
   rmSync(join(h.proc, "4242"), { recursive: true });
-  // The approvald store tar: missing, readable by others, or holding anything but files and directories.
-  await expectRefusal(h, "approvald_tar_missing", { after: () => rmSync(storeTar(h)) });
-  await expectRefusal(h, "approvald_tar_mode", { after: () => chmodSync(storeTar(h), 0o644) });
-  await expectRefusal(h, "approvald_tar_invalid", {
-    after: () => {
-      const odd = join(h.base, "odd-store");
-      mkdirSync(odd, { recursive: true });
-      writeFileSync(join(odd, "chain.jsonl"), "{}\n");
-      symlinkSync("/etc/passwd", join(odd, "escape"));
-      spawnSync("tar", ["-czf", storeTar(h), "-C", odd, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
-      chmodSync(storeTar(h), 0o600);
-    },
-  });
+  // The store copy (review-a (b)): both or (with --no-store-copy) neither; 0600 regular files.
+  await expectRefusal(h, "store_copy_missing", { after: () => (rmSync(storeBlob(h)), rmSync(storeList(h))) });
+  await expectRefusal(h, "store_copy_partial", { after: () => rmSync(storeBlob(h)) });
+  await expectRefusal(h, "store_copy_partial", { after: () => rmSync(storeList(h)) });
+  await expectRefusal(h, "store_copy_unexpected", { extra: ["--no-store-copy"] });
+  await expectRefusal(h, "store_copy_unexpected", { extra: ["--no-store-copy"], after: () => rmSync(storeList(h)) });
+  await expectRefusal(h, "store_copy_mode", { after: () => chmodSync(storeBlob(h), 0o644) });
+  await expectRefusal(h, "store_copy_mode", { after: () => chmodSync(storeList(h), 0o640) });
   // Still archives once every cause is gone.
   await archived(h);
 });
@@ -474,7 +523,7 @@ test("3. chunks are each at most --chunk-bytes, listed in order with sizes and h
   files.forEach((f, i) => {
     expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(Number.isSafeInteger(f.bytes)).toBe(true);
-    if (f.class === "link" || f.class === "dir" || f.same_as || f.member_of) return;
+    if (f.class === "link" || f.class === "dir" || f.same_as) return;
     const data = entries.get(`data/${String(i).padStart(6, "0")}`)!;
     expect(data.length).toBe(f.bytes);
     expect(sha(data)).toBe(f.sha256);
@@ -565,7 +614,7 @@ test("a second start while a live run holds progress.json or the pid file refuse
     let r = await cli(h, runId);
     expect({ code: r.code, line: r.line }).toEqual({ code: 64, line: { status: "refused", reason: "nap_already_running", chunks_acked: 0 } });
     expect(JSON.parse(readFileSync(progressPath, "utf8"))).toEqual(live);
-    expect([existsSync(join(napDir(h.home), "run.json")), existsSync(storeTar(h))]).toEqual([true, true]); // the live run's inputs
+    expect([existsSync(join(napDir(h.home), "run.json")), existsSync(storeBlob(h)), existsSync(storeList(h))]).toEqual([true, true, true]); // the live run's inputs
     rmSync(progressPath);
     writeFileSync(join(napDir(h.home), "archive.pid"), `${sleeper.pid}\n`);
     r = await cli(h, runId);
@@ -644,7 +693,7 @@ test("5 / S-n3: TERM mid-upload exits 143 and leaves no store tar, run file, pid
   stub.onPut = (key) => (key.endsWith("chunk-0001.bin") ? "hang" : undefined);
   const p = Bun.spawn([process.execPath, "--no-env-file", "--no-install", SCRIPT, ...args(h, runId)], { env: envFor(h), stdout: "pipe", stderr: "pipe" });
   for (let i = 0; i < 400 && !putsSince(before).includes("chunk-0001.bin"); i++) await Bun.sleep(25);
-  expect(existsSync(storeTar(h))).toBe(true); // a staged input until the run ends
+  expect([existsSync(storeBlob(h)), existsSync(storeList(h))]).toEqual([true, true]); // staged inputs until the run ends
   p.kill("SIGTERM");
   expect(await p.exited).toBe(143);
   const line = JSON.parse((await new Response(p.stdout).text()).trim().split("\n").pop()!);
@@ -652,6 +701,7 @@ test("5 / S-n3: TERM mid-upload exits 143 and leaves no store tar, run file, pid
   expectStagingGone(h);
   expect(readdirSync(join(napDir(h.home), "chunks")).filter((n) => n.endsWith(".part"))).toEqual([]);
   expect(progress(h)).toMatchObject({ phase: "failed", reason: "interrupted" });
+  expectNoPlaintextStore(h);
   // A chunk already in the bucket cannot be deleted with the writer's URLs (13 S7).
   const key = `nap/${TENANT}/2026-11-08/${runId}/chunk-0000.bin`;
   const del = await fetch(stub.url("DELETE", key), { method: "DELETE" });
@@ -676,20 +726,10 @@ test("6. planted secrets and paths never reach stdout, stderr, progress.json or 
     expect(text).not.toContain("nap-planted-checkpoint");
     expect(text).not.toContain("BEGIN PUBLIC KEY");
   }
-  // 13 S4: the daemon's token files are in no byte of the home and no byte of the payload.
-  const homeFiles = snapshotTree(h.root);
-  for (const rel of Object.keys(homeFiles)) {
-    if (homeFiles[rel] === "special" || homeFiles[rel].startsWith("link:")) continue;
-    const text = readFileSync(join(h.root, rel)).toString("latin1");
-    expect([rel, text.includes(PLANTED.approvaldEnv) || text.includes(PLANTED.approvaldHook)]).toEqual([rel, false]);
-  }
-  const { gunzipSync } = await import("node:zlib");
-  const storeIdx = JSON.parse(decryptPayload(stub, manifest).entries.get("files.json")!.toString()).files.findIndex((f: any) => f.path === APPROVALD_STORE_ENTRY);
-  const storeBytes = gunzipSync(decryptPayload(stub, manifest).entries.get(`data/${String(storeIdx).padStart(6, "0")}`)!).toString("latin1");
-  for (const text of [tar.toString("latin1"), storeBytes]) {
-    expect(text).not.toContain(PLANTED.approvaldEnv);
-    expect(text).not.toContain(PLANTED.approvaldHook);
-  }
+  // 13 S4 and review-a (b): no plaintext store byte (member contents, the daemon's tokens) in the home or
+  // the payload; the store rides only as the cp-encrypted blob.
+  expectNoPlaintextStore(h);
+  for (const n of [PLANTED.approvaldEnv, PLANTED.approvaldHook, "# attested policy"]) expect(tar.toString("latin1")).not.toContain(n);
   // W5: exactly the format's keys, none naming a provider object; no value is a filesystem path but the
   // approvald virtual prefix in files.json (not in the manifest).
   expect(Object.keys(manifest).sort()).toEqual([...MANIFEST_KEYS].sort());
@@ -750,7 +790,7 @@ test("N-n1: --dry-run counts with the writers live, no key, no run file and no f
     unsupported: 0,
     not_owned: 0,
     wal_nonempty: 1,
-    approvald_tar_staged: true,
+    store_copy_staged: "blob",
     browser_profile_files: 1,
   });
   expect(line.live_files).toBe(Object.keys(h.included).length + 2); // + state.db's -wal and -shm before the fold
@@ -803,7 +843,7 @@ test("S-n4: the bundle staged alone (no package.json, no node_modules) folds, ar
   const runId = newRunId();
   stagePutRun(stub, h.home, runId);
   expect(runFold(join(bundle, "nap-sqlite-fold.ts"), h, runId).code).toBe(0);
-  stageApprovaldTar(h);
+  stageStoreCopy(h);
   const a = args(h, runId).filter((x, i, all) => x !== "--paths" && all[i - 1] !== "--paths"); // the default: next to the script
   // Async: the stub bucket answers from this process.
   const p = Bun.spawn([process.execPath, "--no-env-file", "--no-install", join(bundle, "nap-archive.ts"), ...a], { cwd: bundle, env: envFor(h), stdout: "pipe", stderr: "pipe" });

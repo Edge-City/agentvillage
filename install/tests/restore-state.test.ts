@@ -1,7 +1,8 @@
 // The nap restore's box side (install/restore-state.ts): P-COST NAP design v2 section 8 box tests 7 and 8,
 // section 12 M2 (no private key in any form; the data key only from a 0600 file, review-a N-n4), 13 M3
-// (secret_cp skipped, secret_box restored 0600, .env merged), 13 S3/S4 and review-a S-n2 (the approvald store
-// never lands in the home; its members must match files.json). Synthetic homes and a loopback stub only.
+// (secret_cp skipped, secret_box restored 0600, .env merged), 13 S3/S4 and review-a (b) with release L43372
+// (the approvald store copy is an opaque encrypted pair that never lands in the home). Synthetic homes and a
+// loopback stub only.
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
@@ -10,7 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import { chunkName, dataEntryName, hasData, manifestName, TAR_END, tarPadding, toolSha256, ustarHeader } from "../nap-common";
-import { APPROVALD_STORE_ENTRY, BUNDLE_FILES } from "../nap-state-paths";
+import { BUNDLE_FILES, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
 import {
   buildNapHome,
   cleanup,
@@ -24,7 +25,8 @@ import {
   runPrefix,
   SERVED,
   snapshotTree,
-  stageApprovaldTar,
+  decryptStoreBlob,
+  stageStoreCopy,
   stageGetRun,
   stageKey,
   stagePaths,
@@ -66,10 +68,18 @@ async function run(cmd: string[], env: Record<string, string>) {
   return { code, line: lines.length ? JSON.parse(lines[lines.length - 1]) : null, stdout, stderr };
 }
 
-type Archived = { h: NapHome; manifestKey: string; manifest: any; files: any[]; entries: Map<string, Buffer> };
+type Archived = {
+  h: NapHome;
+  manifestKey: string;
+  manifest: any;
+  files: any[];
+  entries: Map<string, Buffer>;
+  /** What the root piece staged (null with --no-store-copy). */
+  store: { blob: Buffer; list: Buffer } | null;
+};
 
 /** Archive a fresh fixture home the way the cp drives it, and publish its manifest. */
-async function archiveFixture(label: string, tweak: (h: NapHome) => void = () => {}): Promise<Archived> {
+async function archiveFixture(label: string, tweak: (h: NapHome) => void = () => {}, o: { noStoreCopy?: boolean } = {}): Promise<Archived> {
   const base = tempBase(label);
   dirs.push(base);
   const h = buildNapHome(base);
@@ -79,14 +89,21 @@ async function archiveFixture(label: string, tweak: (h: NapHome) => void = () =>
   stagePutRun(stub, h.home, runId);
   const paths = stagePaths(h.home);
   expect(runFold(FOLD, h, runId).code).toBe(0);
-  stageApprovaldTar(h);
+  let store: Archived["store"] = null;
+  if (o.noStoreCopy) {
+    rmSync(join(napDir(h.home), "approvald-store.enc"), { force: true });
+    rmSync(join(napDir(h.home), "approvald-store.members.enc"), { force: true });
+  } else {
+    const staged = stageStoreCopy(h);
+    store = { blob: staged.blob, list: staged.list };
+  }
   const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: h.root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", NAP_WRAP_PUBLIC_KEY: wrapKeys().publicPem, NAP_PROC_ROOT: join(base, "proc") };
   const r = await run([ARCHIVE, "--tenant", TENANT, "--root", h.root, "--home", h.home, "--run-id", runId, "--served-commit", SERVED,
-    "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths, "--chunk-bytes", String(CHUNK)], env);
+    "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths, "--chunk-bytes", String(CHUNK), ...(o.noStoreCopy ? ["--no-store-copy"] : [])], env);
   expect({ code: r.code, status: r.line?.status, stderr: r.stderr }).toEqual({ code: 0, status: "archived", stderr: "" });
   const manifest = JSON.parse(publishManifest(stub, r.line.manifest_key).toString("utf8"));
   const { entries } = decryptPayload(stub, manifest);
-  return { h, manifestKey: r.line.manifest_key, manifest, files: JSON.parse(entries.get("files.json")!.toString()).files, entries };
+  return { h, manifestKey: r.line.manifest_key, manifest, files: JSON.parse(entries.get("files.json")!.toString()).files, entries, store };
 }
 
 type Target = { base: string; root: string; home: string };
@@ -158,7 +175,6 @@ function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip
     chunks.push({ n, name: chunkName(n), bytes: body.length, sha256: sha(body) });
   }
   const count = (cls: string) => files.filter((f) => f.class === cls).length;
-  const members = files.filter((f) => f.member_of !== undefined);
   const manifest = {
     ...a.manifest,
     run_id: runId,
@@ -177,7 +193,7 @@ function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip
       log_count: count("log"),
       dir_count: count("dir"),
     },
-    tree: { ...a.manifest.tree, approvald_files: members.length, approvald_bytes: members.reduce((n, f) => n + f.bytes, 0) },
+    tree: a.manifest.tree,
     chunks,
   };
   o.payload?.(manifest.payload);
@@ -254,14 +270,18 @@ test("7. each mismatch class refuses (exit 1) and writes nothing into the home",
     x.data = Buffer.from(x.data!);
     x.data[0] ^= 1; // same size, other bytes, files.json unchanged
   });
-  await forged("approvald_members_mismatch", (items) => items.filter((x) => x.entry.path !== `/var/lib/approvald/${TENANT}/sandbox-id`));
+  // The store pair (release L43372): each entry must hash to the manifest's sha; nothing else sits outside the home.
+  await forged("files_invalid", (items) => {
+    const x = at(items, STORE_MEMBERS_ENTRY);
+    x.data = Buffer.from("another list");
+    x.entry.bytes = x.data.length;
+    x.entry.sha256 = sha(x.data);
+  });
   await forged("files_invalid", (items) => void (items[items.length - 1].entry.path = "/etc/passwd"));
   await forged("files_invalid", (items) => {
-    // A store member posing as a file of its own (data and all): never a path a restore writes.
-    const x = at(items, `/var/lib/approvald/${TENANT}/data/APPROVAL.md`);
-    delete x.entry.member_of;
-    x.data = Buffer.alloc(x.entry.bytes);
-    x.entry.sha256 = sha(x.data);
+    // A store member posing as a file of its own (data and all), after the pair: never a path a restore writes.
+    const data = Buffer.from("old-sandbox\n");
+    return [...items, { entry: { path: `/var/lib/approvald/${TENANT}/sandbox-id`, bytes: data.length, sha256: sha(data), mtime_ms: 0, mode: 0o600, class: "state" }, data }];
   });
 });
 
@@ -345,7 +365,7 @@ test("7 / 12 M2 / N-n4: the data key comes only from a 0600 file; NAP_WRAP_PRIVA
   expect(usage(["--mode", "presigned"])).toBe(2);
   expect(usage([...m, "--key-stdin"])).toBe(2); // N-n4: no stdin path for the key
   expect(usage([...m, "--repair"])).toBe(2);
-  expect(usage([...m, "--approvald-out", join(t.root, "store.tar.gz")])).toBe(2);
+  expect(usage([...m, "--approvald-out", join(t.root, "out")])).toBe(2);
   expect(usage([...m, "--key-file", join(t.base, "outside.json")])).toBe(2);
   expect(usage(["--manifest", a.manifestKey.replace(TENANT, "other-tenant"), "--mode", "presigned"])).toBe(2);
 });
@@ -354,12 +374,12 @@ test("7 / 12 M2 / N-n4: the data key comes only from a 0600 file; NAP_WRAP_PRIVA
 // 8. round trip
 // ---------------------------------------------------------------------------------------------------------
 
-test("8. archive → restore into a woken home: byte-equal for every class but secret_cp; secret_box 0600; .env merged; the store extracts to <t>/", async () => {
+test("8. archive → restore into a woken home: byte-equal for every class but secret_cp; secret_box 0600; .env merged; the store copy comes back byte-equal and extracts to <t>/", async () => {
   const a = await archiveFixture("roundtrip");
   const { h } = a;
   const t = wakeTarget("roundtrip-t");
-  const out = join(t.base, "approvald-out", "store.tar.gz");
-  mkdirSync(dirname(out));
+  const out = join(t.base, "approvald-out");
+  mkdirSync(out);
   const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a), extra: ["--approvald-out", out] });
   expect({ code: r.code, status: r.line.status, reason: r.line.reason, stderr: r.stderr }).toEqual({ code: 0, status: "restored", reason: undefined, stderr: "" });
   const home = a.files.filter((f) => !f.path.startsWith("/"));
@@ -394,15 +414,27 @@ test("8. archive → restore into a woken home: byte-equal for every class but s
   expect(r.line).toMatchObject({ secret_cp_skipped: 1, env_merged: 2, secret_box_written: secretBox - 1, links: 1 });
   // Nothing excluded comes back.
   for (const rel of Object.keys(h.excluded)) expect([rel, existsSync(join(t.root, rel))]).toEqual([rel, false]);
-  // The store: outside the home only, 0600; it extracts to <t>/ with data/ one level down, without token files.
-  expect(statSync(out).mode & 0o777).toBe(0o600);
-  for (const rel of Object.keys(snapshotTree(t.root))) expect(rel).not.toMatch(/store\.tar\.gz|var\/lib\/approvald/);
+  // The store copy ("wake from the archive copy", box half): the blob and the list, byte-equal to what root
+  // staged, 0600, outside the home only; the box never decrypted either.
+  const blobOut = join(out, "nap-store.enc");
+  const listOut = join(out, "nap-store.members.enc");
+  expect([readFileSync(blobOut).equals(a.store!.blob), readFileSync(listOut).equals(a.store!.list)]).toEqual([true, true]);
+  expect([statSync(blobOut).mode & 0o777, statSync(listOut).mode & 0o777]).toEqual([0o600, 0o600]);
+  expect(r.line).toMatchObject({ store_copy: "blob", store_written: 2 });
+  for (const rel of Object.keys(snapshotTree(t.root))) expect(rel).not.toMatch(/nap-store|var\/lib\/approvald/);
+  // The cp's root step, simulated: decrypt the blob, extract to <t>/ with data/ one level down, no token files.
   const tdir = join(t.base, "var-lib-approvald", TENANT);
   mkdirSync(tdir, { recursive: true });
-  expect(spawnSync("tar", ["-xzf", out, "-C", tdir]).status).toBe(0);
+  const tgz = join(t.base, "store.tar.gz");
+  writeFileSync(tgz, decryptStoreBlob(readFileSync(blobOut)));
+  expect(spawnSync("tar", ["-xzf", tgz, "-C", tdir]).status).toBe(0);
   expect(readFileSync(join(tdir, "data", "APPROVAL.md"), "utf8")).toBe("# attested policy\n");
   expect(readFileSync(join(tdir, "sandbox-id"), "utf8")).toBe("old-sandbox\n");
   expect([existsSync(join(tdir, "env")), existsSync(join(tdir, "hook-token")), existsSync(join(tdir, TENANT))]).toEqual([false, false, false]);
+  // The cp's parity, simulated: decrypt the list and check every member against the extracted store.
+  const listed = JSON.parse(decryptStoreBlob(readFileSync(listOut)).toString()).members as { path: string; bytes: number; sha256: string }[];
+  expect(listed.map((m) => m.path)).toEqual(["data/APPROVAL.md", "data/chain.jsonl", "sandbox-id"]);
+  for (const m of listed) expect([m.path, sha(readFileSync(join(tdir, m.path))), statSync(join(tdir, m.path)).size]).toEqual([m.path, m.sha256, m.bytes]);
   expect(r.stdout).not.toContain(t.base);
 });
 
@@ -414,8 +446,21 @@ test("8. --no-merge-env leaves the cp's .env alone; without --approvald-out the 
   expect({ code: r.code, status: r.line.status, env_merged: r.line.env_merged }).toEqual({ code: 0, status: "restored", env_merged: 0 });
   expect(readFileSync(join(t.home, ".env"), "utf8")).toBe(envBefore);
   const all = snapshotTree(t.base);
-  expect(Object.keys(all).filter((p) => p.endsWith(".tar.gz"))).toEqual([]);
-  expect(a.files.some((f) => f.path === APPROVALD_STORE_ENTRY)).toBe(true);
+  expect(Object.keys(all).filter((p) => p.includes("nap-store"))).toEqual([]);
+  expect(r.line).toMatchObject({ store_copy: "blob", store_written: 0 });
+  expect(a.files.some((f) => f.path === STORE_BLOB_ENTRY)).toBe(true);
+});
+
+test("(a): an archive with store_copy none restores; --approvald-out receives nothing", async () => {
+  const a = await archiveFixture("no-store", () => {}, { noStoreCopy: true });
+  expect(a.manifest.store_copy).toBe("none");
+  const t = wakeTarget("no-store-t");
+  const out = join(t.base, "approvald-out");
+  mkdirSync(out);
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a), extra: ["--approvald-out", out] });
+  expect({ code: r.code, status: r.line.status, store_copy: r.line.store_copy, store_written: r.line.store_written })
+    .toEqual({ code: 0, status: "restored", store_copy: "none", store_written: 0 });
+  expect(snapshotTree(out)).toEqual({});
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -562,7 +607,7 @@ test("N4: a name with a backslash is archived and restored; a non-UTF-8 name ref
   stagePutRun(stub, a.h.home, runId);
   const paths = stagePaths(a.h.home);
   expect(runFold(FOLD, a.h, runId).code).toBe(0);
-  stageApprovaldTar(a.h);
+  stageStoreCopy(a.h);
   const opts = parseArgs(["--tenant", TENANT, "--root", a.h.root, "--home", a.h.home, "--run-id", runId, "--served-commit", SERVED,
     "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths], { HOME: a.h.root, NAP_WRAP_PUBLIC_KEY: wrapKeys().publicPem, NAP_PROC_ROOT: join(a.h.base, "proc") });
   const out = await runArchive(opts);

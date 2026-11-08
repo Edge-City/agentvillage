@@ -5,13 +5,15 @@
  *
  * The control plane fences the tenant, stops the writers, stages the pinned nap bundle (review-a S-n4:
  * `BUNDLE_FILES` plus `nap-state-paths.json`, one directory), runs the WAL fold as its own exec
- * (`nap-sqlite-fold.ts`, S-n1), runs its root piece (the approvald store tar, WITHOUT the daemon's token
- * files, staged 0600 at `$HERMES_HOME/av-events/nap/approvald-store.tar.gz`) and its root count, stages the
+ * (`nap-sqlite-fold.ts`, S-n1), runs its root piece (the approvald store ALREADY ENCRYPTED to the cp's key,
+ * `av-events/nap/approvald-store.enc`, and its member list, also cp-encrypted, `approvald-store.members.enc`,
+ * both 0600; or nothing, with `--no-store-copy`) and its root count, stages the
  * run file, then starts this from the bundle as a detached one-shot and polls `av-events/nap/progress.json`:
  *
  *   bun --no-env-file --no-install <bundle>/nap-archive.ts --tenant <id> [--home <dir>] [--root <dir>]
  *       --run-id <uuid> --served-commit <sha40> --tool-sha256 <sha64> --mode presigned [--paths <file>]
  *       [--run-file <path>] [--chunk-bytes N] [--progress <path>] [--pid-file <path>]
+ *       [--no-store-copy | [--store-count N] [--store-bytes N]]
  *   bun --no-env-file --no-install <bundle>/nap-archive.ts --tenant <id> [--home <dir>] [--root <dir>] --dry-run
  *
  * `--root` is the walk root (`$HOME`, `/home/hermes` on a box); `--home` is `$HERMES_HOME`, inside it.
@@ -29,10 +31,13 @@
  *      followed; hard links are read once by inode. A file that
  *      cannot be read, a special file, or a file that changes while it is read FAILS the run (exit 1,
  *      `file_unreadable` / `file_unsupported` / `file_changed`): nothing is ever skipped;
- *      The staged approvald store tar is packed as one entry, and each of its members is listed in
- *      `files.json` under `/var/lib/approvald/<tenant>/` with its size and SHA-256 (S-n2);
+ *      The staged store blob and its encrypted member list are packed as one opaque pair of entries (the
+ *      box never decrypts, opens or parses either; release L43372); the manifest records their SHA-256s and,
+ *      as given, the cp's `--store-count` / `--store-bytes`. A blob without its list or the reverse refuses
+ *      (`store_copy_partial`), as do neither without `--no-store-copy` (`store_copy_missing`) and a staged
+ *      copy with it (`store_copy_unexpected`), all 64;
  *   3. streams a USTAR tar (`files.json` first: path, bytes, sha256, mtime_ms, mode, class for every entry;
- *      then `data/<index>` per file, the approvald store tar included) through gzip and SHA-256 into
+ *      then `data/<index>` per file, the store blob and list included) through gzip and SHA-256 into
  *      AES-256-GCM under a fresh random data key wrapped RSA-OAEP-SHA256 to `NAP_WRAP_PUBLIC_KEY` (the box
  *      can never decrypt what it wrote), cut into `--chunk-bytes` chunks under `av-events/nap/chunks/`;
  *      `progress.json` (0600) gets the wrapped key, IV, `key_id` and run id at stream start and the GCM tag
@@ -49,7 +54,7 @@
  * `--dry-run` (batch 0, writers live; review-a N-n1) needs no key, run file or fold, writes nothing, and never
  * fails on the tree: it prints `tool_sha256`, the walk totals, the per-exclude counts, and how many entries
  * it could not read, could not archive, or that another uid owns, how many `-wal` files are non-empty and
- * whether a store tar is staged. Exit 0.
+ * whether a store copy is staged. Exit 0.
  *
  * Environment (names only): `NAP_WRAP_PUBLIC_KEY` (RSA-4096 public key PEM), `NAP_CHUNK_BYTES` (25165824),
  * `NAP_UPLOAD_TIMEOUT_S` (30), `NAP_UPLOAD_PARALLEL` (3), `NAP_UPLOAD_RETRY_MS` (1000), `NAP_RUN_ID`,
@@ -64,8 +69,8 @@
  * stay in the bucket, `.part` files removed, `progress.json` `failed`); 2 usage; 130/143 on INT/TERM (as 1).
  * It writes nowhere but `$HERMES_HOME/av-events/nap/`. On every exit it reaches (archived, refused, failed,
  * INT/TERM; all but `nap_already_running`, whose tar belongs to the live run) it deletes the run file, the
- * pid file and the staged approvald tar, which holds the chain's signing keys (S-n3); the control plane's
- * root `rm` of the tar, checked absent before any restart, is the backstop for a KILL or an OOM.
+ * pid file and the staged store blob and list (S-n3); the control plane's
+ * root `rm` of them, checked absent before any restart, is the backstop for a KILL or an OOM.
  * Never a path, a URL, a token or file content in any output.
  */
 
@@ -114,7 +119,6 @@ import {
   isInt,
   EMPTY_SHA256,
   keyIdOf,
-  listStoreMembers,
   MANIFEST_SCHEMA,
   MAX_FILES_JSON_BYTES,
   MAX_TAR_ENTRY_BYTES,
@@ -144,15 +148,16 @@ import {
 } from "./nap-common";
 import { FOLD_FILE, FOLD_SCHEMA } from "./nap-sqlite-fold";
 import {
-  APPROVALD_STORE_ENTRY,
-  APPROVALD_STORE_FILE,
-  approvaldMemberPath,
   BROWSER_PROFILE_EXCLUDE,
   BUNDLE_FILES,
   classOf,
   linkReach,
   NAP_DIR,
   napPathsSha256,
+  STORE_BLOB_ENTRY,
+  STORE_BLOB_FILE,
+  STORE_MEMBERS_ENTRY,
+  STORE_MEMBERS_FILE,
   napStatePathsDocument,
   type PathRules,
   WAL_SUFFIX,
@@ -199,6 +204,12 @@ export type ArchiveOptions = {
   maxFilesJsonBytes: number;
   /** The tar's per-entry limit (Fable N11); an option only so a test can lower it. */
   maxEntryBytes: number;
+  /** Shape (a): the cp keeps no store copy in this archive (`--no-store-copy`). */
+  noStoreCopy: boolean;
+  /** The cp's own member count and total bytes of the store copy, recorded as given (`--store-count`,
+   * `--store-bytes`); null when not given. */
+  storeMemberCount: number | null;
+  storeTotalBytes: number | null;
 };
 
 /** Test seams: each relative path just hashed (pass 1), about to be packed (pass 2), and each chunk before
@@ -210,6 +221,11 @@ type Stream = {
   run_id: string;
   prefix: string;
   tool_sha256: string;
+  store_copy?: Manifest["store_copy"];
+  store_blob_sha256?: string | null;
+  store_members_sha256?: string | null;
+  store_member_count?: number | null;
+  store_total_bytes?: number | null;
   key_id: string;
   wrapped_key_b64: string;
   iv_b64: string;
@@ -263,7 +279,7 @@ function readPidFile(path: string): number | null {
 }
 
 /** What the INT/TERM handler needs to leave the right things on disk. */
-type Live = { progress: string; chunks: string; runFile: string; pidFile: string; storeTar: string; doc: Progress | null };
+type Live = { progress: string; chunks: string; runFile: string; pidFile: string; storeFiles: string[]; doc: Progress | null };
 let live: Live | null = null;
 
 function removeParts(dir: string): void {
@@ -299,8 +315,6 @@ type Walked = {
   liveBytes: number;
   liveDirs: number;
   excluded: ExcludedCounts;
-  approvaldFiles: number;
-  approvaldBytes: number;
 };
 
 /** Hash one regular file, failing (`file_changed`) when it moves under the read. */
@@ -348,10 +362,15 @@ const walk = (root: string, rules: PathRules) => {
 };
 
 /**
- * Pass 1: the walk and `files.json`'s entries: the home's, then the approvald store tar, then each of its
- * members under `/var/lib/approvald/<tenant>/` (S-n2). Throws `NapError`.
+ * Pass 1: the walk and `files.json`'s entries: the home's, then the encrypted store blob and its encrypted
+ * member list as two opaque entries. Throws `NapError`.
  */
-export function walkAndHash(root: string, rules: PathRules, storeTar: string | null, tenant: string, hooks: ArchiveHooks = {}): Walked {
+export function walkAndHash(
+  root: string,
+  rules: PathRules,
+  store: { blob: string; members: string } | null,
+  hooks: ArchiveHooks = {},
+): Walked {
   const tree = walk(root, rules);
   const files: FileEntry[] = [];
   const sources = new Map<string, { path: string; dev: number; ino: number }>();
@@ -394,49 +413,22 @@ export function walkAndHash(root: string, rules: PathRules, storeTar: string | n
   }
   const liveFiles = tree.items.filter((i) => i.type !== "dir").length;
   const liveDirs = tree.items.length - liveFiles;
-  if (storeTar !== null) {
-    let st;
-    try {
-      st = lstatSync(storeTar);
-    } catch {
-      fail("approvald_tar_missing");
-    }
-    if (!st.isFile()) fail("approvald_tar_invalid");
-    if ((st.mode & 0o077) !== 0) fail("approvald_tar_mode");
-    const { bytes, sha256: digest } = hashFile(storeTar, APPROVALD_STORE_ENTRY, st, hooks.afterHash);
-    files.push({ path: APPROVALD_STORE_ENTRY, bytes, sha256: digest, mtime_ms: Math.floor(st.mtimeMs), mode: 0o600, class: "state" });
-    sources.set(APPROVALD_STORE_ENTRY, { path: storeTar, dev: st.dev, ino: st.ino });
-    // The members, from the same bytes that were hashed.
-    let gz: Buffer;
-    try {
-      gz = readFileSync(storeTar);
-    } catch {
-      fail("file_changed");
-    }
-    if (sha256(gz) !== digest) fail("file_changed");
-    for (const m of listStoreMembers(gz)) {
-      files.push({
-        path: approvaldMemberPath(tenant, m.path),
-        bytes: m.bytes,
-        sha256: m.sha256,
-        mtime_ms: m.mtime_ms,
-        mode: m.mode,
-        class: "state",
-        member_of: APPROVALD_STORE_ENTRY,
-      });
+  if (store !== null) {
+    // The store copy (review-a (b) at L43357, release L43372): the cp-encrypted blob and the cp-encrypted
+    // member list, one opaque pair. Each is hashed, never opened or parsed; the cp does the member parity.
+    for (const [entry, path] of [[STORE_BLOB_ENTRY, store.blob], [STORE_MEMBERS_ENTRY, store.members]] as const) {
+      let st;
+      try {
+        st = lstatSync(path);
+      } catch {
+        fail("file_changed");
+      }
+      const { bytes, sha256: digest } = hashFile(path, entry, st, hooks.afterHash);
+      files.push({ path: entry, bytes, sha256: digest, mtime_ms: Math.floor(st.mtimeMs), mode: 0o600, class: "state" });
+      sources.set(entry, { path, dev: st.dev, ino: st.ino });
     }
   }
-  const members = files.filter((f) => f.member_of !== undefined);
-  return {
-    files,
-    sources,
-    liveFiles,
-    liveBytes,
-    liveDirs,
-    excluded: tree.excluded,
-    approvaldFiles: members.length,
-    approvaldBytes: members.reduce((n, f) => n + f.bytes, 0),
-  };
+  return { files, sources, liveFiles, liveBytes, liveDirs, excluded: tree.excluded };
 }
 
 /** Writes the ciphertext into `chunks/<nnnn>.part`, each sealed (hashed, renamed `chunk-<nnnn>.bin`) when full. */
@@ -630,7 +622,8 @@ async function putWithRetry(transport: NapTransport, name: string, body: HttpBod
 }
 
 const isComplete = (s: Stream | undefined): s is Required<Stream> =>
-  !!s && s.stream_complete === true && !!s.wrapped_key_b64 && !!s.iv_b64 && !!s.gcm_tag_b64 && Array.isArray(s.chunks) && !!s.payload && !!s.tree;
+  !!s && s.stream_complete === true && !!s.wrapped_key_b64 && !!s.iv_b64 && !!s.gcm_tag_b64 && Array.isArray(s.chunks) && !!s.payload && !!s.tree &&
+  (s.store_copy === "blob" || s.store_copy === "none");
 
 /** The sha of the bundle this file runs from. */
 export const ownToolSha256 = () => toolSha256(import.meta.dir, BUNDLE_FILES);
@@ -653,8 +646,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let walNonEmpty = 0;
   let notOwned = 0;
   let liveBytes = 0;
-  // files.json's size as the archive would write it (64-hex placeholders for the hashes; the approvald
-  // members are not listed here), against the cap both sides share (Fable S1).
+  // files.json's size as the archive would write it (64-hex placeholders for the hashes; the two store
+  // entries add a few hundred bytes), against the cap both sides share (Fable S1).
   let filesJsonBytes = Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: [] }));
   let liveDirs = 0;
   let linksAbsolute = 0;
@@ -711,7 +704,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       file_name_invalid: tree.problems.name_invalid,
       not_owned: notOwned,
       wal_nonempty: walNonEmpty,
-      approvald_tar_staged: lstatSafe(join(opts.home, ...APPROVALD_STORE_FILE.split("/"))),
+      store_copy_staged: storeStaged(opts.home),
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
       links_absolute: linksAbsolute,
       links_escaping: linksEscaping,
@@ -721,6 +714,12 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       files_json_max: MAX_FILES_JSON_BYTES,
     },
   };
+}
+
+function storeStaged(home: string): "blob" | "none" | "partial" {
+  const b = lstatSafe(join(home, ...STORE_BLOB_FILE.split("/")));
+  const m = lstatSafe(join(home, ...STORE_MEMBERS_FILE.split("/")));
+  return b && m ? "blob" : !b && !m ? "none" : "partial";
 }
 
 /** The fold's record for this run (S-n1): its counts, or a refusal code. */
@@ -736,6 +735,30 @@ function readFold(home: string, runId: string): { db_count: number; wal_folded: 
   if (doc.run_id !== runId) fail("fold_mismatch");
   if (doc.wal_unfolded !== 0) fail("wal_unfolded");
   return { db_count: doc.db_count, wal_folded: doc.wal_folded };
+}
+
+/** The store copy as staged: both the blob and its list (shape (b)), or neither with `--no-store-copy`
+ * (shape (a)); anything partial refuses. Both are 0600 regular files. */
+function checkStoreStaging(blob: string, members: string, none: boolean): void {
+  const at = (path: string) => {
+    try {
+      return lstatSync(path);
+    } catch {
+      return null;
+    }
+  };
+  const b = at(blob);
+  const m = at(members);
+  if (none) {
+    if (b || m) fail("store_copy_unexpected");
+    return;
+  }
+  if (!b && !m) fail("store_copy_missing");
+  if (!b || !m) fail("store_copy_partial");
+  for (const st of [b, m]) {
+    if (!st.isFile()) fail("store_copy_invalid");
+    if ((st.mode & 0o077) !== 0) fail("store_copy_mode");
+  }
 }
 
 /** The control plane's copy of the rules must be exactly the rules built in here (S-n4). */
@@ -762,7 +785,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
   const startedMs = Date.now();
   const napDir = join(opts.home, ...NAP_DIR.split("/"));
   const chunksDir = join(napDir, "chunks");
-  const storeTar = join(opts.home, ...APPROVALD_STORE_FILE.split("/"));
+  const storeBlob = join(opts.home, ...STORE_BLOB_FILE.split("/"));
+  const storeMembers = join(opts.home, ...STORE_MEMBERS_FILE.split("/"));
+  const storeFiles = [storeBlob, storeMembers];
   const rules: PathRules = { hermesRel: relative(opts.root, opts.home).split(sep).join("/") };
   const now = () => new Date().toISOString();
   const prev = readProgress(opts.progress);
@@ -775,7 +800,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
   }
   if (prev?.phase === "done" && prev.run_id === opts.runId) {
     removeQuietly(opts.runFile);
-    removeQuietly(storeTar); // the signing keys never outlive a run (S-n3)
+    for (const f of storeFiles) removeQuietly(f); // the staged store copy never outlives a run (S-n3)
     return { code: 64, line: { status: "refused", reason: "run_already_archived", chunks_acked: 0 } };
   }
 
@@ -807,7 +832,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       // The JSON line still reports the outcome.
     }
     removeQuietly(opts.runFile);
-    removeQuietly(storeTar);
+    for (const f of storeFiles) removeQuietly(f);
     if (pidHeld) removeQuietly(opts.pidFile);
     live = null;
     return { code, line };
@@ -853,6 +878,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     prefix = run.prefix;
     date = parsePrefix(run.prefix)!.date;
     fold = readFold(opts.home, opts.runId);
+    checkStoreStaging(storeBlob, storeMembers, opts.noStoreCopy);
     if (gatewayBack()) fail("writers_alive");
   } catch (err) {
     if (err instanceof NapError) return refuse(err.code);
@@ -872,7 +898,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     } catch {
       return refuse("pid_file_failed");
     }
-    live = { progress: opts.progress, chunks: chunksDir, runFile: opts.runFile, pidFile: opts.pidFile, storeTar, doc: null };
+    live = { progress: opts.progress, chunks: chunksDir, runFile: opts.runFile, pidFile: opts.pidFile, storeFiles, doc: null };
   }
 
   // Resume only a complete stream of this run whose un-acked chunks are intact (13 S6).
@@ -880,7 +906,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
   const acked = new Set<number>(doc.acked); // empty unless a stream of this run is on record
   if (doc.stream) {
     const s = doc.stream;
-    if (isComplete(s) && s.prefix === prefix && s.tool_sha256 === toolSha && chunksIntact(chunksDir, s.chunks, acked)) stream = s;
+    if (isComplete(s) && s.prefix === prefix && s.tool_sha256 === toolSha &&
+      s.store_copy === (opts.noStoreCopy ? "none" : "blob") && s.store_member_count === opts.storeMemberCount &&
+      s.store_total_bytes === opts.storeTotalBytes && chunksIntact(chunksDir, s.chunks, acked)) stream = s;
     else return discard("resume_needs_new_run");
   }
 
@@ -892,17 +920,17 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       return failed("progress_write_failed");
     }
     try {
-      walked = walkAndHash(opts.root, rules, storeTar, opts.tenant, hooks);
+      walked = walkAndHash(opts.root, rules, opts.noStoreCopy ? null : { blob: storeBlob, members: storeMembers }, hooks);
     } catch (err) {
       if (!(err instanceof NapError)) throw err;
       // Before any chunk exists: the run file, key, URL and tree refusals are 64; an unreadable or changed
       // file (13 S10) fails the run.
-      const refusals = ["file_name_invalid", "approvald_tar_missing", "approvald_tar_invalid", "approvald_tar_mode", "root_invalid"];
+      const refusals = ["file_name_invalid", "root_invalid"];
       return refusals.includes(err.code) ? refuse(err.code) : failed(err.code);
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding
     // bytes refuses, and nothing is folded again.
-    if (walked.files.some((f) => f.member_of === undefined && f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
+    if (walked.files.some((f) => f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
       return refuse("wal_unfolded");
     }
     // Fable N11: a file the tar cannot hold refuses here, before any chunk, not mid-pack.
@@ -929,6 +957,11 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
         stream_complete: true,
         date,
         created_at: now(),
+        store_copy: opts.noStoreCopy ? "none" : "blob",
+        store_blob_sha256: walked.files.find((f) => f.path === STORE_BLOB_ENTRY)?.sha256 ?? null,
+        store_members_sha256: walked.files.find((f) => f.path === STORE_MEMBERS_ENTRY)?.sha256 ?? null,
+        store_member_count: opts.storeMemberCount,
+        store_total_bytes: opts.storeTotalBytes,
         served: { overlay_commit: opts.servedCommit, hermes_version: opts.hermesVersion, approvald_version: opts.approvaldVersion },
         payload: {
           sha256: packed.payloadSha,
@@ -950,8 +983,6 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
           db_count: fold.db_count,
           wal_folded: fold.wal_folded,
           approvald_secret_names: opts.approvaldSecretNames,
-          approvald_files: walked.approvaldFiles,
-          approvald_bytes: walked.approvaldBytes,
           browser_profile_files: walked.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
           browser_profile_dropped: (walked.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0) > 0,
         },
@@ -1014,6 +1045,11 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     served: stream.served,
     tool_sha256: stream.tool_sha256,
     paths_sha256: pathsSha,
+    store_copy: stream.store_copy,
+    store_blob_sha256: stream.store_blob_sha256,
+    store_members_sha256: stream.store_members_sha256,
+    store_member_count: stream.store_member_count,
+    store_total_bytes: stream.store_total_bytes,
     mode: CIPHER_MODE,
     key_id: stream.key_id,
     wrapped_key_b64: stream.wrapped_key_b64,
@@ -1056,8 +1092,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       live_dirs: t.live_dirs,
       db_count: t.db_count,
       wal_folded: t.wal_folded,
-      approvald_files: t.approvald_files,
-      approvald_bytes: t.approvald_bytes,
+      store_copy: stream.store_copy,
       browser_profile_files: t.browser_profile_files,
       served_commit: stream.served.overlay_commit,
       tool_sha256: stream.tool_sha256,
@@ -1081,7 +1116,7 @@ function usage(message: string): never {
   console.error(
     "usage: bun install/nap-archive.ts --tenant <id> [--home <dir>] [--root <dir>] --run-id <uuid> --served-commit <sha40> " +
       "--tool-sha256 <sha64> --mode presigned [--paths <file>] [--run-file <path>] [--chunk-bytes N] [--progress <path>] " +
-      "[--pid-file <path>]\n       bun install/nap-archive.ts --tenant <id> [--home <dir>] [--root <dir>] --dry-run",
+      "[--pid-file <path>] [--no-store-copy | [--store-count N] [--store-bytes N]]\n       bun install/nap-archive.ts --tenant <id> [--home <dir>] [--root <dir>] --dry-run",
   );
   process.exit(2);
 }
@@ -1106,14 +1141,19 @@ const inside = (dir: string, path: string) => resolve(path).startsWith(resolve(d
 export function parseArgs(argv: string[], env: Record<string, string | undefined> = process.env): ArchiveOptions {
   const flags: Record<string, string | undefined> = {};
   let dryRun = false;
+  let noStoreCopy = false;
   const known = new Set([
     "--tenant", "--home", "--root", "--run-id", "--served-commit", "--tool-sha256", "--paths", "--mode", "--run-file", "--chunk-bytes",
-    "--progress", "--pid-file",
+    "--progress", "--pid-file", "--store-count", "--store-bytes",
   ]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--dry-run") {
       dryRun = true;
+      continue;
+    }
+    if (arg === "--no-store-copy") {
+      noStoreCopy = true;
       continue;
     }
     if (!known.has(arg)) usage(`unknown argument ${arg}`);
@@ -1148,6 +1188,11 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   const chunkBytes = boundedInt(chunkFlag, "--chunk-bytes", MIN_CHUNK_BYTES, MAX_CHUNK_BYTES, DEFAULT_CHUNK_BYTES);
   const version = (v: string | undefined) => (v && VERSION_TEXT.test(v.trim()) ? v.trim() : null);
   const secretNames = env.NAP_APPROVALD_SECRET_NAMES?.trim();
+  if (noStoreCopy && (flags["--store-count"] !== undefined || flags["--store-bytes"] !== undefined)) {
+    usage("--store-count and --store-bytes describe a store copy; not with --no-store-copy");
+  }
+  const storeInt = (flag: string) =>
+    flags[flag] !== undefined ? boundedInt(flags[flag], flag, 0, Number.MAX_SAFE_INTEGER, 0) : null;
   return {
     tenant,
     home,
@@ -1173,6 +1218,9 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     procRoot: env.NAP_PROC_ROOT?.trim() || "/proc",
     maxFilesJsonBytes: MAX_FILES_JSON_BYTES,
     maxEntryBytes: MAX_TAR_ENTRY_BYTES,
+    noStoreCopy,
+    storeMemberCount: storeInt("--store-count"),
+    storeTotalBytes: storeInt("--store-bytes"),
   };
 }
 
@@ -1190,7 +1238,7 @@ function abandon(reason: string): Record<string, unknown> {
       }
     }
     removeQuietly(l.runFile);
-    removeQuietly(l.storeTar);
+    for (const f of l.storeFiles) removeQuietly(f);
     removeQuietly(l.pidFile);
   }
   return line;

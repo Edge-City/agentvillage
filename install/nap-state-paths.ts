@@ -20,13 +20,13 @@
  *   - `unclassified` : anything else under the home: archived and restored like `state`, counted apart;
  *   - `link`         : a symlink (set by the walker), recorded with its target, never followed;
  *   - `dir`          : a directory the walk entered, empty or not, with its mode (Fable S2): no data.
- * The approvald store tar (staged by the control plane's root piece into the nap dir, the ONE file under
- * `av-events/nap/` that is archived; review-a S-n2) rides as one `state` entry named `APPROVALD_STORE_ENTRY`,
- * and each of its members is listed after it, file by file, under the virtual prefix
- * `/var/lib/approvald/<tenant>/` (class `state`, `member_of` the store entry, size and SHA-256, no data of
- * its own), so the control plane's root count of `/var/lib/approvald/<t>` can be compared member by member.
- * Every one of these paths starts with `/`, so none can ever name a home file, and a restore never writes
- * them into the home.
+ * The approvald store copy (review-a (b) at L43357, narrowed by release L43372): the control plane's root piece
+ * stages, in the nap dir, the store ALREADY ENCRYPTED to the cp's own public key (`STORE_BLOB_FILE`) and its
+ * member list, ALSO encrypted by the cp (`STORE_MEMBERS_FILE`). The box never decrypts, opens or parses
+ * either: both are archived as one opaque pair of `state` entries (`STORE_BLOB_ENTRY`, `STORE_MEMBERS_ENTRY`)
+ * with their SHA-256s, and nothing else. The cp decrypts the list and does the member parity itself. With
+ * `--no-store-copy` (shape (a)) nothing is staged and nothing is archived. Both entry paths start with `/`,
+ * so neither can ever name a home file, and a restore never writes them into the home.
  *
  * One module, imported by `install/nap-archive.ts` and `install/restore-state.ts`; the control plane reads
  * the same rules from `bun --no-env-file --no-install install/nap-state-paths.ts` (one JSON document,
@@ -44,13 +44,13 @@ export type NapClass = "state" | "secret_cp" | "secret_box" | "unclassified" | "
 
 /** The tool's own working directory, relative to `$HERMES_HOME`. */
 export const NAP_DIR = "av-events/nap";
-/** Where the root piece stages the approvald store tar, relative to `$HERMES_HOME`. */
-export const APPROVALD_STORE_FILE = `${NAP_DIR}/approvald-store.tar.gz`;
-/** Its `files.json` path: absolute, so never a home path, and a restore never writes it into the home. */
-export const APPROVALD_STORE_ENTRY = "/var/lib/approvald/.nap-store.tar.gz";
-/** The virtual root of the store's members in `files.json` (`/var/lib/approvald/<tenant>/<member>`). */
-export const APPROVALD_MEMBER_ROOT = "/var/lib/approvald/";
-export const approvaldMemberPath = (tenant: string, member: string) => `${APPROVALD_MEMBER_ROOT}${tenant}/${member}`;
+/** Where the root piece stages the encrypted store blob and its encrypted member list, relative to `$HERMES_HOME`. */
+export const STORE_BLOB_FILE = `${NAP_DIR}/approvald-store.enc`;
+export const STORE_MEMBERS_FILE = `${NAP_DIR}/approvald-store.members.enc`;
+/** Their `files.json` paths: absolute, so never a home path, and a restore never writes them into the home. */
+export const STORE_BLOB_ENTRY = "/var/lib/approvald/.nap-store.enc";
+export const STORE_MEMBERS_ENTRY = "/var/lib/approvald/.nap-store.members.enc";
+export const STORE_ENTRIES: readonly string[] = [STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY];
 /** The browser profiles stay excluded (Hermes treats them as a regenerable credential store; review-a
  * N-n3): the manifest records how many files were dropped and a flag, for the resident notice. */
 export const BROWSER_PROFILE_EXCLUDE = "browser_profile";
@@ -112,8 +112,8 @@ export const EXCLUDES: readonly Exclude[] = [
   { name: "backup_lock", scope: "hermes_path", match: ".backup.lock" },
   { name: "socket", scope: "type", match: "socket" },
   { name: "fifo", scope: "type", match: "fifo" },
-  // The tool's own staging: neither archived nor counted (the approvald store tar staged inside it is
-  // archived as its own entry, with its members listed; S-n2).
+  // The tool's own staging: neither archived nor counted (the encrypted store blob and member list staged
+  // inside it are archived as their own two entries).
   { name: "nap_dir", scope: "hermes_path", match: NAP_DIR },
 ];
 
@@ -262,7 +262,7 @@ export class WalkRefused extends Error {}
 /**
  * Every archivable entry under `root`, sorted, and every excluded one counted per exclude name (a
  * subtree's non-directory entries each count, with their `lstat` size). The one exception is `nap_dir`,
- * the tool's own transient staging (run file, progress, chunks, the staged approvald tar): it is neither
+ * the tool's own transient staging (run file, progress, chunks, the staged store blob and list): it is neither
  * archived nor counted, and the control plane's root count prunes it the same way. Symlinks are listed and never
  * followed. Refuses (`WalkRefused`) on anything it cannot read or archive (13 S10: nothing is skipped):
  * `file_unreadable` for a directory it cannot list, `file_unsupported` for a device or a bad name.
@@ -366,9 +366,10 @@ export function napStatePathsDocument() {
     hermes_home: "$HERMES_HOME",
     nap_dir: `$HERMES_HOME/${NAP_DIR}`,
     approvald_store: {
-      staged_at: `$HERMES_HOME/${APPROVALD_STORE_FILE}`,
-      files_json_path: APPROVALD_STORE_ENTRY,
-      member_prefix: `${APPROVALD_MEMBER_ROOT}<tenant>/`,
+      blob_staged_at: `$HERMES_HOME/${STORE_BLOB_FILE}`,
+      members_staged_at: `$HERMES_HOME/${STORE_MEMBERS_FILE}`,
+      blob_files_json_path: STORE_BLOB_ENTRY,
+      members_files_json_path: STORE_MEMBERS_ENTRY,
     },
     browser_profile: { exclude: BROWSER_PROFILE_EXCLUDE, archived: false },
     bundle_files: BUNDLE_FILES,

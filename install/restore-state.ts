@@ -7,7 +7,7 @@
  *
  *   bun --no-env-file --no-install install/restore-state.ts --tenant <id> --manifest <key> --mode presigned
  *       [--run-file <path>] [--key-file <path>] [--home <dir>] [--root <dir>]
- *       [--approvald-out <path>] [--verify-only] [--repair] [--no-merge-env] [--dry-run]
+ *       [--approvald-out <dir>] [--verify-only] [--repair] [--no-merge-env] [--dry-run]
  *
  * `--manifest` is the copy of record the `naps` row names: `nap/<tenant>/<date>/<run>/state_manifest.<sha256>.json`
  * (never "latest"). `--root` is the home the archive walked (`$HOME`); `--home` is `$HERMES_HOME` inside it.
@@ -33,11 +33,13 @@
  * `secret_box` with mode 0600, except `$HERMES_HOME/.env`, which is MERGED by default: every archived line
  * whose key is not in `CP_REMINTABLE.env_keys` and is not already set is added to the file the control
  * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic); `secret_cp` is never written (the
- * wake re-minted it). The approvald store tar (13 S3, S4) never lands in the home: with `--approvald-out`
- * (a path outside the root) it is written there 0600 for the control plane's root step to extract into
- * `/var/lib/approvald/<t>/`; without it, it is verified and not written. Either way its members must be
- * exactly the ones `files.json` lists under `/var/lib/approvald/<tenant>/` (review-a S-n2,
- * `approvald_members_mismatch`); those listed members are never written anywhere.
+ * wake re-minted it). The approvald store copy (13 S3, S4; review-a (b) at L43357, release L43372) is an
+ * opaque pair the cp encrypted to its own key: the store blob and its member list. The box never decrypts or
+ * parses either, and neither ever lands in the home: with `--approvald-out <dir>` (a directory outside the
+ * root) both are written there 0600 as `nap-store.enc` and `nap-store.members.enc`, byte-verified against
+ * `files.json` and the manifest's shas, for the control plane's root step to decrypt, check and restore into
+ * `/var/lib/approvald/<t>/`; without it, they are verified and not written. An archive with
+ * `store_copy: none` (shape (a)) has neither, and nothing is written.
  *
  * Two-phase write: each file to write is staged (mode and mtime from `files.json`) under
  * `av-events/nap/restore-staging/`, every one is moved next to its target under a temp name, and only then
@@ -90,7 +92,6 @@ import {
   hasData,
   HEX64,
   isInt,
-  listStoreMembers,
   type Manifest,
   MANIFEST_SLOT_NAME,
   manifestName,
@@ -114,8 +115,6 @@ import {
   writeJsonAtomic,
 } from "./nap-common";
 import {
-  APPROVALD_STORE_ENTRY,
-  approvaldMemberPath,
   cleanRelPath,
   classOf,
   excludedBy,
@@ -124,12 +123,17 @@ import {
   linkTargetValid,
   napPathsSha256,
   NAP_DIR,
+  STORE_BLOB_ENTRY,
+  STORE_ENTRIES,
   type PathRules,
   restorable,
   walkHome,
   WalkRefused,
 } from "./nap-state-paths";
 import { hermesHome } from "./paths";
+
+/** Where `--approvald-out <dir>` receives a store entry: `nap-store.enc`, `nap-store.members.enc`. */
+const storeOutPath = (dir: string, entry: string) => join(dir, entry.slice(entry.lastIndexOf("/") + 2));
 
 const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 const MAX_ENV_BYTES = 1024 * 1024;
@@ -166,12 +170,15 @@ export type RestoreLine = {
   secret_box_written: number;
   env_merged: number;
   links: number;
+  /** The archive's store copy (`blob` or `none`) and how many of its two files went to `--approvald-out`. */
+  store_copy?: "blob" | "none";
+  store_written: number;
   /** Whether the archive was made under the rules this restore carries (Fable S5). */
   paths_match?: boolean;
   reason?: string;
 };
 
-type Act = "write" | "unchanged" | "skip" | "env" | "store" | "member" | "same" | "missing" | "changed";
+type Act = "write" | "unchanged" | "skip" | "env" | "store" | "same" | "missing" | "changed";
 type Plan = { entry: FileEntry; index: number; act: Act };
 
 const segments = (rel: string) => rel.split("/");
@@ -190,12 +197,10 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
   const d = doc as { schema?: unknown; files?: unknown };
   if (!d || typeof d !== "object" || d.schema !== FILES_SCHEMA || !Array.isArray(d.files)) fail("files_invalid");
   const files = d.files as FileEntry[];
-  const allowed = new Set(["path", "bytes", "sha256", "mtime_ms", "mode", "class", "target", "same_as", "member_of"]);
+  const allowed = new Set(["path", "bytes", "sha256", "mtime_ms", "mode", "class", "target", "same_as"]);
   const byPath = new Map<string, FileEntry>();
   let last = "";
-  let lastMember = "";
   let stores = 0;
-  const memberRoot = approvaldMemberPath(manifest.tenant_id, "");
   // Fable S5: an archive made under other rules (paths_sha256 differs) is trusted for its classes and its
   // exclude decisions; only structure is checked. Under the same rules, any disagreement is a forgery.
   const sameRules = manifest.paths_sha256 === napPathsSha256();
@@ -205,23 +210,15 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     if (!isInt(f.bytes) || !isInt(f.mtime_ms) || !isInt(f.mode) || f.mode > 0o777 || typeof f.sha256 !== "string" || !HEX64.test(f.sha256)) {
       fail("files_invalid");
     }
-    if (f.path === APPROVALD_STORE_ENTRY) {
-      if (f.class !== "state" || f.target !== undefined || f.same_as !== undefined || f.member_of !== undefined || ++stores > 1) {
-        fail("files_invalid");
-      }
+    if (STORE_ENTRIES.includes(f.path)) {
+      // The store copy's encrypted blob, then its encrypted list (in that order), each once, opaque `state` entries.
+      if (f.class !== "state" || f.target !== undefined || f.same_as !== undefined) fail("files_invalid");
+      if (f.path !== STORE_ENTRIES[stores++]) fail("files_invalid");
+      const want = f.path === STORE_BLOB_ENTRY ? manifest.store_blob_sha256 : manifest.store_members_sha256;
+      if (manifest.store_copy !== "blob" || f.sha256 !== want) fail("files_invalid");
       continue;
     }
-    if (f.member_of !== undefined) {
-      // An approvald store member (S-n2): listed after the store, never a home path, never written.
-      if (f.member_of !== APPROVALD_STORE_ENTRY || stores !== 1 || f.class !== "state" || f.target !== undefined || f.same_as !== undefined) {
-        fail("files_invalid");
-      }
-      if (typeof f.path !== "string" || !f.path.startsWith(memberRoot) || !cleanRelPath(f.path.slice(memberRoot.length))) fail("files_invalid");
-      if (lastMember && !(f.path > lastMember)) fail("files_invalid");
-      lastMember = f.path;
-      continue;
-    }
-    if (stores > 0) fail("files_invalid"); // home entries come first, then the store and its members
+    if (stores > 0) fail("files_invalid"); // home entries come first, then the store pair
     // Nothing is ever written through a link (Fable S4): every ancestor files.json names is a directory.
     if (typeof f.path === "string") {
       const parts = f.path.split("/");
@@ -249,6 +246,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     }
     byPath.set(f.path, f);
   }
+  if ((manifest.store_copy === "blob") !== (stores === 2)) fail("files_invalid");
   const p = manifest.payload;
   const count = (c: FileEntry["class"]) => files.filter((f) => f.class === c).length;
   if (
@@ -259,9 +257,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     count("unclassified") !== p.unclassified_count ||
     count("link") !== p.link_count ||
     count("log") !== p.log_count ||
-    count("dir") !== p.dir_count ||
-    files.filter((f) => f.member_of !== undefined).length !== manifest.tree.approvald_files ||
-    files.filter((f) => f.member_of !== undefined).reduce((n, f) => n + f.bytes, 0) !== manifest.tree.approvald_bytes
+    count("dir") !== p.dir_count
   ) {
     fail("counts_mismatch");
   }
@@ -408,6 +404,7 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     secret_box_written: 0,
     env_merged: 0,
     links: 0,
+    store_written: 0,
   };
   const writes = !opts.dryRun && (!opts.verifyOnly || opts.repair);
   const end = (status: RestoreLine["status"], reason?: string) => {
@@ -499,7 +496,6 @@ async function restoreInner(
   let tarLimit = Infinity;
   let tarSeen = 0;
   let envArchived: Buffer | null = null;
-  const storeParts: Buffer[] = [];
   let envCurrent = "";
   const stagedPath = (index: number) => join(staging, String(index).padStart(6, "0"));
   const toStage = new Set<number>();
@@ -508,8 +504,7 @@ async function restoreInner(
     const index = new Map(entries.map((f, i) => [f.path, i]));
     plans = entries.map((entry, i) => {
       const act = (a: Act): Plan => ({ entry, index: i, act: a });
-      if (entry.path === APPROVALD_STORE_ENTRY) return act("store");
-      if (entry.member_of !== undefined) return act("member");
+      if (STORE_ENTRIES.includes(entry.path)) return act("store");
       // What the CURRENT rules call secret_cp is skipped whatever the archive recorded (Fable S5).
       const isCp = (f: FileEntry) => f.class === "secret_cp" || (f.class !== "link" && f.class !== "dir" && classOf(f.path, rules) === "secret_cp");
       if (isCp(entry)) return act("skip");
@@ -548,11 +543,13 @@ async function restoreInner(
         if (st && !st.isFile()) throw new NapError("target_not_regular");
         envCurrent = st ? readFileSync(join(root, ...segments(envRel)), "utf8") : "";
       }
-      if (opts.approvaldOut && entries.some((f) => f.path === APPROVALD_STORE_ENTRY)) {
-        const parent = lstatOrNull(dirname(opts.approvaldOut));
-        if (!parent || !parent.isDirectory()) throw new NapError("approvald_out_invalid");
-        const target = lstatOrNull(opts.approvaldOut);
-        if (target && !target.isFile()) throw new NapError("approvald_out_invalid");
+      if (opts.approvaldOut && entries.some((f) => STORE_ENTRIES.includes(f.path))) {
+        const dir = lstatOrNull(opts.approvaldOut);
+        if (!dir || !dir.isDirectory()) throw new NapError("approvald_out_invalid");
+        for (const e of STORE_ENTRIES) {
+          const target = lstatOrNull(storeOutPath(opts.approvaldOut, e));
+          if (target && !target.isFile()) throw new NapError("approvald_out_invalid");
+        }
       }
     }
     // What gets staged: the data of every entry to write (a hard link's data comes from its first entry).
@@ -580,6 +577,7 @@ async function restoreInner(
           }
           files = validateFiles(doc, manifest, rules);
           line.paths_match = manifest.paths_sha256 === napPathsSha256();
+          line.store_copy = manifest.store_copy;
           dataOrder = files.map((f, i) => (hasData(f) ? i : -1)).filter((i) => i >= 0);
           tarLimit = 512 + size + tarPadding(size) + 10240 +
             dataOrder.reduce((n, i) => n + 512 + files![i].bytes + tarPadding(files![i].bytes), 0);
@@ -597,7 +595,6 @@ async function restoreInner(
     // it is under MAX_ENV_BYTES and --no-merge-env is not given.
     const captureEnv = f.path === envRel && !opts.verifyOnly && !opts.dryRun;
     const envParts: Buffer[] = [];
-    const isStore = f.path === APPROVALD_STORE_ENTRY;
     let got = 0;
     return {
       write: (b) => {
@@ -608,7 +605,6 @@ async function restoreInner(
           while (off < b.length) off += writeSync(fd, b, off, b.length - off);
         }
         if (captureEnv) envParts.push(Buffer.from(b));
-        if (isStore) storeParts.push(Buffer.from(b));
       },
       end: () => {
         if (fd >= 0) {
@@ -618,15 +614,6 @@ async function restoreInner(
         }
         if (got !== f.bytes || hash.digest("hex") !== f.sha256) fail("file_hash_mismatch");
         if (captureEnv) envArchived = Buffer.concat(envParts);
-        if (isStore) {
-          // The store's members must be exactly the ones files.json lists (S-n2).
-          const listed = files!.filter((e) => e.member_of !== undefined);
-          const actual = listStoreMembers(Buffer.concat(storeParts));
-          storeParts.length = 0;
-          const same = actual.length === listed.length && actual.every((m, k) =>
-            approvaldMemberPath(manifest.tenant_id, m.path) === listed[k].path && m.bytes === listed[k].bytes && m.sha256 === listed[k].sha256);
-          if (!same) fail("approvald_members_mismatch");
-        }
       },
     };
   };
@@ -737,8 +724,8 @@ async function restoreInner(
       for (const item of dirItems) mkdirSync(join(root, ...segments(item.entry.path)), { recursive: true, mode: 0o700 });
       for (const item of items) {
         if (item.entry.class === "dir") continue;
-        const isStore = item.entry.path === APPROVALD_STORE_ENTRY;
-        const target = isStore ? opts.approvaldOut! : join(root, ...segments(item.entry.path));
+        const isStore = STORE_ENTRIES.includes(item.entry.path);
+        const target = isStore ? storeOutPath(opts.approvaldOut!, item.entry.path) : join(root, ...segments(item.entry.path));
         const dir = dirname(target);
         if (!isStore) mkdirSync(dir, { recursive: true, mode: 0o700 });
         const tmp = tmpName(dir, target.slice(dir.length + 1));
@@ -780,7 +767,10 @@ async function restoreInner(
       try {
         renameSync(moved[i].tmp, moved[i].target);
         const e = moved[i].item.entry;
-        if (e.path === APPROVALD_STORE_ENTRY) continue;
+        if (STORE_ENTRIES.includes(e.path)) {
+          line.store_written++;
+          continue;
+        }
         line.written++;
         line.bytes += e.class === "link" ? 0 : e.bytes;
         if (e.class === "secret_box") line.secret_box_written++;
@@ -830,7 +820,7 @@ function usage(message: string): never {
   console.error(`restore-state: ${message}`);
   console.error(
     "usage: bun install/restore-state.ts --tenant <id> --manifest <key> --mode presigned [--run-file <path>] " +
-      "[--key-file <path>] [--home <dir>] [--root <dir>] [--approvald-out <path>] [--verify-only] [--repair] " +
+      "[--key-file <path>] [--home <dir>] [--root <dir>] [--approvald-out <dir>] [--verify-only] [--repair] " +
       "[--no-merge-env] [--dry-run]",
   );
   process.exit(2);
@@ -872,7 +862,9 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   const keyFile = resolve(flags["--key-file"] ?? join(napDir, "restore-key.json"));
   if (!inside(napDir, runFile) || !inside(napDir, keyFile)) usage("--run-file and --key-file must sit under $HERMES_HOME/av-events/nap/");
   const approvaldOut = flags["--approvald-out"] !== undefined ? resolve(flags["--approvald-out"]) : null;
-  if (approvaldOut && (inside(root, approvaldOut) || approvaldOut === root)) usage("--approvald-out must sit outside the home (--root)");
+  if (approvaldOut && (inside(root, approvaldOut) || approvaldOut === root || inside(approvaldOut, root))) {
+    usage("--approvald-out must be a directory outside the home (--root)");
+  }
   const timeout = Number(env.NAP_UPLOAD_TIMEOUT_S ?? "30");
   const retry = Number(env.NAP_UPLOAD_RETRY_MS ?? "1000");
   return {

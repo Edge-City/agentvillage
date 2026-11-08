@@ -12,7 +12,6 @@ import { lstatSync, mkdirSync, openSync, closeSync, readSync, readdirSync, readF
 import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { dirname, join } from "node:path";
-import { gunzipSync } from "node:zlib";
 
 export const MANIFEST_SCHEMA = "state_manifest.v1";
 export const FILES_SCHEMA = "nap_files.v1";
@@ -74,16 +73,13 @@ export type FileEntry = {
   target?: string;
   /** A hard link of an earlier entry: no data of its own in the tar. */
   same_as?: string;
-  /** An approvald store member (`/var/lib/approvald/<t>/<member>`): its bytes ride inside the store tar
-   * entry this names, so it has no data entry of its own (review-a S-n2). */
-  member_of?: string;
 };
 export type FilesDoc = { schema: string; files: FileEntry[] };
 
 /** Index in `files.json` → the tar entry name of its data. */
 export const dataEntryName = (index: number) => `data/${pad(index, 6)}`;
 /** Whether an entry has its own data entry in the tar (regular files that are not a later hard link). */
-export const hasData = (f: FileEntry) => f.class !== "link" && f.class !== "dir" && f.same_as === undefined && f.member_of === undefined;
+export const hasData = (f: FileEntry) => f.class !== "link" && f.class !== "dir" && f.same_as === undefined;
 /** A directory's entry carries no bytes: size 0 and the SHA-256 of nothing. */
 export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -101,6 +97,15 @@ export type Manifest = {
   /** The pinned nap bundle this ran from (review-a S-n4; `BUNDLE_FILES`), and the path rules it walked by. */
   tool_sha256: string;
   paths_sha256: string;
+  /** The approvald store copy: `blob` (the cp-encrypted blob and its cp-encrypted member list are in the
+   * payload as one opaque pair, their SHA-256s here, as staged) or `none` (shape (a), `--no-store-copy`; both
+   * shas null). The two counts are the cp's own (`--store-count`, `--store-bytes`), recorded as given, null
+   * when not given (always null with `none`); the box never reads the list (release L43372). */
+  store_copy: "blob" | "none";
+  store_blob_sha256: string | null;
+  store_members_sha256: string | null;
+  store_member_count: number | null;
+  store_total_bytes: number | null;
   mode: string;
   /** SHA-256 of the wrapping public key's SPKI DER: which key pair opens this archive (13 N2). */
   key_id: string;
@@ -132,9 +137,6 @@ export type Manifest = {
     wal_folded: number;
     /** How many approvald token files the root piece left out (their names never; 13 S4). */
     approvald_secret_names: number | null;
-    /** The approvald store's members, as listed in `files.json` (review-a S-n2: the root count's parity). */
-    approvald_files: number;
-    approvald_bytes: number;
     /** Browser-profile files left out (review-a N-n3), and whether any were. */
     browser_profile_files: number;
     browser_profile_dropped: boolean;
@@ -145,7 +147,8 @@ export type Manifest = {
 /** Every key a manifest carries, at each level (design v2 4.2). Provider-neutral (12 W5): no Railway id,
  * checkpoint name or sandbox path, ever; those live only in the control plane's `naps` table. */
 export const MANIFEST_KEYS = [
-  "schema", "tenant_id", "date", "run_id", "created_at", "transport", "prefix", "served", "tool_sha256", "paths_sha256", "mode", "key_id",
+  "schema", "tenant_id", "date", "run_id", "created_at", "transport", "prefix", "served", "tool_sha256", "paths_sha256", "store_copy", "store_blob_sha256",
+  "store_members_sha256", "store_member_count", "store_total_bytes", "mode", "key_id",
   "wrapped_key_b64", "iv_b64", "gcm_tag_b64", "payload", "tree", "chunks",
 ] as const;
 export const MANIFEST_SERVED_KEYS = ["overlay_commit", "hermes_version", "approvald_version"] as const;
@@ -153,7 +156,7 @@ export const MANIFEST_PAYLOAD_KEYS = [
   "sha256", "bytes", "file_count", "total_file_bytes", "secret_cp_count", "secret_box_count", "unclassified_count", "link_count", "log_count", "dir_count",
 ] as const;
 export const MANIFEST_TREE_KEYS = [
-  "live_files", "live_bytes", "live_dirs", "excluded", "db_count", "wal_folded", "approvald_secret_names", "approvald_files", "approvald_bytes",
+  "live_files", "live_bytes", "live_dirs", "excluded", "db_count", "wal_folded", "approvald_secret_names",
   "browser_profile_files", "browser_profile_dropped",
 ] as const;
 const EXCLUDE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -206,6 +209,14 @@ export function parseManifest(bytes: Uint8Array, key: string, tenant: string): M
   if (!exactKeys(doc.served, MANIFEST_SERVED_KEYS) || !HEX40.test(doc.served.overlay_commit)) fail("manifest_invalid");
   if (typeof doc.tool_sha256 !== "string" || !HEX64.test(doc.tool_sha256)) fail("manifest_invalid");
   if (typeof doc.paths_sha256 !== "string" || !HEX64.test(doc.paths_sha256)) fail("manifest_invalid");
+  const shaOrNull = (v: unknown, wantSha: boolean) => (wantSha ? typeof v === "string" && HEX64.test(v) : v === null);
+  if (doc.store_copy !== "blob" && doc.store_copy !== "none") fail("manifest_invalid");
+  if (!shaOrNull(doc.store_blob_sha256, doc.store_copy === "blob") || !shaOrNull(doc.store_members_sha256, doc.store_copy === "blob")) {
+    fail("manifest_invalid");
+  }
+  for (const n of [doc.store_member_count, doc.store_total_bytes]) {
+    if (doc.store_copy === "blob" ? n !== null && !isInt(n) : n !== null) fail("manifest_invalid");
+  }
   for (const b of [doc.wrapped_key_b64, doc.iv_b64, doc.gcm_tag_b64]) if (typeof b !== "string" || !B64.test(b)) fail("manifest_invalid");
   if (Buffer.from(doc.iv_b64, "base64").length !== 12 || Buffer.from(doc.gcm_tag_b64, "base64").length !== 16) fail("manifest_invalid");
   if (typeof doc.key_id !== "string" || !HEX64.test(doc.key_id)) fail("manifest_invalid");
@@ -217,7 +228,7 @@ export function parseManifest(bytes: Uint8Array, key: string, tenant: string): M
     fail("manifest_invalid");
   }
   if (t.approvald_secret_names !== null && !isInt(t.approvald_secret_names)) fail("manifest_invalid");
-  if (!isInt(t.live_dirs) || !isInt(t.approvald_files) || !isInt(t.approvald_bytes) || !isInt(t.browser_profile_files)) fail("manifest_invalid");
+  if (!isInt(t.live_dirs) || !isInt(t.browser_profile_files)) fail("manifest_invalid");
   if (t.browser_profile_dropped !== t.browser_profile_files > 0) fail("manifest_invalid");
   if (!t.excluded || typeof t.excluded !== "object" || Array.isArray(t.excluded)) fail("manifest_invalid");
   for (const [name, c] of Object.entries(t.excluded)) {
@@ -518,104 +529,6 @@ export class TarReader {
   finish(): void {
     if (!this.done || this.sink || this.remaining > 0) fail("tar_truncated");
   }
-}
-
-// ---------------------------------------------------------------------------------------------------------
-// The approvald store tar (review-a S-n2): list its members, file by file
-// ---------------------------------------------------------------------------------------------------------
-
-export type StoreMember = { path: string; bytes: number; sha256: string; mtime_ms: number; mode: number };
-/** The store is small (policy, chain, a few ids); a bigger one is refused, never truncated. */
-export const MAX_STORE_TAR_BYTES = 1024 * 1024 * 1024;
-
-const SAFE_MEMBER = (rel: string) =>
-  rel.length > 0 && rel.length <= 4096 && !rel.startsWith("/") &&
-  rel.split("/").every((s) => s.length > 0 && s !== "." && s !== ".." && !s.includes("\\") && !s.includes("\0"));
-
-/**
- * The regular-file members of a gzipped tar as the root piece writes it (`tar -czf … -C <dir> .`, GNU tar on a
- * box): directories are skipped, a leading `./` is dropped, pax (`x`, `g`) and GNU long-name (`L`) headers are
- * honoured, and anything else (a link, a device) or a bad checksum, name or size refuses
- * `approvald_tar_invalid`. Sorted by path; a repeated path refuses too.
- */
-export function listStoreMembers(gz: Uint8Array): StoreMember[] {
-  let tar: Buffer;
-  try {
-    tar = gunzipSync(gz, { maxOutputLength: MAX_STORE_TAR_BYTES });
-  } catch {
-    fail("approvald_tar_invalid");
-  }
-  const text = (b: Uint8Array) => {
-    const end = b.indexOf(0);
-    try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(b.subarray(0, end === -1 ? b.length : end));
-    } catch {
-      fail("approvald_tar_invalid");
-    }
-  };
-  const octal = (b: Uint8Array) => {
-    const t = new TextDecoder().decode(b).replace(/\0.*$/s, "").trim();
-    if (!/^[0-7]+$/.test(t)) fail("approvald_tar_invalid");
-    return parseInt(t, 8);
-  };
-  const members: StoreMember[] = [];
-  const seen = new Set<string>();
-  let off = 0;
-  let longName: string | null = null;
-  let paxPath: string | null = null;
-  let ended = false;
-  while (off + 512 <= tar.length) {
-    const h = tar.subarray(off, off + 512);
-    if (h.every((b) => b === 0)) {
-      ended = true;
-      break;
-    }
-    let sum = 0;
-    for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 0x20 : h[i];
-    if (sum !== octal(h.subarray(148, 156))) fail("approvald_tar_invalid");
-    const size = octal(h.subarray(124, 136));
-    const body = off + 512;
-    if (body + size > tar.length) fail("approvald_tar_invalid");
-    const data = tar.subarray(body, body + size);
-    off = body + size + tarPadding(size);
-    const type = String.fromCharCode(h[156] || 0x30);
-    if (type === "L") {
-      longName = text(data);
-      continue;
-    }
-    if (type === "x" || type === "g") {
-      if (type === "x") {
-        for (const rec of text(data).split("\n")) {
-          const m = /^[0-9]+ path=(.*)$/s.exec(rec);
-          if (m) paxPath = m[1];
-        }
-      }
-      continue;
-    }
-    const ustar = text(h.subarray(257, 263)) === "ustar";
-    const prefix = ustar ? text(h.subarray(345, 500)) : "";
-    let name = longName ?? paxPath ?? (prefix ? `${prefix}/${text(h.subarray(0, 100))}` : text(h.subarray(0, 100)));
-    longName = null;
-    paxPath = null;
-    while (name.startsWith("./")) name = name.slice(2);
-    if (name.endsWith("/")) name = name.slice(0, -1);
-    if (type === "5") {
-      if (size !== 0) fail("approvald_tar_invalid");
-      continue;
-    }
-    if (type !== "0") fail("approvald_tar_invalid");
-    if (!SAFE_MEMBER(name) || seen.has(name)) fail("approvald_tar_invalid");
-    seen.add(name);
-    members.push({
-      path: name,
-      bytes: size,
-      sha256: sha256(data),
-      mtime_ms: octal(h.subarray(136, 148)) * 1000,
-      mode: octal(h.subarray(100, 108)) & 0o777,
-    });
-  }
-  if (!ended) fail("approvald_tar_invalid");
-  return members.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 // ---------------------------------------------------------------------------------------------------------
