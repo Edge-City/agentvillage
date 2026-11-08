@@ -6,7 +6,8 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -621,7 +622,7 @@ test("security fold 2 (MEDIUM): a link at a secret_cp, cp-env, excluded or cp-wr
   expect(readlinkSync(join(t.home, "skills", "planted-link"))).toBe(target);
 });
 
-test("N4: a name with a backslash is archived and restored; a non-UTF-8 name refuses file_name_invalid (64) and the dry run counts it", async () => {
+test("N4: a name with a backslash is archived and restored", async () => {
   const a = await archiveFixture("odd-names", (h) => {
     mkdirSync(join(h.root, "notes"), { recursive: true });
     writeFileSync(join(h.root, "notes", "a\\b.txt"), "backslash\n");
@@ -631,16 +632,32 @@ test("N4: a name with a backslash is archived and restored; a non-UTF-8 name ref
   const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
   expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
   expect(readFileSync(join(t.root, "notes", "a\\b.txt"), "utf8")).toBe("backslash\n");
-  // Non-UTF-8 bytes in a name: only where the filesystem allows them (Linux; APFS refuses them).
-  const bad = Buffer.concat([Buffer.from(join(a.h.root, "notes") + "/"), Buffer.from([0x66, 0xff, 0x6f])]);
-  let planted = false;
+});
+
+/** Whether this filesystem takes a name that is not UTF-8 (Linux ext4/tmpfs: yes; macOS APFS refuses it with
+ * EILSEQ). Probed once, by raw bytes, and removed by raw bytes. */
+const RAW_NAMES = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "nap-rawname-"));
+  const name = Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0x66, 0xff, 0x6f])]);
   try {
-    writeFileSync(bad, "latin-1 name\n");
-    planted = true;
+    writeFileSync(name, "");
+    unlinkSync(name);
+    return true;
   } catch {
-    // not on this filesystem
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  if (!planted) return;
+})();
+
+// Skips where the filesystem refuses a non-UTF-8 name (macOS APFS); runs on Linux CI. The byte-level
+// check itself runs everywhere in nap-archive.test.ts through the walker's reader seam.
+test.skipIf(!RAW_NAMES)("N4 (Linux): a real non-UTF-8 name refuses file_name_invalid (64) before any open; the dry run counts it", async () => {
+  const a = await archiveFixture("raw-names", (h) => {
+    mkdirSync(join(h.root, "notes"), { recursive: true });
+  });
+  const bad = Buffer.concat([Buffer.from(join(a.h.root, "notes") + "/"), Buffer.from([0x66, 0xff, 0x6f])]);
+  writeFileSync(bad, "latin-1 name\n");
   const { runArchive, parseArgs } = await import("../nap-archive");
   const dry = await runArchive({ root: a.h.root, home: a.h.home, dryRun: true } as any);
   expect(dry.line).toMatchObject({ file_name_invalid: 1 });
@@ -653,6 +670,7 @@ test("N4: a name with a backslash is archived and restored; a non-UTF-8 name ref
     "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths], { HOME: a.h.root, NAP_WRAP_PUBLIC_KEY: wrapKeys().publicPem, NAP_PROC_ROOT: join(a.h.base, "proc") });
   const out = await runArchive(opts);
   expect(out).toEqual({ code: 64, line: { status: "refused", reason: "file_name_invalid", chunks_acked: 0 } });
+  unlinkSync(bad);
 });
 
 test("N3: a hard link to a secret_cp file is skipped like the file itself; the stale token never lands at the second path", async () => {

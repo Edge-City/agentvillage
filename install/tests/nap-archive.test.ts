@@ -10,7 +10,7 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { MANIFEST_KEYS, MANIFEST_PAYLOAD_KEYS, MANIFEST_TREE_KEYS, toolSha256 } from "../nap-common";
 import { parseArgs, runArchive, type ArchiveHooks } from "../nap-archive";
-import { BUNDLE_FILES, excludedBy, napStatePathsDocument, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
+import { BUNDLE_FILES, excludedBy, napStatePathsDocument, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY, walkHome, WalkRefused } from "../nap-state-paths";
 import {
   buildNapHome,
   cleanup,
@@ -994,4 +994,28 @@ test("security fold 2 (MEDIUM): a symlink at a managed path refuses link_at_mana
   symlinkSync("../MEMORY.md", join(h.home, "skills", "memory-link"));
   const { r } = await archived(h);
   expect(r.code).toBe(0);
+});
+
+test("N4 (CI fold 2): a non-UTF-8 name is caught from its raw bytes before any stat; the strict walk refuses file_name_invalid, never file_unreadable", () => {
+  // Runs on every platform: the directory reader hands the walker raw bytes, as Linux's readdir does.
+  const h = fresh("raw-name");
+  const bad = Buffer.from([0x66, 0xff, 0x6f]);
+  const rules = { hermesRel: ".hermes" };
+  const readdirBytes = (dir: string) => {
+    const real = readdirSync(dir, { encoding: "buffer" }) as Buffer[];
+    return dir === join(h.root, "notes") ? [...real, bad] : real;
+  };
+  mkdirSync(join(h.root, "notes"), { recursive: true });
+  writeFileSync(join(h.root, "notes", "ok.txt"), "ok\n");
+  let code = "";
+  try {
+    walkHome(h.root, rules, { readdirBytes });
+  } catch (err) {
+    code = err instanceof WalkRefused ? err.message : String(err);
+  }
+  expect(code).toBe("file_name_invalid");
+  // The lenient walk (dry run, fold) counts it once and carries on; nothing else is called unreadable.
+  const lenient = walkHome(h.root, rules, { lenient: true, readdirBytes });
+  expect(lenient.problems).toEqual({ unreadable: 0, unsupported: 0, name_invalid: 1 });
+  expect(lenient.items.some((i) => i.rel === "notes/ok.txt")).toBe(true);
 });

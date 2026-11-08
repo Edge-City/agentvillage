@@ -290,7 +290,12 @@ export class WalkRefused extends Error {}
  * `file_unreadable` for a directory it cannot list, `file_unsupported` for a device or a bad name.
  * `lenient` (the dry count and the fold only) counts those in `problems` and carries on.
  */
-export function walkHome(root: string, rules: PathRules, opts: { lenient?: boolean } = {}): WalkResult {
+export function walkHome(
+  root: string,
+  rules: PathRules,
+  opts: { lenient?: boolean; /** Test seam only: the raw directory reader. */ readdirBytes?: (dir: string) => Buffer[] } = {},
+): WalkResult {
+  const readdirBytes = opts.readdirBytes ?? ((dir: string) => readdirSync(dir, { encoding: "buffer" }));
   const items: WalkItem[] = [];
   const excluded: ExcludedCounts = {};
   const problems: WalkProblems = { unreadable: 0, unsupported: 0, name_invalid: 0 };
@@ -315,25 +320,29 @@ export function walkHome(root: string, rules: PathRules, opts: { lenient?: boole
     }
   };
   const list = (rel: string): string[] => {
+    let raws: Buffer[];
     try {
-      // As bytes: a name that is not UTF-8 cannot be named in files.json, and a lossy decode would not
-      // find the file again (Fable N4). It refuses `file_name_invalid`; the dry run counts it.
-      const names: string[] = [];
-      for (const raw of readdirSync(rel ? join(root, ...rel.split("/")) : root, { encoding: "buffer" })) {
-        let name: string;
-        try {
-          name = utf8.decode(raw);
-        } catch {
-          problem("file_name_invalid");
-          continue;
-        }
-        names.push(name);
-      }
-      return names.sort();
+      raws = readdirBytes(rel ? join(root, ...rel.split("/")) : root);
     } catch {
       problem("file_unreadable");
       return [];
     }
+    // As bytes, checked with a strict UTF-8 decode BEFORE anything opens or stats the entry: a name that is
+    // not UTF-8 cannot be named in files.json, and a lossy decode would not find the file again (Fable N4).
+    // It refuses `file_name_invalid` (outside the readdir's own catch, so it is never turned into
+    // `file_unreadable`); the dry run and the fold count it.
+    const names: string[] = [];
+    for (const raw of raws) {
+      let name: string;
+      try {
+        name = utf8.decode(raw);
+      } catch {
+        problem("file_name_invalid");
+        continue;
+      }
+      names.push(name);
+    }
+    return names.sort();
   };
   /** Count a whole excluded subtree under `name`. */
   const countAll = (rel: string, name: string) => {
