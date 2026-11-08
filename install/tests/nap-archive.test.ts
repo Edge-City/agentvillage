@@ -851,3 +851,20 @@ test("M1: a progress file with acks but no stream (an older tool's discard) is s
   expect({ code: r.code, line: r.line }).toEqual({ code: 64, line: { status: "refused", reason: "run_id_spent", chunks_acked: 0 } });
   expect(putsSince(before)).toEqual([]);
 });
+
+test("S1: files.json over the restore's cap refuses before pack (64, nothing PUT); --dry-run reports its size against the cap", async () => {
+  const { MAX_FILES_JSON_BYTES } = await import("../nap-common");
+  const h = fresh("files-cap");
+  const runId = newRunId();
+  prepare(h, runId);
+  const before = stub.requests.length;
+  const out = await runArchive({ ...inProcess(h, runId), maxFilesJsonBytes: 2048 });
+  expect(out).toEqual({ code: 64, line: { status: "refused", reason: "files_json_too_large", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+  expect(existsSync(join(napDir(h.home), "chunks"))).toBe(false);
+  expectStagingGone(h);
+  const dry = await runArchive({ ...inProcess(h, runId), dryRun: true });
+  expect(dry.line).toMatchObject({ files_json_max: MAX_FILES_JSON_BYTES });
+  expect((dry.line as any).files_json_bytes).toBeGreaterThan(2048);
+  expect(parseArgs(args(h, runId), envFor(h)).maxFilesJsonBytes).toBe(MAX_FILES_JSON_BYTES);
+});

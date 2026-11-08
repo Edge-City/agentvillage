@@ -115,6 +115,7 @@ import {
   keyIdOf,
   listStoreMembers,
   MANIFEST_SCHEMA,
+  MAX_FILES_JSON_BYTES,
   MANIFEST_SLOT_NAME,
   type Manifest,
   type ManifestChunk,
@@ -190,6 +191,9 @@ export type ArchiveOptions = {
   retryMs: number;
   attempts: number;
   procRoot: string;
+  /** The restore's own cap on `files.json` (Fable S1): the same constant, so nothing archives that cannot
+   * restore. An option only so a test can lower it. */
+  maxFilesJsonBytes: number;
 };
 
 /** Test seams: each relative path just hashed (pass 1), about to be packed (pass 2), and each chunk before
@@ -623,6 +627,7 @@ export const ownPathsSha256 = () => sha256(JSON.stringify(napStatePathsDocument(
 
 /** `--dry-run` (review-a N-n1): a read-only count that never fails on the tree and writes nothing. */
 export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOutcome {
+  const placeholder = "0".repeat(64);
   const rules: PathRules = { hermesRel: relative(opts.root, opts.home).split(sep).join("/") };
   let tree;
   try {
@@ -636,8 +641,15 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let walNonEmpty = 0;
   let notOwned = 0;
   let liveBytes = 0;
+  // files.json's size as the archive would write it (64-hex placeholders for the hashes; the approvald
+  // members are not listed here), against the cap both sides share (Fable S1).
+  let filesJsonBytes = Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: [] }));
   for (const item of tree.items) {
     liveBytes += item.st.size;
+    filesJsonBytes += 1 + Buffer.byteLength(JSON.stringify({
+      path: item.rel, bytes: item.st.size, sha256: placeholder, mtime_ms: Math.floor(item.st.mtimeMs), mode: item.st.mode & 0o777,
+      class: item.type === "link" ? "link" : "unclassified",
+    }));
     if (item.st.uid !== uid) notOwned++;
     if (item.type !== "file") continue;
     if (item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0) walNonEmpty++;
@@ -665,6 +677,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       wal_nonempty: walNonEmpty,
       approvald_tar_staged: lstatSafe(join(opts.home, ...APPROVALD_STORE_FILE.split("/"))),
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
+      files_json_bytes: filesJsonBytes,
+      files_json_max: MAX_FILES_JSON_BYTES,
     },
   };
 }
@@ -850,6 +864,10 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     // bytes refuses, and nothing is folded again.
     if (walked.files.some((f) => f.member_of === undefined && f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
       return refuse("wal_unfolded");
+    }
+    // Fable S1: one cap on both sides; an archive the restore would refuse is never made.
+    if (Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: walked.files })) > opts.maxFilesJsonBytes) {
+      return refuse("files_json_too_large");
     }
     const counts = (cls: FileEntry["class"]) => walked.files.filter((f) => f.class === cls).length;
     const keyId = keyIdOf(publicKey);
@@ -1108,6 +1126,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     retryMs: boundedInt(env.NAP_UPLOAD_RETRY_MS, "NAP_UPLOAD_RETRY_MS", 0, 60_000, 1000),
     attempts: 4,
     procRoot: env.NAP_PROC_ROOT?.trim() || "/proc",
+    maxFilesJsonBytes: MAX_FILES_JSON_BYTES,
   };
 }
 
