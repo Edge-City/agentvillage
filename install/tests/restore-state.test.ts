@@ -534,3 +534,37 @@ test("S5: an archive made under other rules restores by its own classes; a file 
   const r2 = await restore(t2, bad.manifestKey, bad.chunks, { keyDoc: bad.keyDoc });
   expect({ code: r2.code, reason: r2.line.reason }).toEqual({ code: 1, reason: "path_not_allowed" });
 });
+
+test("N4: a name with a backslash is archived and restored; a non-UTF-8 name refuses file_name_invalid (64) and the dry run counts it", async () => {
+  const a = await archiveFixture("odd-names", (h) => {
+    mkdirSync(join(h.root, "notes"), { recursive: true });
+    writeFileSync(join(h.root, "notes", "a\\b.txt"), "backslash\n");
+  });
+  expect(a.files.some((f) => f.path === "notes/a\\b.txt")).toBe(true);
+  const t = wakeTarget("odd-names-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  expect(readFileSync(join(t.root, "notes", "a\\b.txt"), "utf8")).toBe("backslash\n");
+  // Non-UTF-8 bytes in a name: only where the filesystem allows them (Linux; APFS refuses them).
+  const bad = Buffer.concat([Buffer.from(join(a.h.root, "notes") + "/"), Buffer.from([0x66, 0xff, 0x6f])]);
+  let planted = false;
+  try {
+    writeFileSync(bad, "latin-1 name\n");
+    planted = true;
+  } catch {
+    // not on this filesystem
+  }
+  if (!planted) return;
+  const { runArchive, parseArgs } = await import("../nap-archive");
+  const dry = await runArchive({ root: a.h.root, home: a.h.home, dryRun: true } as any);
+  expect(dry.line).toMatchObject({ file_name_invalid: 1 });
+  const runId = newRunId();
+  stagePutRun(stub, a.h.home, runId);
+  const paths = stagePaths(a.h.home);
+  expect(runFold(FOLD, a.h, runId).code).toBe(0);
+  stageApprovaldTar(a.h);
+  const opts = parseArgs(["--tenant", TENANT, "--root", a.h.root, "--home", a.h.home, "--run-id", runId, "--served-commit", SERVED,
+    "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths], { HOME: a.h.root, NAP_WRAP_PUBLIC_KEY: wrapKeys().publicPem, NAP_PROC_ROOT: join(a.h.base, "proc") });
+  const out = await runArchive(opts);
+  expect(out).toEqual({ code: 64, line: { status: "refused", reason: "file_name_invalid", chunks_acked: 0 } });
+});

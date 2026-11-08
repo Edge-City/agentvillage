@@ -703,6 +703,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       excluded: tree.excluded,
       unreadable,
       unsupported: tree.problems.unsupported,
+      file_name_invalid: tree.problems.name_invalid,
       not_owned: notOwned,
       wal_nonempty: walNonEmpty,
       approvald_tar_staged: lstatSafe(join(opts.home, ...APPROVALD_STORE_FILE.split("/"))),
@@ -889,7 +890,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       if (!(err instanceof NapError)) throw err;
       // Before any chunk exists: the run file, key, URL and tree refusals are 64; an unreadable or changed
       // file (13 S10) fails the run.
-      const refusals = ["approvald_tar_missing", "approvald_tar_invalid", "approvald_tar_mode", "root_invalid"];
+      const refusals = ["file_name_invalid", "approvald_tar_missing", "approvald_tar_invalid", "approvald_tar_mode", "root_invalid"];
       return refusals.includes(err.code) ? refuse(err.code) : failed(err.code);
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding

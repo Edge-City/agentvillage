@@ -172,9 +172,10 @@ const SIDECARS = ["-wal", "-shm", "-journal"];
 
 export type PathRules = { hermesRel: string };
 
-const SEGMENT_OK = (s: string) => s.length > 0 && s !== "." && s !== ".." && !s.includes("\\") && !s.includes("\0");
+// A backslash is an ordinary byte in a Linux name (Fable N4); no tar entry ever carries a path.
+const SEGMENT_OK = (s: string) => s.length > 0 && s !== "." && s !== ".." && !s.includes("\0");
 
-/** A clean relative path: no leading `/`, no empty, `.` or `..` segment, no backslash or NUL. */
+/** A clean relative path: no leading `/`, no empty, `.` or `..` segment, no NUL. */
 export function cleanRelPath(rel: string): boolean {
   if (typeof rel !== "string" || rel.length === 0 || rel.length > 4096 || rel.startsWith("/")) return false;
   return rel.split("/").every(SEGMENT_OK);
@@ -253,7 +254,7 @@ export function linkReach(linkRel: string, target: string): "absolute" | "escapi
 export type WalkItem = { rel: string; type: "file" | "link" | "dir"; st: Stats };
 export type ExcludedCounts = Record<string, { files: number; bytes: number }>;
 /** What a lenient walk counted instead of refusing (review-a N-n1: batch 0's dry count). */
-export type WalkProblems = { unreadable: number; unsupported: number };
+export type WalkProblems = { unreadable: number; unsupported: number; name_invalid: number };
 export type WalkResult = { items: WalkItem[]; excluded: ExcludedCounts; problems: WalkProblems };
 
 export class WalkRefused extends Error {}
@@ -270,13 +271,15 @@ export class WalkRefused extends Error {}
 export function walkHome(root: string, rules: PathRules, opts: { lenient?: boolean } = {}): WalkResult {
   const items: WalkItem[] = [];
   const excluded: ExcludedCounts = {};
-  const problems: WalkProblems = { unreadable: 0, unsupported: 0 };
-  const problem = (code: "file_unreadable" | "file_unsupported" | "file_changed"): null => {
+  const problems: WalkProblems = { unreadable: 0, unsupported: 0, name_invalid: 0 };
+  const problem = (code: "file_unreadable" | "file_unsupported" | "file_changed" | "file_name_invalid"): null => {
     if (!opts.lenient) throw new WalkRefused(code);
     if (code === "file_unsupported") problems.unsupported++;
+    else if (code === "file_name_invalid") problems.name_invalid++;
     else problems.unreadable++;
     return null;
   };
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
   const count = (name: string, bytes: number) => {
     const c = (excluded[name] ??= { files: 0, bytes: 0 });
     c.files++;
@@ -291,7 +294,20 @@ export function walkHome(root: string, rules: PathRules, opts: { lenient?: boole
   };
   const list = (rel: string): string[] => {
     try {
-      return readdirSync(rel ? join(root, ...rel.split("/")) : root).sort();
+      // As bytes: a name that is not UTF-8 cannot be named in files.json, and a lossy decode would not
+      // find the file again (Fable N4). It refuses `file_name_invalid`; the dry run counts it.
+      const names: string[] = [];
+      for (const raw of readdirSync(rel ? join(root, ...rel.split("/")) : root, { encoding: "buffer" })) {
+        let name: string;
+        try {
+          name = utf8.decode(raw);
+        } catch {
+          problem("file_name_invalid");
+          continue;
+        }
+        names.push(name);
+      }
+      return names.sort();
     } catch {
       problem("file_unreadable");
       return [];
