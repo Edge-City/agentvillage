@@ -366,6 +366,9 @@ test("2. refusals exit 64 before any write: key, run file, URL, transport, bundl
   await expectRefusal(h, "store_copy_unexpected", { extra: ["--no-store-copy"], after: () => rmSync(storeList(h)) });
   await expectRefusal(h, "store_copy_mode", { after: () => chmodSync(storeBlob(h), 0o644) });
   await expectRefusal(h, "store_copy_mode", { after: () => chmodSync(storeList(h), 0o640) });
+  // Fable read 2 S1: a zero-byte blob or list (a cut root-piece write) is never a store copy.
+  await expectRefusal(h, "store_copy_invalid", { after: () => writeFileSync(storeBlob(h), "", { mode: 0o600 }) });
+  await expectRefusal(h, "store_copy_invalid", { after: () => writeFileSync(storeList(h), "", { mode: 0o600 }) });
   // Still archives once every cause is gone.
   await archived(h);
 });

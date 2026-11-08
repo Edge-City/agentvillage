@@ -744,7 +744,7 @@ function readFold(home: string, runId: string): { db_count: number; wal_folded: 
 }
 
 /** The store copy as staged: both the blob and its list (shape (b)), or neither with `--no-store-copy`
- * (shape (a)); anything partial refuses. Both are 0600 regular files. */
+ * (shape (a)); anything partial refuses. Both are non-empty 0600 regular files. */
 function checkStoreStaging(blob: string, members: string, none: boolean): void {
   const at = (path: string) => {
     try {
@@ -762,7 +762,8 @@ function checkStoreStaging(blob: string, members: string, none: boolean): void {
   if (!b && !m) fail("store_copy_missing");
   if (!b || !m) fail("store_copy_partial");
   for (const st of [b, m]) {
-    if (!st.isFile()) fail("store_copy_invalid");
+    // An empty ciphertext is never a valid store copy: a cut root-piece write (Fable read 2 S1).
+    if (!st.isFile() || st.size === 0) fail("store_copy_invalid");
     if ((st.mode & 0o077) !== 0) fail("store_copy_mode");
   }
 }
