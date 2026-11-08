@@ -118,9 +118,11 @@ import {
   approvaldMemberPath,
   cleanRelPath,
   classOf,
+  excludedBy,
   CP_REMINTABLE,
   ENV_FILE,
   linkTargetValid,
+  napPathsSha256,
   NAP_DIR,
   type PathRules,
   restorable,
@@ -164,6 +166,8 @@ export type RestoreLine = {
   secret_box_written: number;
   env_merged: number;
   links: number;
+  /** Whether the archive was made under the rules this restore carries (Fable S5). */
+  paths_match?: boolean;
   reason?: string;
 };
 
@@ -192,6 +196,10 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
   let lastMember = "";
   let stores = 0;
   const memberRoot = approvaldMemberPath(manifest.tenant_id, "");
+  // Fable S5: an archive made under other rules (paths_sha256 differs) is trusted for its classes and its
+  // exclude decisions; only structure is checked. Under the same rules, any disagreement is a forgery.
+  const sameRules = manifest.paths_sha256 === napPathsSha256();
+  const FILE_CLASSES = ["state", "secret_cp", "secret_box", "unclassified", "log"];
   for (const f of files) {
     if (!f || typeof f !== "object" || Object.keys(f).some((k) => !allowed.has(k))) fail("files_invalid");
     if (!isInt(f.bytes) || !isInt(f.mtime_ms) || !isInt(f.mode) || f.mode > 0o777 || typeof f.sha256 !== "string" || !HEX64.test(f.sha256)) {
@@ -222,7 +230,8 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
         if (up && up.class !== "dir") fail("files_invalid");
       }
     }
-    if (typeof f.path !== "string" || !restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
+    if (typeof f.path !== "string" || !cleanRelPath(f.path) || excludedBy(f.path, rules, f.class === "dir") === "nap_dir") fail("path_not_allowed");
+    if (sameRules && !restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
     if (f.class === "dir") {
@@ -232,7 +241,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
       if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
     } else {
       if (f.target !== undefined) fail("files_invalid");
-      if (f.class !== classOf(f.path, rules)) fail("class_mismatch");
+      if (sameRules ? f.class !== classOf(f.path, rules) : !FILE_CLASSES.includes(f.class)) fail("class_mismatch");
       if (f.same_as !== undefined) {
         const first = byPath.get(f.same_as);
         if (!first || !hasData(first) || first.bytes !== f.bytes || first.sha256 !== f.sha256) fail("files_invalid");
@@ -471,7 +480,10 @@ async function restoreInner(
       const act = (a: Act): Plan => ({ entry, index: i, act: a });
       if (entry.path === APPROVALD_STORE_ENTRY) return act("store");
       if (entry.member_of !== undefined) return act("member");
-      if (entry.class === "secret_cp") return act("skip");
+      // What the CURRENT rules call secret_cp is skipped whatever the archive recorded (Fable S5).
+      if (entry.class === "secret_cp" || (entry.class !== "link" && entry.class !== "dir" && classOf(entry.path, rules) === "secret_cp")) {
+        return act("skip");
+      }
       if (entry.path === envRel) return act("env");
       const state = diskState(root, entry);
       if (opts.verifyOnly) {
@@ -536,6 +548,7 @@ async function restoreInner(
             fail("files_invalid");
           }
           files = validateFiles(doc, manifest, rules);
+          line.paths_match = manifest.paths_sha256 === napPathsSha256();
           dataOrder = files.map((f, i) => (hasData(f) ? i : -1)).filter((i) => i >= 0);
           tarLimit = 512 + size + tarPadding(size) + 10240 +
             dataOrder.reduce((n, i) => n + 512 + files![i].bytes + tarPadding(files![i].bytes), 0);
@@ -702,7 +715,8 @@ async function restoreInner(
         } else {
           const src = stagedPath(item.entry.same_as !== undefined ? indexOf.get(item.entry.same_as)! : item.index);
           copyFileSync(src, tmp);
-          chmodSync(tmp, item.entry.class === "secret_box" || isStore ? 0o600 : item.entry.mode);
+          const secret = item.entry.class === "secret_box" || (!isStore && classOf(item.entry.path, rules) === "secret_box");
+          chmodSync(tmp, secret || isStore ? 0o600 : item.entry.mode);
           const when = new Date(item.entry.mtime_ms);
           utimesSync(tmp, when, when);
         }

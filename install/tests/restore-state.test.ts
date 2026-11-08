@@ -130,7 +130,7 @@ function itemsOf(a: Archived): Item[] {
   return a.files.map((entry, i) => ({ entry: { ...entry }, data: hasData(entry) ? a.entries.get(dataEntryName(i)) : undefined }));
 }
 
-function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip?: boolean; payload?: (p: any) => void } = {}) {
+function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip?: boolean; payload?: (p: any) => void; manifest?: (m: any) => void } = {}) {
   let items = itemsOf(a);
   items = edit(items) ?? items;
   const files = items.map((x) => x.entry);
@@ -181,6 +181,7 @@ function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip
     chunks,
   };
   o.payload?.(manifest.payload);
+  o.manifest?.(manifest);
   const bytes = Buffer.from(JSON.stringify(manifest));
   const manifestKey = `${prefix}${manifestName(sha(bytes))}`;
   stub.objects.set(manifestKey, bytes);
@@ -502,4 +503,34 @@ test("S4: absolute and escaping symlinks are archived verbatim and recreated as 
   const bad = await restore(t2, f.manifestKey, f.chunks, { keyDoc: f.keyDoc });
   expect({ code: bad.code, status: bad.line.status, reason: bad.line.reason }).toEqual({ code: 1, status: "refused", reason: "files_invalid" });
   expect(snapshotTree(t2.root, notNap)).toEqual(before);
+});
+
+test("S5: an archive made under other rules restores by its own classes; a file the current rules call secret_cp is still skipped", async () => {
+  const a = await archiveFixture("old-rules");
+  const olderRules = (items: Item[]) => {
+    at(items, ".hermes/SOUL.md").entry.class = "unclassified"; // the old rules did not name it
+    at(items, ".hermes/approval/agent-token").entry.class = "secret_box"; // nor knew the cp re-mints it
+  };
+  // Same rules: the classes must agree, so this refuses as a forgery would.
+  const same = forge(a, olderRules);
+  const t0 = wakeTarget("old-rules-t0");
+  const r0 = await restore(t0, same.manifestKey, same.chunks, { keyDoc: same.keyDoc });
+  expect({ code: r0.code, reason: r0.line.reason }).toEqual({ code: 1, reason: "class_mismatch" });
+  // Other rules (paths_sha256 differs): the manifest's classes are trusted; structure is still checked.
+  const older = forge(a, olderRules, { manifest: (m) => (m.paths_sha256 = "1".repeat(64)) });
+  const t = wakeTarget("old-rules-t");
+  const r = await restore(t, older.manifestKey, older.chunks, { keyDoc: older.keyDoc });
+  expect({ code: r.code, status: r.line.status, paths_match: r.line.paths_match }).toEqual({ code: 0, status: "restored", paths_match: false });
+  expect(readFileSync(join(t.home, "SOUL.md"), "utf8")).toBe("# SOUL.md\n");
+  expect(readFileSync(join(t.home, "approval", "agent-token"), "utf8")).toBe(FRESH.agent); // still skipped
+  expect(r.line.secret_cp_skipped).toBe(1);
+  // A structural problem still refuses under other rules.
+  const bad = forge(a, (items) => {
+    olderRules(items);
+    const x = at(items, ".hermes/MEMORY.md");
+    x.entry.path = "../escape.md";
+  }, { manifest: (m) => (m.paths_sha256 = "1".repeat(64)) });
+  const t2 = wakeTarget("old-rules-t2");
+  const r2 = await restore(t2, bad.manifestKey, bad.chunks, { keyDoc: bad.keyDoc });
+  expect({ code: r2.code, reason: r2.line.reason }).toEqual({ code: 1, reason: "path_not_allowed" });
 });

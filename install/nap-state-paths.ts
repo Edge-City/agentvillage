@@ -34,6 +34,7 @@
  * stripping can import it too.
  */
 
+import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, type Stats } from "node:fs";
 import { join, posix } from "node:path";
 
@@ -369,6 +370,11 @@ export function napStatePathsDocument() {
     },
     sqlite: { suffixes: SQLITE_SUFFIXES, wal_suffix: WAL_SUFFIX },
   };
+}
+
+/** The SHA-256 of the rules document, as the manifest's `paths_sha256` records it. */
+export function napPathsSha256(): string {
+  return createHash("sha256").update(JSON.stringify(napStatePathsDocument())).digest("hex");
 }
 
 if (import.meta.main) {

@@ -151,6 +151,7 @@ import {
   classOf,
   linkReach,
   NAP_DIR,
+  napPathsSha256,
   napStatePathsDocument,
   type PathRules,
   WAL_SUFFIX,
@@ -631,7 +632,7 @@ const isComplete = (s: Stream | undefined): s is Required<Stream> =>
 /** The sha of the bundle this file runs from. */
 export const ownToolSha256 = () => toolSha256(import.meta.dir, BUNDLE_FILES);
 /** The sha of the path rules this file was built with. */
-export const ownPathsSha256 = () => sha256(JSON.stringify(napStatePathsDocument()));
+export const ownPathsSha256 = () => napPathsSha256();
 
 /** `--dry-run` (review-a N-n1): a read-only count that never fails on the tree and writes nothing. */
 export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOutcome {
