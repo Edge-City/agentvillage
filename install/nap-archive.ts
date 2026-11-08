@@ -151,6 +151,7 @@ import {
   BROWSER_PROFILE_EXCLUDE,
   BUNDLE_FILES,
   classOf,
+  linkAtManagedPath,
   linkReach,
   NAP_DIR,
   napPathsSha256,
@@ -386,6 +387,8 @@ export function walkAndHash(
       continue;
     }
     if (item.type === "link") {
+      // The restore never recreates a link at a managed path (security fold 2): nothing archives it either.
+      if (linkAtManagedPath(item.rel, rules)) fail("link_at_managed_path");
       let target: string;
       try {
         target = readlinkSync(path);
@@ -653,6 +656,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let linksAbsolute = 0;
   let largest = 0;
   let linksEscaping = 0;
+  let linksManaged = 0;
   for (const item of tree.items) {
     if (item.type === "dir") {
       liveDirs++;
@@ -670,6 +674,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
     }));
     if (item.st.uid !== uid) notOwned++;
     if (item.type === "link") {
+      if (linkAtManagedPath(item.rel, rules)) linksManaged++;
       try {
         const reach = linkReach(item.rel, readlinkSync(join(opts.root, ...item.rel.split("/"))));
         if (reach === "absolute") linksAbsolute++;
@@ -707,6 +712,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       store_copy_staged: storeStaged(opts.home),
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
       links_absolute: linksAbsolute,
+      links_at_managed_path: linksManaged,
       links_escaping: linksEscaping,
       largest_file_bytes: largest,
       entry_max: MAX_TAR_ENTRY_BYTES,
@@ -925,7 +931,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       if (!(err instanceof NapError)) throw err;
       // Before any chunk exists: the run file, key, URL and tree refusals are 64; an unreadable or changed
       // file (13 S10) fails the run.
-      const refusals = ["file_name_invalid", "root_invalid"];
+      const refusals = ["file_name_invalid", "root_invalid", "link_at_managed_path"];
       return refusals.includes(err.code) ? refuse(err.code) : failed(err.code);
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding

@@ -973,3 +973,25 @@ test("N11: a file over the tar's entry limit refuses file_too_large (64) before 
   expect(dry.line).toMatchObject({ largest_file_bytes: 200 * 1024, entry_max: MAX_TAR_ENTRY_BYTES });
   expect(parseArgs(args(h, runId), envFor(h)).maxEntryBytes).toBe(MAX_TAR_ENTRY_BYTES);
 });
+
+test("security fold 2 (MEDIUM): a symlink at a managed path refuses link_at_managed_path (64) before pack; the dry run counts it", async () => {
+  for (const rel of [".hermes/village-bridge.json", ".hermes/mini-apps.json", ".hermes/approval/agent-token"]) {
+    const h = fresh(`link-managed-${rel.length}`);
+    rmSync(join(h.root, rel), { force: true });
+    symlinkSync("/etc/cron.d/nap-planted", join(h.root, rel));
+    const runId = newRunId();
+    prepare(h, runId);
+    const before = stub.requests.length;
+    const out = await runArchive(inProcess(h, runId));
+    expect([rel, out]).toEqual([rel, { code: 64, line: { status: "refused", reason: "link_at_managed_path", chunks_acked: 0 } }]);
+    expect(putsSince(before)).toEqual([]);
+    expectStagingGone(h);
+    const dry = await runArchive({ ...inProcess(h, runId), dryRun: true });
+    expect([rel, dry.line.links_at_managed_path]).toEqual([rel, 1]);
+  }
+  // An ordinary link elsewhere in the home still archives (the fixture's own .hermes/skills/linked included).
+  const h = fresh("link-ordinary");
+  symlinkSync("../MEMORY.md", join(h.home, "skills", "memory-link"));
+  const { r } = await archived(h);
+  expect(r.code).toBe(0);
+});

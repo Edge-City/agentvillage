@@ -585,6 +585,42 @@ test("S5 / security fold 2 (HIGH): paths_sha256 relaxes nothing; the CURRENT rul
   }
 });
 
+test("security fold 2 (MEDIUM): a link at a secret_cp, cp-env, excluded or cp-written path, or above one, refuses link_at_managed_path; nothing written", async () => {
+  const a = await archiveFixture("link-managed");
+  const target = "/etc/cron.d/nap-planted";
+  const sorted = (items: Item[]) => items.sort((p, q) =>
+    p.entry.path.startsWith("/") === q.entry.path.startsWith("/") ? (p.entry.path < q.entry.path ? -1 : 1) : p.entry.path.startsWith("/") ? 1 : -1);
+  for (const rel of [
+    ".hermes/approval/agent-token", // secret_cp, CP_REMINTABLE.files
+    ".hermes/.env", // the cp's .env keys
+    ".hermes/gateway.pid", // excluded
+    ".hermes/av-events/nap", // the tool's own dir (excluded)
+    ".hermes/mini-apps.json", ".hermes/village-bridge.json", ".hermes/constitution.md", // the wake's step 4 writes
+    ".hermes/shell-hooks-allowlist.json", ".hermes/config.yaml", ".hermes/SOUL.md", // the installer's writes
+    ".hermes/approval", // a directory above agent-token
+    ".hermes", // above all of them
+  ]) {
+    const f = forge(a, (items) => sorted([
+      ...items.filter((x) => x.entry.path !== rel && !x.entry.path.startsWith(`${rel}/`)),
+      { entry: { path: rel, bytes: Buffer.byteLength(target), sha256: sha(target), mtime_ms: 0, mode: 0o777, class: "link", target } },
+    ]));
+    const t = wakeTarget("link-managed-t");
+    const before = snapshotTree(t.root, notNap);
+    const r = await restore(t, f.manifestKey, f.chunks, { keyDoc: f.keyDoc });
+    expect({ rel, code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ rel, code: 1, status: "refused", reason: "link_at_managed_path" });
+    expect([rel, snapshotTree(t.root, notNap)]).toEqual([rel, before]);
+  }
+  // Control: the same link at an ordinary path restores as a link.
+  const ok = forge(a, (items) => sorted([
+    ...items,
+    { entry: { path: ".hermes/skills/planted-link", bytes: Buffer.byteLength(target), sha256: sha(target), mtime_ms: 0, mode: 0o777, class: "link", target } },
+  ]));
+  const t = wakeTarget("link-ordinary-t");
+  const r = await restore(t, ok.manifestKey, ok.chunks, { keyDoc: ok.keyDoc });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  expect(readlinkSync(join(t.home, "skills", "planted-link"))).toBe(target);
+});
+
 test("N4: a name with a backslash is archived and restored; a non-UTF-8 name refuses file_name_invalid (64) and the dry run counts it", async () => {
   const a = await archiveFixture("odd-names", (h) => {
     mkdirSync(join(h.root, "notes"), { recursive: true });

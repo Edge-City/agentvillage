@@ -25,7 +25,8 @@
  * manifest's before its bytes are decrypted; AES-256-GCM's tag verifies; the plaintext payload's SHA-256
  * and length equal the manifest's; the tar holds `files.json` then exactly one data entry per file, in
  * order; every path is clean, under the root and not on the CURRENT exclude list, whatever rules the
- * archive says it was made under; every file's class is a known one; every file's size and SHA-256 equal
+ * archive says it was made under; no symlink sits at a managed path (`link_at_managed_path`: a `secret_cp`
+ * or excluded path, a file the cp or the installer writes, or a directory above one); every file's class is a known one; every file's size and SHA-256 equal
  * `files.json`'s; no target is (or sits under) a symlink or the wrong kind of file. Any mismatch is
  * `status: "refused"` and writes nothing.
  *
@@ -122,6 +123,7 @@ import {
   classOf,
   CP_REMINTABLE,
   ENV_FILE,
+  linkAtManagedPath,
   linkTargetValid,
   napPathsSha256,
   NAP_DIR,
@@ -235,6 +237,8 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
       }
     }
     if (typeof f.path !== "string" || !cleanRelPath(f.path)) fail("path_not_allowed");
+    // A link never sits where the cp, the installer or the rules manage a path: a later write would follow it.
+    if (f.class === "link" && linkAtManagedPath(f.path, rules)) fail("link_at_managed_path");
     if (!restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;

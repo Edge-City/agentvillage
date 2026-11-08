@@ -233,6 +233,28 @@ export function classOf(rel: string, rules: PathRules): "state" | "secret_cp" | 
   return "unclassified";
 }
 
+/**
+ * Files the control plane or the overlay installer writes on a wake or later (design 6.2 step 4,
+ * `provisionBoxSteps`: `writeIngestEnv` and the cp `.env` keys, `ensurePluginToken`, the mini-app projection,
+ * `village-bridge.json`, the constitution; `syncOverlay`: `install_approval.ts` `ALLOWLIST_FILE`,
+ * `config.ts`, `profile.ts`), relative to `$HERMES_HOME`, plus the tool's own nap dir. A symlink at one of
+ * these, or at any directory above one, would turn that later write into a write wherever the link points,
+ * so a restore never recreates one (`link_at_managed_path`) and the archive refuses to pack one.
+ */
+export const CP_WRITTEN_FILES: readonly string[] = [
+  ENV_FILE, ...CP_REMINTABLE.files, "mini-apps.json", "village-bridge.json", "constitution.md", "shell-hooks-allowlist.json",
+  "config.yaml", "SOUL.md", NAP_DIR,
+];
+
+/** Whether a symlink at `rel` would sit at a managed path: a path the current rules call `secret_cp` or
+ * exclude (as a link is walked: directory-name rules do not match it), a `CP_WRITTEN_FILES` entry, or a
+ * directory above one (security fold 2, MEDIUM). */
+export function linkAtManagedPath(rel: string, rules: PathRules): boolean {
+  if (classOf(rel, rules) === "secret_cp" || excludedBy(rel, rules, false) !== null) return true;
+  const h = rules.hermesRel ? `${rules.hermesRel}/` : "";
+  return CP_WRITTEN_FILES.some((p) => rel === `${h}${p}` || `${h}${p}`.startsWith(`${rel}/`));
+}
+
 /** Whether a restore may write `rel`: a clean path under the root that the exclude list does not leave out. */
 export function restorable(rel: string, rules: PathRules, isDir = false): boolean {
   return cleanRelPath(rel) && excludedBy(rel, rules, isDir) === null;
@@ -376,6 +398,7 @@ export function napStatePathsDocument() {
     excludes: EXCLUDES,
     exclude_names: EXCLUDE_NAMES,
     cp_remintable: CP_REMINTABLE,
+    cp_written_files: CP_WRITTEN_FILES.map((p) => `$HERMES_HOME/${p}`),
     classes: {
       secret_box_files: SECRET_BOX_FILES.map((p) => `$HERMES_HOME/${p}`),
       secret_box_dirs: SECRET_BOX_DIRS.map((p) => `$HERMES_HOME/${p}/`),
