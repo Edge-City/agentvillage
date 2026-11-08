@@ -5,7 +5,7 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -567,4 +567,17 @@ test("N4: a name with a backslash is archived and restored; a non-UTF-8 name ref
     "--tool-sha256", TOOL, "--mode", "presigned", "--paths", paths], { HOME: a.h.root, NAP_WRAP_PUBLIC_KEY: wrapKeys().publicPem, NAP_PROC_ROOT: join(a.h.base, "proc") });
   const out = await runArchive(opts);
   expect(out).toEqual({ code: 64, line: { status: "refused", reason: "file_name_invalid", chunks_acked: 0 } });
+});
+
+test("N3: a hard link to a secret_cp file is skipped like the file itself; the stale token never lands at the second path", async () => {
+  const a = await archiveFixture("hard-secret", (h) => {
+    mkdirSync(join(h.root, "notes"), { recursive: true });
+    linkSync(join(h.home, "approval", "agent-token"), join(h.root, "notes", "token-copy"));
+  });
+  expect(a.files.find((f) => f.path === "notes/token-copy")).toMatchObject({ same_as: ".hermes/approval/agent-token" });
+  const t = wakeTarget("hard-secret-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, skipped: r.line.secret_cp_skipped }).toEqual({ code: 0, status: "restored", skipped: 2 });
+  expect(existsSync(join(t.root, "notes", "token-copy"))).toBe(false);
+  expect(readFileSync(join(t.home, "approval", "agent-token"), "utf8")).toBe(FRESH.agent);
 });

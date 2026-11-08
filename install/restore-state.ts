@@ -481,9 +481,10 @@ async function restoreInner(
       if (entry.path === APPROVALD_STORE_ENTRY) return act("store");
       if (entry.member_of !== undefined) return act("member");
       // What the CURRENT rules call secret_cp is skipped whatever the archive recorded (Fable S5).
-      if (entry.class === "secret_cp" || (entry.class !== "link" && entry.class !== "dir" && classOf(entry.path, rules) === "secret_cp")) {
-        return act("skip");
-      }
+      const isCp = (f: FileEntry) => f.class === "secret_cp" || (f.class !== "link" && f.class !== "dir" && classOf(f.path, rules) === "secret_cp");
+      if (isCp(entry)) return act("skip");
+      // A hard link to a secret_cp file carries the same stale bytes: skipped too (Fable N3).
+      if (entry.same_as !== undefined && isCp(entries[index.get(entry.same_as)!])) return act("skip");
       if (entry.path === envRel) return act("env");
       const state = diskState(root, entry);
       if (opts.verifyOnly) {
