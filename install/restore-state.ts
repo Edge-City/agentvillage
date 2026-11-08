@@ -294,29 +294,59 @@ function diskState(root: string, f: FileEntry): DiskState {
   return sha256(readFileSync(path)) === f.sha256 ? "same" : "differs";
 }
 
-function envNames(text: string): Set<string> {
-  const names = new Set<string>();
-  for (const line of text.split("\n")) {
-    const m = ENV_LINE.exec(line);
-    if (m) names.add(m[1]);
+type EnvEntry = { key: string; lines: string[] };
+
+/** The `.env` assignments in order, a quoted value that spans lines kept whole (Fable N2); comments and
+ * blank lines are not entries. */
+export function envEntries(text: string): EnvEntry[] {
+  const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
+  const out: EnvEntry[] = [];
+  const closes = (q: string, s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      if (q === '"' && s[i] === "\\") {
+        i++;
+        continue;
+      }
+      if (s[i] === q) return true;
+    }
+    return false;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const m = ENV_LINE.exec(lines[i]);
+    if (!m) continue;
+    const value = lines[i].slice(lines[i].indexOf("=") + 1).trimStart();
+    const block = [lines[i]];
+    const q = value[0];
+    if ((q === '"' || q === "'") && !closes(q, value.slice(1))) {
+      let j = i + 1;
+      while (j < lines.length) {
+        block.push(lines[j]);
+        if (closes(q, lines[j])) break;
+        j++;
+      }
+      if (j >= lines.length) continue; // never closed: not a value a merge can carry; env.archived keeps it
+      i = j;
+    }
+    out.push({ key: m[1], lines: block });
   }
-  return names;
+  return out;
 }
 
-/** The archived `.env` lines a restore adds: keys the control plane does not re-mint, not set in `current`. */
-export function envLinesToMerge(archived: string, current: string): string[] {
-  const have = envNames(current);
-  const add: string[] = [];
+/** The archived `.env` entries a restore adds: keys the control plane does not re-mint, not set in `current`. */
+export function envEntriesToMerge(archived: string, current: string): EnvEntry[] {
+  const have = new Set(envEntries(current).map((e) => e.key));
+  const add: EnvEntry[] = [];
   const seen = new Set<string>();
-  for (const raw of archived.split("\n")) {
-    const line = raw.replace(/\r$/, "");
-    const m = ENV_LINE.exec(line);
-    if (!m || seen.has(m[1])) continue;
-    seen.add(m[1]);
-    if (!CP_REMINTABLE.env_keys.includes(m[1]) && !have.has(m[1])) add.push(line);
+  for (const e of envEntries(archived)) {
+    if (seen.has(e.key)) continue;
+    seen.add(e.key);
+    if (!CP_REMINTABLE.env_keys.includes(e.key) && !have.has(e.key)) add.push(e);
   }
   return add;
 }
+
+/** The lines of those entries, in order. */
+export const envLinesToMerge = (archived: string, current: string): string[] => envEntriesToMerge(archived, current).flatMap((e) => e.lines);
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -468,7 +498,7 @@ async function restoreInner(
   let nextData = 0;
   let tarLimit = Infinity;
   let tarSeen = 0;
-  let envArchived: string | null = null;
+  let envArchived: Buffer | null = null;
   const storeParts: Buffer[] = [];
   let envCurrent = "";
   const stagedPath = (index: number) => join(staging, String(index).padStart(6, "0"));
@@ -563,7 +593,9 @@ async function restoreInner(
     if (name !== dataEntryName(i) || size !== f.bytes) fail("archive_files_mismatch");
     const hash = createHash("sha256");
     let fd = toStage.has(i) ? openSync(stagedPath(i), "wx", 0o600) : -1;
-    const captureEnv = f.path === envRel && opts.mergeEnv && !opts.verifyOnly && !opts.dryRun;
+    // The archived .env is always captured on a restore: kept whole as env.archived (Fable N2), merged when
+    // it is under MAX_ENV_BYTES and --no-merge-env is not given.
+    const captureEnv = f.path === envRel && !opts.verifyOnly && !opts.dryRun;
     const envParts: Buffer[] = [];
     const isStore = f.path === APPROVALD_STORE_ENTRY;
     let got = 0;
@@ -575,10 +607,7 @@ async function restoreInner(
           let off = 0;
           while (off < b.length) off += writeSync(fd, b, off, b.length - off);
         }
-        if (captureEnv) {
-          if (got > MAX_ENV_BYTES) fail("env_too_large");
-          envParts.push(Buffer.from(b));
-        }
+        if (captureEnv) envParts.push(Buffer.from(b));
         if (isStore) storeParts.push(Buffer.from(b));
       },
       end: () => {
@@ -588,7 +617,7 @@ async function restoreInner(
           fd = -1;
         }
         if (got !== f.bytes || hash.digest("hex") !== f.sha256) fail("file_hash_mismatch");
-        if (captureEnv) envArchived = Buffer.concat(envParts).toString("utf8");
+        if (captureEnv) envArchived = Buffer.concat(envParts);
         if (isStore) {
           // The store's members must be exactly the ones files.json lists (S-n2).
           const listed = files!.filter((e) => e.member_of !== undefined);
@@ -699,7 +728,9 @@ async function restoreInner(
     const moved: { tmp: string; target: string; item: Plan }[] = [];
     const tmpName = (dir: string, base: string) => join(dir, `.${base}.nap-restore-${process.pid}-${randomBytes(4).toString("hex")}`);
     let envTmp: string | null = null;
-    let envAdd: string[] = [];
+    let keptTmp: string | null = null;
+    const napDirPath = join(opts.home, ...NAP_DIR.split("/"));
+    let envAdd: EnvEntry[] = [];
     // Directories (Fable S2): created now, their mode and mtime set last, deepest first, after every rename.
     const dirItems = items.filter((i) => i.entry.class === "dir");
     try {
@@ -725,18 +756,24 @@ async function restoreInner(
       }
       // `$HERMES_HOME/.env`: the merge is staged with the rest.
       if (status === "restored" && envArchived !== null) {
-        envAdd = envLinesToMerge(envArchived, envCurrent);
+        keptTmp = tmpName(napDirPath, "env.archived");
+        mkdirSync(napDirPath, { recursive: true, mode: 0o700 });
+        writeFileSync(keptTmp, envArchived, { mode: 0o600, flag: "wx" });
+      }
+      if (status === "restored" && envArchived !== null && opts.mergeEnv && envArchived.length <= MAX_ENV_BYTES) {
+        envAdd = envEntriesToMerge(envArchived.toString("utf8"), envCurrent);
         if (envAdd.length > 0) {
           const envPath = join(root, ...segments(envRel));
           mkdirSync(dirname(envPath), { recursive: true, mode: 0o700 });
           envTmp = tmpName(dirname(envPath), ENV_FILE);
-          const text = `${envCurrent}${envCurrent && !envCurrent.endsWith("\n") ? "\n" : ""}${envAdd.join("\n")}\n`;
+          const text = `${envCurrent}${envCurrent && !envCurrent.endsWith("\n") ? "\n" : ""}${envAdd.flatMap((e) => e.lines).join("\n")}\n`;
           writeFileSync(envTmp, text, { mode: 0o600, flag: "wx" });
         }
       }
     } catch {
       for (const m of moved) rmSync(m.tmp, { force: true });
       if (envTmp) rmSync(envTmp, { force: true });
+      if (keptTmp) rmSync(keptTmp, { force: true });
       return end("error", "write_failed");
     }
     for (let i = 0; i < moved.length; i++) {
@@ -749,6 +786,16 @@ async function restoreInner(
         if (e.class === "secret_box") line.secret_box_written++;
       } catch {
         for (const m of moved.slice(i)) rmSync(m.tmp, { force: true });
+        if (envTmp) rmSync(envTmp, { force: true });
+        if (keptTmp) rmSync(keptTmp, { force: true });
+        return end("error", "write_failed");
+      }
+    }
+    if (keptTmp) {
+      try {
+        renameSync(keptTmp, join(napDirPath, "env.archived"));
+      } catch {
+        rmSync(keptTmp, { force: true });
         if (envTmp) rmSync(envTmp, { force: true });
         return end("error", "write_failed");
       }

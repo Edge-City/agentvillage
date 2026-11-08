@@ -581,3 +581,25 @@ test("N3: a hard link to a secret_cp file is skipped like the file itself; the s
   expect(existsSync(join(t.root, "notes", "token-copy"))).toBe(false);
   expect(readFileSync(join(t.home, "approval", "agent-token"), "utf8")).toBe(FRESH.agent);
 });
+
+test("N2: a multi-line quoted value merges whole; the archived .env is kept 0600 in the nap dir; an oversized .env no longer refuses the restore", async () => {
+  const archivedEnv = `# resident notes\nAV_EVENTS_TOKEN=${PLANTED.eventsToken}\nCERT="-----BEGIN-----\nline two\n-----END-----"\nSINGLE='a b'\nAFTER=1\n`;
+  const a = await archiveFixture("env-shape", (h) => writeFileSync(join(h.home, ".env"), archivedEnv, { mode: 0o600 }));
+  const t = wakeTarget("env-shape-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged }).toEqual({ code: 0, status: "restored", merged: 3 });
+  const env = readFileSync(join(t.home, ".env"), "utf8");
+  expect(env).toContain(`CERT="-----BEGIN-----\nline two\n-----END-----"\n`);
+  expect(env).toContain("SINGLE='a b'\nAFTER=1\n");
+  expect(env).toContain(`AV_EVENTS_TOKEN=${FRESH.events}`);
+  expect(env).not.toContain(PLANTED.eventsToken);
+  const kept = join(napDir(t.home), "env.archived");
+  expect([readFileSync(kept, "utf8"), statSync(kept).mode & 0o777]).toEqual([archivedEnv, 0o600]);
+  // Over the merge cap: restored without a merge, the archived copy kept.
+  const big = `RESIDENT_KEY=1\n${"# padding\n".repeat(120_000)}`;
+  const b = await archiveFixture("env-big", (h) => writeFileSync(join(h.home, ".env"), big, { mode: 0o600 }));
+  const t2 = wakeTarget("env-big-t");
+  const r2 = await restore(t2, b.manifestKey, b.manifest.chunks.length, { keyDoc: keyFor(b) });
+  expect({ code: r2.code, status: r2.line.status, merged: r2.line.env_merged }).toEqual({ code: 0, status: "restored", merged: 0 });
+  expect(readFileSync(join(napDir(t2.home), "env.archived"), "utf8")).toBe(big);
+});
