@@ -468,9 +468,10 @@ test("2c. a file that changes during the walk or before it is packed, or cannot 
 
 /** The parity convention (README "Nap: state archive and restore", Fable S6): find's predicates, verbatim. */
 const PARITY = {
-  files: ["-xdev", "-mindepth", "1", "(", "-type", "f", "-o", "-type", "l", ")"],
-  dirs: ["-xdev", "-mindepth", "1", "-type", "d"],
-  endpoints: ["-xdev", "-mindepth", "1", "(", "-type", "s", "-o", "-type", "p", ")"],
+  // No -xdev: the cp's count (nap-count.js at f7480739) crosses mount points, as the walker does (review-a N7).
+  files: ["-mindepth", "1", "(", "-type", "f", "-o", "-type", "l", ")"],
+  dirs: ["-mindepth", "1", "-type", "d"],
+  endpoints: ["-mindepth", "1", "(", "-type", "s", "-o", "-type", "p", ")"],
 };
 
 test("2d / S6. live_files, live_bytes and live_dirs equal find(1) under the README's predicates and the same excludes; live + excluded = everything", async () => {
