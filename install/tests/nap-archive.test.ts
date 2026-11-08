@@ -1125,3 +1125,23 @@ test("review-a N3: an orphan -wal (no main file beside it) never blocks a nap; i
   expect(files.find((f) => f.path === ".hermes/orphan.db-wal")).toMatchObject({ bytes: 4096, sha256: sha(orphan) });
   expect(JSON.parse(readFileSync(join(napDir(h.home), "fold.json"), "utf8"))).toMatchObject({ wal_unfolded: 0, wal_orphan: 1 });
 });
+
+test("review-a N8: a re-run after a crash mid-pack, with the pair gone and only a fresh run file, fails resume_needs_new_run, not a staging refusal", async () => {
+  const h = fresh("midstream-nostage");
+  const runId = newRunId();
+  prepare(h, runId);
+  let snapshot = "";
+  await runArchive(inProcess(h, runId), {
+    beforePack: (rel) => {
+      if (rel === ".hermes/sessions/big.bin") {
+        snapshot = readFileSync(join(napDir(h.home), "progress.json"), "utf8");
+        throw new Error("simulated TERM mid-pack");
+      }
+    },
+  });
+  writeFileSync(join(napDir(h.home), "progress.json"), JSON.stringify({ ...JSON.parse(snapshot), pid: 999999999 }), { mode: 0o600 });
+  expect([existsSync(storeBlob(h)), existsSync(storeList(h))]).toEqual([false, false]); // a TERM removes the pair
+  stagePutRun(stub, h.home, runId);
+  const again = await cli(h, runId);
+  expect({ code: again.code, line: again.line }).toEqual({ code: 1, line: { status: "error", reason: "resume_needs_new_run", chunks_acked: 0 } });
+});

@@ -923,8 +923,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     date = parsePrefix(run.prefix)!.date;
     fold = readFold(opts.home, opts.runId);
     // A complete stream on record already holds the store pair inside its ciphertext, and the manifest takes
-    // its shas from that stream: the staging is not looked at again (Fable read 2 S2).
-    if (!isComplete(doc.stream)) checkStoreStaging(storeBlob, storeMembers, opts.noStoreCopy);
+    // its shas from that stream: the staging is not looked at again (Fable read 2 S2). An incomplete one is
+    // never resumed: the run goes on to resume_needs_new_run, not a staging refusal (review-a N8).
+    if (!doc.stream) checkStoreStaging(storeBlob, storeMembers, opts.noStoreCopy);
     if (gatewayBack()) fail("writers_alive");
   } catch (err) {
     if (err instanceof NapError) return refuse(err.code);

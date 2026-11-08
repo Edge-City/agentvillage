@@ -701,6 +701,16 @@ test("review-a N4: browser_profiles and other browser-ish dirs stay archived, cl
   }
 });
 
+test.skipIf(process.getuid?.() === 0)("review-a N8: a target directory the restore cannot read is target_unreadable, never payload_unreadable (skipped as root, which reads anything)", async () => {
+  const a = await archiveFixture("plan-io");
+  const t = wakeTarget("plan-io-t");
+  mkdirSync(join(t.home, "sessions"), { recursive: true });
+  chmodSync(join(t.home, "sessions"), 0o000);
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  chmodSync(join(t.home, "sessions"), 0o700);
+  expect({ code: r.code, reason: r.line.reason, written: r.line.written }).toEqual({ code: 1, reason: "target_unreadable", written: 0 });
+});
+
 test("N4: a name with a backslash is archived and restored", async () => {
   const a = await archiveFixture("odd-names", (h) => {
     mkdirSync(join(h.root, "notes"), { recursive: true });

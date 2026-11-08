@@ -478,7 +478,7 @@ async function restoreInner(
   const stagedPath = (index: number) => join(staging, String(index).padStart(6, "0"));
   const toStage = new Set<number>();
 
-  const plan = (entries: FileEntry[]): void => {
+  const planEntries = (entries: FileEntry[]): void => {
     const index = new Map(entries.map((f, i) => [f.path, i]));
     // `.env` and its hard links (Fable read 2 N): every other path of the group gets the archived `.env`
     // without the cp's re-minted keys, never a whole copy.
@@ -553,6 +553,16 @@ async function restoreInner(
       if (wanted) toStage.add(p.entry.same_as !== undefined ? index.get(p.entry.same_as)! : p.index);
     }
     if (toStage.size > 0) mkdirSync(staging, { recursive: true, mode: 0o700 });
+  };
+  /** The plan reads the target tree; an I/O error there (EACCES, ENAMETOOLONG) is the target's, never the
+   * payload's (review-a N8): `target_unreadable`. */
+  const plan = (entries: FileEntry[]): void => {
+    try {
+      planEntries(entries);
+    } catch (err) {
+      if (err instanceof NapError) throw err;
+      throw new NapError("target_unreadable");
+    }
   };
 
   const open = (name: string, size: number): TarSink => {
