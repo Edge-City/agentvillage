@@ -112,6 +112,7 @@ import {
   HEX64,
   type HttpBody,
   isInt,
+  EMPTY_SHA256,
   keyIdOf,
   listStoreMembers,
   MANIFEST_SCHEMA,
@@ -292,6 +293,7 @@ type Walked = {
   sources: Map<string, { path: string; dev: number; ino: number }>;
   liveFiles: number;
   liveBytes: number;
+  liveDirs: number;
   excluded: ExcludedCounts;
   approvaldFiles: number;
   approvaldBytes: number;
@@ -355,6 +357,11 @@ export function walkAndHash(root: string, rules: PathRules, storeTar: string | n
     const mode = item.st.mode & 0o777;
     const mtime_ms = Math.floor(item.st.mtimeMs);
     const path = join(root, ...item.rel.split("/"));
+    if (item.type === "dir") {
+      // Fable S2: every directory, empty ones included, with its mode; no bytes, no data entry.
+      files.push({ path: item.rel, bytes: 0, sha256: EMPTY_SHA256, mtime_ms, mode, class: "dir" });
+      continue;
+    }
     if (item.type === "link") {
       let target: string;
       try {
@@ -382,7 +389,8 @@ export function walkAndHash(root: string, rules: PathRules, storeTar: string | n
     sources.set(item.rel, { path, dev: item.st.dev, ino: item.st.ino });
     if (item.st.nlink > 1) firstByInode.set(inodeKey, entry);
   }
-  const liveFiles = tree.items.length;
+  const liveFiles = tree.items.filter((i) => i.type !== "dir").length;
+  const liveDirs = tree.items.length - liveFiles;
   if (storeTar !== null) {
     let st;
     try {
@@ -421,6 +429,7 @@ export function walkAndHash(root: string, rules: PathRules, storeTar: string | n
     sources,
     liveFiles,
     liveBytes,
+    liveDirs,
     excluded: tree.excluded,
     approvaldFiles: members.length,
     approvaldBytes: members.reduce((n, f) => n + f.bytes, 0),
@@ -644,7 +653,16 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   // files.json's size as the archive would write it (64-hex placeholders for the hashes; the approvald
   // members are not listed here), against the cap both sides share (Fable S1).
   let filesJsonBytes = Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: [] }));
+  let liveDirs = 0;
   for (const item of tree.items) {
+    if (item.type === "dir") {
+      liveDirs++;
+      if (item.st.uid !== uid) notOwned++;
+      filesJsonBytes += 1 + Buffer.byteLength(JSON.stringify({
+        path: item.rel, bytes: 0, sha256: placeholder, mtime_ms: Math.floor(item.st.mtimeMs), mode: item.st.mode & 0o777, class: "dir",
+      }));
+      continue;
+    }
     liveBytes += item.st.size;
     filesJsonBytes += 1 + Buffer.byteLength(JSON.stringify({
       path: item.rel, bytes: item.st.size, sha256: placeholder, mtime_ms: Math.floor(item.st.mtimeMs), mode: item.st.mode & 0o777,
@@ -666,8 +684,9 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       status: "dry_run",
       tool_sha256: ownToolSha256(),
       paths_sha256: ownPathsSha256(),
-      live_files: tree.items.length,
+      live_files: tree.items.length - liveDirs,
       live_bytes: liveBytes,
+      live_dirs: liveDirs,
       excluded_files: sum("files"),
       excluded_bytes: sum("bytes"),
       excluded: tree.excluded,
@@ -892,16 +911,18 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
           sha256: packed.payloadSha,
           bytes: packed.payloadBytes,
           file_count: walked.files.length,
-          total_file_bytes: walked.files.filter((f) => f.class !== "link").reduce((n, f) => n + f.bytes, 0),
+          total_file_bytes: walked.files.filter((f) => f.class !== "link" && f.class !== "dir").reduce((n, f) => n + f.bytes, 0),
           secret_cp_count: counts("secret_cp"),
           secret_box_count: counts("secret_box"),
           unclassified_count: counts("unclassified"),
           link_count: counts("link"),
           log_count: counts("log"),
+          dir_count: counts("dir"),
         },
         tree: {
           live_files: walked.liveFiles,
           live_bytes: walked.liveBytes,
+          live_dirs: walked.liveDirs,
           excluded: walked.excluded,
           db_count: fold.db_count,
           wal_folded: fold.wal_folded,
@@ -1009,6 +1030,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       excluded_bytes: Object.values(t.excluded).reduce((n, c) => n + c.bytes, 0),
       live_files: t.live_files,
       live_bytes: t.live_bytes,
+      live_dirs: t.live_dirs,
       db_count: t.db_count,
       wal_folded: t.wal_folded,
       approvald_files: t.approvald_files,

@@ -149,8 +149,8 @@ test("1. every path under the home is archived except the exclude list, which is
   const h = fresh("walk");
   const { r, manifest, files } = await archived(h);
   const byPath = new Map(files.map((f) => [f.path, f]));
-  const home = files.filter((f) => !f.path.startsWith("/"));
-  // Exactly the fixture's included set: nothing else, nothing missing.
+  const home = files.filter((f) => !f.path.startsWith("/") && f.class !== "dir");
+  // Exactly the fixture's included set: nothing else, nothing missing (directories: Fable S2's test).
   expect(home.map((f) => f.path)).toEqual([...Object.keys(h.included), ...sidecars(h)].sort());
   for (const [rel, cls] of Object.entries(h.included)) expect([rel, byPath.get(rel)?.class]).toEqual([rel, cls]);
   for (const rel of Object.keys(h.excluded)) expect([rel, byPath.has(rel)]).toEqual([rel, false]);
@@ -457,7 +457,7 @@ test("3. chunks are each at most --chunk-bytes, listed in order with sizes and h
   files.forEach((f, i) => {
     expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(Number.isSafeInteger(f.bytes)).toBe(true);
-    if (f.class === "link" || f.same_as || f.member_of) return;
+    if (f.class === "link" || f.class === "dir" || f.same_as || f.member_of) return;
     const data = entries.get(`data/${String(i).padStart(6, "0")}`)!;
     expect(data.length).toBe(f.bytes);
     expect(sha(data)).toBe(f.sha256);

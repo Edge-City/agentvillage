@@ -69,7 +69,7 @@ export type FileEntry = {
   sha256: string;
   mtime_ms: number;
   mode: number;
-  class: "state" | "secret_cp" | "secret_box" | "unclassified" | "link" | "log";
+  class: "state" | "secret_cp" | "secret_box" | "unclassified" | "link" | "log" | "dir";
   /** Links only. */
   target?: string;
   /** A hard link of an earlier entry: no data of its own in the tar. */
@@ -83,7 +83,9 @@ export type FilesDoc = { schema: string; files: FileEntry[] };
 /** Index in `files.json` → the tar entry name of its data. */
 export const dataEntryName = (index: number) => `data/${pad(index, 6)}`;
 /** Whether an entry has its own data entry in the tar (regular files that are not a later hard link). */
-export const hasData = (f: FileEntry) => f.class !== "link" && f.same_as === undefined && f.member_of === undefined;
+export const hasData = (f: FileEntry) => f.class !== "link" && f.class !== "dir" && f.same_as === undefined && f.member_of === undefined;
+/** A directory's entry carries no bytes: size 0 and the SHA-256 of nothing. */
+export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 export type ManifestChunk = { n: number; name: string; bytes: number; sha256: string };
 export type ExcludedCounts = Record<string, { files: number; bytes: number }>;
@@ -115,11 +117,16 @@ export type Manifest = {
     unclassified_count: number;
     link_count: number;
     log_count: number;
+    /** Directories recorded (Fable S2). */
+    dir_count: number;
   };
   /** The script's own count of the walked tree (13 M2 support), the per-exclude counts, the WAL fold. */
   tree: {
+    /** Regular files and symlinks (a link's bytes are its target's length). */
     live_files: number;
     live_bytes: number;
+    /** Directories under the root, the root itself not counted (Fable S2). */
+    live_dirs: number;
     excluded: ExcludedCounts;
     db_count: number;
     wal_folded: number;
@@ -143,10 +150,10 @@ export const MANIFEST_KEYS = [
 ] as const;
 export const MANIFEST_SERVED_KEYS = ["overlay_commit", "hermes_version", "approvald_version"] as const;
 export const MANIFEST_PAYLOAD_KEYS = [
-  "sha256", "bytes", "file_count", "total_file_bytes", "secret_cp_count", "secret_box_count", "unclassified_count", "link_count", "log_count",
+  "sha256", "bytes", "file_count", "total_file_bytes", "secret_cp_count", "secret_box_count", "unclassified_count", "link_count", "log_count", "dir_count",
 ] as const;
 export const MANIFEST_TREE_KEYS = [
-  "live_files", "live_bytes", "excluded", "db_count", "wal_folded", "approvald_secret_names", "approvald_files", "approvald_bytes",
+  "live_files", "live_bytes", "live_dirs", "excluded", "db_count", "wal_folded", "approvald_secret_names", "approvald_files", "approvald_bytes",
   "browser_profile_files", "browser_profile_dropped",
 ] as const;
 const EXCLUDE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -210,7 +217,7 @@ export function parseManifest(bytes: Uint8Array, key: string, tenant: string): M
     fail("manifest_invalid");
   }
   if (t.approvald_secret_names !== null && !isInt(t.approvald_secret_names)) fail("manifest_invalid");
-  if (!isInt(t.approvald_files) || !isInt(t.approvald_bytes) || !isInt(t.browser_profile_files)) fail("manifest_invalid");
+  if (!isInt(t.live_dirs) || !isInt(t.approvald_files) || !isInt(t.approvald_bytes) || !isInt(t.browser_profile_files)) fail("manifest_invalid");
   if (t.browser_profile_dropped !== t.browser_profile_files > 0) fail("manifest_invalid");
   if (!t.excluded || typeof t.excluded !== "object" || Array.isArray(t.excluded)) fail("manifest_invalid");
   for (const [name, c] of Object.entries(t.excluded)) {

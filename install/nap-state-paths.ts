@@ -18,7 +18,8 @@
  *   - `log`          : `$HERMES_HOME/logs/`;
  *   - `state`        : the paths design 1.2 names (rows 1-24);
  *   - `unclassified` : anything else under the home: archived and restored like `state`, counted apart;
- *   - `link`         : a symlink (set by the walker), recorded with its target, never followed.
+ *   - `link`         : a symlink (set by the walker), recorded with its target, never followed;
+ *   - `dir`          : a directory the walk entered, empty or not, with its mode (Fable S2): no data.
  * The approvald store tar (staged by the control plane's root piece into the nap dir, the ONE file under
  * `av-events/nap/` that is archived; review-a S-n2) rides as one `state` entry named `APPROVALD_STORE_ENTRY`,
  * and each of its members is listed after it, file by file, under the virtual prefix
@@ -38,7 +39,7 @@ import { join, posix } from "node:path";
 
 export const NAP_STATE_PATHS_SCHEMA = "nap_state_paths.v2";
 
-export type NapClass = "state" | "secret_cp" | "secret_box" | "unclassified" | "link" | "log";
+export type NapClass = "state" | "secret_cp" | "secret_box" | "unclassified" | "link" | "log" | "dir";
 
 /** The tool's own working directory, relative to `$HERMES_HOME`. */
 export const NAP_DIR = "av-events/nap";
@@ -238,7 +239,7 @@ export function linkTargetSafe(linkRel: string, target: string): boolean {
   return resolved !== ".." && !resolved.startsWith("../") && !posix.isAbsolute(resolved);
 }
 
-export type WalkItem = { rel: string; type: "file" | "link"; st: Stats };
+export type WalkItem = { rel: string; type: "file" | "link" | "dir"; st: Stats };
 export type ExcludedCounts = Record<string, { files: number; bytes: number }>;
 /** What a lenient walk counted instead of refusing (review-a N-n1: batch 0's dry count). */
 export type WalkProblems = { unreadable: number; unsupported: number };
@@ -316,7 +317,10 @@ export function walkHome(root: string, rules: PathRules, opts: { lenient?: boole
       if (!st) continue;
       if (st.isSymbolicLink()) items.push({ rel: r, type: "link", st });
       else if (st.isFile()) items.push({ rel: r, type: "file", st });
-      else if (st.isDirectory()) visit(r);
+      else if (st.isDirectory()) {
+        items.push({ rel: r, type: "dir", st });
+        visit(r);
+      }
       else if (st.isSocket()) count("socket", st.size);
       else if (st.isFIFO()) count("fifo", st.size);
       else problem("file_unsupported");

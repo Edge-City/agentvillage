@@ -69,10 +69,11 @@ async function run(cmd: string[], env: Record<string, string>) {
 type Archived = { h: NapHome; manifestKey: string; manifest: any; files: any[]; entries: Map<string, Buffer> };
 
 /** Archive a fresh fixture home the way the cp drives it, and publish its manifest. */
-async function archiveFixture(label: string): Promise<Archived> {
+async function archiveFixture(label: string, tweak: (h: NapHome) => void = () => {}): Promise<Archived> {
   const base = tempBase(label);
   dirs.push(base);
   const h = buildNapHome(base);
+  tweak(h);
   mkdirSync(join(base, "proc"));
   const runId = newRunId();
   stagePutRun(stub, h.home, runId);
@@ -174,6 +175,7 @@ function forge(a: Archived, edit: (items: Item[]) => Item[] | void, o: { tagFlip
       unclassified_count: count("unclassified"),
       link_count: count("link"),
       log_count: count("log"),
+      dir_count: count("dir"),
     },
     tree: { ...a.manifest.tree, approvald_files: members.length, approvald_bytes: members.reduce((n, f) => n + f.bytes, 0) },
     chunks,
@@ -283,7 +285,8 @@ test("7. two-phase write: a target that cannot be written, or a parent that is a
   symlinkSync(elsewhere, join(t.home, "memory"));
   const before = snapshotTree(t.root, notNap);
   const r = await restore(t, a.manifestKey, n, { keyDoc: keyFor(a) });
-  expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 1, status: "refused", reason: "target_parent_not_directory" });
+  // The directory entry itself is a symlink now (Fable S2 records directories): never written through.
+  expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 1, status: "refused", reason: "target_not_directory" });
   expect(snapshotTree(t.root, notNap)).toEqual(before);
   expect(snapshotTree(elsewhere)).toEqual({});
 });
@@ -363,6 +366,10 @@ test("8. archive → restore into a woken home: byte-equal for every class but s
     const src = join(h.root, f.path);
     const dst = join(t.root, f.path);
     if (f.class === "secret_cp" || f.path === ".hermes/.env") continue;
+    if (f.class === "dir") {
+      expect([f.path, statSync(dst).isDirectory(), statSync(dst).mode & 0o777]).toEqual([f.path, true, statSync(src).mode & 0o777]);
+      continue;
+    }
     if (f.class === "link") {
       expect([f.path, readlinkSync(dst)]).toEqual([f.path, readlinkSync(src)]);
       continue;
@@ -408,4 +415,37 @@ test("8. --no-merge-env leaves the cp's .env alone; without --approvald-out the 
   const all = snapshotTree(t.base);
   expect(Object.keys(all).filter((p) => p.endsWith(".tar.gz"))).toEqual([]);
   expect(a.files.some((f) => f.path === APPROVALD_STORE_ENTRY)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Fable read 1 (overlay#617 at fb5a0f9c)
+// ---------------------------------------------------------------------------------------------------------
+
+test("S2: every directory is recorded with its mode, empty ones included; restore recreates them; verify-only sees a missing one", async () => {
+  const a = await archiveFixture("dirs", (h) => {
+    mkdirSync(join(h.root, "drafts"));
+    chmodSync(join(h.root, "drafts"), 0o750);
+    mkdirSync(join(h.home, "cron", "output", "empty"), { recursive: true });
+    chmodSync(join(h.home, "mcp-tokens"), 0o700);
+    chmodSync(join(h.home, "skills"), 0o755);
+  });
+  const dirsOf = a.files.filter((f) => f.class === "dir");
+  const byPath = new Map(dirsOf.map((f) => [f.path, f]));
+  expect(byPath.get("drafts")).toMatchObject({ mode: 0o750, bytes: 0 });
+  expect(byPath.get(".hermes/cron/output/empty")).toBeDefined();
+  expect(byPath.get(".hermes/mcp-tokens")).toMatchObject({ mode: 0o700 });
+  expect(byPath.has(".hermes/edge-src")).toBe(false); // excluded trees stay out
+  expect(byPath.has(".hermes/av-events/nap")).toBe(false); // the nap dir is pruned
+  expect(a.manifest.payload.dir_count).toBe(dirsOf.length);
+  expect(a.manifest.tree.live_dirs).toBe(dirsOf.length);
+  const t = wakeTarget("dirs-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  for (const f of dirsOf) {
+    const st = statSync(join(t.root, f.path));
+    expect([f.path, st.isDirectory(), st.mode & 0o777]).toEqual([f.path, true, f.mode]);
+  }
+  rmSync(join(t.root, "drafts"), { recursive: true });
+  const v = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a), extra: ["--verify-only"] });
+  expect({ code: v.code, status: v.line.status, m: v.line.drift_missing }).toEqual({ code: 1, status: "drift", m: 1 });
 });

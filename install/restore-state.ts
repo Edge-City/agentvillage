@@ -86,6 +86,7 @@ import {
   FILES_ENTRY,
   FILES_SCHEMA,
   type FileEntry,
+  EMPTY_SHA256,
   hasData,
   HEX64,
   isInt,
@@ -216,7 +217,9 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     if (typeof f.path !== "string" || !restorable(f.path, rules)) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
-    if (f.class === "link") {
+    if (f.class === "dir") {
+      if (f.target !== undefined || f.same_as !== undefined || f.bytes !== 0 || f.sha256 !== EMPTY_SHA256) fail("files_invalid");
+    } else if (f.class === "link") {
       if (typeof f.target !== "string" || f.same_as !== undefined) fail("files_invalid");
       if (!linkTargetSafe(f.path, f.target)) fail("link_unsafe");
       if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
@@ -240,6 +243,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     count("unclassified") !== p.unclassified_count ||
     count("link") !== p.link_count ||
     count("log") !== p.log_count ||
+    count("dir") !== p.dir_count ||
     files.filter((f) => f.member_of !== undefined).length !== manifest.tree.approvald_files ||
     files.filter((f) => f.member_of !== undefined).reduce((n, f) => n + f.bytes, 0) !== manifest.tree.approvald_bytes
   ) {
@@ -261,6 +265,10 @@ function diskState(root: string, f: FileEntry): DiskState {
   const path = join(root, ...parts);
   const st = lstatOrNull(path);
   if (!st) return "missing";
+  if (f.class === "dir") {
+    if (!st.isDirectory()) return "kind_bad";
+    return (st.mode & 0o777) === f.mode ? "same" : "differs";
+  }
   if (f.class === "link") {
     if (!st.isSymbolicLink()) return "kind_bad";
     return readlinkSync(path) === f.target ? "same" : "differs";
@@ -466,7 +474,9 @@ async function restoreInner(
         return act(state === "same" ? "same" : state === "missing" ? "missing" : "changed");
       }
       if (state === "parent_bad") throw new NapError("target_parent_not_directory");
-      if (state === "kind_bad") throw new NapError(entry.class === "link" ? "target_kind_mismatch" : "target_not_regular");
+      if (state === "kind_bad") {
+        throw new NapError(entry.class === "link" ? "target_kind_mismatch" : entry.class === "dir" ? "target_not_directory" : "target_not_regular");
+      }
       return act(state === "same" ? "unchanged" : "write");
     });
     if (opts.verifyOnly) {
@@ -498,7 +508,7 @@ async function restoreInner(
     // What gets staged: the data of every entry to write (a hard link's data comes from its first entry).
     const stageAll = !opts.dryRun && (!opts.verifyOnly || (opts.repair && line.drift_extra === 0));
     for (const p of plans) {
-      if (!stageAll || p.entry.class === "link") continue;
+      if (!stageAll || p.entry.class === "link" || p.entry.class === "dir") continue;
       const wanted = p.act === "write" || (p.act === "store" && !!opts.approvaldOut && !opts.verifyOnly) ||
         ((p.act === "missing" || p.act === "changed") && opts.repair);
       if (wanted) toStage.add(p.entry.same_as !== undefined ? index.get(p.entry.same_as)! : p.index);
@@ -669,8 +679,12 @@ async function restoreInner(
     const tmpName = (dir: string, base: string) => join(dir, `.${base}.nap-restore-${process.pid}-${randomBytes(4).toString("hex")}`);
     let envTmp: string | null = null;
     let envAdd: string[] = [];
+    // Directories (Fable S2): created now, their mode and mtime set last, deepest first, after every rename.
+    const dirItems = items.filter((i) => i.entry.class === "dir");
     try {
+      for (const item of dirItems) mkdirSync(join(root, ...segments(item.entry.path)), { recursive: true, mode: 0o700 });
       for (const item of items) {
+        if (item.entry.class === "dir") continue;
         const isStore = item.entry.path === APPROVALD_STORE_ENTRY;
         const target = isStore ? opts.approvaldOut! : join(root, ...segments(item.entry.path));
         const dir = dirname(target);
@@ -723,6 +737,19 @@ async function restoreInner(
         line.env_merged = envAdd.length;
       } catch {
         rmSync(envTmp, { force: true });
+        return end("error", "write_failed");
+      }
+    }
+    const depth = (p: string) => p.split("/").length;
+    for (const item of [...dirItems].sort((a, b) => depth(b.entry.path) - depth(a.entry.path))) {
+      try {
+        const path = join(root, ...segments(item.entry.path));
+        if (!lstatSync(path).isDirectory()) throw new Error("not a directory");
+        chmodSync(path, item.entry.mode);
+        const when = new Date(item.entry.mtime_ms);
+        utimesSync(path, when, when);
+        line.written++;
+      } catch {
         return end("error", "write_failed");
       }
     }
