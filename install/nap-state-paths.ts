@@ -146,6 +146,13 @@ export const ENV_FILE = ".env";
 /** Class `secret_box`, relative to `$HERMES_HOME` (design 1.2 rows 16, 22; 1.4). */
 export const SECRET_BOX_FILES: readonly string[] = [ENV_FILE, "auth.json", "vault.key", "vault.json.enc", "google_token.json", "av-events/hash.key"];
 export const SECRET_BOX_DIRS: readonly string[] = ["mcp-tokens"];
+/**
+ * Any file under a directory named like a browser's profile or user data, anywhere under the home, is
+ * `secret_box` (0600 on restore): Login Data, Cookies and the like. Only `browser-profile(s)` are excluded
+ * (N-n3); every other browser-ish directory (`browser_profiles`, Browser Use's Chromium user-data dir, say)
+ * stays archived, because not losing data wins (review-a N4, product's call).
+ */
+export const SECRET_BOX_BROWSER_DIR = /^browser[-_ ]?(profiles?|user[-_ ]?data|data|sessions?)$/i;
 /** Any file named like this, anywhere under the home, is `secret_box`. */
 export const SECRET_BOX_NAME = /^(\.env(\..+)?|.+\.(pem|key|p12))$/;
 /** Class `log`, relative to `$HERMES_HOME`. */
@@ -241,6 +248,7 @@ export function classOf(rel: string, rules: PathRules): "state" | "secret_cp" | 
     if (SECRET_BOX_FILES.includes(hRel) || SECRET_BOX_DIRS.some((d) => hRel.startsWith(`${d}/`))) return "secret_box";
   }
   if (SECRET_BOX_NAME.test(name)) return "secret_box";
+  if (rel.split("/").slice(0, -1).some((seg) => SECRET_BOX_BROWSER_DIR.test(seg))) return "secret_box";
   if (hRel !== null) {
     if (LOG_DIRS.some((d) => hRel.startsWith(`${d}/`))) return "log";
     const main = SIDECARS.reduce((p, s) => (p.endsWith(s) ? p.slice(0, -s.length) : p), hRel);
@@ -428,6 +436,7 @@ export function napStatePathsDocument() {
       secret_box_files: SECRET_BOX_FILES.map((p) => `$HERMES_HOME/${p}`),
       secret_box_dirs: SECRET_BOX_DIRS.map((p) => `$HERMES_HOME/${p}/`),
       secret_box_name: SECRET_BOX_NAME.source,
+      secret_box_browser_dir: SECRET_BOX_BROWSER_DIR.source,
       log_dirs: LOG_DIRS.map((p) => `$HERMES_HOME/${p}/`),
       state_files: STATE_FILES.map((p) => `$HERMES_HOME/${p}`),
       state_dirs: STATE_DIRS.map((p) => `$HERMES_HOME/${p}/`),

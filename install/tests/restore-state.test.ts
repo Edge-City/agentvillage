@@ -684,6 +684,23 @@ test("review-a S2: an archived symlinked dotfile over a fresh box's regular file
   expect(snapshotTree(t2.root, notNap)).toEqual(before);
 });
 
+test("review-a N4: browser_profiles and other browser-ish dirs stay archived, classed secret_box, restored 0600", async () => {
+  const a = await archiveFixture("browser-dirs", (h) => {
+    for (const rel of [".hermes/browser_profiles/Default/Cookies", "projects/BrowserData/Login Data", "x/browser-user-data/Local State"]) {
+      mkdirSync(dirname(join(h.root, rel)), { recursive: true });
+      writeFileSync(join(h.root, rel), `secret of ${rel}\n`, { mode: 0o644 });
+    }
+  });
+  const rels = [".hermes/browser_profiles/Default/Cookies", "projects/BrowserData/Login Data", "x/browser-user-data/Local State"];
+  for (const rel of rels) expect([rel, a.files.find((f) => f.path === rel)?.class]).toEqual([rel, "secret_box"]);
+  const t = wakeTarget("browser-dirs-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  for (const rel of rels) {
+    expect([rel, readFileSync(join(t.root, rel), "utf8"), statSync(join(t.root, rel)).mode & 0o777]).toEqual([rel, `secret of ${rel}\n`, 0o600]);
+  }
+});
+
 test("N4: a name with a backslash is archived and restored", async () => {
   const a = await archiveFixture("odd-names", (h) => {
     mkdirSync(join(h.root, "notes"), { recursive: true });
