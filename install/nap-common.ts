@@ -664,12 +664,25 @@ export function httpCall(
     const send = secure ? httpsRequest : httpRequest;
     let settled = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
+    // The body's file descriptor, closed however the call ends (Fable N10: a refusal before the body drains
+    // left the pump waiting on a drain that never comes).
+    let fd = -1;
+    const closeFd = () => {
+      if (fd < 0) return;
+      try {
+        closeSync(fd);
+      } catch {
+        // already closed
+      }
+      fd = -1;
+    };
     const headers: Record<string, string> = { Accept: "*/*", "Accept-Encoding": "identity" };
     if (opts.body) headers["Content-Length"] = String("file" in opts.body ? opts.body.bytes : opts.body.data.length);
     const done = (err: Error | null, status = 0) => {
       if (settled) return;
       settled = true;
       clearTimeout(idle);
+      closeFd();
       if (err) {
         req.destroy();
         reject(err);
@@ -709,7 +722,7 @@ export function httpCall(
     if (!opts.body) req.end();
     else if ("data" in opts.body) req.end(opts.body.data);
     else {
-      const fd = openSync(opts.body.file, "r");
+      fd = openSync(opts.body.file, "r");
       const buf = Buffer.alloc(1024 * 1024);
       let off = 0;
       const pump = () => {
@@ -717,7 +730,7 @@ export function httpCall(
           while (!settled) {
             const n = readSync(fd, buf, 0, buf.length, off);
             if (n === 0) {
-              closeSync(fd);
+              closeFd();
               req.end();
               return;
             }
@@ -728,13 +741,9 @@ export function httpCall(
               return;
             }
           }
-          closeSync(fd);
+          closeFd();
         } catch {
-          try {
-            closeSync(fd);
-          } catch {
-            // already closed
-          }
+          closeFd();
           done(new HttpNetwork("network"));
         }
       };

@@ -5,7 +5,7 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { MANIFEST_KEYS, MANIFEST_PAYLOAD_KEYS, MANIFEST_TREE_KEYS, toolSha256 } from "../nap-common";
@@ -884,4 +884,37 @@ test("S1: files.json over the restore's cap refuses before pack (64, nothing PUT
   expect(dry.line).toMatchObject({ files_json_max: MAX_FILES_JSON_BYTES });
   expect((dry.line as any).files_json_bytes).toBeGreaterThan(2048);
   expect(parseArgs(args(h, runId), envFor(h)).maxFilesJsonBytes).toBe(MAX_FILES_JSON_BYTES);
+});
+
+test("N10: a server that refuses before the body drains gets the chunk's file descriptor closed, not leaked", async () => {
+  const { httpCall } = await import("../nap-common");
+  const dir = tempBase("fd");
+  dirs.push(dir);
+  const file = join(dir, "chunk.bin");
+  writeFileSync(file, Buffer.alloc(16 * 1024 * 1024, 7));
+  // Answers 403 at once, never reading the body.
+  const early = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("no", { status: 403 }) });
+  const ino = lstatSync(file).ino;
+  // Descriptors open on the chunk file itself (sockets and the rest are not counted).
+  const fds = () => readdirSync("/dev/fd").filter((name) => {
+    try {
+      return fstatSync(Number(name)).ino === ino;
+    } catch {
+      return false;
+    }
+  }).length;
+  try {
+    const before = fds();
+    for (let i = 0; i < 5; i++) {
+      try {
+        await httpCall("PUT", `http://127.0.0.1:${early.port}/b/k`, { body: { file, bytes: 16 * 1024 * 1024 }, idleMs: 2000 });
+      } catch {
+        // a reset is fine; the descriptor is what is checked
+      }
+    }
+    await Bun.sleep(100);
+    expect(fds()).toBe(before);
+  } finally {
+    early.stop(true);
+  }
 });
