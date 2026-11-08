@@ -310,6 +310,18 @@ test("7. two-phase write: a target that cannot be written, or a parent that is a
   expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 1, status: "refused", reason: "target_not_directory" });
   expect(snapshotTree(t.root, notNap)).toEqual(before);
   expect(snapshotTree(elsewhere)).toEqual({});
+  // review-a S4: a forged archive WITHOUT the directory's own entry, so only the restore's on-disk parent
+  // check stands between its files and the link (a box writes its own files.json).
+  const forgedNoDir = forge(a, (items) => items.filter((x) => x.entry.path !== ".hermes/memory"));
+  const t2 = wakeTarget("twophase-link-nodir");
+  const elsewhere2 = join(t2.base, "elsewhere");
+  mkdirSync(elsewhere2);
+  symlinkSync(elsewhere2, join(t2.home, "memory"));
+  const before2 = snapshotTree(t2.root, notNap);
+  const r2 = await restore(t2, forgedNoDir.manifestKey, forgedNoDir.chunks, { keyDoc: forgedNoDir.keyDoc });
+  expect({ code: r2.code, status: r2.line.status, reason: r2.line.reason }).toEqual({ code: 1, status: "refused", reason: "target_parent_not_directory" });
+  expect(snapshotTree(t2.root, notNap)).toEqual(before2);
+  expect(snapshotTree(elsewhere2)).toEqual({});
 });
 
 test("7. --verify-only writes nothing and reports drift both ways; --repair refuses extra files, then rewrites changed and missing ones", async () => {
