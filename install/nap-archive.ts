@@ -166,6 +166,8 @@ import {
   type PathRules,
   WAL_SUFFIX,
   inRetiredWal,
+  walBlocks,
+  walOrphan,
   walkHome,
   WalkRefused,
 } from "./nap-state-paths";
@@ -680,6 +682,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let linksEscaping = 0;
   let linksManaged = 0;
   let targetsInvalid = 0;
+  let walOrphans = 0;
+  const regularRels = new Set(tree.items.filter((i) => i.type === "file").map((i) => i.rel));
   for (const item of tree.items) {
     if (item.type === "dir") {
       liveDirs++;
@@ -709,7 +713,10 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       }
     }
     if (item.type !== "file") continue;
-    if (!inRetiredWal(item.rel) && item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0) walNonEmpty++;
+    if (item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0 && !inRetiredWal(item.rel)) {
+      if (walOrphan(item.rel, regularRels)) walOrphans++;
+      else walNonEmpty++;
+    }
     try {
       closeSync(openSync(join(opts.root, ...item.rel.split("/")), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW));
     } catch {
@@ -734,6 +741,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       file_name_invalid: tree.problems.name_invalid + targetsInvalid,
       not_owned: notOwned,
       wal_nonempty: walNonEmpty,
+      wal_orphan: walOrphans,
       store_copy_staged: storeStaged(opts.home),
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
       links_absolute: linksAbsolute,
@@ -967,7 +975,8 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding
     // bytes refuses, and nothing is folded again.
-    if (walked.files.some((f) => f.class !== "link" && !inRetiredWal(f.path) && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
+    const regular = new Set(walked.files.filter((f) => hasData(f) || f.same_as !== undefined).map((f) => f.path));
+    if (walked.files.some((f) => regular.has(f.path) && walBlocks(f.path, regular) && f.bytes > 0)) {
       return refuse("wal_unfolded");
     }
     // review-a S1: the restore's own per-entry rules, run here before any chunk, so nothing is archived that

@@ -177,6 +177,13 @@ export const WAL_SUFFIX = "-wal";
  */
 export const RETIRED_WAL_MARK = ".retired-wal-";
 export const inRetiredWal = (rel: string): boolean => rel.split("/").some((seg) => seg.includes(RETIRED_WAL_MARK));
+/** A `-wal` with no regular main file beside it (review-a N3): no fold can empty it, so it never blocks a
+ * nap; it is archived as is and counted (`wal_orphan`). */
+export const walOrphan = (rel: string, regularFiles: ReadonlySet<string>): boolean =>
+  rel.endsWith(WAL_SUFFIX) && !regularFiles.has(rel.slice(0, -WAL_SUFFIX.length));
+/** Whether a non-empty `-wal` at `rel` blocks a nap: not inside a retired-WAL capture, and not an orphan. */
+export const walBlocks = (rel: string, regularFiles: ReadonlySet<string>): boolean =>
+  rel.endsWith(WAL_SUFFIX) && !inRetiredWal(rel) && !walOrphan(rel, regularFiles);
 const SIDECARS = ["-wal", "-shm", "-journal"];
 
 export type PathRules = { hermesRel: string };

@@ -378,10 +378,11 @@ test("2 / S-n1: a -wal of any name the fold cannot empty refuses; one that fills
   // A `-wal` beside a file that is not SQLite: the fold must not open it, so its bytes stay and it refuses.
   const blob = join(h.home, "plugin-data", "store.bin-wal");
   mkdirSync(dirname(blob), { recursive: true });
+  writeFileSync(join(h.home, "plugin-data", "store.bin"), "not sqlite"); // its main file (no main: an orphan, review-a N3)
   writeFileSync(blob, "wal bytes that stay");
   let runId = newRunId();
   const fold = prepare(h, runId);
-  expect({ code: fold.code, line: fold.line }).toEqual({ code: 64, line: { status: "refused", reason: "wal_unfolded", db_count: 1, wal_folded: 1, wal_unfolded: 1 } });
+  expect({ code: fold.code, line: fold.line }).toEqual({ code: 64, line: { status: "refused", reason: "wal_unfolded", db_count: 1, wal_folded: 1, wal_unfolded: 1, wal_orphan: 0 } });
   expect(readFileSync(blob, "utf8")).toBe("wal bytes that stay");
   let r = await cli(h, runId);
   expect({ code: r.code, line: r.line }).toEqual({ code: 64, line: { status: "refused", reason: "wal_unfolded", chunks_acked: 0 } });
@@ -1111,4 +1112,15 @@ test("review-a N1: a symlink target that is not UTF-8 refuses file_name_invalid 
   expect(putsSince(before)).toEqual([]);
   const dry = await runArchive({ ...inProcess(h, runId), dryRun: true });
   expect(dry.line).toMatchObject({ file_name_invalid: 1, unreadable: 0 });
+});
+
+test("review-a N3: an orphan -wal (no main file beside it) never blocks a nap; it is archived as is and the dry run counts it", async () => {
+  const h = fresh("orphan-wal");
+  const orphan = Buffer.alloc(4096, 7);
+  writeFileSync(join(h.home, "orphan.db-wal"), orphan);
+  const dry = await runArchive({ ...inProcess(h, newRunId()), dryRun: true });
+  expect(dry.line).toMatchObject({ wal_orphan: 1, wal_nonempty: 1 }); // the fixture's live state.db-wal, before its fold
+  const { files } = await archived(h);
+  expect(files.find((f) => f.path === ".hermes/orphan.db-wal")).toMatchObject({ bytes: 4096, sha256: sha(orphan) });
+  expect(JSON.parse(readFileSync(join(napDir(h.home), "fold.json"), "utf8"))).toMatchObject({ wal_unfolded: 0, wal_orphan: 1 });
 });

@@ -24,7 +24,7 @@ import { closeSync, constants, lstatSync, openSync, readSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { UUID, writeJsonAtomic } from "./nap-common";
-import { inRetiredWal, NAP_DIR, type PathRules, SQLITE_SUFFIXES, WAL_SUFFIX, walkHome } from "./nap-state-paths";
+import { inRetiredWal, NAP_DIR, walBlocks, walOrphan, type PathRules, SQLITE_SUFFIXES, WAL_SUFFIX, walkHome } from "./nap-state-paths";
 import { hermesHome } from "./paths";
 
 export const FOLD_SCHEMA = "nap_fold.v1";
@@ -55,7 +55,7 @@ const sizeOf = (path: string): number => {
   }
 };
 
-export type FoldResult = { db_count: number; wal_folded: number; wal_unfolded: number };
+export type FoldResult = { db_count: number; wal_folded: number; wal_unfolded: number; wal_orphan: number };
 
 /** Fold the databases among `rels` (regular files relative to `root`, from an include walk). */
 export function foldSqlite(root: string, rels: string[]): FoldResult {
@@ -84,8 +84,11 @@ export function foldSqlite(root: string, rels: string[]): FoldResult {
     }
     if (before > 0 && sizeOf(`${path}${WAL_SUFFIX}`) === 0) wal_folded++;
   }
-  const wal_unfolded = rels.filter((rel) => !inRetiredWal(rel) && rel.endsWith(WAL_SUFFIX) && sizeOf(join(root, ...rel.split("/"))) > 0).length;
-  return { db_count, wal_folded, wal_unfolded };
+  const regular = new Set(rels);
+  const nonEmpty = (rel: string) => sizeOf(join(root, ...rel.split("/"))) > 0;
+  const wal_unfolded = rels.filter((rel) => walBlocks(rel, regular) && nonEmpty(rel)).length;
+  const wal_orphan = rels.filter((rel) => !inRetiredWal(rel) && walOrphan(rel, regular) && nonEmpty(rel)).length;
+  return { db_count, wal_folded, wal_unfolded, wal_orphan };
 }
 
 /** Fold the whole tree the archive will walk (by the same rules; this walk is lenient, the archive's is not). */
