@@ -58,6 +58,13 @@ afterEach(() => {
 });
 
 type Home = NapHome & { proc: string };
+/**
+ * Pids for the fake gateways planted under a home's fake /proc. gatewayRunning never counts the archive's own
+ * pid, and an in-process runArchive runs as this test runner: a fake pid that happens to equal the runner's
+ * (777 did once, after the pid counter wrapped) was skipped and the S6 test archived. These are above Linux's
+ * PID_MAX_LIMIT (2^22) and macOS's 99999, so no real process, the runner included, can ever hold one.
+ */
+const FAKE_GATEWAY_PID = ["4194305", "4194306", "4194307"] as const;
 function fresh(label: string, opts: { bigBytes?: number } = {}): Home {
   const base = tempBase(label);
   dirs.push(base);
@@ -354,10 +361,10 @@ test("2. refusals exit 64 before any write: key, run file, URL, transport, bundl
   await expectRefusal(h, "fold_missing", { after: () => rmSync(join(nap, "fold.json")) });
   await expectRefusal(h, "fold_mismatch", { after: () => expect(runFold(FOLD, h, newRunId()).code).toBe(0) });
   // A writer came back (13 S6).
-  mkdirSync(join(h.proc, "4242"));
-  writeFileSync(join(h.proc, "4242", "cmdline"), "bash\0-lc\0while true; do hermes gateway run; sleep 2; done\0");
+  mkdirSync(join(h.proc, FAKE_GATEWAY_PID[0]));
+  writeFileSync(join(h.proc, FAKE_GATEWAY_PID[0], "cmdline"), "bash\0-lc\0while true; do hermes gateway run; sleep 2; done\0");
   await expectRefusal(h, "writers_alive");
-  rmSync(join(h.proc, "4242"), { recursive: true });
+  rmSync(join(h.proc, FAKE_GATEWAY_PID[0]), { recursive: true });
   // The store copy (review-a (b)): both or (with --no-store-copy) neither; 0600 regular files.
   await expectRefusal(h, "store_copy_missing", { after: () => (rmSync(storeBlob(h)), rmSync(storeList(h))) });
   await expectRefusal(h, "store_copy_partial", { after: () => rmSync(storeBlob(h)) });
@@ -646,8 +653,8 @@ test("S6: the gateway coming back mid-run aborts it; no stream of that run survi
     beforeUpload: (n) => {
       pidSeen ||= readFileSync(join(napDir(h.home), "archive.pid"), "utf8").trim();
       if (n === 1) {
-        mkdirSync(join(h.proc, "777"));
-        writeFileSync(join(h.proc, "777", "cmdline"), "/home/hermes/.hermes/hermes-agent/venv/bin/python\0/home/hermes/.local/bin/hermes\0gateway\0run\0");
+        mkdirSync(join(h.proc, FAKE_GATEWAY_PID[1]));
+        writeFileSync(join(h.proc, FAKE_GATEWAY_PID[1], "cmdline"), "/home/hermes/.hermes/hermes-agent/venv/bin/python\0/home/hermes/.local/bin/hermes\0gateway\0run\0");
       }
     },
   };
@@ -777,8 +784,8 @@ test("6 / 12 M2: no box-side file reads NAP_WRAP_PRIVATE_KEY or any private key;
 
 test("N-n1: --dry-run counts with the writers live, no key, no run file and no fold; reports unreadable files and live WALs; writes nothing", async () => {
   const h = fresh("dry");
-  mkdirSync(join(h.proc, "4242"));
-  writeFileSync(join(h.proc, "4242", "cmdline"), "hermes\0gateway\0run\0");
+  mkdirSync(join(h.proc, FAKE_GATEWAY_PID[0]));
+  writeFileSync(join(h.proc, FAKE_GATEWAY_PID[0], "cmdline"), "hermes\0gateway\0run\0");
   const unreadable = process.getuid?.() !== 0;
   const before = snapshotTree(h.root);
   if (unreadable) chmodSync(join(h.home, "sessions", "s1.jsonl"), 0o000);
@@ -881,15 +888,15 @@ test("M1: a run discarded after two acks cannot be re-run under its id: run_id_s
   const out = await runArchive(inProcess(h, runId), {
     beforeUpload: (n) => {
       if (n === 2) {
-        mkdirSync(join(h.proc, "778"));
-        writeFileSync(join(h.proc, "778", "cmdline"), "hermes\0gateway\0run\0");
+        mkdirSync(join(h.proc, FAKE_GATEWAY_PID[2]));
+        writeFileSync(join(h.proc, FAKE_GATEWAY_PID[2], "cmdline"), "hermes\0gateway\0run\0");
       }
     },
   });
   expect(out).toEqual({ code: 1, line: { status: "error", reason: "gateway_running", chunks_acked: 2 } });
   const after = progress(h);
   expect([after.stream, after.acked, after.orphan_chunks, after.spent]).toEqual([undefined, [], 2, true]);
-  rmSync(join(h.proc, "778"), { recursive: true });
+  rmSync(join(h.proc, FAKE_GATEWAY_PID[2]), { recursive: true });
   // The cp retries the archive step with the same run id: refused before any write, nothing uploaded.
   prepare(h, runId);
   const before = stub.requests.length;
@@ -1144,4 +1151,19 @@ test("review-a N8: a re-run after a crash mid-pack, with the pair gone and only 
   stagePutRun(stub, h.home, runId);
   const again = await cli(h, runId);
   expect({ code: again.code, line: again.line }).toEqual({ code: 1, line: { status: "error", reason: "resume_needs_new_run", chunks_acked: 0 } });
+});
+
+test("S6 flake: a gateway at the archive's own pid is never counted (the runner's pid, in process); a fake pid above any pid_max always is", async () => {
+  const { gatewayRunning } = await import("../nap-common");
+  const h = fresh("own-pid");
+  mkdirSync(join(h.proc, String(process.pid)));
+  writeFileSync(join(h.proc, String(process.pid), "cmdline"), "hermes\0gateway\0run\0");
+  expect(gatewayRunning(h.home, h.proc)).toBe(false);
+  for (const pid of FAKE_GATEWAY_PID) {
+    expect([pid, Number(pid) > 4_194_304 && Number(pid) !== process.pid]).toEqual([pid, true]);
+    mkdirSync(join(h.proc, pid));
+    writeFileSync(join(h.proc, pid, "cmdline"), "hermes\0gateway\0run\0");
+    expect([pid, gatewayRunning(h.home, h.proc)]).toEqual([pid, true]);
+    rmSync(join(h.proc, pid), { recursive: true });
+  }
 });
