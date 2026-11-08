@@ -10,6 +10,14 @@
       "decision": "not_secret",
       "reason": "av-rate (the suggestion rating cards): an optional override of the gateway session key the plugin injects the [Rating recorded] line into (default agent:main:telegram:dm:<home chat id>), for a developer testing with their own bot. A session key is a routing label Hermes derives from the platform and chat id, not a credential; nothing authenticates with it."
     },
+    "NAP_WRAP_PUBLIC_KEY": {
+      "decision": "not_secret",
+      "reason": "install/nap-archive.ts (P-COST NAP, the box-state archive): the fleet wrap key's PUBLIC half (RSA-4096 PEM, SPKI), which the control plane passes in the archive's exec environment so the box can wrap the run's random AES data key and never decrypt what it wrote. A public key opens nothing; the script refuses any PEM holding PRIVATE KEY. The private half never reaches a box (design 12 M2; no box-side file reads NAP_WRAP_PRIVATE_KEY, and a test greps for it)."
+    },
+    "NAP_APPROVALD_SECRET_NAMES": {
+      "decision": "not_secret",
+      "reason": "install/nap-archive.ts (P-COST NAP): a count, set by the control plane, of the approvald token files its root piece left out of the store tar (design 13 S4). An integer recorded in the manifest; it carries no name and no credential."
+    },
     "INDEX_API_KEY": {
       "decision": "strip",
       "reason": "Index writes are approval-gated (intent.publish.*, opportunity.accept); with the key agent code could call Index around the gate. The Index MCP client and record_intention run inside the gateway; the index-network scripts read $HERMES_HOME/.env (resolveIndexApiKey, envOrDotenv)."
