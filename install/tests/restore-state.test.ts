@@ -255,7 +255,7 @@ test("7. each mismatch class refuses (exit 1) and writes nothing into the home",
   await forged("path_not_allowed", (items) => void (at(items, ".hermes/config.yaml").entry.path = "../escape.yaml"));
   await forged("path_not_allowed", (items) => {
     const x = at(items, ".hermes/SOUL.md");
-    return [...items, { entry: { ...x.entry, path: ".hermes/edge-src/install/install.ts" }, data: x.data }].sort((p, q) =>
+    return [...items, { entry: { ...x.entry, path: ".hermes/av-events/nap/planted.json" }, data: x.data }].sort((p, q) =>
       p.entry.path.startsWith("/") === q.entry.path.startsWith("/") ? (p.entry.path < q.entry.path ? -1 : 1) : p.entry.path.startsWith("/") ? 1 : -1);
   });
   await forged("class_mismatch", (items) => void (at(items, ".hermes/auth.json").entry.class = "bogus"));
@@ -570,8 +570,22 @@ test("S5 / security fold 2 (HIGH): paths_sha256 relaxes nothing; the CURRENT rul
     expect(r.line.secret_cp_skipped).toBe(1);
     expect(statSync(join(t.home, "auth.json")).mode & 0o777).toBe(0o600); // secret_box by the current rules
   }
-  // An entry at a path the CURRENT rules exclude refuses even when the manifest claims older rules.
-  for (const rel of [".hermes/edge-src/install/install.ts", ".hermes/gateway.pid", ".hermes/av-events/nap/run.json", "a/node_modules/x.js"]) {
+  // An entry at a path the CURRENT rules exclude is never written, whatever rules the manifest claims: skipped
+  // and counted (Fable read 2 S3), the rest restored; the tool's own dir still refuses.
+  for (const rel of [".hermes/edge-src/install/install.ts", ".hermes/gateway.pid", "a/node_modules/x.js"]) {
+    const older = forge(a, (items) => {
+      olderRules(items);
+      const x = at(items, ".hermes/MEMORY.md");
+      return [...items, { entry: { ...x.entry, path: rel }, data: x.data }].sort((p, q) =>
+        p.entry.path.startsWith("/") === q.entry.path.startsWith("/") ? (p.entry.path < q.entry.path ? -1 : 1) : p.entry.path.startsWith("/") ? 1 : -1);
+    }, { manifest: (m) => (m.paths_sha256 = "1".repeat(64)) });
+    const t3 = wakeTarget("old-rules-excluded");
+    const r3 = await restore(t3, older.manifestKey, older.chunks, { keyDoc: older.keyDoc });
+    expect({ rel, code: r3.code, status: r3.line.status, skipped: r3.line.excluded_skipped }).toEqual({ rel, code: 0, status: "restored", skipped: 1 });
+    expect([rel, existsSync(join(t3.root, rel))]).toEqual([rel, false]);
+    expect(existsSync(join(t3.home, "MEMORY.md"))).toBe(true);
+  }
+  for (const rel of [".hermes/av-events/nap/run.json"]) {
     const bad = forge(a, (items) => {
       olderRules(items);
       const x = at(items, ".hermes/MEMORY.md");

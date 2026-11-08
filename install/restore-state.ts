@@ -24,8 +24,8 @@
  * tenant, date and run; the data key's IV is the manifest's; each chunk's size and SHA-256 equal the
  * manifest's before its bytes are decrypted; AES-256-GCM's tag verifies; the plaintext payload's SHA-256
  * and length equal the manifest's; the tar holds `files.json` then exactly one data entry per file, in
- * order; every path is clean, under the root and not on the CURRENT exclude list, whatever rules the
- * archive says it was made under; no symlink sits at a managed path (`link_at_managed_path`: a `secret_cp`
+ * order; every path is clean, under the root and outside the tool's own dir, whatever rules the archive
+ * says it was made under (an entry the CURRENT exclude list covers is never written: `excluded_skipped`); no symlink sits at a managed path (`link_at_managed_path`: a `secret_cp`
  * or excluded path, a file the cp or the installer writes, or a directory above one); every file's class is a known one; every file's size and SHA-256 equal
  * `files.json`'s; no target is (or sits under) a symlink or the wrong kind of file. Any mismatch is
  * `status: "refused"` and writes nothing.
@@ -58,7 +58,7 @@
  * restore or a repair (not on `--verify-only` alone or `--dry-run`).
  *
  * Output: one JSON line `{status, manifest_key, files, bytes, written, unchanged, drift_missing, drift_extra,
- * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, class_reclassified, store_copy,
+ * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, class_reclassified, excluded_skipped, store_copy,
  * store_written, paths_match, reason?}`; `status` is restored,
  * verified, repaired, dry_run, drift, refused or error. Never a path, a URL, a key or file content.
  * Exit: 0 restored, verified, repaired or dry_run; 1 drift, refused or error; 2 usage.
@@ -130,6 +130,7 @@ import {
   STORE_BLOB_ENTRY,
   STORE_ENTRIES,
   type PathRules,
+  excludedBy,
   restorable,
   walkHome,
   WalkRefused,
@@ -179,12 +180,14 @@ export type RestoreLine = {
   store_written: number;
   /** Files whose recorded class differs from the current rules' class; written by the current class. */
   class_reclassified: number;
+  /** Entries at paths the CURRENT exclude list covers: never written (an older rule set excluded less). */
+  excluded_skipped: number;
   /** Whether the archive was made under the rules this restore carries (informational only). */
   paths_match?: boolean;
   reason?: string;
 };
 
-type Act = "write" | "unchanged" | "skip" | "env" | "store" | "same" | "missing" | "changed";
+type Act = "write" | "unchanged" | "skip" | "excluded" | "env" | "store" | "same" | "missing" | "changed";
 type Plan = { entry: FileEntry; index: number; act: Act };
 
 const segments = (rel: string) => rel.split("/");
@@ -239,7 +242,9 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
     if (typeof f.path !== "string" || !cleanRelPath(f.path)) fail("path_not_allowed");
     // A link never sits where the cp, the installer or the rules manage a path: a later write would follow it.
     if (f.class === "link" && linkAtManagedPath(f.path, rules)) fail("link_at_managed_path");
-    if (!restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
+    // The tool's own dir is never a restore target; any other path the CURRENT rules exclude is skipped in
+    // the plan and counted (excluded_skipped; Fable read 2 S3): never writing it is as safe as refusing.
+    if (excludedBy(f.path, rules, f.class === "dir") === "nap_dir") fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
     if (f.class === "dir") {
@@ -416,6 +421,7 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     env_merged: 0,
     links: 0,
     class_reclassified: 0,
+    excluded_skipped: 0,
     store_written: 0,
   };
   const writes = !opts.dryRun && (!opts.verifyOnly || opts.repair);
@@ -517,6 +523,7 @@ async function restoreInner(
     plans = entries.map((entry, i) => {
       const act = (a: Act): Plan => ({ entry, index: i, act: a });
       if (STORE_ENTRIES.includes(entry.path)) return act("store");
+      if (!restorable(entry.path, rules, entry.class === "dir")) return act("excluded");
       // What the CURRENT rules call secret_cp is skipped; the recorded class is never consulted (it is box-written).
       const isCp = (f: FileEntry) => isHomeFile(f) && classOf(f.path, rules) === "secret_cp";
       if (isCp(entry)) return act("skip");
@@ -695,6 +702,7 @@ async function restoreInner(
   line.files = all.length;
   line.links = all.filter((f) => f.class === "link").length;
   line.secret_cp_skipped = plans.filter((p) => p.act === "skip").length;
+  line.excluded_skipped = plans.filter((p) => p.act === "excluded").length;
   const bytesOf = (items: Plan[]) => items.reduce((n, p) => n + (p.entry.class === "link" ? 0 : p.entry.bytes), 0);
   if (opts.verifyOnly) {
     const missing = plans.filter((p) => p.act === "missing");
