@@ -168,6 +168,15 @@ export const STATE_DIRS: readonly string[] = [
 /** SQLite files the archive folds (13 S1), and the WAL sidecar suffix it refuses to leave non-empty. */
 export const SQLITE_SUFFIXES: readonly string[] = [".db", ".sqlite", ".sqlite3"];
 export const WAL_SUFFIX = "-wal";
+/**
+ * Hermes's retired-WAL capture (`<db>.retired-wal-<ts>-<pid>/`, and its `.partial`; hermes_state_dbfile.py):
+ * the retired `-wal` whose frames are NOT in the main file, a copy of the main image (or its header only)
+ * and `manifest.json` with digests. "Nothing is merged: whether those frames belong on top of the main file
+ * is the operator's decision." The fold never opens anything inside one, the archive's unfolded-WAL check
+ * never counts it, and it is archived byte for byte (review-a S3).
+ */
+export const RETIRED_WAL_MARK = ".retired-wal-";
+export const inRetiredWal = (rel: string): boolean => rel.split("/").some((seg) => seg.includes(RETIRED_WAL_MARK));
 const SIDECARS = ["-wal", "-shm", "-journal"];
 
 export type PathRules = { hermesRel: string };

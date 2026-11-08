@@ -165,6 +165,7 @@ import {
   napStatePathsDocument,
   type PathRules,
   WAL_SUFFIX,
+  inRetiredWal,
   walkHome,
   WalkRefused,
 } from "./nap-state-paths";
@@ -693,7 +694,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       }
     }
     if (item.type !== "file") continue;
-    if (item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0) walNonEmpty++;
+    if (!inRetiredWal(item.rel) && item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0) walNonEmpty++;
     try {
       closeSync(openSync(join(opts.root, ...item.rel.split("/")), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW));
     } catch {
@@ -951,7 +952,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding
     // bytes refuses, and nothing is folded again.
-    if (walked.files.some((f) => f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
+    if (walked.files.some((f) => f.class !== "link" && !inRetiredWal(f.path) && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
       return refuse("wal_unfolded");
     }
     // review-a S1: the restore's own per-entry rules, run here before any chunk, so nothing is archived that

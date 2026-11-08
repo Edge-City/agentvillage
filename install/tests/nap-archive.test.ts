@@ -1074,3 +1074,28 @@ test("review-a S1: the archive runs the restore's own entry rules before pack; a
   expect(putsSince(before)).toEqual([]);
   expectStagingGone(h);
 });
+
+test("review-a S3: Hermes's retired-WAL capture is never folded and never blocks the nap; its image, WAL and manifest archive byte for byte", async () => {
+  const h = fresh("retired-wal");
+  // Hermes's shape: <db>.retired-wal-<ts>-<pid>/ with the main image copy, the retired WAL (frames NOT in the
+  // image) and manifest.json; here the fixture's state.db and its non-empty -wal, copied before any fold.
+  const cap = join(h.home, "state.db.retired-wal-20261101T000000Z-4242");
+  mkdirSync(cap);
+  copyFileSync(join(h.home, "state.db"), join(cap, "state.db"));
+  copyFileSync(join(h.home, "state.db-wal"), join(cap, "state.db-wal"));
+  writeFileSync(join(cap, "manifest.json"), '{"note":"digests of the two files"}\n');
+  // A header-only capture (image over 512 MiB): a WAL with no main file beside it.
+  const hdr = join(h.home, "big.db.retired-wal-20261101T000000Z-4243.partial");
+  mkdirSync(hdr);
+  copyFileSync(join(h.home, "state.db-wal"), join(hdr, "big.db-wal"));
+  const rels = [".hermes/state.db.retired-wal-20261101T000000Z-4242/state.db", ".hermes/state.db.retired-wal-20261101T000000Z-4242/state.db-wal",
+    ".hermes/state.db.retired-wal-20261101T000000Z-4242/manifest.json", ".hermes/big.db.retired-wal-20261101T000000Z-4243.partial/big.db-wal"];
+  const shas = Object.fromEntries(rels.map((rel) => [rel, sha(readFileSync(join(h.root, rel)))]));
+  expect(lstatSync(join(cap, "state.db-wal")).size).toBeGreaterThan(0);
+  const { manifest, files } = await archived(h);
+  expect([manifest.tree.db_count, manifest.tree.wal_folded]).toEqual([1, 1]); // the live state.db only
+  for (const rel of rels) {
+    expect([rel, sha(readFileSync(join(h.root, rel)))]).toEqual([rel, shas[rel]]); // untouched on disk
+    expect([rel, files.find((f) => f.path === rel)?.sha256]).toEqual([rel, shas[rel]]); // archived as is
+  }
+});

@@ -24,7 +24,7 @@ import { closeSync, constants, lstatSync, openSync, readSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { UUID, writeJsonAtomic } from "./nap-common";
-import { NAP_DIR, type PathRules, SQLITE_SUFFIXES, WAL_SUFFIX, walkHome } from "./nap-state-paths";
+import { inRetiredWal, NAP_DIR, type PathRules, SQLITE_SUFFIXES, WAL_SUFFIX, walkHome } from "./nap-state-paths";
 import { hermesHome } from "./paths";
 
 export const FOLD_SCHEMA = "nap_fold.v1";
@@ -61,6 +61,7 @@ export type FoldResult = { db_count: number; wal_folded: number; wal_unfolded: n
 export function foldSqlite(root: string, rels: string[]): FoldResult {
   const candidates = new Set<string>();
   for (const rel of rels) {
+    if (inRetiredWal(rel)) continue; // Hermes's hands-off recovery capture: never opened (review-a S3)
     if (SQLITE_SUFFIXES.some((s) => rel.endsWith(s))) candidates.add(rel);
     if (rel.endsWith(WAL_SUFFIX) && rel.length > WAL_SUFFIX.length) candidates.add(rel.slice(0, -WAL_SUFFIX.length));
   }
@@ -83,7 +84,7 @@ export function foldSqlite(root: string, rels: string[]): FoldResult {
     }
     if (before > 0 && sizeOf(`${path}${WAL_SUFFIX}`) === 0) wal_folded++;
   }
-  const wal_unfolded = rels.filter((rel) => rel.endsWith(WAL_SUFFIX) && sizeOf(join(root, ...rel.split("/"))) > 0).length;
+  const wal_unfolded = rels.filter((rel) => !inRetiredWal(rel) && rel.endsWith(WAL_SUFFIX) && sizeOf(join(root, ...rel.split("/"))) > 0).length;
   return { db_count, wal_folded, wal_unfolded };
 }
 
