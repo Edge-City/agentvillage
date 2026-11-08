@@ -120,7 +120,7 @@ import {
   classOf,
   CP_REMINTABLE,
   ENV_FILE,
-  linkTargetSafe,
+  linkTargetValid,
   NAP_DIR,
   type PathRules,
   restorable,
@@ -214,14 +214,21 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
       continue;
     }
     if (stores > 0) fail("files_invalid"); // home entries come first, then the store and its members
+    // Nothing is ever written through a link (Fable S4): every ancestor files.json names is a directory.
+    if (typeof f.path === "string") {
+      const parts = f.path.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        const up = byPath.get(parts.slice(0, i).join("/"));
+        if (up && up.class !== "dir") fail("files_invalid");
+      }
+    }
     if (typeof f.path !== "string" || !restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
     if (f.class === "dir") {
       if (f.target !== undefined || f.same_as !== undefined || f.bytes !== 0 || f.sha256 !== EMPTY_SHA256) fail("files_invalid");
     } else if (f.class === "link") {
-      if (typeof f.target !== "string" || f.same_as !== undefined) fail("files_invalid");
-      if (!linkTargetSafe(f.path, f.target)) fail("link_unsafe");
+      if (!linkTargetValid(f.target) || f.same_as !== undefined) fail("files_invalid");
       if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
     } else {
       if (f.target !== undefined) fail("files_invalid");

@@ -317,10 +317,6 @@ test("2. refusals exit 64 before any write: key, run file, URL, transport, bundl
       chmodSync(storeTar(h), 0o600);
     },
   });
-  // A symlink a restore would refuse: the box is never napped with an archive it cannot get back.
-  symlinkSync("/etc/hosts", join(h.home, "skills", "absolute"));
-  await expectRefusal(h, "link_unsafe");
-  rmSync(join(h.home, "skills", "absolute"));
   // Still archives once every cause is gone.
   await archived(h);
 });

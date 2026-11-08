@@ -236,11 +236,17 @@ export function restorable(rel: string, rules: PathRules, isDir = false): boolea
   return cleanRelPath(rel) && excludedBy(rel, rules, isDir) === null;
 }
 
-/** A symlink a restore may recreate: a relative target that does not climb out of the walk root. */
-export function linkTargetSafe(linkRel: string, target: string): boolean {
-  if (typeof target !== "string" || target.length === 0 || target.includes("\0") || target.startsWith("/")) return false;
+/** A symlink target a restore may recreate (Fable S4): any non-empty text without NUL, absolute or climbing
+ * out of the root included. Recreating a link writes only the link; a restore never writes THROUGH one. */
+export function linkTargetValid(target: unknown): target is string {
+  return typeof target === "string" && target.length > 0 && Buffer.byteLength(target) < 4096 && !target.includes("\0");
+}
+
+/** How a link's target reaches out: `absolute`, `escaping` (relative, climbs out of the walk root) or null. */
+export function linkReach(linkRel: string, target: string): "absolute" | "escaping" | null {
+  if (target.startsWith("/")) return "absolute";
   const resolved = posix.normalize(posix.join(posix.dirname(linkRel), target));
-  return resolved !== ".." && !resolved.startsWith("../") && !posix.isAbsolute(resolved);
+  return resolved === ".." || resolved.startsWith("../") ? "escaping" : null;
 }
 
 export type WalkItem = { rel: string; type: "file" | "link" | "dir"; st: Stats };

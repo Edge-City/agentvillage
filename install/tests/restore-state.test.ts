@@ -242,9 +242,9 @@ test("7. each mismatch class refuses (exit 1) and writes nothing into the home",
   });
   await forged("class_mismatch", (items) => void (at(items, ".hermes/auth.json").entry.class = "state"));
   await forged("class_mismatch", (items) => void (at(items, ".hermes/approval/agent-token").entry.class = "secret_box"));
-  await forged("link_unsafe", (items) => {
+  await forged("files_invalid", (items) => {
     const l = at(items, ".hermes/skills/linked").entry;
-    l.target = "../../../../etc";
+    l.target = "edge\0/etc"; // a NUL in a target: no link can hold it
     l.bytes = Buffer.byteLength(l.target);
     l.sha256 = sha(l.target);
   });
@@ -468,4 +468,38 @@ test("S3: a resident's processes.json, cron.pid or gateway.lock outside $HERMES_
   const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
   expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
   for (const rel of planted) expect([rel, readFileSync(join(t.root, rel), "utf8")]).toEqual([rel, `resident file ${rel}\n`]);
+});
+
+test("S4: absolute and escaping symlinks are archived verbatim and recreated as links; a dry run counts them; nothing is written through a link", async () => {
+  const a = await archiveFixture("links", (h) => {
+    symlinkSync("/usr/bin/env", join(h.home, "skills", "absolute"));
+    mkdirSync(join(h.root, "bin2"));
+    symlinkSync("../../outside-the-home", join(h.root, "bin2", "up"));
+  });
+  const byPath = new Map(a.files.map((f) => [f.path, f]));
+  expect(byPath.get(".hermes/skills/absolute")).toMatchObject({ class: "link", target: "/usr/bin/env" });
+  expect(byPath.get("bin2/up")).toMatchObject({ class: "link", target: "../../outside-the-home" });
+  const t = wakeTarget("links-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  expect(readlinkSync(join(t.home, "skills", "absolute"))).toBe("/usr/bin/env");
+  expect(readlinkSync(join(t.root, "bin2", "up"))).toBe("../../outside-the-home");
+  // The dry run reads every link.
+  const { runArchive } = await import("../nap-archive");
+  const dry = await runArchive({ root: a.h.root, home: a.h.home, dryRun: true } as any);
+  expect(dry.line).toMatchObject({ links_absolute: 1, links_escaping: 1 });
+  // A forged archive with a file under a link entry refuses before anything is written.
+  const f = forge(a, (items) => {
+    const x = at(items, ".hermes/SOUL.md");
+    const extra = { entry: { ...x.entry, path: ".hermes/skills/absolute/planted" }, data: x.data };
+    return [...items, extra].sort((p, q) => {
+      const pa = p.entry.path.startsWith("/"), qa = q.entry.path.startsWith("/");
+      return pa === qa ? (p.entry.path < q.entry.path ? -1 : 1) : pa ? 1 : -1;
+    });
+  });
+  const t2 = wakeTarget("links-t2");
+  const before = snapshotTree(t2.root, notNap);
+  const bad = await restore(t2, f.manifestKey, f.chunks, { keyDoc: f.keyDoc });
+  expect({ code: bad.code, status: bad.line.status, reason: bad.line.reason }).toEqual({ code: 1, status: "refused", reason: "files_invalid" });
+  expect(snapshotTree(t2.root, notNap)).toEqual(before);
 });

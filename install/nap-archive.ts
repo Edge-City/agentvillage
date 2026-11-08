@@ -25,8 +25,8 @@
  *   1. never folds: a `-wal` file of any name still non-empty refuses (`wal_unfolded`);
  *   2. walks the whole root against the EXCLUDE list in `install/nap-state-paths.ts` (the only thing that
  *      keeps a file out), counting every excluded path per exclude name; symlinks are recorded (class
- *      `link`, target) and never followed, and one whose target is absolute or climbs out of the root
- *      refuses (`link_unsafe`: a restore would refuse it); hard links are read once by inode. A file that
+ *      `link`, the target verbatim, absolute or climbing out of the root included; Fable S4) and never
+ *      followed; hard links are read once by inode. A file that
  *      cannot be read, a special file, or a file that changes while it is read FAILS the run (exit 1,
  *      `file_unreadable` / `file_unsupported` / `file_changed`): nothing is ever skipped;
  *      The staged approvald store tar is packed as one entry, and each of its members is listed in
@@ -149,7 +149,7 @@ import {
   BROWSER_PROFILE_EXCLUDE,
   BUNDLE_FILES,
   classOf,
-  linkTargetSafe,
+  linkReach,
   NAP_DIR,
   napStatePathsDocument,
   type PathRules,
@@ -369,7 +369,6 @@ export function walkAndHash(root: string, rules: PathRules, storeTar: string | n
       } catch {
         fail("file_changed");
       }
-      if (!linkTargetSafe(item.rel, target)) fail("link_unsafe");
       const bytes = Buffer.byteLength(target);
       liveBytes += bytes;
       files.push({ path: item.rel, bytes, sha256: sha256(target), mtime_ms, mode, class: "link", target });
@@ -654,6 +653,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   // members are not listed here), against the cap both sides share (Fable S1).
   let filesJsonBytes = Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: [] }));
   let liveDirs = 0;
+  let linksAbsolute = 0;
+  let linksEscaping = 0;
   for (const item of tree.items) {
     if (item.type === "dir") {
       liveDirs++;
@@ -669,6 +670,15 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       class: item.type === "link" ? "link" : "unclassified",
     }));
     if (item.st.uid !== uid) notOwned++;
+    if (item.type === "link") {
+      try {
+        const reach = linkReach(item.rel, readlinkSync(join(opts.root, ...item.rel.split("/"))));
+        if (reach === "absolute") linksAbsolute++;
+        if (reach === "escaping") linksEscaping++;
+      } catch {
+        unreadable++;
+      }
+    }
     if (item.type !== "file") continue;
     if (item.rel.endsWith(WAL_SUFFIX) && item.st.size > 0) walNonEmpty++;
     try {
@@ -696,6 +706,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       wal_nonempty: walNonEmpty,
       approvald_tar_staged: lstatSafe(join(opts.home, ...APPROVALD_STORE_FILE.split("/"))),
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
+      links_absolute: linksAbsolute,
+      links_escaping: linksEscaping,
       files_json_bytes: filesJsonBytes,
       files_json_max: MAX_FILES_JSON_BYTES,
     },
@@ -876,7 +888,7 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       if (!(err instanceof NapError)) throw err;
       // Before any chunk exists: the run file, key, URL and tree refusals are 64; an unreadable or changed
       // file (13 S10) fails the run.
-      const refusals = ["link_unsafe", "approvald_tar_missing", "approvald_tar_invalid", "approvald_tar_mode", "root_invalid"];
+      const refusals = ["approvald_tar_missing", "approvald_tar_invalid", "approvald_tar_mode", "root_invalid"];
       return refusals.includes(err.code) ? refuse(err.code) : failed(err.code);
     }
     // The fold ran in its own exec before the root count (S-n1); here a `-wal` of any name still holding
