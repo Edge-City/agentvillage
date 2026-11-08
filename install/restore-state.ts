@@ -226,7 +226,10 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
   return files;
 }
 
-type DiskState = "same" | "missing" | "differs" | "parent_bad" | "kind_bad";
+/** `replace`: a regular file or a link where the archive has the other kind; the rename replaces it (never
+ * following it). `kind_bad`: a directory in the way of a file or a link, or a non-directory where a
+ * directory is wanted. */
+type DiskState = "same" | "missing" | "differs" | "replace" | "parent_bad" | "kind_bad";
 
 /** Compare one entry with the disk under `root`, never following a symlink. */
 function diskState(root: string, f: FileEntry): DiskState {
@@ -244,10 +247,10 @@ function diskState(root: string, f: FileEntry): DiskState {
     return (st.mode & 0o777) === f.mode ? "same" : "differs";
   }
   if (f.class === "link") {
-    if (!st.isSymbolicLink()) return "kind_bad";
+    if (!st.isSymbolicLink()) return st.isDirectory() ? "kind_bad" : "replace";
     return readlinkSync(path) === f.target ? "same" : "differs";
   }
-  if (!st.isFile()) return "kind_bad";
+  if (!st.isFile()) return st.isDirectory() ? "kind_bad" : "replace";
   if (st.size !== f.bytes) return "differs";
   return sha256(readFileSync(path)) === f.sha256 ? "same" : "differs";
 }

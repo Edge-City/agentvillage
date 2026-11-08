@@ -649,6 +649,29 @@ test("review-a S1: a file from before 1970 (a negative mtime_ms) archives and re
   expect([readFileSync(join(t.root, "notes", "old.txt"), "utf8"), statSync(join(t.root, "notes", "old.txt")).mtimeMs]).toEqual(["from 1969\n", -86_400_000]);
 });
 
+test("review-a S2: an archived symlinked dotfile over a fresh box's regular file (and a file over a link) is put in place; a directory in the way refuses", async () => {
+  const a = await archiveFixture("dotfile-link", (h) => {
+    mkdirSync(join(h.root, "dotfiles"), { recursive: true });
+    writeFileSync(join(h.root, "dotfiles", "bashrc"), "alias ll='ls -l'\n");
+    symlinkSync("dotfiles/bashrc", join(h.root, ".bashrc"));
+    writeFileSync(join(h.root, ".profile"), "resident profile\n");
+  });
+  const t = wakeTarget("dotfile-link-t");
+  writeFileSync(join(t.root, ".bashrc"), "# /etc/skel copy\n"); // a fresh useradd -m home
+  symlinkSync("/etc/skel/.profile", join(t.root, ".profile"));
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 0, status: "restored", reason: undefined });
+  expect(readlinkSync(join(t.root, ".bashrc"))).toBe("dotfiles/bashrc");
+  expect([lstatSync(join(t.root, ".profile")).isFile(), readFileSync(join(t.root, ".profile"), "utf8")]).toEqual([true, "resident profile\n"]);
+  // A directory where the archive has a link still refuses, nothing written.
+  const t2 = wakeTarget("dotfile-dir-t");
+  mkdirSync(join(t2.root, ".bashrc"));
+  const before = snapshotTree(t2.root, notNap);
+  const r2 = await restore(t2, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r2.code, reason: r2.line.reason }).toEqual({ code: 1, reason: "target_kind_mismatch" });
+  expect(snapshotTree(t2.root, notNap)).toEqual(before);
+});
+
 test("N4: a name with a backslash is archived and restored", async () => {
   const a = await archiveFixture("odd-names", (h) => {
     mkdirSync(join(h.root, "notes"), { recursive: true });
