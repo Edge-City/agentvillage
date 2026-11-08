@@ -226,6 +226,10 @@ type Progress = {
   reason?: string;
   stream?: Stream;
   acked: number[];
+  /** A run whose stream was discarded, or that failed before any stream: its id is never reused (Fable M1). */
+  spent?: boolean;
+  /** Chunks a discarded stream had acked: in the bucket, named by no manifest. */
+  orphan_chunks?: number;
   result?: Record<string, unknown>;
 };
 
@@ -722,6 +726,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
   }
 
   const sameRun = prev && prev.run_id === opts.runId ? prev : null;
+  // Fable M1: a run id whose stream was discarded (or that failed with no stream at all) is spent; only a
+  // stream on record can be resumed, and its acks are the only acks that ever count.
+  const spent = !!sameRun && (sameRun.spent === true || (sameRun.phase === "failed" && !sameRun.stream));
   let doc: Progress = {
     schema: PROGRESS_SCHEMA,
     phase: "running",
@@ -729,8 +736,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     run_id: opts.runId,
     started_at: now(),
     updated_at: now(),
-    acked: sameRun?.acked?.filter(isInt) ?? [],
-    ...(sameRun?.stream ? { stream: sameRun.stream } : {}),
+    acked: !spent && sameRun?.stream ? (sameRun.acked ?? []).filter(isInt) : [],
+    ...(spent ? { spent: true, orphan_chunks: sameRun?.orphan_chunks ?? sameRun?.acked?.length ?? 0 } : {}),
+    ...(!spent && sameRun?.stream ? { stream: sameRun.stream } : {}),
   };
   const save = (patch: Partial<Progress>) => {
     doc = { ...doc, ...patch, updated_at: now() };
@@ -753,15 +761,20 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
   const refuse = (reason: string) => finish(64, { status: "refused", reason, chunks_acked: 0 }, "refused");
   const failed = (reason: string, extra: Partial<Progress> = {}) => {
     removeParts(chunksDir);
-    return finish(1, { status: "error", reason, chunks_acked: doc.acked.length }, "failed", extra);
+    const acked = extra.orphan_chunks ?? doc.acked.length;
+    // A failure with no stream on record leaves nothing to resume: the id is spent.
+    const noStream = extra.stream === undefined && ("stream" in extra || !doc.stream);
+    return finish(1, { status: "error", reason, chunks_acked: acked }, "failed", { ...extra, ...(noStream ? { spent: true } : {}) });
   };
-  /** A failure after which no chunk of this run may be used: the chunks go, the stream record goes. */
+  /** A failure after which no chunk of this run may be used: the chunks go, the stream record and its acks
+   * go (Fable M1), and the run id is spent; the acked count survives only as `orphan_chunks`. */
   const discard = (reason: string) => {
     rmSync(chunksDir, { recursive: true, force: true });
-    const keep = doc.acked;
-    return failed(reason, { stream: undefined, acked: keep });
+    return failed(reason, { stream: undefined, acked: [], orphan_chunks: doc.acked.length, spent: true });
   };
   const gatewayBack = () => gatewayRunning(opts.home, opts.procRoot);
+
+  if (spent) return refuse("run_id_spent");
 
   // Refusals before any write.
   let publicKey: KeyObject;
@@ -810,9 +823,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
 
   // Resume only a complete stream of this run whose un-acked chunks are intact (13 S6).
   let stream: Required<Stream> | null = null;
-  const acked = new Set<number>(doc.acked);
-  if (sameRun?.stream) {
-    const s = sameRun.stream;
+  const acked = new Set<number>(doc.acked); // empty unless a stream of this run is on record
+  if (doc.stream) {
+    const s = doc.stream;
     if (isComplete(s) && s.prefix === prefix && s.tool_sha256 === toolSha && chunksIntact(chunksDir, s.chunks, acked)) stream = s;
     else return discard("resume_needs_new_run");
   }

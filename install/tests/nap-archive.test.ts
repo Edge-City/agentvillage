@@ -803,3 +803,51 @@ test("S-n4: the bundle staged alone (no package.json, no node_modules) folds, ar
   expect(usage.status).toBe(2); // loads, then refuses its missing arguments
   expect(usage.stderr).toContain("usage:");
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Fable read 1 (overlay#617 at fb5a0f9c)
+// ---------------------------------------------------------------------------------------------------------
+
+test("M1: a run discarded after two acks cannot be re-run under its id: run_id_spent, nothing PUT, no stale acks carried", async () => {
+  const h = fresh("stale-acks", { bigBytes: 300 * 1024 });
+  const runId = newRunId();
+  prepare(h, runId);
+  // The reader's probe: two chunks acked, then the gateway comes back and the stream is discarded.
+  const out = await runArchive(inProcess(h, runId), {
+    beforeUpload: (n) => {
+      if (n === 2) {
+        mkdirSync(join(h.proc, "778"));
+        writeFileSync(join(h.proc, "778", "cmdline"), "hermes\0gateway\0run\0");
+      }
+    },
+  });
+  expect(out).toEqual({ code: 1, line: { status: "error", reason: "gateway_running", chunks_acked: 2 } });
+  const after = progress(h);
+  expect([after.stream, after.acked, after.orphan_chunks, after.spent]).toEqual([undefined, [], 2, true]);
+  rmSync(join(h.proc, "778"), { recursive: true });
+  // The cp retries the archive step with the same run id: refused before any write, nothing uploaded.
+  prepare(h, runId);
+  const before = stub.requests.length;
+  const r = await cli(h, runId);
+  expect({ code: r.code, line: r.line }).toEqual({ code: 64, line: { status: "refused", reason: "run_id_spent", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+  expectStagingGone(h);
+  // Still spent after the refusal; a new run id archives every chunk.
+  prepare(h, runId);
+  expect((await cli(h, runId)).line).toMatchObject({ reason: "run_id_spent" });
+  const next = await archived(h);
+  for (const c of next.manifest.chunks) expect(stub.objects.has(`${next.manifest.prefix}${c.name}`)).toBe(true);
+});
+
+test("M1: a progress file with acks but no stream (an older tool's discard) is spent too", async () => {
+  const h = fresh("stale-acks-2");
+  const runId = newRunId();
+  prepare(h, runId);
+  writeFileSync(join(napDir(h.home), "progress.json"), JSON.stringify({
+    schema: "nap_progress.v1", phase: "failed", pid: 999999999, run_id: runId, started_at: "x", updated_at: "x", acked: [0, 1],
+  }), { mode: 0o600 });
+  const before = stub.requests.length;
+  const r = await cli(h, runId);
+  expect({ code: r.code, line: r.line }).toEqual({ code: 64, line: { status: "refused", reason: "run_id_spent", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+});
