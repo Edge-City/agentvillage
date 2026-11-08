@@ -449,3 +449,23 @@ test("S2: every directory is recorded with its mode, empty ones included; restor
   const v = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a), extra: ["--verify-only"] });
   expect({ code: v.code, status: v.line.status, m: v.line.drift_missing }).toEqual({ code: 1, status: "drift", m: 1 });
 });
+
+test("S3: a resident's processes.json, cron.pid or gateway.lock outside $HERMES_HOME, and a FILE named venv or .cache, are archived and restored", async () => {
+  const planted = ["project/processes.json", "project/cron.pid", "project/gateway.lock", "project/.backup.lock", "notes/venv", "notes/.cache", "docs/browser-profile"];
+  const a = await archiveFixture("resident-names", (h) => {
+    for (const rel of planted) {
+      mkdirSync(join(h.root, dirname(rel)), { recursive: true });
+      writeFileSync(join(h.root, rel), `resident file ${rel}\n`);
+    }
+  });
+  const paths = new Set(a.files.map((f) => f.path));
+  for (const rel of planted) expect([rel, paths.has(rel)]).toEqual([rel, true]);
+  // Hermes's own runtime files at the $HERMES_HOME root stay out.
+  for (const rel of [".hermes/processes.json", ".hermes/gateway.pid", ".hermes/cron.pid", ".hermes/gateway.lock", ".hermes/.backup.lock"]) {
+    expect([rel, paths.has(rel)]).toEqual([rel, false]);
+  }
+  const t = wakeTarget("resident-names-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
+  for (const rel of planted) expect([rel, readFileSync(join(t.root, rel), "utf8")]).toEqual([rel, `resident file ${rel}\n`]);
+});

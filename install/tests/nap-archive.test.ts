@@ -220,12 +220,18 @@ test("S-n2: the approvald store is archived though av-events/nap/ is excluded; e
 test("the exclude list: rebuildable trees, installer-built trees, pids and the nap dir; never SQLite sidecars, media or unknown dirs", () => {
   const rules = { hermesRel: ".hermes" };
   for (const rel of [".hermes/hermes-agent/x", ".hermes/edge-src/x", ".hermes/bin/x", ".bun/bin/bun", ".bun/install/cache/x", "a/node_modules/b",
-    "a/.venv/b", "a/venv/b", "a/site-packages/b", "a/__pycache__/b", "a/b.pyc", ".hermes/gateway.pid", "x/cron.pid", ".hermes/gateway.lock",
+    "a/.venv/b", "a/venv/b", "a/site-packages/b", "a/__pycache__/b", "a/b.pyc", ".hermes/gateway.pid", ".hermes/cron.pid", ".hermes/gateway.lock",
     ".hermes/processes.json", ".hermes/av-events/nap/progress.json", ".hermes/browser-profile/x", ".hermes/.recall/index.db", ".cache/x"]) {
     expect([rel, excludedBy(rel, rules)]).not.toEqual([rel, null]);
   }
+  // A directory name rule matches a directory, never a file of that name (Fable S3).
+  for (const rel of ["notes/venv", "notes/.cache", "a/node_modules"]) {
+    expect([rel, excludedBy(rel, rules, true)]).not.toEqual([rel, null]);
+    expect([rel, excludedBy(rel, rules, false)]).toEqual([rel, null]);
+  }
   for (const rel of [".hermes/state.db-wal", ".hermes/state.db-shm", "x/a.sqlite-journal", ".hermes/kanban.db", ".hermes/cache/images/a",
-    ".hermes/image_cache/a", ".hermes/.recall/epoch", ".local/share/x", "project/.git/HEAD", ".hermes/backups/x", ".bun/install/global/x"]) {
+    ".hermes/image_cache/a", ".hermes/.recall/epoch", ".local/share/x", "project/.git/HEAD", ".hermes/backups/x", ".bun/install/global/x",
+    "x/cron.pid", "project/processes.json", "project/gateway.lock", ".hermes/skills/x/gateway.pid"]) {
     expect([rel, excludedBy(rel, rules)]).toEqual([rel, null]);
   }
 });
@@ -420,7 +426,7 @@ test("2d. live_files and live_bytes equal a find(1) count of the home under the 
   let excluded = 0;
   for (const path of found) {
     const rel = relative(h.root, path);
-    const why = excludedBy(rel, { hermesRel: ".hermes" });
+    const why = excludedBy(rel, { hermesRel: ".hermes" }, lstatSync(path).isDirectory());
     if (why === "nap_dir") continue;
     const st = lstatSync(path);
     if (why || st.isSocket() || st.isFIFO()) {

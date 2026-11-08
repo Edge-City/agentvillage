@@ -214,7 +214,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
       continue;
     }
     if (stores > 0) fail("files_invalid"); // home entries come first, then the store and its members
-    if (typeof f.path !== "string" || !restorable(f.path, rules)) fail("path_not_allowed");
+    if (typeof f.path !== "string" || !restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
     if (f.class === "dir") {

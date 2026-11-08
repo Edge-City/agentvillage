@@ -65,7 +65,8 @@ export const BUNDLE_FILES: readonly string[] = [
 
 /**
  * An exclude: `scope` says what `match` is matched against.
- *   - `dir_any_depth`: a directory name at any depth (the whole subtree);
+ *   - `dir_any_depth`: a DIRECTORY of that name at any depth (the whole subtree); a regular file or link
+ *     of that name is not matched (Fable S3);
  *   - `name_any_depth`: a file name at any depth;
  *   - `suffix_any_depth`: a file-name suffix at any depth;
  *   - `hermes_path`: a path under `$HERMES_HOME` (file or subtree), with `except` paths kept;
@@ -101,12 +102,13 @@ export const EXCLUDES: readonly Exclude[] = [
   { name: "bun_bin", scope: "root_path", match: ".bun/bin" },
   // The derived recall index; its `--wipe-user` epoch marker is kept (13 N3; install/install_recall.ts:12-14).
   { name: "recall", scope: "hermes_path", match: ".recall", except: [".recall/epoch"] },
-  // Runtime files (hermes_cli/backup.py:108, :128).
-  { name: "pid", scope: "name_any_depth", match: "gateway.pid" },
-  { name: "pid", scope: "name_any_depth", match: "cron.pid" },
-  { name: "gateway_lock", scope: "name_any_depth", match: "gateway.lock" },
-  { name: "processes_json", scope: "name_any_depth", match: "processes.json" },
-  { name: "backup_lock", scope: "name_any_depth", match: ".backup.lock" },
+  // Hermes's runtime files, at the $HERMES_HOME root only (hermes_cli/backup.py:108, :128): a resident's
+  // file of the same name anywhere else is archived (Fable S3).
+  { name: "pid", scope: "hermes_path", match: "gateway.pid" },
+  { name: "pid", scope: "hermes_path", match: "cron.pid" },
+  { name: "gateway_lock", scope: "hermes_path", match: "gateway.lock" },
+  { name: "processes_json", scope: "hermes_path", match: "processes.json" },
+  { name: "backup_lock", scope: "hermes_path", match: ".backup.lock" },
   { name: "socket", scope: "type", match: "socket" },
   { name: "fifo", scope: "type", match: "fifo" },
   // The tool's own staging: neither archived nor counted (the approvald store tar staged inside it is
@@ -180,8 +182,10 @@ export function cleanRelPath(rel: string): boolean {
 const under = (rel: string, base: string) => rel === base || rel.startsWith(`${base}/`);
 const inHermes = (r: PathRules, p: string) => (r.hermesRel ? `${r.hermesRel}/${p}` : p);
 
-/** The exclude name that leaves `rel` (relative to the walk root) out, or null. Types are the walker's. */
-export function excludedBy(rel: string, rules: PathRules): string | null {
+/** The exclude name that leaves `rel` (relative to the walk root) out, or null. `isDir` says whether `rel`
+ * itself is a directory (a `dir_any_depth` rule matches only a directory); the special types are the
+ * walker's. */
+export function excludedBy(rel: string, rules: PathRules, isDir = false): string | null {
   const parts = rel.split("/");
   const name = parts[parts.length - 1];
   for (const e of EXCLUDES) {
@@ -196,7 +200,7 @@ export function excludedBy(rel: string, rules: PathRules): string | null {
         if (under(rel, e.match)) return e.name;
         break;
       case "dir_any_depth":
-        if (parts.slice(0, -1).includes(e.match) || name === e.match) return e.name;
+        if (parts.slice(0, -1).includes(e.match) || (isDir && name === e.match)) return e.name;
         break;
       case "name_any_depth":
         if (name === e.match) return e.name;
@@ -228,8 +232,8 @@ export function classOf(rel: string, rules: PathRules): "state" | "secret_cp" | 
 }
 
 /** Whether a restore may write `rel`: a clean path under the root that the exclude list does not leave out. */
-export function restorable(rel: string, rules: PathRules): boolean {
-  return cleanRelPath(rel) && excludedBy(rel, rules) === null;
+export function restorable(rel: string, rules: PathRules, isDir = false): boolean {
+  return cleanRelPath(rel) && excludedBy(rel, rules, isDir) === null;
 }
 
 /** A symlink a restore may recreate: a relative target that does not climb out of the walk root. */
@@ -307,14 +311,14 @@ export function walkHome(root: string, rules: PathRules, opts: { lenient?: boole
         problem("file_unsupported");
         continue;
       }
-      const why = excludedBy(r, rules);
+      const st = stat(r);
+      if (!st) continue;
+      const why = excludedBy(r, rules, st.isDirectory());
       if (why === "nap_dir") continue; // the tool's own transient staging: neither archived nor counted
       if (why) {
         countAll(r, why);
         continue;
       }
-      const st = stat(r);
-      if (!st) continue;
       if (st.isSymbolicLink()) items.push({ rel: r, type: "link", st });
       else if (st.isFile()) items.push({ rel: r, type: "file", st });
       else if (st.isDirectory()) {
