@@ -700,6 +700,30 @@ test("N3: a hard link to a secret_cp file is skipped like the file itself; the s
   expect(readFileSync(join(t.home, "approval", "agent-token"), "utf8")).toBe(FRESH.agent);
 });
 
+test("Fable read 2 N (.env): a duplicate key merges its LAST value; every hard link to .env gets it without the re-minted keys; a .env symlink refuses", async () => {
+  const archivedEnv = `# resident notes\nMY_TOKEN=first\nAV_EVENTS_TOKEN=${PLANTED.eventsToken}\nMY_TOKEN=second\nOTHER=1\n`;
+  const a = await archiveFixture("env-links", (h) => {
+    writeFileSync(join(h.home, ".env"), archivedEnv, { mode: 0o600 });
+    mkdirSync(join(h.root, "notes"), { recursive: true });
+    linkSync(join(h.home, ".env"), join(h.root, "notes", "env-copy")); // sorts after .hermes/.env
+    linkSync(join(h.home, ".env"), join(h.root, ".a-env")); // sorts before it: .env is then the second path
+  });
+  expect(a.files.find((f) => f.path === ".hermes/.env")).toMatchObject({ same_as: ".a-env" });
+  const t = wakeTarget("env-links-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, links: r.line.env_links_filtered })
+    .toEqual({ code: 0, status: "restored", merged: 2, links: 2 });
+  const env = readFileSync(join(t.home, ".env"), "utf8");
+  expect([env.includes("MY_TOKEN=second"), env.includes("MY_TOKEN=first"), env.includes(PLANTED.eventsToken)]).toEqual([true, false, false]);
+  const filtered = `# resident notes\nMY_TOKEN=first\nMY_TOKEN=second\nOTHER=1\n`;
+  for (const rel of ["notes/env-copy", ".a-env"]) {
+    expect([rel, readFileSync(join(t.root, rel), "utf8"), statSync(join(t.root, rel)).mode & 0o777]).toEqual([rel, filtered, 0o600]);
+  }
+  expect(readFileSync(join(napDir(t.home), "env.archived"), "utf8")).toBe(archivedEnv);
+  // A .env that is a symlink is never silently dropped: the archive refuses it (link_at_managed_path, 64,
+  // in nap-archive.test.ts) and a forged one refuses the restore (the MEDIUM test above).
+});
+
 test("N2: a multi-line quoted value merges whole; the archived .env is kept 0600 in the nap dir; an oversized .env no longer refuses the restore", async () => {
   const archivedEnv = `# resident notes\nAV_EVENTS_TOKEN=${PLANTED.eventsToken}\nCERT="-----BEGIN-----\nline two\n-----END-----"\nSINGLE='a b'\nAFTER=1\n`;
   const a = await archiveFixture("env-shape", (h) => writeFileSync(join(h.home, ".env"), archivedEnv, { mode: 0o600 }));

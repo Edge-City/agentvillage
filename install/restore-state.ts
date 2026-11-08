@@ -180,6 +180,8 @@ export type RestoreLine = {
   store_written: number;
   /** Files whose recorded class differs from the current rules' class; written by the current class. */
   class_reclassified: number;
+  /** Hard links to `.env` written at their other paths without the cp's re-minted keys. */
+  env_links_filtered: number;
   /** Entries at paths the CURRENT exclude list covers: never written (an older rule set excluded less). */
   excluded_skipped: number;
   /** Whether the archive was made under the rules this restore carries (informational only). */
@@ -187,7 +189,7 @@ export type RestoreLine = {
   reason?: string;
 };
 
-type Act = "write" | "unchanged" | "skip" | "excluded" | "env" | "store" | "same" | "missing" | "changed";
+type Act = "write" | "unchanged" | "skip" | "excluded" | "env" | "env_link" | "store" | "same" | "missing" | "changed";
 type Plan = { entry: FileEntry; index: number; act: Act };
 
 const segments = (rel: string) => rel.split("/");
@@ -306,7 +308,7 @@ function diskState(root: string, f: FileEntry): DiskState {
   return sha256(readFileSync(path)) === f.sha256 ? "same" : "differs";
 }
 
-type EnvEntry = { key: string; lines: string[] };
+type EnvEntry = { key: string; lines: string[]; start: number };
 
 /** The `.env` assignments in order, a quoted value that spans lines kept whole (Fable N2); comments and
  * blank lines are not entries. */
@@ -326,6 +328,7 @@ export function envEntries(text: string): EnvEntry[] {
   for (let i = 0; i < lines.length; i++) {
     const m = ENV_LINE.exec(lines[i]);
     if (!m) continue;
+    const start = i;
     const value = lines[i].slice(lines[i].indexOf("=") + 1).trimStart();
     const block = [lines[i]];
     const q = value[0];
@@ -339,22 +342,29 @@ export function envEntries(text: string): EnvEntry[] {
       if (j >= lines.length) continue; // never closed: not a value a merge can carry; env.archived keeps it
       i = j;
     }
-    out.push({ key: m[1], lines: block });
+    out.push({ key: m[1], lines: block, start: start });
   }
   return out;
 }
 
-/** The archived `.env` entries a restore adds: keys the control plane does not re-mint, not set in `current`. */
+/** The archived `.env` entries a restore adds: keys the control plane does not re-mint, not set in `current`.
+ * A key given twice merges its LAST value, as python-dotenv (and so Hermes) reads the file. */
 export function envEntriesToMerge(archived: string, current: string): EnvEntry[] {
   const have = new Set(envEntries(current).map((e) => e.key));
-  const add: EnvEntry[] = [];
-  const seen = new Set<string>();
+  const all = envEntries(archived);
+  const last = new Map(all.map((e, i) => [e.key, i]));
+  return all.filter((e, i) => last.get(e.key) === i && !CP_REMINTABLE.env_keys.includes(e.key) && !have.has(e.key));
+}
+
+/** The archived `.env` with every entry of a key the control plane re-mints taken out (comments, blank lines
+ * and every other entry kept as archived): what a hard link to `.env` at another path is restored as. */
+export function envWithoutRemintable(archived: string): string {
+  const lines = archived.split("\n");
+  const drop = new Set<number>();
   for (const e of envEntries(archived)) {
-    if (seen.has(e.key)) continue;
-    seen.add(e.key);
-    if (!CP_REMINTABLE.env_keys.includes(e.key) && !have.has(e.key)) add.push(e);
+    if (CP_REMINTABLE.env_keys.includes(e.key)) for (let k = 0; k < e.lines.length; k++) drop.add(e.start + k);
   }
-  return add;
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
 /** The lines of those entries, in order. */
@@ -422,6 +432,7 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     links: 0,
     class_reclassified: 0,
     excluded_skipped: 0,
+    env_links_filtered: 0,
     store_written: 0,
   };
   const writes = !opts.dryRun && (!opts.verifyOnly || opts.repair);
@@ -514,12 +525,19 @@ async function restoreInner(
   let tarLimit = Infinity;
   let tarSeen = 0;
   let envArchived: Buffer | null = null;
+  // The data entry that carries `.env`'s bytes: `.env` itself, or the first path of its hard-link group.
+  let envDataPath = envRel;
   let envCurrent = "";
   const stagedPath = (index: number) => join(staging, String(index).padStart(6, "0"));
   const toStage = new Set<number>();
 
   const plan = (entries: FileEntry[]): void => {
     const index = new Map(entries.map((f, i) => [f.path, i]));
+    // `.env` and its hard links (Fable read 2 N): every other path of the group gets the archived `.env`
+    // without the cp's re-minted keys, never a whole copy.
+    const envEntry = entries.find((f) => f.path === envRel && isHomeFile(f));
+    envDataPath = envEntry?.same_as ?? envRel;
+    const envGroup = new Set(envEntry ? entries.filter((f) => isHomeFile(f) && (f.same_as ?? f.path) === envDataPath).map((f) => f.path) : []);
     plans = entries.map((entry, i) => {
       const act = (a: Act): Plan => ({ entry, index: i, act: a });
       if (STORE_ENTRIES.includes(entry.path)) return act("store");
@@ -530,6 +548,14 @@ async function restoreInner(
       // A hard link to a secret_cp file carries the same stale bytes: skipped too (Fable N3).
       if (entry.same_as !== undefined && isCp(entries[index.get(entry.same_as)!])) return act("skip");
       if (entry.path === envRel) return act("env");
+      if (envGroup.has(entry.path)) {
+        if (!opts.verifyOnly) {
+          const st = diskState(root, entry);
+          if (st === "parent_bad") throw new NapError("target_parent_not_directory");
+          if (st === "kind_bad") throw new NapError("target_not_regular");
+        }
+        return act("env_link");
+      }
       const state = diskState(root, entry);
       if (opts.verifyOnly) {
         if ((state === "parent_bad" || state === "kind_bad") && opts.repair) {
@@ -613,7 +639,7 @@ async function restoreInner(
     let fd = toStage.has(i) ? openSync(stagedPath(i), "wx", 0o600) : -1;
     // The archived .env is always captured on a restore: kept whole as env.archived (Fable N2), merged when
     // it is under MAX_ENV_BYTES and --no-merge-env is not given.
-    const captureEnv = f.path === envRel && !opts.verifyOnly && !opts.dryRun;
+    const captureEnv = f.path === envDataPath && !opts.verifyOnly && !opts.dryRun;
     const envParts: Buffer[] = [];
     let got = 0;
     return {
@@ -729,7 +755,8 @@ async function restoreInner(
     return end("dry_run");
   }
   const store = opts.approvaldOut ? plans.filter((p) => p.act === "store") : [];
-  return commit([...toWrite, ...store], "restored");
+  const envLinks = envArchived !== null ? plans.filter((p) => p.act === "env_link") : [];
+  return commit([...toWrite, ...envLinks, ...store], "restored");
 
   function commit(items: Plan[], status: "restored" | "repaired") {
     const indexOf = new Map(all.map((f, i) => [f.path, i]));
@@ -752,6 +779,11 @@ async function restoreInner(
         const tmp = tmpName(dir, target.slice(dir.length + 1));
         if (item.entry.class === "link") {
           symlinkSync(item.entry.target!, tmp);
+        } else if (item.act === "env_link") {
+          writeFileSync(tmp, envWithoutRemintable(envArchived!.toString("utf8")), { mode: 0o600, flag: "wx" });
+          chmodSync(tmp, 0o600);
+          const when = new Date(item.entry.mtime_ms);
+          utimesSync(tmp, when, when);
         } else {
           const src = stagedPath(item.entry.same_as !== undefined ? indexOf.get(item.entry.same_as)! : item.index);
           copyFileSync(src, tmp);
@@ -793,6 +825,10 @@ async function restoreInner(
           continue;
         }
         line.written++;
+        if (moved[i].item.act === "env_link") {
+          line.env_links_filtered++;
+          continue;
+        }
         line.bytes += e.class === "link" ? 0 : e.bytes;
         if (isHomeFile(e) && classOf(e.path, rules) === "secret_box") line.secret_box_written++;
       } catch {

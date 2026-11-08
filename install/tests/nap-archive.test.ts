@@ -981,7 +981,7 @@ test("N11: a file over the tar's entry limit refuses file_too_large (64) before 
 });
 
 test("security fold 2 (MEDIUM): a symlink at a managed path refuses link_at_managed_path (64) before pack; the dry run counts it", async () => {
-  for (const rel of [".hermes/village-bridge.json", ".hermes/mini-apps.json", ".hermes/approval/agent-token"]) {
+  for (const rel of [".hermes/village-bridge.json", ".hermes/mini-apps.json", ".hermes/approval/agent-token", ".hermes/.env"]) {
     const h = fresh(`link-managed-${rel.length}`);
     rmSync(join(h.root, rel), { force: true });
     symlinkSync("/etc/cron.d/nap-planted", join(h.root, rel));
