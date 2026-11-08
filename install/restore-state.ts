@@ -24,12 +24,14 @@
  * tenant, date and run; the data key's IV is the manifest's; each chunk's size and SHA-256 equal the
  * manifest's before its bytes are decrypted; AES-256-GCM's tag verifies; the plaintext payload's SHA-256
  * and length equal the manifest's; the tar holds `files.json` then exactly one data entry per file, in
- * order; every path is clean, under the root, not on the exclude list, and of the class the rules give it;
- * every link target is relative and stays inside the root; every file's size and SHA-256 equal
+ * order; every path is clean, under the root and not on the CURRENT exclude list, whatever rules the
+ * archive says it was made under; every file's class is a known one; every file's size and SHA-256 equal
  * `files.json`'s; no target is (or sits under) a symlink or the wrong kind of file. Any mismatch is
  * `status: "refused"` and writes nothing.
  *
- * What is written back, by class (13 M3): `state`, `unclassified`, `log` and `link` as archived;
+ * What is written back, by class (13 M3), each file's class taken from the CURRENT rules (`classOf`), never
+ * from `files.json` (the box wrote it; a file whose recorded class differs is counted `class_reclassified`;
+ * `paths_sha256` is informational, `paths_match` in the line): `state`, `unclassified`, `log` and `link` as archived;
  * `secret_box` with mode 0600, except `$HERMES_HOME/.env`, which is MERGED by default: every archived line
  * whose key is not in `CP_REMINTABLE.env_keys` and is not already set is added to the file the control
  * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic); `secret_cp` is never written (the
@@ -55,7 +57,8 @@
  * restore or a repair (not on `--verify-only` alone or `--dry-run`).
  *
  * Output: one JSON line `{status, manifest_key, files, bytes, written, unchanged, drift_missing, drift_extra,
- * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, reason?}`; `status` is restored,
+ * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, class_reclassified, store_copy,
+ * store_written, paths_match, reason?}`; `status` is restored,
  * verified, repaired, dry_run, drift, refused or error. Never a path, a URL, a key or file content.
  * Exit: 0 restored, verified, repaired or dry_run; 1 drift, refused or error; 2 usage.
  */
@@ -117,7 +120,6 @@ import {
 import {
   cleanRelPath,
   classOf,
-  excludedBy,
   CP_REMINTABLE,
   ENV_FILE,
   linkTargetValid,
@@ -173,7 +175,9 @@ export type RestoreLine = {
   /** The archive's store copy (`blob` or `none`) and how many of its two files went to `--approvald-out`. */
   store_copy?: "blob" | "none";
   store_written: number;
-  /** Whether the archive was made under the rules this restore carries (Fable S5). */
+  /** Files whose recorded class differs from the current rules' class; written by the current class. */
+  class_reclassified: number;
+  /** Whether the archive was made under the rules this restore carries (informational only). */
   paths_match?: boolean;
   reason?: string;
 };
@@ -192,6 +196,10 @@ function lstatOrNull(path: string) {
   }
 }
 
+const FILE_CLASSES: readonly string[] = ["state", "secret_cp", "secret_box", "unclassified", "log"];
+/** A regular file of the home (not a link, a directory or the store pair). */
+const isHomeFile = (f: FileEntry) => FILE_CLASSES.includes(f.class) && !STORE_ENTRIES.includes(f.path);
+
 /** Validate `files.json` against the manifest's counts and the path rules. */
 export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules): FileEntry[] {
   const d = doc as { schema?: unknown; files?: unknown };
@@ -201,10 +209,9 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
   const byPath = new Map<string, FileEntry>();
   let last = "";
   let stores = 0;
-  // Fable S5: an archive made under other rules (paths_sha256 differs) is trusted for its classes and its
-  // exclude decisions; only structure is checked. Under the same rules, any disagreement is a forgery.
-  const sameRules = manifest.paths_sha256 === napPathsSha256();
-  const FILE_CLASSES = ["state", "secret_cp", "secret_box", "unclassified", "log"];
+  // The manifest and files.json are written on the box, so a tampered box can craft both: paths_sha256
+  // never relaxes anything. Every entry meets the CURRENT exclude list, and the current classOf decides
+  // secret handling (plan, commit); the recorded class only has to be a known one.
   for (const f of files) {
     if (!f || typeof f !== "object" || Object.keys(f).some((k) => !allowed.has(k))) fail("files_invalid");
     if (!isInt(f.bytes) || !isInt(f.mtime_ms) || !isInt(f.mode) || f.mode > 0o777 || typeof f.sha256 !== "string" || !HEX64.test(f.sha256)) {
@@ -227,8 +234,8 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
         if (up && up.class !== "dir") fail("files_invalid");
       }
     }
-    if (typeof f.path !== "string" || !cleanRelPath(f.path) || excludedBy(f.path, rules, f.class === "dir") === "nap_dir") fail("path_not_allowed");
-    if (sameRules && !restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
+    if (typeof f.path !== "string" || !cleanRelPath(f.path)) fail("path_not_allowed");
+    if (!restorable(f.path, rules, f.class === "dir")) fail("path_not_allowed");
     if (last && !(f.path > last)) fail("files_invalid");
     last = f.path;
     if (f.class === "dir") {
@@ -238,7 +245,7 @@ export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules
       if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
     } else {
       if (f.target !== undefined) fail("files_invalid");
-      if (sameRules ? f.class !== classOf(f.path, rules) : !FILE_CLASSES.includes(f.class)) fail("class_mismatch");
+      if (!FILE_CLASSES.includes(f.class)) fail("class_mismatch");
       if (f.same_as !== undefined) {
         const first = byPath.get(f.same_as);
         if (!first || !hasData(first) || first.bytes !== f.bytes || first.sha256 !== f.sha256) fail("files_invalid");
@@ -404,6 +411,7 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     secret_box_written: 0,
     env_merged: 0,
     links: 0,
+    class_reclassified: 0,
     store_written: 0,
   };
   const writes = !opts.dryRun && (!opts.verifyOnly || opts.repair);
@@ -505,8 +513,8 @@ async function restoreInner(
     plans = entries.map((entry, i) => {
       const act = (a: Act): Plan => ({ entry, index: i, act: a });
       if (STORE_ENTRIES.includes(entry.path)) return act("store");
-      // What the CURRENT rules call secret_cp is skipped whatever the archive recorded (Fable S5).
-      const isCp = (f: FileEntry) => f.class === "secret_cp" || (f.class !== "link" && f.class !== "dir" && classOf(f.path, rules) === "secret_cp");
+      // What the CURRENT rules call secret_cp is skipped; the recorded class is never consulted (it is box-written).
+      const isCp = (f: FileEntry) => isHomeFile(f) && classOf(f.path, rules) === "secret_cp";
       if (isCp(entry)) return act("skip");
       // A hard link to a secret_cp file carries the same stale bytes: skipped too (Fable N3).
       if (entry.same_as !== undefined && isCp(entries[index.get(entry.same_as)!])) return act("skip");
@@ -577,6 +585,7 @@ async function restoreInner(
           }
           files = validateFiles(doc, manifest, rules);
           line.paths_match = manifest.paths_sha256 === napPathsSha256();
+          line.class_reclassified = files.filter((f) => isHomeFile(f) && f.class !== classOf(f.path, rules)).length;
           line.store_copy = manifest.store_copy;
           dataOrder = files.map((f, i) => (hasData(f) ? i : -1)).filter((i) => i >= 0);
           tarLimit = 512 + size + tarPadding(size) + 10240 +
@@ -734,7 +743,7 @@ async function restoreInner(
         } else {
           const src = stagedPath(item.entry.same_as !== undefined ? indexOf.get(item.entry.same_as)! : item.index);
           copyFileSync(src, tmp);
-          const secret = item.entry.class === "secret_box" || (!isStore && classOf(item.entry.path, rules) === "secret_box");
+          const secret = !isStore && classOf(item.entry.path, rules) === "secret_box";
           chmodSync(tmp, secret || isStore ? 0o600 : item.entry.mode);
           const when = new Date(item.entry.mtime_ms);
           utimesSync(tmp, when, when);
@@ -773,7 +782,7 @@ async function restoreInner(
         }
         line.written++;
         line.bytes += e.class === "link" ? 0 : e.bytes;
-        if (e.class === "secret_box") line.secret_box_written++;
+        if (isHomeFile(e) && classOf(e.path, rules) === "secret_box") line.secret_box_written++;
       } catch {
         for (const m of moved.slice(i)) rmSync(m.tmp, { force: true });
         if (envTmp) rmSync(envTmp, { force: true });
