@@ -71,8 +71,9 @@
  * INT/TERM; all but `nap_already_running`, whose inputs belong to the live run) it deletes the run file, the
  * pid file and the staged store blob and list (S-n3), except that a run stopping with its complete stream on
  * record (resumable) keeps the staged pair; a resume never re-checks the staging, since the pair is already in
- * the stream's ciphertext and the manifest takes its shas from the stream (Fable read 2 S2); the control plane's
- * root `rm` of them, checked absent before any restart, is the backstop for a KILL or an OOM.
+ * the stream's ciphertext and the manifest takes its shas from the stream (Fable read 2 S2). The control
+ * plane's own cleanup (run as hermes, not root), checked absent before any restart, is the backstop for a
+ * KILL or an OOM and removes a kept pair (review-a N2).
  * Never a path, a URL, a token or file content in any output.
  */
 
