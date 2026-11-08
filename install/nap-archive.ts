@@ -117,6 +117,7 @@ import {
   listStoreMembers,
   MANIFEST_SCHEMA,
   MAX_FILES_JSON_BYTES,
+  MAX_TAR_ENTRY_BYTES,
   MANIFEST_SLOT_NAME,
   type Manifest,
   type ManifestChunk,
@@ -196,6 +197,8 @@ export type ArchiveOptions = {
   /** The restore's own cap on `files.json` (Fable S1): the same constant, so nothing archives that cannot
    * restore. An option only so a test can lower it. */
   maxFilesJsonBytes: number;
+  /** The tar's per-entry limit (Fable N11); an option only so a test can lower it. */
+  maxEntryBytes: number;
 };
 
 /** Test seams: each relative path just hashed (pass 1), about to be packed (pass 2), and each chunk before
@@ -655,6 +658,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let filesJsonBytes = Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: [] }));
   let liveDirs = 0;
   let linksAbsolute = 0;
+  let largest = 0;
   let linksEscaping = 0;
   for (const item of tree.items) {
     if (item.type === "dir") {
@@ -666,6 +670,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       continue;
     }
     liveBytes += item.st.size;
+    if (item.type === "file") largest = Math.max(largest, item.st.size);
     filesJsonBytes += 1 + Buffer.byteLength(JSON.stringify({
       path: item.rel, bytes: item.st.size, sha256: placeholder, mtime_ms: Math.floor(item.st.mtimeMs), mode: item.st.mode & 0o777,
       class: item.type === "link" ? "link" : "unclassified",
@@ -710,6 +715,8 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       browser_profile_files: tree.excluded[BROWSER_PROFILE_EXCLUDE]?.files ?? 0,
       links_absolute: linksAbsolute,
       links_escaping: linksEscaping,
+      largest_file_bytes: largest,
+      entry_max: MAX_TAR_ENTRY_BYTES,
       files_json_bytes: filesJsonBytes,
       files_json_max: MAX_FILES_JSON_BYTES,
     },
@@ -898,6 +905,8 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     if (walked.files.some((f) => f.member_of === undefined && f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
       return refuse("wal_unfolded");
     }
+    // Fable N11: a file the tar cannot hold refuses here, before any chunk, not mid-pack.
+    if (walked.files.some((f) => hasData(f) && f.bytes > opts.maxEntryBytes)) return refuse("file_too_large");
     // Fable S1: one cap on both sides; an archive the restore would refuse is never made.
     if (Buffer.byteLength(JSON.stringify({ schema: FILES_SCHEMA, files: walked.files })) > opts.maxFilesJsonBytes) {
       return refuse("files_json_too_large");
@@ -1163,6 +1172,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     attempts: 4,
     procRoot: env.NAP_PROC_ROOT?.trim() || "/proc",
     maxFilesJsonBytes: MAX_FILES_JSON_BYTES,
+    maxEntryBytes: MAX_TAR_ENTRY_BYTES,
   };
 }
 

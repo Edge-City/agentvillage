@@ -918,3 +918,18 @@ test("N10: a server that refuses before the body drains gets the chunk's file de
     early.stop(true);
   }
 });
+
+test("N11: a file over the tar's entry limit refuses file_too_large (64) before pack; the dry run reports the largest file", async () => {
+  const { MAX_TAR_ENTRY_BYTES } = await import("../nap-common");
+  const h = fresh("too-large", { bigBytes: 200 * 1024 });
+  const runId = newRunId();
+  prepare(h, runId);
+  const before = stub.requests.length;
+  const out = await runArchive({ ...inProcess(h, runId), maxEntryBytes: 100 * 1024 });
+  expect(out).toEqual({ code: 64, line: { status: "refused", reason: "file_too_large", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+  expectStagingGone(h);
+  const dry = await runArchive({ ...inProcess(h, runId), dryRun: true });
+  expect(dry.line).toMatchObject({ largest_file_bytes: 200 * 1024, entry_max: MAX_TAR_ENTRY_BYTES });
+  expect(parseArgs(args(h, runId), envFor(h)).maxEntryBytes).toBe(MAX_TAR_ENTRY_BYTES);
+});
