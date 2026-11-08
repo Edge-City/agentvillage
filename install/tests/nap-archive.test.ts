@@ -1099,3 +1099,16 @@ test("review-a S3: Hermes's retired-WAL capture is never folded and never blocks
     expect([rel, files.find((f) => f.path === rel)?.sha256]).toEqual([rel, shas[rel]]); // archived as is
   }
 });
+
+test("review-a N1: a symlink target that is not UTF-8 refuses file_name_invalid (64), byte-true like names; the dry run counts it", async () => {
+  const h = fresh("raw-target");
+  symlinkSync(Buffer.from([0xff, 0xfe, 0x61]), join(h.root, "odd-link"));
+  const runId = newRunId();
+  prepare(h, runId);
+  const before = stub.requests.length;
+  const out = await runArchive(inProcess(h, runId));
+  expect(out).toEqual({ code: 64, line: { status: "refused", reason: "file_name_invalid", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+  const dry = await runArchive({ ...inProcess(h, runId), dryRun: true });
+  expect(dry.line).toMatchObject({ file_name_invalid: 1, unreadable: 0 });
+});

@@ -372,6 +372,15 @@ const walk = (root: string, rules: PathRules) => {
   }
 };
 
+/** A link's target as text, or null when its bytes are not UTF-8 (strict decode, never lossy). */
+function linkTargetText(raw: Buffer): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Pass 1: the walk and `files.json`'s entries: the home's, then the encrypted store blob and its encrypted
  * member list as two opaque entries. Throws `NapError`.
@@ -399,12 +408,15 @@ export function walkAndHash(
     if (item.type === "link") {
       // The restore never recreates a link at a managed path (security fold 2): nothing archives it either.
       if (linkAtManagedPath(item.rel, rules)) fail("link_at_managed_path");
-      let target: string;
+      let raw: Buffer;
       try {
-        target = readlinkSync(path);
+        raw = readlinkSync(path, { encoding: "buffer" });
       } catch {
         fail("file_changed");
       }
+      // Byte-true, like names (review-a N1): a target that is not UTF-8 cannot be recorded without loss.
+      const target = linkTargetText(raw);
+      if (target === null) fail("file_name_invalid");
       const bytes = Buffer.byteLength(target);
       liveBytes += bytes;
       files.push({ path: item.rel, bytes, sha256: sha256(target), mtime_ms, mode, class: "link", target });
@@ -667,6 +679,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
   let largest = 0;
   let linksEscaping = 0;
   let linksManaged = 0;
+  let targetsInvalid = 0;
   for (const item of tree.items) {
     if (item.type === "dir") {
       liveDirs++;
@@ -686,7 +699,9 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
     if (item.type === "link") {
       if (linkAtManagedPath(item.rel, rules)) linksManaged++;
       try {
-        const reach = linkReach(item.rel, readlinkSync(join(opts.root, ...item.rel.split("/"))));
+        const target = linkTargetText(readlinkSync(join(opts.root, ...item.rel.split("/")), { encoding: "buffer" }));
+        if (target === null) targetsInvalid++;
+        const reach = target === null ? null : linkReach(item.rel, target);
         if (reach === "absolute") linksAbsolute++;
         if (reach === "escaping") linksEscaping++;
       } catch {
@@ -716,7 +731,7 @@ export function dryCount(opts: Pick<ArchiveOptions, "root" | "home">): ArchiveOu
       excluded: tree.excluded,
       unreadable,
       unsupported: tree.problems.unsupported,
-      file_name_invalid: tree.problems.name_invalid,
+      file_name_invalid: tree.problems.name_invalid + targetsInvalid,
       not_owned: notOwned,
       wal_nonempty: walNonEmpty,
       store_copy_staged: storeStaged(opts.home),
