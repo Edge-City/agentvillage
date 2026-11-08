@@ -413,27 +413,42 @@ test("2c. a file that changes during the walk or before it is packed, or cannot 
 // 2d. M2 support: the script's own totals equal an independent count under the same exclude list
 // ---------------------------------------------------------------------------------------------------------
 
-test("2d. live_files and live_bytes equal a find(1) count of the home under the same exclude list; live + excluded = everything", async () => {
+/** The parity convention (README "Nap: state archive and restore", Fable S6): find's predicates, verbatim. */
+const PARITY = {
+  files: ["-xdev", "-mindepth", "1", "(", "-type", "f", "-o", "-type", "l", ")"],
+  dirs: ["-xdev", "-mindepth", "1", "-type", "d"],
+  endpoints: ["-xdev", "-mindepth", "1", "(", "-type", "s", "-o", "-type", "p", ")"],
+};
+
+test("2d / S6. live_files, live_bytes and live_dirs equal find(1) under the README's predicates and the same excludes; live + excluded = everything", async () => {
   const h = fresh("count");
   const { manifest } = await archived(h);
-  const found = spawnSync("find", [h.root, "-mindepth", "1", "!", "-type", "d"], { encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+  const find = (preds: string[]) => spawnSync("find", [h.root, ...preds], { encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+  const rules = { hermesRel: ".hermes" };
   let live = 0;
   let liveBytes = 0;
   let excluded = 0;
-  for (const path of found) {
-    const rel = relative(h.root, path);
-    const why = excludedBy(rel, { hermesRel: ".hermes" }, lstatSync(path).isDirectory());
-    if (why === "nap_dir") continue;
+  for (const path of find(PARITY.files)) {
     const st = lstatSync(path);
-    if (why || st.isSocket() || st.isFIFO()) {
-      excluded++;
-      continue;
+    const why = excludedBy(relative(h.root, path), rules, false);
+    if (why === "nap_dir") continue; // pruned from both counts
+    if (why) excluded++;
+    else {
+      live++;
+      liveBytes += st.size; // a symlink's lstat size is its target's length
     }
-    live++;
-    liveBytes += st.size;
   }
-  expect([manifest.tree.live_files, manifest.tree.live_bytes]).toEqual([live, liveBytes]);
+  let dirs = 0;
+  for (const path of find(PARITY.dirs)) if (!excludedBy(relative(h.root, path), rules, true)) dirs++;
+  for (const path of find(PARITY.endpoints)) if (excludedBy(relative(h.root, path), rules, false) !== "nap_dir") excluded++;
+  expect([manifest.tree.live_files, manifest.tree.live_bytes, manifest.tree.live_dirs]).toEqual([live, liveBytes, dirs]);
   expect(Object.values(manifest.tree.excluded as Record<string, { files: number }>).reduce((n, c) => n + c.files, 0)).toBe(excluded);
+  // The README states exactly these predicates.
+  const readme = readFileSync(join(REPO, "README.md"), "utf8");
+  for (const preds of Object.values(PARITY)) {
+    const text = preds.map((p) => (p === "(" ? "\\(" : p === ")" ? "\\)" : p)).join(" ");
+    expect([text, readme.includes(`find "$HOME" ${text}`)]).toEqual([text, true]);
+  }
 });
 
 // ---------------------------------------------------------------------------------------------------------
