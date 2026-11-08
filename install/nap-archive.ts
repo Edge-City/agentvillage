@@ -68,8 +68,10 @@
  * Exit: 0 archived (or `dry_run`); 64 refused before any write but `progress.json`; 1 failed (acked chunks
  * stay in the bucket, `.part` files removed, `progress.json` `failed`); 2 usage; 130/143 on INT/TERM (as 1).
  * It writes nowhere but `$HERMES_HOME/av-events/nap/`. On every exit it reaches (archived, refused, failed,
- * INT/TERM; all but `nap_already_running`, whose tar belongs to the live run) it deletes the run file, the
- * pid file and the staged store blob and list (S-n3); the control plane's
+ * INT/TERM; all but `nap_already_running`, whose inputs belong to the live run) it deletes the run file, the
+ * pid file and the staged store blob and list (S-n3), except that a run stopping with its complete stream on
+ * record (resumable) keeps the staged pair; a resume never re-checks the staging, since the pair is already in
+ * the stream's ciphertext and the manifest takes its shas from the stream (Fable read 2 S2); the control plane's
  * root `rm` of them, checked absent before any restart, is the backstop for a KILL or an OOM.
  * Never a path, a URL, a token or file content in any output.
  */
@@ -839,7 +841,10 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
       // The JSON line still reports the outcome.
     }
     removeQuietly(opts.runFile);
-    for (const f of storeFiles) removeQuietly(f);
+    // The staged store pair goes on success and on every exit that cannot resume; a run that stops with its
+    // complete stream on record keeps it (Fable read 2 S2; INT/TERM still removes it, in abandon()).
+    const resumable = phase !== "done" && isComplete(doc.stream) && doc.spent !== true;
+    if (!resumable) for (const f of storeFiles) removeQuietly(f);
     if (pidHeld) removeQuietly(opts.pidFile);
     live = null;
     return { code, line };
@@ -885,7 +890,9 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     prefix = run.prefix;
     date = parsePrefix(run.prefix)!.date;
     fold = readFold(opts.home, opts.runId);
-    checkStoreStaging(storeBlob, storeMembers, opts.noStoreCopy);
+    // A complete stream on record already holds the store pair inside its ciphertext, and the manifest takes
+    // its shas from that stream: the staging is not looked at again (Fable read 2 S2).
+    if (!isComplete(doc.stream)) checkStoreStaging(storeBlob, storeMembers, opts.noStoreCopy);
     if (gatewayBack()) fail("writers_alive");
   } catch (err) {
     if (err instanceof NapError) return refuse(err.code);

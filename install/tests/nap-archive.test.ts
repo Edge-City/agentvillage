@@ -678,7 +678,10 @@ test("5. 401 → auth_refused; 403 (an expired URL) → url_expired; 503 retried
     expect({ code: r.code, line: r.line }).toEqual({ code: 1, line: { status: "error", reason, chunks_acked: acked } });
     expect(progress(h)).toMatchObject({ phase: "failed", reason, acked: Array.from({ length: acked }, (_, k) => k) });
     expect(readdirSync(join(napDir(h.home), "chunks")).filter((n) => n.endsWith(".part"))).toEqual([]);
-    expectStagingGone(h);
+    // A transport failure after the stream completed is resumable: the run file and pid go, the staged
+    // store pair stays (Fable read 2 S2).
+    expect([existsSync(join(napDir(h.home), "run.json")), existsSync(join(napDir(h.home), "archive.pid"))]).toEqual([false, false]);
+    expect([existsSync(storeBlob(h)), existsSync(storeList(h))]).toEqual([true, true]);
     if (reason === "upload_unavailable") expect(putsSince(before).filter((n) => n === "chunk-0002.bin").length).toBe(4);
   }
   // A URL that has really expired is a 403 from the bucket: url_expired, and the cp re-mints.
@@ -1021,4 +1024,41 @@ test("N4 (CI fold 2): a non-UTF-8 name is caught from its raw bytes before any s
   const lenient = walkHome(h.root, rules, { lenient: true, readdirBytes });
   expect(lenient.problems).toEqual({ unreadable: 0, unsupported: 0, name_invalid: 1 });
   expect(lenient.items.some((i) => i.rel === "notes/ok.txt")).toBe(true);
+});
+
+test("Fable read 2 S2: after a 503 on chunk 2 the same run id resumes from the archive step alone; the manifest's store shas are the first staging's", async () => {
+  const h = fresh("resume-store", { bigBytes: 300 * 1024 });
+  const runId = newRunId();
+  prepare(h, runId);
+  const first = { blob: readFileSync(storeBlob(h)), list: readFileSync(storeList(h)) };
+  stub.onPut = (k) => (k.endsWith("chunk-0002.bin") ? 503 : undefined);
+  const r1 = await cli(h, runId);
+  stub.onPut = () => undefined;
+  expect({ code: r1.code, reason: r1.line.reason, acked: r1.line.chunks_acked }).toEqual({ code: 1, reason: "upload_unavailable", acked: 2 });
+  expect(progress(h)).toMatchObject({ phase: "failed", stream: { stream_complete: true } });
+  expect([readFileSync(storeBlob(h)).equals(first.blob), readFileSync(storeList(h)).equals(first.list)]).toEqual([true, true]);
+  // The cp re-runs the archive step alone (a fresh run file), and also once more with the pair re-staged
+  // (new ciphertext): either way the stream is resumed and its own shas are recorded.
+  for (const restage of [false, true]) {
+    const id = restage ? newRunId() : runId;
+    if (restage) {
+      prepare(h, id);
+      stub.onPut = (k) => (k.endsWith("chunk-0002.bin") ? 503 : undefined);
+      await cli(h, id);
+      stub.onPut = () => undefined;
+    }
+    const staged = { blob: readFileSync(storeBlob(h)), list: readFileSync(storeList(h)) };
+    if (restage) stageStoreCopy(h); // the root piece ran again: other bytes, never consulted by the resume
+    stagePutRun(stub, h.home, id);
+    const before = stub.requests.length;
+    const r2 = await cli(h, id);
+    expect({ restage, code: r2.code, status: r2.line.status, reason: r2.line.reason }).toEqual({ restage, code: 0, status: "archived", reason: undefined });
+    const puts = putsSince(before);
+    expect(puts).not.toContain("chunk-0000.bin");
+    expect(puts).not.toContain("chunk-0001.bin");
+    expect(puts).toContain("chunk-0002.bin");
+    const manifest = JSON.parse(publishManifest(stub, r2.line.manifest_key).toString("utf8"));
+    expect([manifest.store_blob_sha256, manifest.store_members_sha256]).toEqual([sha(staged.blob), sha(staged.list)]);
+    expectStagingGone(h);
+  }
 });
