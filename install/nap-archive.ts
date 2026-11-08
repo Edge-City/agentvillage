@@ -109,6 +109,7 @@ import {
   CIPHER_MODE,
   dataEntryName,
   type ExcludedCounts,
+  checkFileEntries,
   fail,
   FILES_ENTRY,
   FILES_SCHEMA,
@@ -217,7 +218,13 @@ export type ArchiveOptions = {
 
 /** Test seams: each relative path just hashed (pass 1), about to be packed (pass 2), and each chunk before
  * its upload. Never set in production. */
-export type ArchiveHooks = { afterHash?: (rel: string) => void; beforePack?: (rel: string) => void; beforeUpload?: (n: number) => void };
+export type ArchiveHooks = {
+  afterHash?: (rel: string) => void;
+  /** Sees `files.json`'s entries before the restore's own checks run on them (review-a S1). */
+  afterWalk?: (files: FileEntry[]) => void;
+  beforePack?: (rel: string) => void;
+  beforeUpload?: (n: number) => void;
+};
 
 /** What `progress.json` keeps of the stream (13 S6): the key material from the start, the tag at the end. */
 type Stream = {
@@ -946,6 +953,19 @@ export async function runArchive(opts: ArchiveOptions, hooks: ArchiveHooks = {})
     // bytes refuses, and nothing is folded again.
     if (walked.files.some((f) => f.class !== "link" && f.path.endsWith(WAL_SUFFIX) && f.bytes > 0)) {
       return refuse("wal_unfolded");
+    }
+    // review-a S1: the restore's own per-entry rules, run here before any chunk, so nothing is archived that
+    // the restore would refuse (the refusal's own code, 64).
+    hooks.afterWalk?.(walked.files);
+    try {
+      checkFileEntries(walked.files, rules, {
+        copy: opts.noStoreCopy ? "none" : "blob",
+        blob: walked.files.find((f) => f.path === STORE_BLOB_ENTRY)?.sha256 ?? null,
+        members: walked.files.find((f) => f.path === STORE_MEMBERS_ENTRY)?.sha256 ?? null,
+      });
+    } catch (err) {
+      if (err instanceof NapError) return refuse(err.code);
+      throw err;
     }
     // Fable N11: a file the tar cannot hold refuses here, before any chunk, not mid-pack.
     if (walked.files.some((f) => hasData(f) && f.bytes > opts.maxEntryBytes)) return refuse("file_too_large");

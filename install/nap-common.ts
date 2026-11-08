@@ -12,6 +12,7 @@ import { lstatSync, mkdirSync, openSync, closeSync, readSync, readdirSync, readF
 import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { dirname, join } from "node:path";
+import { cleanRelPath, excludedBy, linkAtManagedPath, linkTargetValid, type PathRules, STORE_BLOB_ENTRY, STORE_ENTRIES } from "./nap-state-paths";
 
 export const MANIFEST_SCHEMA = "state_manifest.v1";
 export const FILES_SCHEMA = "nap_files.v1";
@@ -82,6 +83,76 @@ export const dataEntryName = (index: number) => `data/${pad(index, 6)}`;
 export const hasData = (f: FileEntry) => f.class !== "link" && f.class !== "dir" && f.same_as === undefined;
 /** A directory's entry carries no bytes: size 0 and the SHA-256 of nothing. */
 export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/** The classes a regular file of the home may carry. */
+export const FILE_CLASSES: readonly string[] = ["state", "secret_cp", "secret_box", "unclassified", "log"];
+
+/**
+ * The restore's per-entry rules over `files.json`, one function for both sides (review-a S1): the restore
+ * runs it on what it downloads, and the archive runs it on what it is about to pack, so nothing is archived
+ * that the restore would refuse. `store` is the store copy the entries must carry (`copy`, and the two shas
+ * when `blob`). Refuses (throws) `files_invalid`, `path_not_allowed`, `link_at_managed_path` or `class_mismatch`.
+ */
+export function checkFileEntries(
+  entries: unknown,
+  rules: PathRules,
+  store: { copy: "blob" | "none"; blob: string | null; members: string | null },
+): FileEntry[] {
+  if (!Array.isArray(entries)) fail("files_invalid");
+  const files = entries as FileEntry[];
+  const allowed = new Set(["path", "bytes", "sha256", "mtime_ms", "mode", "class", "target", "same_as"]);
+  const byPath = new Map<string, FileEntry>();
+  let last = "";
+  let stores = 0;
+  for (const f of files) {
+    if (!f || typeof f !== "object" || Object.keys(f).some((k) => !allowed.has(k))) fail("files_invalid");
+    // mtime_ms is any safe integer: a file from before 1970 has a negative one (review-a S1).
+    if (!isInt(f.bytes) || !Number.isSafeInteger(f.mtime_ms) || !isInt(f.mode) || f.mode > 0o777 || typeof f.sha256 !== "string" || !HEX64.test(f.sha256)) {
+      fail("files_invalid");
+    }
+    if (STORE_ENTRIES.includes(f.path)) {
+      // The store copy's encrypted blob, then its encrypted list (in that order), each once, opaque `state` entries.
+      if (f.class !== "state" || f.target !== undefined || f.same_as !== undefined) fail("files_invalid");
+      if (f.path !== STORE_ENTRIES[stores++]) fail("files_invalid");
+      const want = f.path === STORE_BLOB_ENTRY ? store.blob : store.members;
+      if (store.copy !== "blob" || f.sha256 !== want) fail("files_invalid");
+      continue;
+    }
+    if (stores > 0) fail("files_invalid"); // home entries come first, then the store pair
+    // Nothing is ever written through a link (Fable S4): every ancestor files.json names is a directory.
+    if (typeof f.path === "string") {
+      const parts = f.path.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        const up = byPath.get(parts.slice(0, i).join("/"));
+        if (up && up.class !== "dir") fail("files_invalid");
+      }
+    }
+    if (typeof f.path !== "string" || !cleanRelPath(f.path)) fail("path_not_allowed");
+    // A link never sits where the cp, the installer or the rules manage a path: a later write would follow it.
+    if (f.class === "link" && linkAtManagedPath(f.path, rules)) fail("link_at_managed_path");
+    // The tool's own dir is never a restore target; any other path the CURRENT rules exclude is skipped in
+    // the restore's plan and counted (excluded_skipped; Fable read 2 S3).
+    if (excludedBy(f.path, rules, f.class === "dir") === "nap_dir") fail("path_not_allowed");
+    if (last && !(f.path > last)) fail("files_invalid");
+    last = f.path;
+    if (f.class === "dir") {
+      if (f.target !== undefined || f.same_as !== undefined || f.bytes !== 0 || f.sha256 !== EMPTY_SHA256) fail("files_invalid");
+    } else if (f.class === "link") {
+      if (!linkTargetValid(f.target) || f.same_as !== undefined) fail("files_invalid");
+      if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
+    } else {
+      if (f.target !== undefined) fail("files_invalid");
+      if (!FILE_CLASSES.includes(f.class)) fail("class_mismatch");
+      if (f.same_as !== undefined) {
+        const first = byPath.get(f.same_as);
+        if (!first || !hasData(first) || first.bytes !== f.bytes || first.sha256 !== f.sha256) fail("files_invalid");
+      }
+    }
+    byPath.set(f.path, f);
+  }
+  if ((store.copy === "blob") !== (stores === 2)) fail("files_invalid");
+  return files;
+}
 
 export type ManifestChunk = { n: number; name: string; bytes: number; sha256: string };
 export type ExcludedCounts = Record<string, { files: number; bytes: number }>;

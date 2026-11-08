@@ -1062,3 +1062,15 @@ test("Fable read 2 S2: after a 503 on chunk 2 the same run id resumes from the a
     expectStagingGone(h);
   }
 });
+
+test("review-a S1: the archive runs the restore's own entry rules before pack; a refusal there is 64 with the restore's code, nothing PUT", async () => {
+  const h = fresh("entry-rules");
+  const runId = newRunId();
+  prepare(h, runId);
+  const before = stub.requests.length;
+  const hooks: ArchiveHooks = { afterWalk: (files) => void (files.find((f) => f.path === ".hermes/MEMORY.md")!.class = "bogus" as any) };
+  const out = await runArchive(inProcess(h, runId), hooks);
+  expect(out).toEqual({ code: 64, line: { status: "refused", reason: "class_mismatch", chunks_acked: 0 } });
+  expect(putsSince(before)).toEqual([]);
+  expectStagingGone(h);
+});

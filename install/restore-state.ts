@@ -92,10 +92,9 @@ import {
   FILES_ENTRY,
   FILES_SCHEMA,
   type FileEntry,
-  EMPTY_SHA256,
+  checkFileEntries,
+  FILE_CLASSES,
   hasData,
-  HEX64,
-  isInt,
   type Manifest,
   MANIFEST_SLOT_NAME,
   manifestName,
@@ -119,18 +118,13 @@ import {
   writeJsonAtomic,
 } from "./nap-common";
 import {
-  cleanRelPath,
   classOf,
   CP_REMINTABLE,
   ENV_FILE,
-  linkAtManagedPath,
-  linkTargetValid,
   napPathsSha256,
   NAP_DIR,
-  STORE_BLOB_ENTRY,
   STORE_ENTRIES,
   type PathRules,
-  excludedBy,
   restorable,
   walkHome,
   WalkRefused,
@@ -203,7 +197,6 @@ function lstatOrNull(path: string) {
   }
 }
 
-const FILE_CLASSES: readonly string[] = ["state", "secret_cp", "secret_box", "unclassified", "log"];
 /** A regular file of the home (not a link, a directory or the store pair). */
 const isHomeFile = (f: FileEntry) => FILE_CLASSES.includes(f.class) && !STORE_ENTRIES.includes(f.path);
 
@@ -211,60 +204,11 @@ const isHomeFile = (f: FileEntry) => FILE_CLASSES.includes(f.class) && !STORE_EN
 export function validateFiles(doc: unknown, manifest: Manifest, rules: PathRules): FileEntry[] {
   const d = doc as { schema?: unknown; files?: unknown };
   if (!d || typeof d !== "object" || d.schema !== FILES_SCHEMA || !Array.isArray(d.files)) fail("files_invalid");
-  const files = d.files as FileEntry[];
-  const allowed = new Set(["path", "bytes", "sha256", "mtime_ms", "mode", "class", "target", "same_as"]);
-  const byPath = new Map<string, FileEntry>();
-  let last = "";
-  let stores = 0;
-  // The manifest and files.json are written on the box, so a tampered box can craft both: paths_sha256
-  // never relaxes anything. Every entry meets the CURRENT exclude list, and the current classOf decides
-  // secret handling (plan, commit); the recorded class only has to be a known one.
-  for (const f of files) {
-    if (!f || typeof f !== "object" || Object.keys(f).some((k) => !allowed.has(k))) fail("files_invalid");
-    if (!isInt(f.bytes) || !isInt(f.mtime_ms) || !isInt(f.mode) || f.mode > 0o777 || typeof f.sha256 !== "string" || !HEX64.test(f.sha256)) {
-      fail("files_invalid");
-    }
-    if (STORE_ENTRIES.includes(f.path)) {
-      // The store copy's encrypted blob, then its encrypted list (in that order), each once, opaque `state` entries.
-      if (f.class !== "state" || f.target !== undefined || f.same_as !== undefined) fail("files_invalid");
-      if (f.path !== STORE_ENTRIES[stores++]) fail("files_invalid");
-      const want = f.path === STORE_BLOB_ENTRY ? manifest.store_blob_sha256 : manifest.store_members_sha256;
-      if (manifest.store_copy !== "blob" || f.sha256 !== want) fail("files_invalid");
-      continue;
-    }
-    if (stores > 0) fail("files_invalid"); // home entries come first, then the store pair
-    // Nothing is ever written through a link (Fable S4): every ancestor files.json names is a directory.
-    if (typeof f.path === "string") {
-      const parts = f.path.split("/");
-      for (let i = 1; i < parts.length; i++) {
-        const up = byPath.get(parts.slice(0, i).join("/"));
-        if (up && up.class !== "dir") fail("files_invalid");
-      }
-    }
-    if (typeof f.path !== "string" || !cleanRelPath(f.path)) fail("path_not_allowed");
-    // A link never sits where the cp, the installer or the rules manage a path: a later write would follow it.
-    if (f.class === "link" && linkAtManagedPath(f.path, rules)) fail("link_at_managed_path");
-    // The tool's own dir is never a restore target; any other path the CURRENT rules exclude is skipped in
-    // the plan and counted (excluded_skipped; Fable read 2 S3): never writing it is as safe as refusing.
-    if (excludedBy(f.path, rules, f.class === "dir") === "nap_dir") fail("path_not_allowed");
-    if (last && !(f.path > last)) fail("files_invalid");
-    last = f.path;
-    if (f.class === "dir") {
-      if (f.target !== undefined || f.same_as !== undefined || f.bytes !== 0 || f.sha256 !== EMPTY_SHA256) fail("files_invalid");
-    } else if (f.class === "link") {
-      if (!linkTargetValid(f.target) || f.same_as !== undefined) fail("files_invalid");
-      if (f.bytes !== Buffer.byteLength(f.target) || f.sha256 !== sha256(f.target)) fail("files_invalid");
-    } else {
-      if (f.target !== undefined) fail("files_invalid");
-      if (!FILE_CLASSES.includes(f.class)) fail("class_mismatch");
-      if (f.same_as !== undefined) {
-        const first = byPath.get(f.same_as);
-        if (!first || !hasData(first) || first.bytes !== f.bytes || first.sha256 !== f.sha256) fail("files_invalid");
-      }
-    }
-    byPath.set(f.path, f);
-  }
-  if ((manifest.store_copy === "blob") !== (stores === 2)) fail("files_invalid");
+  const files = checkFileEntries(d.files, rules, {
+    copy: manifest.store_copy,
+    blob: manifest.store_blob_sha256,
+    members: manifest.store_members_sha256,
+  });
   const p = manifest.payload;
   const count = (c: FileEntry["class"]) => files.filter((f) => f.class === c).length;
   if (

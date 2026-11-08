@@ -6,7 +6,7 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -634,6 +634,19 @@ test("security fold 2 (MEDIUM): a link at a secret_cp, cp-env, excluded or cp-wr
   const r = await restore(t, ok.manifestKey, ok.chunks, { keyDoc: ok.keyDoc });
   expect({ code: r.code, status: r.line.status }).toEqual({ code: 0, status: "restored" });
   expect(readlinkSync(join(t.home, "skills", "planted-link"))).toBe(target);
+});
+
+test("review-a S1: a file from before 1970 (a negative mtime_ms) archives and restores with its mtime", async () => {
+  const a = await archiveFixture("pre-epoch", (h) => {
+    mkdirSync(join(h.root, "notes"), { recursive: true });
+    writeFileSync(join(h.root, "notes", "old.txt"), "from 1969\n");
+    utimesSync(join(h.root, "notes", "old.txt"), new Date(-86_400_000), new Date(-86_400_000));
+  });
+  expect(a.files.find((f) => f.path === "notes/old.txt")).toMatchObject({ mtime_ms: -86_400_000 });
+  const t = wakeTarget("pre-epoch-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, reason: r.line.reason }).toEqual({ code: 0, status: "restored", reason: undefined });
+  expect([readFileSync(join(t.root, "notes", "old.txt"), "utf8"), statSync(join(t.root, "notes", "old.txt")).mtimeMs]).toEqual(["from 1969\n", -86_400_000]);
 });
 
 test("N4: a name with a backslash is archived and restored", async () => {
