@@ -13,7 +13,7 @@ import { gzipSync } from "node:zlib";
 
 import { chunkName, dataEntryName, hasData, manifestName, TAR_END, tarPadding, toolSha256, ustarHeader } from "../nap-common";
 import { BUNDLE_FILES, CP_REMINTABLE, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
-import { envBytesWithoutRemintable } from "../restore-state";
+import { envBytesWithoutRemintable, envEntriesToMerge } from "../restore-state";
 import {
   buildNapHome,
   cleanup,
@@ -900,4 +900,61 @@ test("F2: a restore writes env.archived without the re-minted keys' lines, byte-
     `AV_EVENTS_TOKEN=${FRESH.events}\nTELEGRAM_BOT_TOKEN=${FRESH.bot}\n` +
       "CERT='keep\nme'\nLATIN=\ufffd\ufffd\ufffd\nCRLF_KEY=1\nMY_TOKEN=second\nAFTER_UNCLOSED=1\n",
   );
+});
+
+// review-b S1 (L44339): a stray quote in an earlier entry swallows a re-mintable key's line into that entry's
+// quoted value; the merge must not carry the entry (and so the old line) into the live .env. The keys come
+// from the module: two the wake's .env does not set.
+const WAKE_KEYS = ["AV_EVENTS_TOKEN", "TELEGRAM_BOT_TOKEN"];
+const [S1_KEY, S1_KEY2] = REMINT.filter((k) => !WAKE_KEYS.includes(k));
+const s1Env = () =>
+  [
+    "# resident notes",
+    "KEEP_A=1",
+    `X_${S1_KEY}_NOTE=decoy-contains`, // a key that merely contains a re-mintable name: merged
+    `${S1_KEY}_SUFFIX=decoy-suffix`,
+    'STRAY="abc', // stray double quote: the next line is inside STRAY's value
+    `${S1_KEY}=old-swallowed-1`,
+    'END="x"',
+    "STRAY2='abc", // stray single quote, an `export` spaced form swallowed
+    `  export ${S1_KEY2} = old-swallowed-2`,
+    "tail'",
+    "KEEP_B=2",
+    'TAIL="never closed', // unclosed to EOF: not an entry; the next line is its own (re-minted) entry
+    `${S1_KEY}=old-after-unclosed`,
+    "",
+  ].join("\n");
+
+test("S1: envEntriesToMerge skips an entry carrying a swallowed re-mintable line and counts it; the rest still merge", () => {
+  expect([typeof S1_KEY, typeof S1_KEY2]).toEqual(["string", "string"]);
+  const archived = s1Env();
+  expect(remintLines(Buffer.from(archived)).length).toBe(3); // the fixture does hold them
+  const m = envEntriesToMerge(archived, `AV_EVENTS_TOKEN=fresh\n`);
+  expect({ keys: m.entries.map((e) => e.key), skipped: m.skipped })
+    .toEqual({ keys: ["KEEP_A", `X_${S1_KEY}_NOTE`, `${S1_KEY}_SUFFIX`, "KEEP_B"], skipped: 2 });
+  const merged = m.entries.flatMap((e) => e.lines).join("\n");
+  expect(remintLines(Buffer.from(merged))).toEqual([]);
+  expect(merged).not.toContain("old-");
+  // Only entries that would otherwise merge are counted: one already set is not.
+  expect(envEntriesToMerge(archived, "STRAY2=fresh\n").skipped).toBe(1);
+  // Nothing swallowed: nothing skipped.
+  expect(envEntriesToMerge("A=1\nB=\"x\ny\"\n", "").skipped).toBe(0);
+});
+
+test("S1: a restore merges no swallowed re-mintable line into the live .env (env_merge_skipped counts the entries)", async () => {
+  const archived = s1Env();
+  const a = await archiveFixture("env-s1", (h) => writeFileSync(join(h.home, ".env"), archived, { mode: 0o600 }));
+  const t = wakeTarget("env-s1-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, skipped: r.line.env_merge_skipped, dropped: r.line.env_archived_dropped })
+    .toEqual({ code: 0, status: "restored", merged: 4, skipped: 2, dropped: 3 });
+  const live = readFileSync(join(t.home, ".env"));
+  // The live .env sets re-mintable keys only through the wake's own fresh lines.
+  expect(remintLines(live)).toEqual([`AV_EVENTS_TOKEN=${FRESH.events}`, `TELEGRAM_BOT_TOKEN=${FRESH.bot}`]);
+  expect(live.toString("utf8")).toBe(
+    `AV_EVENTS_TOKEN=${FRESH.events}\nTELEGRAM_BOT_TOKEN=${FRESH.bot}\n` +
+      `KEEP_A=1\nX_${S1_KEY}_NOTE=decoy-contains\n${S1_KEY}_SUFFIX=decoy-suffix\nKEEP_B=2\n`,
+  );
+  expect(remintLines(readFileSync(join(napDir(t.home), "env.archived")))).toEqual([]);
+  expect(r.stdout).not.toContain("old-");
 });

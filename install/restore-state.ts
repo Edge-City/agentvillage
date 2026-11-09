@@ -35,7 +35,9 @@
  * `paths_sha256` is informational, `paths_match` in the line): `state`, `unclassified`, `log` and `link` as archived;
  * `secret_box` with mode 0600, except `$HERMES_HOME/.env`, which is MERGED by default: every archived line
  * whose key is not in `CP_REMINTABLE.env_keys` and is not already set is added to the file the control
- * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic). The archived `.env` is kept 0600 as
+ * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic), except an entry whose lines include
+ * one that sets a key in `CP_REMINTABLE.env_keys` (a stray quote can swallow such a line into another key's
+ * quoted value): that entry is not merged, and `env_merge_skipped` counts it. The archived `.env` is kept 0600 as
  * `av-events/nap/env.archived`: the archived `.env` minus every line of a key in `CP_REMINTABLE.env_keys`
  * (the old values the wake revoked or rotated: each entry whole, and any other line that assigns one;
  * `env_archived_dropped` counts them), at any size and whether or not it merges, every other line
@@ -62,8 +64,8 @@
  * restore or a repair (not on `--verify-only` alone or `--dry-run`).
  *
  * Output: one JSON line `{status, manifest_key, files, bytes, written, unchanged, drift_missing, drift_extra,
- * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, class_reclassified, excluded_skipped, store_copy,
- * store_written, env_links_filtered, env_archived_dropped, paths_match, reason?}`; `status` is restored,
+ * drift_changed, secret_cp_skipped, secret_box_written, env_merged, env_merge_skipped, links, class_reclassified, excluded_skipped,
+ * store_copy, store_written, env_links_filtered, env_archived_dropped, paths_match, reason?}`; `status` is restored,
  * verified, repaired, dry_run, drift, refused or error. Never a path, a URL, a key or file content.
  * Exit: 0 restored, verified, repaired or dry_run; 1 drift, refused or error; 2 usage.
  */
@@ -172,6 +174,8 @@ export type RestoreLine = {
   secret_cp_skipped: number;
   secret_box_written: number;
   env_merged: number;
+  /** Archived `.env` entries not merged because a line of theirs sets a re-minted key: a count. */
+  env_merge_skipped: number;
   links: number;
   /** The archive's store copy (`blob` or `none`) and how many of its two files went to `--approvald-out`. */
   store_copy?: "blob" | "none";
@@ -301,12 +305,22 @@ export function envEntries(text: string): EnvEntry[] {
 }
 
 /** The archived `.env` entries a restore adds: keys the control plane does not re-mint, not set in `current`.
- * A key given twice merges its LAST value, as python-dotenv (and so Hermes) reads the file. */
-export function envEntriesToMerge(archived: string, current: string): EnvEntry[] {
+ * A key given twice merges its LAST value, as python-dotenv (and so Hermes) reads the file. An entry with a
+ * line `remintableEnvLines` drops (a re-minted key's line a stray quote swallowed into this entry's value) is
+ * not merged; `skipped` counts those entries. */
+export function envEntriesToMerge(archived: string, current: string): { entries: EnvEntry[]; skipped: number } {
   const have = new Set(envEntries(current).map((e) => e.key));
   const all = envEntries(archived);
   const last = new Map(all.map((e, i) => [e.key, i]));
-  return all.filter((e, i) => last.get(e.key) === i && !CP_REMINTABLE.env_keys.includes(e.key) && !have.has(e.key));
+  const { drop } = remintableEnvLines(archived);
+  const entries: EnvEntry[] = [];
+  let skipped = 0;
+  all.forEach((e, i) => {
+    if (last.get(e.key) !== i || CP_REMINTABLE.env_keys.includes(e.key) || have.has(e.key)) return;
+    if (e.lines.some((_, k) => drop.has(e.start + k))) skipped++;
+    else entries.push(e);
+  });
+  return { entries, skipped };
 }
 
 /** The `\n`-separated line numbers of `.env` text that carry a key the control plane re-mints, and how many
@@ -355,7 +369,7 @@ export function envBytesWithoutRemintable(archived: Buffer): { bytes: Buffer; dr
 }
 
 /** The lines of those entries, in order. */
-export const envLinesToMerge = (archived: string, current: string): string[] => envEntriesToMerge(archived, current).flatMap((e) => e.lines);
+export const envLinesToMerge = (archived: string, current: string): string[] => envEntriesToMerge(archived, current).entries.flatMap((e) => e.lines);
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -416,6 +430,7 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     secret_cp_skipped: 0,
     secret_box_written: 0,
     env_merged: 0,
+    env_merge_skipped: 0,
     links: 0,
     class_reclassified: 0,
     excluded_skipped: 0,
@@ -766,6 +781,7 @@ async function restoreInner(
     let keptDropped = 0;
     const napDirPath = join(opts.home, ...NAP_DIR.split("/"));
     let envAdd: EnvEntry[] = [];
+    let envSkipped = 0;
     // Directories (Fable S2): created now, their mode and mtime set last, deepest first, after every rename.
     const dirItems = items.filter((i) => i.entry.class === "dir");
     try {
@@ -803,7 +819,7 @@ async function restoreInner(
         writeFileSync(keptTmp, kept.bytes, { mode: 0o600, flag: "wx" });
       }
       if (status === "restored" && envArchived !== null && opts.mergeEnv && envArchived.length <= MAX_ENV_BYTES) {
-        envAdd = envEntriesToMerge(envArchived.toString("utf8"), envCurrent);
+        ({ entries: envAdd, skipped: envSkipped } = envEntriesToMerge(envArchived.toString("utf8"), envCurrent));
         if (envAdd.length > 0) {
           const envPath = join(root, ...segments(envRel));
           mkdirSync(dirname(envPath), { recursive: true, mode: 0o700 });
@@ -854,6 +870,7 @@ async function restoreInner(
       try {
         renameSync(envTmp, join(root, ...segments(envRel)));
         line.env_merged = envAdd.length;
+        line.env_merge_skipped = envSkipped;
       } catch {
         rmSync(envTmp, { force: true });
         return end("error", "write_failed");
