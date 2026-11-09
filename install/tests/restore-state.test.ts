@@ -958,3 +958,16 @@ test("S1: a restore merges no swallowed re-mintable line into the live .env (env
   expect(remintLines(readFileSync(join(napDir(t.home), "env.archived")))).toEqual([]);
   expect(r.stdout).not.toContain("old-");
 });
+
+test("N7: env_merge_skipped counts a skipped entry even when nothing is merged (the live .env left as the wake wrote it)", async () => {
+  // The only candidate entry swallows a re-mintable line, so nothing merges and the merged .env is never written.
+  const archived = ['ONLY="abc', `${S1_KEY}=old-swallowed-only`, 'END="x"', ""].join("\n");
+  const a = await archiveFixture("env-n7", (h) => writeFileSync(join(h.home, ".env"), archived, { mode: 0o600 }));
+  const t = wakeTarget("env-n7-t");
+  const before = readFileSync(join(t.home, ".env"));
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, skipped: r.line.env_merge_skipped })
+    .toEqual({ code: 0, status: "restored", merged: 0, skipped: 1 });
+  expect(readFileSync(join(t.home, ".env")).equals(before)).toBe(true);
+  expect(r.stdout).not.toContain("old-");
+});

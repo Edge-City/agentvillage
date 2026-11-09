@@ -875,6 +875,9 @@ async function restoreInner(
         rmSync(envTmp, { force: true });
         return end("error", "write_failed");
       }
+    } else {
+      // Nothing to merge (review-b N7, L44366): entries may still have been skipped; count them all the same.
+      line.env_merge_skipped = envSkipped;
     }
     const depth = (p: string) => p.split("/").length;
     for (const item of [...dirItems].sort((a, b) => depth(b.entry.path) - depth(a.entry.path))) {
