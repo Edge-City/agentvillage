@@ -35,9 +35,15 @@
  * `paths_sha256` is informational, `paths_match` in the line): `state`, `unclassified`, `log` and `link` as archived;
  * `secret_box` with mode 0600, except `$HERMES_HOME/.env`, which is MERGED by default: every archived line
  * whose key is not in `CP_REMINTABLE.env_keys` and is not already set is added to the file the control
- * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic); `secret_cp` is never written (the
- * wake re-minted it). The approvald store copy (13 S3, S4; review-a (b) at L43357, release L43372) is an
- * opaque pair the cp encrypted to its own key: the store blob and its member list. The box never decrypts or
+ * plane wrote (`--no-merge-env` leaves it alone, a batch-1 diagnostic), except an entry whose lines include
+ * one that sets a key in `CP_REMINTABLE.env_keys` (a stray quote can swallow such a line into another key's
+ * quoted value): that entry is not merged, and `env_merge_skipped` counts it. The archived `.env` is kept 0600 as
+ * `av-events/nap/env.archived`: the archived `.env` minus every line of a key in `CP_REMINTABLE.env_keys`
+ * (the old values the wake revoked or rotated: each entry whole, and any other line that assigns one;
+ * `env_archived_dropped` counts them), at any size and whether or not it merges, every other line
+ * byte-exact; a hard link to `.env` at another path is restored as the same bytes. `secret_cp` is never
+ * written (the wake re-minted it). The approvald store copy (13 S3, S4; review-a (b) at L43357, release
+ * L43372) is an opaque pair the cp encrypted to its own key: the store blob and its member list. The box never decrypts or
  * parses either, and neither ever lands in the home: with `--approvald-out <dir>` (a directory outside the
  * root) both are written there 0600 as `nap-store.enc` and `nap-store.members.enc`, byte-verified against
  * `files.json` and the manifest's shas, for the control plane's root step to decrypt, check and restore into
@@ -58,8 +64,8 @@
  * restore or a repair (not on `--verify-only` alone or `--dry-run`).
  *
  * Output: one JSON line `{status, manifest_key, files, bytes, written, unchanged, drift_missing, drift_extra,
- * drift_changed, secret_cp_skipped, secret_box_written, env_merged, links, class_reclassified, excluded_skipped, store_copy,
- * store_written, paths_match, reason?}`; `status` is restored,
+ * drift_changed, secret_cp_skipped, secret_box_written, env_merged, env_merge_skipped, links, class_reclassified, excluded_skipped,
+ * store_copy, store_written, env_links_filtered, env_archived_dropped, paths_match, reason?}`; `status` is restored,
  * verified, repaired, dry_run, drift, refused or error. Never a path, a URL, a key or file content.
  * Exit: 0 restored, verified, repaired or dry_run; 1 drift, refused or error; 2 usage.
  */
@@ -168,6 +174,8 @@ export type RestoreLine = {
   secret_cp_skipped: number;
   secret_box_written: number;
   env_merged: number;
+  /** Archived `.env` entries not merged because a line of theirs sets a re-minted key: a count. */
+  env_merge_skipped: number;
   links: number;
   /** The archive's store copy (`blob` or `none`) and how many of its two files went to `--approvald-out`. */
   store_copy?: "blob" | "none";
@@ -176,6 +184,8 @@ export type RestoreLine = {
   class_reclassified: number;
   /** Hard links to `.env` written at their other paths without the cp's re-minted keys. */
   env_links_filtered: number;
+  /** Entries (and stray lines) of the cp's re-minted keys left out of `av-events/nap/env.archived`: a count. */
+  env_archived_dropped: number;
   /** Entries at paths the CURRENT exclude list covers: never written (an older rule set excluded less). */
   excluded_skipped: number;
   /** Whether the archive was made under the rules this restore carries (informational only). */
@@ -286,7 +296,7 @@ export function envEntries(text: string): EnvEntry[] {
         if (closes(q, lines[j])) break;
         j++;
       }
-      if (j >= lines.length) continue; // never closed: not a value a merge can carry; env.archived keeps it
+      if (j >= lines.length) continue; // never closed: not a value a merge can carry (env.archived keeps it, unless its key is re-minted)
       i = j;
     }
     out.push({ key: m[1], lines: block, start: start });
@@ -295,27 +305,71 @@ export function envEntries(text: string): EnvEntry[] {
 }
 
 /** The archived `.env` entries a restore adds: keys the control plane does not re-mint, not set in `current`.
- * A key given twice merges its LAST value, as python-dotenv (and so Hermes) reads the file. */
-export function envEntriesToMerge(archived: string, current: string): EnvEntry[] {
+ * A key given twice merges its LAST value, as python-dotenv (and so Hermes) reads the file. An entry with a
+ * line `remintableEnvLines` drops (a re-minted key's line a stray quote swallowed into this entry's value) is
+ * not merged; `skipped` counts those entries. */
+export function envEntriesToMerge(archived: string, current: string): { entries: EnvEntry[]; skipped: number } {
   const have = new Set(envEntries(current).map((e) => e.key));
   const all = envEntries(archived);
   const last = new Map(all.map((e, i) => [e.key, i]));
-  return all.filter((e, i) => last.get(e.key) === i && !CP_REMINTABLE.env_keys.includes(e.key) && !have.has(e.key));
+  const { drop } = remintableEnvLines(archived);
+  const entries: EnvEntry[] = [];
+  let skipped = 0;
+  all.forEach((e, i) => {
+    if (last.get(e.key) !== i || CP_REMINTABLE.env_keys.includes(e.key) || have.has(e.key)) return;
+    if (e.lines.some((_, k) => drop.has(e.start + k))) skipped++;
+    else entries.push(e);
+  });
+  return { entries, skipped };
 }
 
-/** The archived `.env` with every entry of a key the control plane re-mints taken out (comments, blank lines
- * and every other entry kept as archived): what a hard link to `.env` at another path is restored as. */
-export function envWithoutRemintable(archived: string): string {
-  const lines = archived.split("\n");
+/** The `\n`-separated line numbers of `.env` text that carry a key the control plane re-mints, and how many
+ * they make: every line of each entry of such a key (a quoted value that spans lines whole), and any other
+ * line that assigns such a key: one whose quote never closes (not an entry; python-dotenv skips it, but it
+ * holds the old value) or one inside another key's quoted value (a stray quote can swallow it). */
+function remintableEnvLines(text: string): { drop: Set<number>; entries: number } {
   const drop = new Set<number>();
-  for (const e of envEntries(archived)) {
-    if (CP_REMINTABLE.env_keys.includes(e.key)) for (let k = 0; k < e.lines.length; k++) drop.add(e.start + k);
+  let entries = 0;
+  for (const e of envEntries(text)) {
+    if (!CP_REMINTABLE.env_keys.includes(e.key)) continue;
+    entries++;
+    for (let k = 0; k < e.lines.length; k++) drop.add(e.start + k);
   }
-  return lines.filter((_, i) => !drop.has(i)).join("\n");
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (drop.has(i)) continue;
+    const m = ENV_LINE.exec(lines[i]);
+    if (m && CP_REMINTABLE.env_keys.includes(m[1])) {
+      drop.add(i);
+      entries++;
+    }
+  }
+  return { drop, entries };
+}
+
+/** The archived `.env` bytes with every line of a key the control plane re-mints taken out (comments, blank
+ * lines and every other entry kept as archived): what `env.archived` and a hard link to `.env` at another
+ * path are restored as. The lines to drop are found on the UTF-8 decoding (the parse the merge uses), then cut
+ * from the bytes, so every kept line is byte-exact even where the file is not valid UTF-8: a decoder never
+ * folds a `\n` byte (0x0A) into a replacement character, so the decoding has the same `\n`-separated lines.
+ * `dropped` counts the entries and stray lines taken out. */
+export function envBytesWithoutRemintable(archived: Buffer): { bytes: Buffer; dropped: number } {
+  const { drop, entries } = remintableEnvLines(archived.toString("utf8"));
+  const kept: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; ; i++) {
+    const nl = archived.indexOf(0x0a, start);
+    const end = nl < 0 ? archived.length : nl;
+    if (!drop.has(i)) kept.push(archived.subarray(start, end));
+    if (nl < 0) break;
+    start = nl + 1;
+  }
+  const NL = Buffer.from([0x0a]);
+  return { bytes: Buffer.concat(kept.flatMap((b, k) => (k === 0 ? [b] : [NL, b]))), dropped: entries };
 }
 
 /** The lines of those entries, in order. */
-export const envLinesToMerge = (archived: string, current: string): string[] => envEntriesToMerge(archived, current).flatMap((e) => e.lines);
+export const envLinesToMerge = (archived: string, current: string): string[] => envEntriesToMerge(archived, current).entries.flatMap((e) => e.lines);
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -376,10 +430,12 @@ export async function runRestore(opts: RestoreOptions): Promise<{ code: number; 
     secret_cp_skipped: 0,
     secret_box_written: 0,
     env_merged: 0,
+    env_merge_skipped: 0,
     links: 0,
     class_reclassified: 0,
     excluded_skipped: 0,
     env_links_filtered: 0,
+    env_archived_dropped: 0,
     store_written: 0,
   };
   const writes = !opts.dryRun && (!opts.verifyOnly || opts.repair);
@@ -594,8 +650,9 @@ async function restoreInner(
     if (name !== dataEntryName(i) || size !== f.bytes) fail("archive_files_mismatch");
     const hash = createHash("sha256");
     let fd = toStage.has(i) ? openSync(stagedPath(i), "wx", 0o600) : -1;
-    // The archived .env is always captured on a restore: kept whole as env.archived (Fable N2), merged when
-    // it is under MAX_ENV_BYTES and --no-merge-env is not given.
+    // The archived .env is always captured on a restore: kept as env.archived without the entries of the
+    // keys the cp re-mints, at any size (Fable N2; review-a F2), merged when it is under MAX_ENV_BYTES and
+    // --no-merge-env is not given.
     const captureEnv = f.path === envDataPath && !opts.verifyOnly && !opts.dryRun;
     const envParts: Buffer[] = [];
     let got = 0;
@@ -721,8 +778,10 @@ async function restoreInner(
     const tmpName = (dir: string, base: string) => join(dir, `.${base}.nap-restore-${process.pid}-${randomBytes(4).toString("hex")}`);
     let envTmp: string | null = null;
     let keptTmp: string | null = null;
+    let keptDropped = 0;
     const napDirPath = join(opts.home, ...NAP_DIR.split("/"));
     let envAdd: EnvEntry[] = [];
+    let envSkipped = 0;
     // Directories (Fable S2): created now, their mode and mtime set last, deepest first, after every rename.
     const dirItems = items.filter((i) => i.entry.class === "dir");
     try {
@@ -737,7 +796,7 @@ async function restoreInner(
         if (item.entry.class === "link") {
           symlinkSync(item.entry.target!, tmp);
         } else if (item.act === "env_link") {
-          writeFileSync(tmp, envWithoutRemintable(envArchived!.toString("utf8")), { mode: 0o600, flag: "wx" });
+          writeFileSync(tmp, envBytesWithoutRemintable(envArchived!).bytes, { mode: 0o600, flag: "wx" });
           chmodSync(tmp, 0o600);
           const when = new Date(item.entry.mtime_ms);
           utimesSync(tmp, when, when);
@@ -755,10 +814,12 @@ async function restoreInner(
       if (status === "restored" && envArchived !== null) {
         keptTmp = tmpName(napDirPath, "env.archived");
         mkdirSync(napDirPath, { recursive: true, mode: 0o700 });
-        writeFileSync(keptTmp, envArchived, { mode: 0o600, flag: "wx" });
+        const kept = envBytesWithoutRemintable(envArchived);
+        keptDropped = kept.dropped;
+        writeFileSync(keptTmp, kept.bytes, { mode: 0o600, flag: "wx" });
       }
       if (status === "restored" && envArchived !== null && opts.mergeEnv && envArchived.length <= MAX_ENV_BYTES) {
-        envAdd = envEntriesToMerge(envArchived.toString("utf8"), envCurrent);
+        ({ entries: envAdd, skipped: envSkipped } = envEntriesToMerge(envArchived.toString("utf8"), envCurrent));
         if (envAdd.length > 0) {
           const envPath = join(root, ...segments(envRel));
           mkdirSync(dirname(envPath), { recursive: true, mode: 0o700 });
@@ -798,6 +859,7 @@ async function restoreInner(
     if (keptTmp) {
       try {
         renameSync(keptTmp, join(napDirPath, "env.archived"));
+        line.env_archived_dropped = keptDropped;
       } catch {
         rmSync(keptTmp, { force: true });
         if (envTmp) rmSync(envTmp, { force: true });
@@ -808,6 +870,7 @@ async function restoreInner(
       try {
         renameSync(envTmp, join(root, ...segments(envRel)));
         line.env_merged = envAdd.length;
+        line.env_merge_skipped = envSkipped;
       } catch {
         rmSync(envTmp, { force: true });
         return end("error", "write_failed");

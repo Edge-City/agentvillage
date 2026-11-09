@@ -12,7 +12,8 @@ import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import { chunkName, dataEntryName, hasData, manifestName, TAR_END, tarPadding, toolSha256, ustarHeader } from "../nap-common";
-import { BUNDLE_FILES, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
+import { BUNDLE_FILES, CP_REMINTABLE, STORE_BLOB_ENTRY, STORE_MEMBERS_ENTRY } from "../nap-state-paths";
+import { envBytesWithoutRemintable, envEntriesToMerge } from "../restore-state";
 import {
   buildNapHome,
   cleanup,
@@ -786,15 +787,15 @@ test("Fable read 2 N (.env): a duplicate key merges its LAST value; every hard l
   expect(a.files.find((f) => f.path === ".hermes/.env")).toMatchObject({ same_as: ".a-env" });
   const t = wakeTarget("env-links-t");
   const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
-  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, links: r.line.env_links_filtered })
-    .toEqual({ code: 0, status: "restored", merged: 2, links: 2 });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, links: r.line.env_links_filtered, dropped: r.line.env_archived_dropped })
+    .toEqual({ code: 0, status: "restored", merged: 2, links: 2, dropped: 1 });
   const env = readFileSync(join(t.home, ".env"), "utf8");
   expect([env.includes("MY_TOKEN=second"), env.includes("MY_TOKEN=first"), env.includes(PLANTED.eventsToken)]).toEqual([true, false, false]);
   const filtered = `# resident notes\nMY_TOKEN=first\nMY_TOKEN=second\nOTHER=1\n`;
   for (const rel of ["notes/env-copy", ".a-env"]) {
     expect([rel, readFileSync(join(t.root, rel), "utf8"), statSync(join(t.root, rel)).mode & 0o777]).toEqual([rel, filtered, 0o600]);
   }
-  expect(readFileSync(join(napDir(t.home), "env.archived"), "utf8")).toBe(archivedEnv);
+  expect(readFileSync(join(napDir(t.home), "env.archived"), "utf8")).toBe(filtered); // F2: the re-minted key's old value is gone
   // A .env that is a symlink is never silently dropped: the archive refuses it (link_at_managed_path, 64,
   // in nap-archive.test.ts) and a forged one refuses the restore (the MEDIUM test above).
 });
@@ -811,12 +812,149 @@ test("N2: a multi-line quoted value merges whole; the archived .env is kept 0600
   expect(env).toContain(`AV_EVENTS_TOKEN=${FRESH.events}`);
   expect(env).not.toContain(PLANTED.eventsToken);
   const kept = join(napDir(t.home), "env.archived");
-  expect([readFileSync(kept, "utf8"), statSync(kept).mode & 0o777]).toEqual([archivedEnv, 0o600]);
-  // Over the merge cap: restored without a merge, the archived copy kept.
-  const big = `RESIDENT_KEY=1\n${"# padding\n".repeat(120_000)}`;
+  expect([readFileSync(kept, "utf8"), statSync(kept).mode & 0o777, r.line.env_archived_dropped])
+    .toEqual([archivedEnv.replace(`AV_EVENTS_TOKEN=${PLANTED.eventsToken}\n`, ""), 0o600, 1]);
+  // Over the merge cap: restored without a merge, the archived copy kept, still without the re-minted keys (F2).
+  const padding = "# padding\n".repeat(120_000);
+  const big = `RESIDENT_KEY=1\nAV_EVENTS_TOKEN=${PLANTED.eventsToken}\n${padding}`;
   const b = await archiveFixture("env-big", (h) => writeFileSync(join(h.home, ".env"), big, { mode: 0o600 }));
   const t2 = wakeTarget("env-big-t");
   const r2 = await restore(t2, b.manifestKey, b.manifest.chunks.length, { keyDoc: keyFor(b) });
-  expect({ code: r2.code, status: r2.line.status, merged: r2.line.env_merged }).toEqual({ code: 0, status: "restored", merged: 0 });
-  expect(readFileSync(join(napDir(t2.home), "env.archived"), "utf8")).toBe(big);
+  expect({ code: r2.code, status: r2.line.status, merged: r2.line.env_merged, dropped: r2.line.env_archived_dropped })
+    .toEqual({ code: 0, status: "restored", merged: 0, dropped: 1 });
+  expect(readFileSync(join(napDir(t2.home), "env.archived"), "utf8")).toBe(`RESIDENT_KEY=1\n${padding}`);
+});
+
+// F2 (review-a L43945, lead L44199): env.archived holds the archived .env minus every line of a key the cp
+// re-mints, every other line byte-exact. Lines as [bytes, kept?]; the keys come from the module.
+const REMINT = CP_REMINTABLE.env_keys;
+const envLine = (text: string | Buffer, kept: boolean): [Buffer, boolean] => [typeof text === "string" ? Buffer.from(text, "utf8") : text, kept];
+function f2Lines(o: { swallow: boolean }): [Buffer, boolean][] {
+  return [
+    envLine("# resident notes", true),
+    envLine("", true),
+    envLine("MY_TOKEN=first", true),
+    // Every re-mintable key, plain, `export` and spaced forms.
+    ...REMINT.map((k, i) => envLine(i % 2 ? `export ${k}=old-${i}` : `  ${k} = old-${i}`, false)),
+    // A multi-line quoted re-mintable value (the key given a second time): all three lines go.
+    envLine(`${REMINT[0]}="-----BEGIN OLD-----`, false),
+    envLine("old body line", false),
+    envLine(`-----END OLD-----"`, false),
+    // A key given twice.
+    envLine(`${REMINT[1]}=old-twice`, false),
+    envLine("CERT='keep", true),
+    envLine("me'", true),
+    // Not UTF-8: a kept line round-trips byte for byte; a dropped one goes whole. Truncated sequences sit
+    // right before the 0x0A so a decoder that swallowed it would shift every later line.
+    envLine(Buffer.from([0x4c, 0x41, 0x54, 0x49, 0x4e, 0x3d, 0xff, 0xfe, 0xc3]), true),
+    envLine(Buffer.concat([Buffer.from(`${REMINT[2]}=old-`), Buffer.from([0xe0, 0x80])]), false),
+    envLine(Buffer.from([0x23, 0x20, 0xf0, 0x90, 0x80]), true),
+    envLine("CRLF_KEY=1\r", true),
+    envLine("MY_TOKEN=second", true),
+    ...(o.swallow
+      ? [envLine('SWALLOW="abc', true), envLine(`${REMINT[3]}=old-swallowed`, false), envLine('END="x"', true)]
+      : []),
+    // An unclosed quote on a re-mintable key: not an entry, but its line still holds the old value.
+    envLine(`${REMINT[4]}="old-unclosed`, false),
+    envLine("AFTER_UNCLOSED=1", true),
+    envLine("", true), // the trailing newline
+  ];
+}
+const joinLines = (ls: [Buffer, boolean][], keptOnly: boolean) =>
+  Buffer.concat(ls.filter(([, k]) => k || !keptOnly).flatMap(([b], i) => (i === 0 ? [b] : [Buffer.from("\n"), b])));
+/** Every line of `bytes` that assigns a re-mintable key, as a dotenv reader would see it. */
+const remintLines = (bytes: Buffer) =>
+  bytes.toString("latin1").split("\n").filter((l) => REMINT.some((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`).test(l)));
+
+test("F2: env.archived is the archived .env minus every line of a re-mintable key, byte-exact (multi-line, twice, unclosed, swallowed, not UTF-8)", () => {
+  expect(REMINT.length).toBeGreaterThanOrEqual(5);
+  const ls = f2Lines({ swallow: true });
+  const archived = joinLines(ls, false);
+  expect(remintLines(archived).length).toBe(REMINT.length + 5); // the fixture does hold them
+  const { bytes, dropped } = envBytesWithoutRemintable(archived);
+  expect(bytes.equals(joinLines(ls, true))).toBe(true);
+  expect(dropped).toBe(REMINT.length + 5);
+  expect(remintLines(bytes)).toEqual([]);
+  expect(/old/i.test(bytes.toString("latin1"))).toBe(false);
+  // Nothing to drop: the bytes come back whole, not-UTF-8 and all.
+  const clean = joinLines(ls.filter(([, k]) => k), false);
+  expect(envBytesWithoutRemintable(clean)).toEqual({ bytes: clean, dropped: 0 });
+  // No trailing newline, the last line dropped.
+  expect(envBytesWithoutRemintable(Buffer.from(`A=1\n${REMINT[0]}=old`)).bytes.toString()).toBe("A=1");
+});
+
+test("F2: a restore writes env.archived without the re-minted keys' lines, byte-exact; the .env merge is unchanged", async () => {
+  const ls = f2Lines({ swallow: false });
+  const archived = joinLines(ls, false);
+  const a = await archiveFixture("env-f2", (h) => writeFileSync(join(h.home, ".env"), archived, { mode: 0o600 }));
+  const t = wakeTarget("env-f2-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, dropped: r.line.env_archived_dropped })
+    .toEqual({ code: 0, status: "restored", merged: 5, dropped: REMINT.length + 4 });
+  const kept = join(napDir(t.home), "env.archived");
+  const bytes = readFileSync(kept);
+  expect([bytes.equals(joinLines(ls, true)), statSync(kept).mode & 0o777]).toEqual([true, 0o600]);
+  expect(remintLines(bytes)).toEqual([]);
+  // The merge, as before: the last value of each key not re-minted and not set, on the UTF-8 decoding.
+  expect(readFileSync(join(t.home, ".env"), "utf8")).toBe(
+    `AV_EVENTS_TOKEN=${FRESH.events}\nTELEGRAM_BOT_TOKEN=${FRESH.bot}\n` +
+      "CERT='keep\nme'\nLATIN=\ufffd\ufffd\ufffd\nCRLF_KEY=1\nMY_TOKEN=second\nAFTER_UNCLOSED=1\n",
+  );
+});
+
+// review-b S1 (L44339): a stray quote in an earlier entry swallows a re-mintable key's line into that entry's
+// quoted value; the merge must not carry the entry (and so the old line) into the live .env. The keys come
+// from the module: two the wake's .env does not set.
+const WAKE_KEYS = ["AV_EVENTS_TOKEN", "TELEGRAM_BOT_TOKEN"];
+const [S1_KEY, S1_KEY2] = REMINT.filter((k) => !WAKE_KEYS.includes(k));
+const s1Env = () =>
+  [
+    "# resident notes",
+    "KEEP_A=1",
+    `X_${S1_KEY}_NOTE=decoy-contains`, // a key that merely contains a re-mintable name: merged
+    `${S1_KEY}_SUFFIX=decoy-suffix`,
+    'STRAY="abc', // stray double quote: the next line is inside STRAY's value
+    `${S1_KEY}=old-swallowed-1`,
+    'END="x"',
+    "STRAY2='abc", // stray single quote, an `export` spaced form swallowed
+    `  export ${S1_KEY2} = old-swallowed-2`,
+    "tail'",
+    "KEEP_B=2",
+    'TAIL="never closed', // unclosed to EOF: not an entry; the next line is its own (re-minted) entry
+    `${S1_KEY}=old-after-unclosed`,
+    "",
+  ].join("\n");
+
+test("S1: envEntriesToMerge skips an entry carrying a swallowed re-mintable line and counts it; the rest still merge", () => {
+  expect([typeof S1_KEY, typeof S1_KEY2]).toEqual(["string", "string"]);
+  const archived = s1Env();
+  expect(remintLines(Buffer.from(archived)).length).toBe(3); // the fixture does hold them
+  const m = envEntriesToMerge(archived, `AV_EVENTS_TOKEN=fresh\n`);
+  expect({ keys: m.entries.map((e) => e.key), skipped: m.skipped })
+    .toEqual({ keys: ["KEEP_A", `X_${S1_KEY}_NOTE`, `${S1_KEY}_SUFFIX`, "KEEP_B"], skipped: 2 });
+  const merged = m.entries.flatMap((e) => e.lines).join("\n");
+  expect(remintLines(Buffer.from(merged))).toEqual([]);
+  expect(merged).not.toContain("old-");
+  // Only entries that would otherwise merge are counted: one already set is not.
+  expect(envEntriesToMerge(archived, "STRAY2=fresh\n").skipped).toBe(1);
+  // Nothing swallowed: nothing skipped.
+  expect(envEntriesToMerge("A=1\nB=\"x\ny\"\n", "").skipped).toBe(0);
+});
+
+test("S1: a restore merges no swallowed re-mintable line into the live .env (env_merge_skipped counts the entries)", async () => {
+  const archived = s1Env();
+  const a = await archiveFixture("env-s1", (h) => writeFileSync(join(h.home, ".env"), archived, { mode: 0o600 }));
+  const t = wakeTarget("env-s1-t");
+  const r = await restore(t, a.manifestKey, a.manifest.chunks.length, { keyDoc: keyFor(a) });
+  expect({ code: r.code, status: r.line.status, merged: r.line.env_merged, skipped: r.line.env_merge_skipped, dropped: r.line.env_archived_dropped })
+    .toEqual({ code: 0, status: "restored", merged: 4, skipped: 2, dropped: 3 });
+  const live = readFileSync(join(t.home, ".env"));
+  // The live .env sets re-mintable keys only through the wake's own fresh lines.
+  expect(remintLines(live)).toEqual([`AV_EVENTS_TOKEN=${FRESH.events}`, `TELEGRAM_BOT_TOKEN=${FRESH.bot}`]);
+  expect(live.toString("utf8")).toBe(
+    `AV_EVENTS_TOKEN=${FRESH.events}\nTELEGRAM_BOT_TOKEN=${FRESH.bot}\n` +
+      `KEEP_A=1\nX_${S1_KEY}_NOTE=decoy-contains\n${S1_KEY}_SUFFIX=decoy-suffix\nKEEP_B=2\n`,
+  );
+  expect(remintLines(readFileSync(join(napDir(t.home), "env.archived")))).toEqual([]);
+  expect(r.stdout).not.toContain("old-");
 });
