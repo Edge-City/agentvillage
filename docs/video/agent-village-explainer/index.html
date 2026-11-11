@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Agent Village explainer</title>
+<style>
+  html, body { margin: 0; background: #0c0820; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { height: 100vh; aspect-ratio: 9 / 16; display: block; }
+</style>
+<canvas id="c"></canvas>
+<script src="film.js"></script>
+<script>
+  // Open this file in a browser to preview in real time. Add ?t=12.5 to hold one moment.
+  film.init(document.getElementById('c'));
+  const hold = new URLSearchParams(location.search).get('t');
+  if (hold !== null) film.draw(Math.round(+hold * film.FPS));
+  else if (!navigator.webdriver) {
+    const t0 = performance.now();
+    (function loop() {
+      film.draw(Math.floor(((performance.now() - t0) / 1000 * film.FPS) % film.frames));
+      requestAnimationFrame(loop);
+    })();
+  }
+</script>
