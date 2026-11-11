@@ -374,8 +374,8 @@ function scene1(ctx, t) {
   palm(ctx, 1010 + (z - 1) * 600, 1960, 820, -190, t, fg, 8, rim);
   palm(ctx, 300 - (z - 1) * 300, 1960, 520, 70, t, fg, 5, rim);
 
-  label(ctx, 'MANDREM · GOA', W / 2, 300, 30, easeOut(prog(t, 0.5, 1.3)) * (1 - prog(t, 5.6, 6.1)));
-  caption(ctx, t, 0.9, 6.1, ['Every year, a village', 'appears *by the sea*.'], 410, 82);
+  label(ctx, 'EDGE CITY INDIA · MANDREM, GOA', W / 2, 300, 26, easeOut(prog(t, 0.5, 1.3)) * (1 - prog(t, 5.6, 6.1)));
+  caption(ctx, t, 0.9, 6.1, ['Edge City builds popup', 'villages *around the world*.'], 410, 74);
 }
 
 // ---------- scene 2: the village by day ----------
@@ -408,7 +408,7 @@ function scene2(ctx, t) {
     }
   }
   const dark = { color: '#1f2a5c', accent: '#e2553f', shadow: 'rgba(255,255,255,.55)' };
-  caption(ctx, t, 0.4, 3.5, ['Hundreds of curious people.', 'Three weeks together.'], 330, 70, dark);
+  caption(ctx, t, 0.4, 3.5, ['A few hundred people.', 'Three weeks together.'], 330, 70, dark);
   caption(ctx, t, 3.6, 6.6, ['So who should', 'you *meet*?'], 320, 92, dark);
 }
 
@@ -510,7 +510,7 @@ function scene3(ctx, t) {
     const blink = Math.max(0, 1 - Math.abs(((t * 0.45) % 1) - 0.5) * 30);
     orb(ctx, 540, oy, or * (1 + clamp(pulse) * 0.1), '#ffc869', { face: prog(t, 2.3, 2.8), blink, look: Math.sin(t * 1.3) });
   }
-  caption(ctx, t, 1.3, 3.9, ['Every resident', 'gets an *agent*.'], 1560, 80);
+  caption(ctx, t, 1.3, 3.9, ['Residents can opt in', 'to their own *agent*.'], 1560, 80);
   caption(ctx, t, 4.1, 7.2, ['It learns what', 'you *care about*.'], 1560, 80);
 }
 
@@ -604,8 +604,8 @@ function scene4(ctx, t) {
     }
     glow(ctx, cx, cy, 300, '#ffc864', 0.35 * spark);
   }
-  caption(ctx, t, 0.9, 4.9, ['While you live your day,', 'the agents *talk*.'], 1480, 76);
-  caption(ctx, t, 5.2, 8.6, ['Quietly looking', 'for *overlap*.'], 1480, 84);
+  caption(ctx, t, 0.9, 4.9, ['While you live your day,', 'it *advocates* for you.'], 1480, 76);
+  caption(ctx, t, 5.2, 8.6, ['Agents negotiate,', 'looking for *overlap*.'], 1480, 84);
 }
 
 // ---------- scene 5: the morning brief ----------
@@ -620,8 +620,8 @@ function scene5(ctx, t) {
   palm(ctx, -120, 700, 640, 200, t, '#f4a996', 3);
   palm(ctx, 1200, 820, 700, -200, t, '#f4ab98', 9);
 
-  const cy0 = 470 + (1 - easeOut(prog(t, 0, 0.9))) * 900 + Math.sin(t * 1.1) * 6;
-  const cx0 = 150, cw = 780, ch = 1130;
+  const cy0 = 440 + (1 - easeOut(prog(t, 0, 0.9))) * 900 + Math.sin(t * 1.1) * 6;
+  const cx0 = 150, cw = 780, ch = 1190;
   ctx.save();
   ctx.shadowColor = 'rgba(120,40,60,.35)'; ctx.shadowBlur = 80; ctx.shadowOffsetY = 36;
   ctx.fillStyle = '#fffaf2'; rrect(ctx, cx0, cy0, cw, ch, 56); ctx.fill();
@@ -650,7 +650,7 @@ function scene5(ctx, t) {
       txt(h, 54, y, 34, '#8a4a2c', 700); txt(e, 192, y, 36, '#2c2146', 500);
     });
   });
-  block(2.6, 666, 250, () => {
+  block(2.6, 666, 350, () => {
     txt('SOMEONE TO MEET', 36, 60, 26, '#3b8f84', 700);
     ctx.fillStyle = '#5cc8c2'; ctx.beginPath(); ctx.arc(86, 150, 50, 0, TAU); ctx.fill();
     ctx.fillStyle = '#c98d68'; ctx.beginPath(); ctx.arc(86, 140, 22, 0, TAU); ctx.fill();
@@ -658,25 +658,32 @@ function scene5(ctx, t) {
     ctx.fillStyle = '#2f7d78'; ctx.beginPath(); ctx.ellipse(86, 212, 44, 36, 0, 0, TAU); ctx.fill(); ctx.restore();
     txt('Arjun', 160, 138, 44, '#2c2146', 700);
     txt('Also builds solar microgrids', 160, 188, 32, '#6f5f78', 500);
+    const press = 1 - 0.07 * Math.sin(prog(t, 3.9, 4.3) * Math.PI), done = prog(t, 4.1, 4.3);
+    ctx.save(); ctx.translate(176, 276); ctx.scale(press, press);
+    ctx.fillStyle = mix('#3b8f84', '#2c2146', done); rrect(ctx, -140, -40, 280, 80, 40); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = `700 34px ${SANS}`; ctx.textAlign = 'center'; ctx.fillText(done > 0.5 ? 'Approved' : 'Approve intro', 0, 12);
+    ctx.restore();
+    ctx.strokeStyle = '#9cc9c1'; ctx.lineWidth = 3; rrect(ctx, 340, 236, 200, 80, 40); ctx.stroke();
+    ctx.fillStyle = '#3b8f84'; ctx.font = `600 34px ${SANS}`; ctx.textAlign = 'center'; ctx.fillText('Not now', 440, 288);
   }, '#e6f6f1');
   // accepted notification
-  const n = spring(prog(t, 4.3, 5.2));
+  const n = spring(prog(t, 4.7, 5.6));
   if (n > 0) {
     ctx.save(); ctx.globalAlpha = clamp(n * 1.5);
-    ctx.translate(cx0 + 48, cy0 + 944 + (1 - n) * 50);
+    ctx.translate(cx0 + 48, cy0 + 1034 + (1 - n) * 50);
     ctx.fillStyle = '#2c2146'; rrect(ctx, 0, 0, cw - 96, 130, 40); ctx.fill();
     ctx.fillStyle = '#7fe0b0'; ctx.beginPath(); ctx.arc(70, 65, 34, 0, TAU); ctx.fill();
     ctx.strokeStyle = '#2c2146'; ctx.lineWidth = 8; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    const c = prog(t, 4.7, 5.2);
+    const c = prog(t, 5.1, 5.6);
     ctx.beginPath(); ctx.moveTo(54, 66); ctx.lineTo(54 + 12 * clamp(c * 2), 66 + 12 * clamp(c * 2));
     if (c > 0.5) ctx.lineTo(66 + 22 * (c - 0.5) * 2, 78 - 26 * (c - 0.5) * 2);
     ctx.stroke();
-    txt('Arjun accepted. You’re connected.', 124, 77, 32, '#fff6e6', 600);
+    txt('Arjun said yes. You’re connected.', 124, 77, 32, '#fff6e6', 600);
     ctx.restore();
-    glow(ctx, cx0 + 118, cy0 + 1009, 200, '#7fe0b0', 0.25 * n * (1 - prog(t, 5.2, 6.2)));
+    glow(ctx, cx0 + 118, cy0 + 1099, 200, '#7fe0b0', 0.25 * n * (1 - prog(t, 5.6, 6.6)));
   }
   const dark = { color: '#3a1f4a', accent: '#c8452f', shadow: 'rgba(255,255,255,.5)' };
-  caption(ctx, t, 0.5, 7.2, ['Each morning,', 'a short *brief*.'], 250, 80, dark);
+  caption(ctx, t, 0.5, 7.2, ['You approve', 'every *introduction*.'], 240, 78, dark);
 }
 
 // ---------- scene 6: the meeting ----------
@@ -832,7 +839,7 @@ function scene7(ctx, t) {
   try { ctx.letterSpacing = '0px'; } catch (e) {}
   ctx.fillText('Village', 540, 712 + (1 - tp) * 30);
   ctx.restore();
-  label(ctx, 'EDGE CITY INDIA', W / 2, 800, 30, easeOut(prog(t, 2.6, 3.4)));
+  label(ctx, 'A FIELD EXPERIMENT AT EDGE CITY INDIA', W / 2, 800, 22, easeOut(prog(t, 2.6, 3.4)));
   const a1 = easeOut(prog(t, 3.3, 4.1)), a2 = easeOut(prog(t, 3.7, 4.5));
   richLine(ctx, 'Agents find the *overlap*.', W / 2, 1560 + (1 - a1) * 24, 60, a1);
   richLine(ctx, 'People do the *meeting*.', W / 2, 1640 + (1 - a2) * 24, 60, a2);
