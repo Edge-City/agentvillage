@@ -6,6 +6,7 @@
   "description": "Read the café menu and schedule, and order with an exact approved preview.",
   "homepage": "https://agents.edgecity.live",
   "visibility": "everyone",
+  "staff": true,
   "permissions": [
     {
       "kind": "read",
