@@ -16,6 +16,13 @@
  *   pr_open              state open, not merged
  *   not_draft            draft === false
  *   base_main            base ref main, base repository this repository (the head may be any fork)
+ *   base_fresh           B-194 (review-b RP8, ov#477 recheck): the pull request's base.sha (which the verdict's
+ *                        base_sha must equal) is at most MAX_BASE_BEHIND commits behind main's tip: compare
+ *                        <base.sha>...main answers for that base, status ahead or identical, behind_by 0 and
+ *                        ahead_by (how far main has moved past the base) an integer 0..MAX_BASE_BEHIND. An open
+ *                        pull request keeps its base.sha for days, so without this a verdict judged against an old
+ *                        main still merged. A compare that fails or answers oddly is no merge; a stale base needs
+ *                        a push that updates it (a new bot run and CI), then the label again.
  *   head_pinned          the pull request's head sha is the full sha every other fact was read for
  *   files_complete       pulls/{n}/files read in full: as many entries as changed_files, 1..2999 (3000 is the API cap)
  *   files_in_scope       every path, and every rename's old path, is mini-apps/<id>/... or skills/<id>/...
@@ -84,9 +91,17 @@ export const FORBIDDEN_FILES: ReadonlySet<string> = new Set([...GATE_FILES, "scr
 export const HEAD_EVENTS = Object.freeze(["head_ref_force_pushed", "head_ref_restored", "reopened"]);
 export const MAX_FILES = 3000;
 export const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+/**
+ * B-194: the most commits main may have moved past the pull request's base (compare base...main ahead_by).
+ * Main moved 4 to 17 commits a day over 16-23 Oct 2026 (squash merges plus the reference-sync bot), so 20 is
+ * about one to two days of main: a verdict, its CI run and the bot's GATE / EDGE_SKILL_NAMES / ownership tree
+ * are at most that far behind what they are merged into, while a pull request labeled within a day of its last
+ * push still merges without a rebase. RP8's probe (50 behind) and an ov#379-like base (88 behind) do not.
+ */
+export const MAX_BASE_BEHIND = 20;
 const MAX_PAGES = 30;
 const MAX_CANDIDATES = 30;
-export const CONDITIONS = Object.freeze(["switch_on", "pr_open", "not_draft", "base_main", "head_pinned", "files_complete", "files_in_scope",
+export const CONDITIONS = Object.freeze(["switch_on", "pr_open", "not_draft", "base_main", "base_fresh", "head_pinned", "files_complete", "files_in_scope",
   "no_forbidden_path", "review_run_green", "review_verdict_pass", "review_lane_mini_app", "ci_green", "label_present", "label_by_writer",
   "label_after_push"] as const);
 export type Condition = (typeof CONDITIONS)[number];
@@ -117,7 +132,8 @@ export type Facts = {
   labelPermission: unknown;
   /** pulls?state=all&head=<head label>: every pull request ever opened from this head (fold 1). */
   headPulls: unknown[] | null;
-  /** compare/<the JSON's base_sha>...main (fold 1). */
+  /** compare/<the pull request's base.sha>...main (fold 1; B-194). The verdict needs its base_sha to equal that
+   *  base.sha, so this is the compare of the JSON's base_sha whenever the verdict can pass. */
   baseCompare: unknown;
   review: { workflow: unknown; runs: unknown[] | null; jobs: unknown[] | null; artifacts: unknown[] | null; report: unknown };
   ci: { workflow: unknown; runs: unknown[] | null; jobs: unknown[] | null };
@@ -201,6 +217,13 @@ export function decide(f: Facts): Decision {
   c.set("pr_open", !!pr && pr.state === "open" && pr.merged === false);
   c.set("not_draft", !!pr && pr.draft === false);
   c.set("base_main", !!pr && pr.base?.ref === BASE_BRANCH && fullName(pr.base?.repo) === f.repo);
+  // B-194: the base is on main and at most MAX_BASE_BEHIND commits behind its tip (see the header).
+  const baseSha = pr && typeof pr.base?.sha === "string" && SHA_RE.test(pr.base.sha) ? pr.base.sha : null;
+  const cmp = isObj(f.baseCompare) ? f.baseCompare : null;
+  c.set("base_fresh", !!baseSha && !!cmp && isObj(cmp.base_commit) && cmp.base_commit.sha === baseSha &&
+    (cmp.status === "ahead" || cmp.status === "identical") && cmp.behind_by === 0 &&
+    Number.isSafeInteger(cmp.ahead_by) && cmp.ahead_by >= 0 && cmp.ahead_by <= MAX_BASE_BEHIND &&
+    (cmp.status === "identical") === (cmp.ahead_by === 0));
   c.set("head_pinned", !!pr && !!sha && pr.head?.sha === sha && typeof pr.head?.ref === "string" && typeof fullName(pr.head?.repo) === "string");
 
   const paths = Array.isArray(f.files) ? f.files.map(entryPaths) : null;
@@ -306,7 +329,8 @@ export function gather(io: Io, repo: string, n: number, switchValue: string | un
     try { report = JSON.parse(io.artifactJson(repo, art.id)); } catch { report = null; }
   }
   const c = runsOf("test.yml", CI_WORKFLOW, unique);
-  const baseSha = isObj(report) && typeof report.base_sha === "string" && SHA_RE.test(report.base_sha) ? report.base_sha : null;
+  // B-194: the pull request's own base.sha (the verdict's base_sha must equal it), never a sha from the JSON.
+  const baseSha = pr && typeof pr.base?.sha === "string" && SHA_RE.test(pr.base.sha) ? pr.base.sha : null;
   const baseCompare = baseSha ? tryGet(io, `${R}/compare/${baseSha}...${BASE_BRANCH}?per_page=1`) : null;
   return {
     repo, n, switchValue, pinnedSha, pr, files, timeline, labelPermission, headPulls, baseCompare,

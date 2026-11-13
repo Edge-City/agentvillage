@@ -383,13 +383,20 @@ describe("Fold 1, review-b M1 (ov#477): the verdict is bound to THIS pull reques
     })), "review_verdict_pass");
     onlyFalse(decideFor(fixture((f) => { report(f).base_ref = "release-x"; })), "review_verdict_pass");
     // The edit moves the pull request's base.sha to main's tip; the JSON still holds the sha the run checked out.
-    onlyFalse(decideFor(fixture((f) => { f[PR].base.sha = "e".repeat(40); })), "review_verdict_pass");
+    // ov#479 round 2 (review-b S1): that new base IS main's tip (compare identical), so base_fresh holds and only
+    // the base_sha === base.sha binding refuses it.
+    onlyFalse(decideFor(fixture((f) => {
+      const tip = "e".repeat(40);
+      f[PR].base.sha = tip;
+      f[P(`compare/${tip}...main?per_page=1`)] = { status: "identical", ahead_by: 0, behind_by: 0, total_commits: 0, base_commit: { sha: tip }, merge_base_commit: { sha: tip } };
+    })), "review_verdict_pass");
   });
   test("base_sha not on main (diverged, behind), the compare unreadable, or the sha malformed => no merge", () => {
+    // B-194: the same compare answers base_fresh, which fails closed on it too.
     for (const status of ["diverged", "behind", undefined]) {
-      onlyFalse(decideFor(fixture((f) => { f[COMPARE].status = status; })), "review_verdict_pass");
+      onlyFalse(decideFor(fixture((f) => { f[COMPARE].status = status; })), "review_verdict_pass", "base_fresh");
     }
-    onlyFalse(decideFor(fixture((f) => { delete f[COMPARE]; })), "review_verdict_pass");
+    onlyFalse(decideFor(fixture((f) => { delete f[COMPARE]; })), "review_verdict_pass", "base_fresh");
     onlyFalse(decideFor(fixture((f) => { report(f).base_sha = "a4974244"; })), "review_verdict_pass");
     onlyFalse(decideFor(fixture((f) => { report(f).base_sha = BASE.toUpperCase(); })), "review_verdict_pass");
   });
@@ -416,6 +423,86 @@ describe("Fold 1, review-b M1 (ov#477): the verdict is bound to THIS pull reques
     onlyFalse(decideFor((() => { const f = sameRepo({ ref: "main", sha: BASE }); f[P("pulls?state=all&head=Edge-City%3Ahello-board&per_page=100")].push({ number: 902, state: "open" }); return f; })()), "ci_green");
     onlyFalse(decideFor(sameRepo({ ref: "release-x", sha: BASE })), "review_verdict_pass");
     onlyFalse(decideFor(sameRepo({ ref: "main", sha: "d".repeat(40) })), "review_verdict_pass");
+  });
+});
+
+describe("B-194 (review-b RP8, ov#477 recheck): the base is at most MAX_BASE_BEHIND commits behind main", () => {
+  /** The compare base...main for a base `n` commits behind main, in the live API's shape. */
+  const behind = (n: number) => fixture((f) => {
+    f[COMPARE] = { status: n === 0 ? "identical" : "ahead", ahead_by: n, behind_by: 0, total_commits: n, base_commit: { sha: BASE }, merge_base_commit: { sha: BASE } };
+  });
+  test("the limit is 20 commits, and base_fresh is one of the logged conditions", () => {
+    expect(A.MAX_BASE_BEHIND).toBe(20);
+    expect(A.CONDITIONS).toContain("base_fresh");
+    const calls = newCalls();
+    A.sweep(fakeIo(fixture(), calls), REPO, { MINI_APPS_AUTOMERGE: "1" });
+    expect(calls.log.filter((l) => l.includes(" pr=#901 ")).every((l) => l.includes(" base_fresh=true"))).toBe(true);
+  });
+  test("base 0 behind (identical to main) => merge", () => {
+    const d = decideFor(behind(0));
+    expect(cond(d, "base_fresh")).toBe(true);
+    expect(d.merge).toBe(true);
+  });
+  test("base exactly MAX_BASE_BEHIND behind => merge", () => {
+    const d = decideFor(behind(20));
+    expect(cond(d, "base_fresh")).toBe(true);
+    expect(d.merge).toBe(true);
+  });
+  test("base MAX_BASE_BEHIND + 1 behind => no merge, base_fresh the only false condition", () => {
+    onlyFalse(decideFor(behind(21)), "base_fresh");
+    onlyFalse(decideFor(behind(500)), "base_fresh");
+  });
+  test("the compare API errors or answers no object => no merge (fail closed)", () => {
+    onlyFalse(decideFor(fixture((f) => { delete f[COMPARE]; })), "review_verdict_pass", "base_fresh");
+    for (const answer of [null, [], "ahead", 3]) {
+      onlyFalse(decideFor(fixture((f) => { f[COMPARE] = answer; })), "review_verdict_pass", "base_fresh");
+    }
+    // An io whose compare GET throws (HTTP 500, rate limit) and nothing else does.
+    const f = fixture();
+    const io = fakeIo(f, newCalls());
+    const get = io.get;
+    io.get = (path) => { if (path === COMPARE) throw new Error("HTTP 500"); return get(path); };
+    onlyFalse(A.decide(A.gather(io, REPO, 901, "1")), "review_verdict_pass", "base_fresh");
+  });
+  test("RP8's probe shape: opened against an old main M0, the bot ran then, main 50 ahead, base.sha still M0 => no merge", () => {
+    const rp8: Fix = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "mini-apps-automerge", "stale-base-rp8.json"), "utf8"));
+    const f = fixture((f) => { for (const [k, v] of Object.entries(rp8)) if (!k.startsWith("_")) f[k] = v; });
+    // Everything the verdict binds still holds: the JSON names #901, base main, base_sha === base.sha, on main.
+    expect([report(f).pr, report(f).base_ref, report(f).base_sha, f[PR].base.sha, f[COMPARE].status]).toEqual([901, "main", BASE, BASE, "ahead"]);
+    const d = decideFor(f);
+    expect(cond(d, "review_verdict_pass")).toBe(true);
+    onlyFalse(d, "base_fresh");
+    const calls = newCalls();
+    expect(A.sweep(fakeIo(f, calls), REPO, { MINI_APPS_AUTOMERGE: "1" })).toBe(0);
+    expect(calls.merge).toEqual([]);
+    expect(calls.log.some((l) => l.includes("merge=false") && l.includes("base_fresh=false"))).toBe(true);
+  });
+  test("a compare answer of an unexpected shape fails closed", () => {
+    const bad: ((c: any) => void)[] = [
+      (c) => { delete c.ahead_by; },
+      (c) => { c.ahead_by = "3"; },
+      (c) => { c.ahead_by = 3.5; },
+      (c) => { c.ahead_by = -1; },
+      (c) => { c.ahead_by = null; },
+      (c) => { c.behind_by = 1; },
+      (c) => { delete c.behind_by; },
+      (c) => { delete c.base_commit; },
+      (c) => { c.base_commit = { sha: "e".repeat(40) }; },
+      (c) => { c.status = "identical"; }, // identical, yet 3 ahead
+      (c) => { c.ahead_by = 0; }, // ahead, yet 0 ahead
+    ];
+    for (const mut of bad) onlyFalse(decideFor(fixture((f) => { mut(f[COMPARE]); })), "base_fresh");
+  });
+  test("the compare asked is the pull request's own base.sha against main, once per read", () => {
+    const calls = newCalls();
+    A.gather(fakeIo(fixture(), calls), REPO, 901, "1");
+    expect(calls.get.filter((g) => g.includes("/compare/"))).toEqual([COMPARE]);
+    // A malformed base.sha is never put in a URL: no compare, no merge.
+    const calls2 = newCalls();
+    const d = A.decide(A.gather(fakeIo(fixture((f) => { f[PR].base.sha = "a4974244"; }), calls2), REPO, 901, "1"));
+    expect(calls2.get.filter((g) => g.includes("/compare/"))).toEqual([]);
+    expect(d.merge).toBe(false);
+    expect(cond(d, "base_fresh")).toBe(false);
   });
 });
 

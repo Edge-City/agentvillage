@@ -316,6 +316,12 @@
     "status": "ahead",
     "ahead_by": 3,
     "behind_by": 0,
-    "total_commits": 3
+    "total_commits": 3,
+    "base_commit": {
+      "sha": "a4974244dcd156149fe53cd47f30ceae76876a3f"
+    },
+    "merge_base_commit": {
+      "sha": "a4974244dcd156149fe53cd47f30ceae76876a3f"
+    }
   }
 }
