@@ -2,8 +2,9 @@
 
 Status: **design note**, 2026-10-06 (CX1). When written, nothing here was built.
 Landed 2026-11-13 from PR #212 so that the paths main cites resolve (`install/knowledge-index.ts`,
-`install/reset.ts`, `skills/recall/scripts/recall.ts`). The box side (sections 2, 4 and 6) was built
-in #253; the other sections are the 6 Oct design, not re-checked against today's code. References: control plane
+`install/reset.ts`, `skills/recall/scripts/recall.ts`). The box side (section 4 and section 11
+task T2, per #253's own description) was built in #253, merged 8 Oct; the other sections are the
+6 Oct design, not re-checked against today's code. References: control plane
 `agentvillage-controlplane` main `57c044a` (paths under `control-plane/src/`), app
 `agentvillage-app` main `a443391c`, this repo `944b4708`, data `agentvillage-data` `cb1bab7`.
 
