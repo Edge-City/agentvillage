@@ -1,7 +1,7 @@
 ---
 name: forkicks
 description: Always send the complete current For Kicks café menu as images when asked about For Kicks or its menu, read its schedule, preview an order with its exact total and shared display name, and place it only after the resident approves. Optional first-party mini-app; UPI and card orders use pay-at-pickup honor rules.
-version: 1.0.8
+version: 1.0.9
 author: Edge City
 ---
 
@@ -79,9 +79,12 @@ an item, change fulfilment or add drinks to evade this restriction.
    Ask about ambiguous or required choices. Select a returned location and
    pickup date; use the returned schedule for the place and time. Do not
    fabricate a pickup slot or promise a preparation time that was not returned.
-   Ask whether the owner wants UPI with a returned payment link (`upi`) or card
-   at pickup (`card_on_pickup`). They'll check UPI payment at pickup; it does not
-   hold the order out of the queue. Delivery needs the intended address and minimum drinks.
+   Do not ask for a payment method before preparing: subsidy eligibility and
+   the amount due are known only from the returned quote, not from the subsidy
+   switch alone. Preserve an explicitly requested `upi` or `card_on_pickup`;
+   otherwise prepare with `card_on_pickup`, the existing non-prepayment default.
+   This wire value does not mean money is due. Delivery needs the intended
+   address and minimum drinks.
    Use only exact options in the returned `optionGroups` as `optionIds`; never
    invent decaf, iced or other options, or claim an absent option is a default.
    Anything the resident wants that is not an exact menu option belongs in the
@@ -113,6 +116,15 @@ an item, change fulfilment or add drinks to evade this restriction.
    instead of implying pickup. Explicitly state **the display name that will be
    shared with the café**; do not send the owner's email, Telegram id or EdgeOS
    identity. If the name is wrong, stop rather than quietly sharing a substitute.
+   When `quote.totalInr` is zero, say “Nothing to pay” and, when its discount
+   covers the subtotal, “Edge covers this order.” Do not ask UPI versus card,
+   request payment, or describe the internal payment-method value as an amount
+   owed. The approval card may still show that wire method; explain that ₹0
+   means no payment is needed. Never infer coverage from the subsidy being on.
+   When the total is positive, state the returned amount and payment method
+   before directing the resident to approve. If no method was specified, explain
+   the default is card at pickup; UPI is available if they prefer. A requested
+   change requires a new prepare and approval, never a patched draft.
    Then follow the prepare answer's `instruction`: with `approval: "requested"`
    the approval card for this exact order was sent to the resident's approvals
    bot, so say: “I've sent your approval card to your approvals bot; tap Approve
@@ -167,6 +179,10 @@ an item, change fulfilment or add drinks to evade this restriction.
    network result and never changes an order that was already placed.
 
 ## Payment and updates
+For a validated receipt with `totalInr: 0`, say “Nothing to pay.” If its returned
+label says Edge-sponsored, show that label. Do not send payment instructions or
+ask for a card/UPI choice, regardless of `payment.method` or `paymentStatus`.
+
 
 For UPI, send **only the exact payment URL returned by a successful, validated
 `forkicks.order.confirm`**. The server validates the configured allowed origin,
