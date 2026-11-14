@@ -172,6 +172,7 @@ test("configureHostedGateway sets pairing, approvals, and telegram restart flag"
   const doc = readConfig(configPath);
   expect((doc.gateway as Record<string, Record<string, unknown>>).pairing.global_mode).toBe("pair");
   expect((doc.approvals as Record<string, unknown>).mode).toBe(false);
+  expect((doc.approvals as Record<string, unknown>).destructive_slash_confirm).toBe(false);
   expect(
     (doc.platforms as Record<string, Record<string, unknown>>).telegram.gateway_restart_notification,
   ).toBe(false);
@@ -188,6 +189,35 @@ test("configureHostedGateway is idempotent and preserves other platform keys", (
   const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
   expect(telegram.gateway_restart_notification).toBe(false);
   expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
+});
+
+// V2112 (CLAIMS L17443 (1)): no resident taps Hermes's "Confirm /new" prompt to start a new chat.
+// Hermes reads `bool(approvals.get("destructive_slash_confirm", True))` from config.yaml per command
+// (gateway/run_busy.py `_maybe_confirm_destructive_slash`), so it must be a real YAML `false`.
+test("configureHostedGateway turns Hermes's destructive slash confirm off as a YAML boolean, and says so", () => {
+  const configPath = withConfig({});
+
+  const out = logged(configureHostedGateway).join("\n");
+
+  expect(readConfig(configPath).approvals).toEqual({ mode: false, destructive_slash_confirm: false });
+  expect(readFileSync(configPath, "utf8")).toMatch(/approvals:\n(\s+\S.*\n)*?\s+destructive_slash_confirm: false\n/);
+  expect(out).toContain("no /new confirm prompt");
+});
+
+test("configureHostedGateway pins destructive_slash_confirm false over a hand-set true, keeps other approvals keys, idempotent", () => {
+  const configPath = withConfig({
+    approvals: { mode: "manual", destructive_slash_confirm: true, mcp_reload_confirm: true, timeout: 60 },
+    command_allowlist: ["ls"],
+  });
+
+  logged(configureHostedGateway);
+  const first = readFileSync(configPath, "utf8");
+  logged(configureHostedGateway);
+
+  expect(readFileSync(configPath, "utf8")).toBe(first);
+  const doc = readConfig(configPath);
+  expect(doc.approvals).toEqual({ mode: false, destructive_slash_confirm: false, mcp_reload_confirm: true, timeout: 60 });
+  expect(doc.command_allowlist).toEqual(["ls"]);
 });
 
 // AGENT-DATE: every resident message reaches the model stamped with the time it was sent, so a

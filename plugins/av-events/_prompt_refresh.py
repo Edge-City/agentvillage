@@ -61,16 +61,23 @@ the kept entries must keep their order. Anything else (an external USER.md write
 turn, or in a background review fork, which shares the parent's session id) is not acknowledged, so
 the next turn's exact test refreshes and carries both. The other file's digest is never touched.
 
-Switch: `AV_PROMPT_REFRESH` = `team` (default; also unset or blank): on only where
-`AV_TEAM_TENANT` is exactly `1` (the control plane writes it per tenant into `$HERMES_HOME/.env`,
-control-plane/src/team-tenant-env.js) | `1` (on|true|yes) everywhere | `0` (off|false|no). Any other
-value is off, with one WARNING per process (a mistyped off must not leave it on). Plus
-`prompt_refresh` in `AV_HOOKS_DISABLED`, which wins. Sub-switch `AV_PROMPT_REFRESH_FILES` = `memory`
-(default; also unset or unknown: only USER.md and MEMORY.md trigger) | `all` (AGENTS.md triggers
-too, and the exact test also compares the skills index, which is not hashed: a skills change alone
-is caught at a session's first turn in a process or with the next hashed change; steps 2 and 3). A refresh always rebuilds the whole prompt, so a
-memory-triggered one also carries a newer AGENTS.md. Read every turn (`_core.env`, process env then
-`.env`), so no restart is needed.
+Switch (v2.1.12 defaults, CLAIMS L17455 (1): every resident's open chat picks up a skills update
+without /new): `AV_PROMPT_REFRESH` = `1` (default; also unset or blank, or on|true|yes): on
+everywhere | `0` (off|false|no) | `team`: the pre-v2.1.12 default, on only where `AV_TEAM_TENANT` is
+exactly `1` (the control plane writes it per tenant into `$HERMES_HOME/.env`,
+control-plane/src/team-tenant-env.js). Any other value is off, with one WARNING per process (a
+mistyped off must not leave it on). Plus `prompt_refresh` in `AV_HOOKS_DISABLED`, which wins.
+Sub-switch `AV_PROMPT_REFRESH_FILES` = `all` (default; also unset or blank: USER.md, MEMORY.md and
+AGENTS.md trigger, and the exact test also compares the skills index, which is not hashed: a skills
+change alone is caught at a session's first turn in a process or with the next hashed change; steps
+2 and 3) | `memory` (the pre-v2.1.12 default: only USER.md and MEMORY.md trigger). Any other value
+is `memory`, the narrower set, with one WARNING per process. A skills update reaches a box through
+the installer (an update or rc roll) or a mini-app reconcile, and both restart the gateway, so
+"first turn in a process" is exactly the turn after the update; Hermes's disk snapshot of the index
+(`prompt_builder._load_skills_snapshot`) is keyed on every SKILL.md's file signature, so the new
+process renders the new index. A refresh always rebuilds the whole prompt, so a memory-triggered one
+also carries a newer AGENTS.md. Read every turn (`_core.env`, process env then `.env`), so no
+restart is needed.
 
 D3 / D7: with the `village-memory` memory provider active (`agent._memory_manager` holds a provider of
 that name), the cp's `knowledge/agentvillage/_profile.md` is hashed in
@@ -101,8 +108,8 @@ rebuild is tried again for the same change at the next turn, up to 3 turns (DEBU
 with one WARNING; `KeyboardInterrupt` and `SystemExit` are never swallowed. A
 missing seam (renamed in a later Hermes) is one INFO line at install and nothing else: `install()`
 checks the loop's seams, `MemoryStore._path_for`, `MEMORY_BLOCK_HEADERS`, the two put-back helpers
-in `agent.system_prompt` and, when `AV_PROMPT_REFRESH_FILES=all` at install, `resolve_context_cwd`
-and the three context renderers. Never inside
+in `agent.system_prompt` and, when `AV_PROMPT_REFRESH_FILES` is `all` at install (the default),
+`resolve_context_cwd` and the three context renderers. Never inside
 the tool loop: every API call of the turn uses the prompt fixed here, and messages are not touched.
 Standard library only; no content is ever logged.
 """
@@ -130,7 +137,7 @@ SWITCH = "prompt_refresh"
 #: The rollout switch and the control plane's team marker.
 MODE_VAR = "AV_PROMPT_REFRESH"
 TEAM_VAR = "AV_TEAM_TENANT"
-#: Which files trigger: `memory` (default: USER.md, MEMORY.md) or `all` (also AGENTS.md and skills).
+#: Which files trigger: `all` (default from v2.1.12: also AGENTS.md and skills) or `memory` (USER.md, MEMORY.md).
 FILES_VAR = "AV_PROMPT_REFRESH_FILES"
 ON_VALUES = frozenset({"1", "true", "yes", "on"})
 OFF_VALUES = frozenset({"0", "false", "no", "off"})
@@ -189,15 +196,16 @@ _PERSIST_FAILED = (
 
 
 def mode() -> str:
-    """`off`, `on` or `team` from `AV_PROMPT_REFRESH`. Unset or blank: `team`. Any other unknown value:
-    `off` with one WARNING per process (the other av-events switches read unknown as off too)."""
+    """`off`, `on` or `team` from `AV_PROMPT_REFRESH`. Unset or blank: `on` (v2.1.12; `team` before).
+    `team`: the pre-v2.1.12 default, on only for team tenants. Any other unknown value: `off` with one
+    WARNING per process (the other av-events switches read unknown as off too)."""
     value = env(MODE_VAR).strip().lower()
-    if not value or value == "team":
+    if not value or value in ON_VALUES:
+        return "on"
+    if value == "team":
         return "team"
     if value in OFF_VALUES:
         return "off"
-    if value in ON_VALUES:
-        return "on"
     _latched_log("mode", "av-events: prompt_refresh: %s has an unknown value; off (use team, 1 or 0)", MODE_VAR)
     return "off"
 
@@ -213,8 +221,15 @@ def disabled_by_hooks(collector: Any) -> bool:
 
 
 def files_mode() -> str:
-    """`all` when `AV_PROMPT_REFRESH_FILES` says so, else `memory` (unset, blank or unknown)."""
-    return "all" if env(FILES_VAR).strip().lower() == "all" else "memory"
+    """`all` (v2.1.12 default: also unset or blank) or `memory` (USER.md / MEMORY.md only, the
+    pre-v2.1.12 default) from `AV_PROMPT_REFRESH_FILES`. Any other value: `memory`, the narrower set,
+    with one WARNING per process (a mistyped `memory` must not widen it)."""
+    value = env(FILES_VAR).strip().lower()
+    if not value or value == "all":
+        return "all"
+    if value != "memory":
+        _latched_log("files_mode", "av-events: prompt_refresh: %s has an unknown value; memory (use all or memory)", FILES_VAR)
+    return "memory"
 
 
 def enabled(collector: Any = None) -> bool:
