@@ -184,8 +184,8 @@ describe("paths: the lane classifier", () => {
   test("the gate list is pinned here, not read back from the script (P0-1's and P0-5's gates included)", () => {
     expect([...R.GATE_FILES].sort()).toEqual([
       ".github/workflows/mini-apps-review.yml", "install/paths.ts", "mini-apps/catalog.json", "mini-apps/manifest.v2.schema.json", "mini-apps/manifests.pins.json",
-      "package.json", "scripts/mini-apps-conformance.ts", "scripts/mini-apps-manifests.cjs", "scripts/mini-apps-review.ts",
-      "scripts/tests/mini-app-manifests.test.ts", "scripts/tests/mini-apps-conformance.test.ts", "scripts/tests/mini-apps-review.test.ts",
+      "package.json", "scripts/mini-apps-conformance.ts", "scripts/mini-apps-manifests.cjs", "scripts/mini-apps-review-comment.ts", "scripts/mini-apps-review.ts",
+      "scripts/tests/mini-app-manifests.test.ts", "scripts/tests/mini-apps-conformance.test.ts", "scripts/tests/mini-apps-review-comment.test.ts", "scripts/tests/mini-apps-review.test.ts",
     ]);
     const r = pr(patch, { extra: { "scripts/mini-apps-conformance.ts": "changed\n" } });
     expect([r.lane, r.verdict, has(r, "gate_changed")]).toEqual(["core", "NEEDS_HUMAN", true]);
@@ -1364,13 +1364,20 @@ function workflowSteps(text: string): Step[] {
 }
 describe("the workflow", () => {
   const wf = readFileSync(join(REPO, ".github/workflows/mini-apps-review.yml"), "utf8");
-  test("read-only, pull_request on mini-apps/** and skills/**, no secrets, actions pinned by full sha", () => {
+  test("read-only, pull_request on mini-apps/** and skills/**, no secrets in the review job, actions pinned by full sha", () => {
     expect(wf).toMatch(/\npermissions:\n  contents: read\n/);
     expect(wf).toContain('      - "mini-apps/**"\n      - "skills/**"\n');
     const code = wf.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
-    expect(code).not.toMatch(/pull_request_target|secrets\.|GITHUB_TOKEN|github\.token|write-all|: write\b|issues:|pull-requests:/);
+    // P0-3 bot wiring: the review job (everything before the comment job) holds no secret and no write token.
+    // The comment job's App token (Pull requests write, two secrets by name) is pinned in
+    // scripts/tests/mini-apps-review-comment.test.ts; here only its one write grant is allowed.
+    const jobs = code.split("\n  comment:\n");
+    expect(jobs.length).toBe(2);
+    expect(jobs[0]).not.toMatch(/pull_request_target|secrets\.|GITHUB_TOKEN|github\.token|write-all|: write\b|issues:|pull-requests:/);
+    expect(code).not.toMatch(/pull_request_target|GITHUB_TOKEN|github\.token|write-all|issues:/);
+    expect(code.match(/^.*: write\b.*$/gm)).toEqual(["          permission-pull-requests: write"]);
     const uses = [...wf.matchAll(/uses: (\S+)/g)].map(m => m[1]);
-    expect(uses.length).toBe(3);
+    expect(uses.length).toBe(7);
     for (const u of uses) expect(u).toMatch(/^[a-z-]+\/[a-z-]+@[0-9a-f]{40}$/);
     expect(wf).toContain("persist-credentials: false");
     expect(wf).toMatch(/GITHUB_STEP_SUMMARY/);
