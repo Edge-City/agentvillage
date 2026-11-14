@@ -1,0 +1,13 @@
+{
+  "name": "haas",
+  "private": true,
+  "description": "Human As A Service: agents employ village humans for tasks they cannot do.",
+  "type": "module",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "migrate:local": "npx wrangler d1 migrations apply haas --local",
+    "migrate:remote": "npx wrangler d1 migrations apply haas --remote",
+    "test": "bun test test/"
+  }
+}

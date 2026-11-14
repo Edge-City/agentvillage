@@ -1,0 +1,16 @@
+name = "haas"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[vars]
+TG_BOT_USERNAME = "HASS_hUmAN_aS_A_seRviCe_Bot"
+
+# Secrets (wrangler secret put): HMAC_SECRET, TG_BOT_TOKEN.
+# Local dev reads them from .dev.vars, which also sets DEV_LOGIN=1.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "haas"
+database_id = "f67b8233-ffcb-431a-9683-6494d32195c1"
+migrations_dir = "migrations"
