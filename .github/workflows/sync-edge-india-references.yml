@@ -12,14 +12,23 @@
 # over main) and one PR to main is opened, or refreshed when it is open already.
 # A person reads the diff and merges; nothing reaches main, the agents, the
 # next release's installed snapshot or the public agentvillage-skills repo
-# before that merge. The PR body carries this run's check result, because a PR
-# opened with GITHUB_TOKEN starts no pull_request CI. If GitHub refuses to open
-# the PR (the repo setting "Allow GitHub Actions to create and approve pull
-# requests" is off), the run fails with that message and nothing is committed
-# to main: there is no fallback to a direct commit. The alternative to that
-# setting is a GitHub App token. A tree identical to main closes a stale PR.
+# before that merge. The PR body carries this run's self-check as well.
+#
+# Identity (SEC-5 follow-up b): the push and every gh call use a token of the
+# mirror GitHub App (INDIA_MIRROR_APP_ID and INDIA_MIRROR_APP_PRIVATE_KEY, secrets of
+# the environment india-mirror, deployable from main only; contents + pull
+# requests, this repo only), minted
+# after the sync step so no write token exists while upstream data is parsed,
+# and revoked when the job ends. GITHUB_TOKEN is read-only here and never
+# pushes or opens anything. Because the PR comes from the App and not from
+# GITHUB_TOKEN, the Test workflow runs on it and on every head the bot pushes,
+# and no org setting for Actions-created PRs is needed. Without the two
+# secrets the run fails closed before any checkout: there is no fallback to
+# GITHUB_TOKEN and none to a direct commit. If GitHub refuses to open the PR,
+# the run fails and nothing is committed to main. A tree identical to main
+# closes a stale PR.
 # The bot acts only on its own PR (this repo's bot/india-refs, opened by
-# github-actions; never a fork's same-named branch) and keeps a branch head only
+# the App, app/<its slug>; never a fork's same-named branch) and keeps a branch head only
 # when it is its own commit (author, message) with the tree built here over the
 # same main; it reuses that head's synced_at only as a strict, in-range ISO-8601
 # UTC timestamp. The PR names the
@@ -52,9 +61,9 @@ on:
         required: false
         default: false
 
+# GITHUB_TOKEN reads only; the mirror App's token carries the writes (bot branch, its PR).
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: sync-edge-india-references
@@ -63,10 +72,27 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # The App's two secrets are ENVIRONMENT secrets of india-mirror, whose deployment branches are main only: a run from
+    # any other branch (a dispatch, or a pull_request run of a PR's own copy of this file) never receives the key.
+    environment: india-mirror
     timeout-minutes: 10
     steps:
+      # Fail closed before any checkout or fetch: no App secrets, no run (never a GITHUB_TOKEN fallback).
+      # Only whether each secret is set reaches the shell, never its value.
+      - name: Require the mirror App's secrets
+        env:
+          HAS_APP_ID: ${{ secrets.INDIA_MIRROR_APP_ID != '' }}
+          HAS_APP_KEY: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$HAS_APP_ID" != "true" ] || [ "$HAS_APP_KEY" != "true" ]; then
+            echo "::error::refused: the india-mirror environment secrets INDIA_MIRROR_APP_ID and INDIA_MIRROR_APP_PRIVATE_KEY (the mirror GitHub App) must both be set. Nothing fetched, nothing pushed; there is no fallback to GITHUB_TOKEN."
+            exit 1
+          fi
+
       - name: Checkout AgentVillage
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Checkout reference source
         uses: actions/checkout@v4
@@ -104,9 +130,23 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "commit_date=$commit_date" >> "$GITHUB_OUTPUT"
 
+      # Minted only after the sync, so no write token exists while upstream data is parsed. Contents and pull
+      # requests on this repo only (no workflows scope); the action masks it in the log and revokes it when the job ends.
+      - name: Mint the mirror App's token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.INDIA_MIRROR_APP_ID }}
+          private-key: ${{ secrets.INDIA_MIRROR_APP_PRIVATE_KEY }}
+          owner: Edge-City
+          repositories: agentvillage
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Forward the change as one pull request (never a commit to main)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           GH_REPO: ${{ github.repository }}
           BRANCH: bot/india-refs
           SUMMARY: ${{ steps.sync.outputs.summary }}
@@ -121,15 +161,26 @@ jobs:
             echo "Checks passed on $GITHUB_REF; only a run on main forwards. Nothing pushed."
             exit 0
           fi
-          # The bot's own PR only: this repo's branch (never a fork's same-named branch), opened by github-actions.
+          # The App's identity comes from the token this job minted: its slug (GitHub reports its PRs as app/<slug>).
+          if ! [[ $APP_SLUG =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error::refused: the mirror App's token step gave no usable app slug. Nothing pushed."
+            exit 1
+          fi
+          bot="${APP_SLUG}[bot] <${APP_SLUG}[bot]@users.noreply.github.com>"
+          # The bot's own PR only: this repo's branch (never a fork's same-named branch), opened by the mirror App.
           open=$(gh pr list --head "$BRANCH" --base main --state open --json number,isCrossRepository,author,headRefName \
-            --jq '[.[] | select(.isCrossRepository == false and .author.login == "app/github-actions" and .headRefName == "bot/india-refs") | .number | tostring] | join(" ")')
+            | jq -r --arg login "app/$APP_SLUG" '[.[] | select(.isCrossRepository == false and .author.is_bot == true and .author.login == $login and .headRefName == "bot/india-refs") | .number | tostring] | join(" ")')
           case "$open" in *" "*)
             echo "::error::refused: more than one open bot PR from $BRANCH ($open); close the extras by hand. Nothing pushed."
             exit 1 ;;
           esac
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          # The App token reaches git only through this helper, which reads GH_TOKEN from the environment at each call:
+          # never in a URL, an argument or .git/config (the checkout persists no credentials). It is the only helper:
+          # the empty value resets any inherited one, and none that stores or caches (store, cache, a keychain) is added.
+          git config --local credential.helper ''
+          git config --local --add credential.helper '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
           base=$(git rev-parse HEAD)
           git switch -c "$BRANCH"
           snap=skills/edge-india/references/SNAPSHOT.json
@@ -147,7 +198,7 @@ jobs:
           own=no
           if git fetch --quiet --depth=1 origin "refs/heads/$BRANCH" 2>/dev/null \
             && [ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ] \
-            && [ "$(git log -1 --format='%an <%ae>' FETCH_HEAD)" = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" ]; then
+            && [ "$(git log -1 --format='%an <%ae>' FETCH_HEAD)" = "$bot" ]; then
             own=yes
             theirs=$(git show "FETCH_HEAD:$snap" 2>/dev/null | jq -r '.synced_at // empty' 2>/dev/null || true)
             ours=$(jq -r '.synced_at' "$snap")
@@ -196,7 +247,7 @@ jobs:
               echo
               echo "    gh pr merge $1 -R $GH_REPO --squash --match-head-commit $head"
               echo
-              echo "This PR was opened with GITHUB_TOKEN, so no pull_request CI ran. To run the Test workflow on it, close and reopen the PR (a reopen by a person starts it). The merge starts sync-skills.yml and test.yml on main."
+              echo "The mirror App opens and updates this PR, so the Test workflow runs on it and again on every head the bot pushes. The merge starts sync-skills.yml and test.yml on main."
               echo
               echo "Files changed at $head against main ($(printf '%s\n' "$files" | wc -l | tr -d ' ')):"
               echo
@@ -213,7 +264,7 @@ jobs:
           else
             write_body "<this PR's number>"
             if ! url=$(gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body"); then
-              echo "::error::refused: GitHub would not open the pull request (is the repo setting 'Allow GitHub Actions to create and approve pull requests' off? the alternative is a GitHub App token). Nothing was committed to main; the forward waits on $BRANCH. Never commit to main instead."
+              echo "::error::refused: GitHub would not open the pull request (is the mirror App installed on this repo with Pull requests: write?). Nothing was committed to main; the forward waits on $BRANCH. Never commit to main instead."
               exit 1
             fi
             # Name the new PR in its own merge line.
