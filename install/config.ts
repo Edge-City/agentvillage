@@ -178,7 +178,8 @@ export function capModelMaxTokens(): void {
  * - Primary already luna: written anyway. Hermes skips a chain entry that is the backend that just
  *   failed (agent/chat_completion_helpers.py:1914-1926), and this step runs before the control
  *   plane's model step (tenants.js applyModelStep after INSTALL_CMD), so the installer cannot know
- *   the tenant's model; a per-tenant model change (PUT /tenants/:id/model) never reruns it.
+ *   the tenant's model; a per-tenant model change (PUT /tenants/:id/model) never reruns it (what
+ *   that leaves for the reasoning override: `ensureFallbackReasoningOff`, ov#514 N2).
  * - The control plane's `hermes config set model` / `cron.model` rewrite single keys of the raw
  *   file and keep this one (hermes_cli/config.py:3532-3578; bare `model` goes to `model.default`,
  *   :3401-3410); this step rewrites only `fallback_providers`.
@@ -246,27 +247,73 @@ export function configureModelFallback(): void {
       console.log(`→ added ${route} to ${key} after ${n} existing ${n === 1 ? "entry" : "entries"}`);
     }
   }
-  const reasoningOffSet = ensureFallbackReasoningOff(doc);
-  if (!hasLuna || reasoningOffSet) writeConfig(doc);
+  const reasoningChanged = ensureFallbackReasoningOff(doc);
+  if (!hasLuna || reasoningChanged) writeConfig(doc);
 }
 
 /**
  * HOT-RASOOL (CLAIMS L26001): `agent.reasoning_overrides[FALLBACK_MODEL] = false` on `doc`, keeping
  * every other `agent` key and every other override. Returns true when `doc` changed; false when the
- * override was already `false`, when luna is the box's PRIMARY model (the override is per model,
+ * override was already `false`, when luna is the box's PRIMARY model and there was no `false` to
+ * remove (below) (the override is per model,
  * not per fallback: it would turn reasoning off for every turn, and a luna-primary box has no
  * mixed-provider history to poison; review-b ov#514 S1), or when a non-mapping (or merge-keyed)
- * `agent` / `reasoning_overrides` was left alone with a warning. The primary model is what the
- * gateway sees: `HERMES_MODEL` in `$HERMES_HOME/.env` first (the control plane writes it), else
- * `model` / `model.default` / `model.model` in config.yaml. See `configureModelFallback`.
+ * `agent` / `reasoning_overrides` was left alone with a warning. "Luna is the primary" means EITHER
+ * model source names luna (ov#514 N1), because Hermes v2026.9.24 reads both, on different paths:
+ *
+ * - config.yaml `model` (a string, or `model.default`, else `model.model`): the messaging gateway
+ *   (Telegram) reads only this, "single source of truth" (gateway/run.py:2919-2927
+ *   `_resolve_gateway_model`, used per turn at gateway/run_turn.py:187); cron takes `cron.model`,
+ *   else this, ahead of the env (cron/scheduler.py:1590, :1606-1614).
+ * - `HERMES_MODEL` in `$HERMES_HOME/.env` (last assignment wins): the dashboard's app chat seeds a
+ *   new session from it ahead of config.yaml (tui_gateway/server.py:1409-1417).
+ *
+ * The control plane writes both from one value (tenants.js applyModelStep), so they normally agree;
+ * when they do not, a box with luna on either path is treated as luna-primary. The log line names
+ * the source(s).
+ *
+ * On a luna-primary box an override that is exactly `false` is REMOVED (returns true), whoever set
+ * it: it would turn reasoning off on every turn (the override is per model), the same capability
+ * limit whether this step or a human wrote it. Any other luna value (true, an effort string, a
+ * mapping) is left alone, as is a non-mapping or merge-keyed block; `reasoning_overrides` itself
+ * is dropped only when the luna key was its last entry, and every other `agent` key is kept.
+ *
+ * Model switch after a run (ov#514 N2): the overlay has no step on the per-tenant model change.
+ * PUT /tenants/:id/model runs the control plane's own commands (the .env HERMES_MODEL line and
+ * `hermes config set model` / `cron.model`, tenants.js applyModelStep) and restarts the gateway;
+ * the installer is not rerun. So a box switched to a luna primary AFTER this step wrote the
+ * override keeps `reasoning_overrides[luna]: false` (reasoning off on every turn) until the next
+ * roll reruns this step, which removes it; closing that gap at switch time is a control-plane
+ * model-step change. A box switched FROM luna gets the override back on the next roll. See
+ * `configureModelFallback`.
  */
 function ensureFallbackReasoningOff(doc: Record<string, unknown>): boolean {
   const path = "agent.reasoning_overrides";
   const byHand = `set ${path}[${FALLBACK_MODEL}]: false by hand`;
   const kind = (value: unknown): string => (Array.isArray(value) ? "list" : typeof value);
-  const primary = primaryModel(doc);
-  if (primary !== undefined && primary.trim().toLowerCase() === FALLBACK_MODEL.toLowerCase()) {
-    console.log(`→ primary model is ${FALLBACK_MODEL}; left ${path}[${FALLBACK_MODEL}] unset (nothing mixed to poison; HOT-RASOOL L26001)`);
+  const isLuna = (model: string | undefined): boolean =>
+    model !== undefined && model.trim().toLowerCase() === FALLBACK_MODEL.toLowerCase();
+  const { env, config } = primaryModels(doc);
+  const lunaSources = [
+    ...(isLuna(env) ? ["$HERMES_HOME/.env HERMES_MODEL"] : []),
+    ...(isLuna(config) ? ["config.yaml model"] : []),
+  ];
+  if (lunaSources.length > 0) {
+    const sources = lunaSources.join(" and ");
+    const lunaAgent = doc.agent;
+    const lunaOverrides = isMapping(lunaAgent) && !("<<" in lunaAgent) ? lunaAgent.reasoning_overrides : undefined;
+    if (isMapping(lunaOverrides) && !("<<" in lunaOverrides) && lunaOverrides[FALLBACK_MODEL] === false) {
+      const { [FALLBACK_MODEL]: _removed, ...rest } = lunaOverrides;
+      const nextAgent: Record<string, unknown> = { ...lunaAgent };
+      if (Object.keys(rest).length > 0) nextAgent.reasoning_overrides = rest;
+      else delete nextAgent.reasoning_overrides;
+      doc.agent = nextAgent;
+      console.log(`→ removed luna reasoning override (luna is primary: ${sources})`);
+      return true;
+    }
+    console.log(
+      `→ primary model is ${FALLBACK_MODEL} (${sources}); left ${path}[${FALLBACK_MODEL}] unset (nothing mixed to poison; HOT-RASOOL L26001)`,
+    );
     return false;
   }
   const agent = doc.agent;
@@ -293,22 +340,18 @@ function ensureFallbackReasoningOff(doc: Record<string, unknown>): boolean {
 }
 
 /**
- * The box's primary model as the gateway resolves it: `HERMES_MODEL` from `$HERMES_HOME/.env`
- * when set (last assignment wins, as python-dotenv does), else config.yaml `model` as a string or
- * its `default` / `model` key when a mapping; `undefined` when none names a model.
+ * The box's primary model from each source Hermes reads (see `ensureFallbackReasoningOff`):
+ * `env` = `HERMES_MODEL` from `$HERMES_HOME/.env` (last assignment wins, as python-dotenv does);
+ * `config` = config.yaml `model` as a string, else its `default`, else its `model` key when a
+ * mapping (gateway/run.py:2919-2927). Each is `undefined` when it names no model.
  */
-function primaryModel(doc: Record<string, unknown>): string | undefined {
-  const fromEnv = dotenvFileValue("HERMES_MODEL");
-  if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv;
+function primaryModels(doc: Record<string, unknown>): { env: string | undefined; config: string | undefined } {
+  const named = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
+  const env = named(dotenvFileValue("HERMES_MODEL"));
   const model = doc.model;
-  if (typeof model === "string" && model.trim()) return model;
-  if (isMapping(model)) {
-    for (const key of ["default", "model"]) {
-      const v = model[key];
-      if (typeof v === "string" && v.trim()) return v;
-    }
-  }
-  return undefined;
+  let config = named(model);
+  if (config === undefined && isMapping(model)) config = named(model.default) ?? named(model.model);
+  return { env, config };
 }
 
 /**
