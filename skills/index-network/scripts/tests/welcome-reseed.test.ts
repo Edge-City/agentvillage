@@ -28,7 +28,6 @@ import {
   RESEED_NO_LINES,
   REFUSED_SEEDS,
   SEED_CODE,
-  SEED_IDS_MAX,
   SEED_SOURCE_TYPE,
   SELECTED_HEADING,
   WELCOME_SEED_FILE,
@@ -255,12 +254,11 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
     expect(creates.map((c) => c.arguments)).toEqual(LINES.map((description) => ({ description, sourceType: SEED_SOURCE_TYPE })));
     expect(trailer).toEqual({ welcome: 1, fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1, seed_codes: ["intent_needs_revision"] });
     expect(readFileSync(join(home, WELCOME_STATE_FILE), "utf8")).toBe(state);
-    // G1: the seed marker keeps its own fields; only the refused line and this run's ids are added (below).
-    const { refused: _added, ids, ...kept } = marker();
+    // G1: the seed marker keeps its own fields; only the refused line is added (below), never this run's ids.
+    const { refused: _added, ...kept } = marker();
     expect(`${JSON.stringify(kept)}\n`).toBe(seedMarker);
     const made = index.rows.map((r) => r.id);
     expect(made).toHaveLength(2);
-    expect([...ids].sort()).toEqual([...made].sort());
     const files = reseedMarkers();
     expect(files).toHaveLength(1);
     const m = JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8"));
@@ -320,44 +318,54 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
       const index = fakeIndex((p) => (p === LINES[2] ? refuse(BROAD) : undefined));
       await reseed(index);
       const m = marker();
-      expect(Object.keys(m)).toEqual(["seededAt", "selected", "created", "failed", "done", "refused", "ids"]);
+      // No ids: the two this run created are the reseed's, in its own marker only.
+      expect(Object.keys(m)).toEqual(["seededAt", "selected", "created", "failed", "done", "refused"]);
       expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, done: true });
-      expect([...m.ids].sort()).toEqual(index.rows.map((r) => r.id).sort());
+      const own = JSON.parse(readFileSync(join(home, "memory", reseedMarkers()[0]!), "utf8"));
+      expect([...own.ids].sort()).toEqual(index.rows.map((r) => r.id).sort());
       expect(m.refused.map((r: { line: string }) => r.line)).toEqual([LINES[2]]);
       expect("surfacedAt" in m.refused[0]).toBe(false);
     });
 
-    describe("the seeded ids: the welcome's are never lost when a --reseed rewrites the seed marker", () => {
+    describe("the seeded ids: the seed marker keeps the welcome's own; a --reseed's go only in its own marker", () => {
       const earlierId = (n: number) => `cccccccc-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 
-      test("earlier ids kept first, this run's added once (an id Index names again is not repeated), noId kept", async () => {
-        welcomed();
-        const repeat = earlierId(1);
-        writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 2, failed: 1, done: true, ids: [repeat], noId: 1 })}\n`);
-        writeLines(LINES);
-        const index = fakeIndex((p) => (p === LINES[0] ? refuse(VAGUE) : p === LINES[1] ? createdReply(repeat) : undefined));
-        await reseed(index);
-        const m = marker();
-        const fresh = index.rows.map((r) => r.id);
-        expect(fresh).toHaveLength(1);
-        expect(m.ids).toEqual([repeat, fresh[0]]);
-        expect(m.noId).toBe(1);
-        expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, done: true });
-        expect(statSync(join(home, WELCOME_SEED_FILE)).mode & 0o777).toBe(0o600);
-        // The reseed's own marker names this run's two ids (the repeat included: Index answered it to this run).
-        const own = JSON.parse(readFileSync(join(home, "memory", reseedMarkers()[0]!), "utf8"));
-        expect([...own.ids].sort()).toEqual([repeat, fresh[0]].sort());
-        expect(statSync(join(home, "memory", reseedMarkers()[0]!)).mode & 0o777).toBe(0o600);
-      });
+      for (const [label, earlier] of [
+        ["the welcome's ids and noId", { ids: [earlierId(1)], noId: 1 }],
+        ["a full list (20 ids)", { ids: Array.from({ length: 20 }, (_, i) => earlierId(i + 1)) }],
+        ["an over-full list (25 ids, as some older write might leave)", { ids: Array.from({ length: 25 }, (_, i) => earlierId(i + 1)) }],
+      ] as const) {
+        test(`a refused-lines rewrite leaves ${label} exactly as they were; the reseed's ids are in its own marker only`, async () => {
+          welcomed();
+          writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 2, failed: 1, done: true, ...earlier })}\n`);
+          writeLines(LINES);
+          // LINES[1]'s create answers an id the welcome already recorded: still the reseed's, never merged.
+          const index = fakeIndex((p) => (p === LINES[0] ? refuse(VAGUE) : p === LINES[1] ? createdReply(earlierId(1)) : undefined));
+          await reseed(index);
+          const m = marker();
+          expect(m.refused.map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+          expect(JSON.stringify({ ids: m.ids, noId: m.noId })).toBe(JSON.stringify(earlier));
+          expect(statSync(join(home, WELCOME_SEED_FILE)).mode & 0o777).toBe(0o600);
+          const fresh = index.rows.map((r) => r.id);
+          expect(fresh).toHaveLength(1);
+          for (const id of fresh) expect(m.ids).not.toContain(id);
+          const own = JSON.parse(readFileSync(join(home, "memory", reseedMarkers()[0]!), "utf8"));
+          expect([...own.ids].sort()).toEqual([earlierId(1), fresh[0]].sort());
+          expect(statSync(join(home, "memory", reseedMarkers()[0]!)).mode & 0o777).toBe(0o600);
+        });
+      }
 
-      test(`at most SEED_IDS_MAX (${SEED_IDS_MAX}) ids: a full list keeps the earlier ones and drops the new`, async () => {
+      test("a refused-lines rewrite of a marker the welcome wrote without ids adds none", async () => {
         welcomed();
-        const full = Array.from({ length: SEED_IDS_MAX }, (_, i) => earlierId(i + 1));
-        writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 3, failed: 0, done: true, ids: full })}\n`);
+        const before = { seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true };
+        writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify(before)}\n`);
         writeLines(LINES);
-        await reseed(fakeIndex((p) => (p === LINES[0] ? refuse(VAGUE) : undefined)));
-        expect(marker().ids).toEqual(full);
-        expect("noId" in marker()).toBe(false);
+        const index = fakeIndex((p) => (p === LINES[0] ? refuse(VAGUE) : undefined));
+        await reseed(index);
+        const { refused: _r, ...kept } = marker();
+        expect(kept).toEqual(before);
+        expect(index.rows).toHaveLength(2);
+        expect(JSON.parse(readFileSync(join(home, "memory", reseedMarkers()[0]!), "utf8")).ids).toHaveLength(2);
       });
 
       test("a reseed with no refusal leaves the seed marker byte for byte (ids included); its own marker carries its ids", async () => {

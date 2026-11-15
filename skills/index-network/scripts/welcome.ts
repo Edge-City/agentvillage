@@ -41,8 +41,8 @@
  * ones first ("Based on what you shared at signup, ..."); the marker then gets
  * `done`, and, only when the run created any, `ids` (the Index ids of the
  * lines it created, ids only, no text) and `noId` (how many landed with no id
- * named: SeedIds; a `--reseed` that rewrites the marker adds its own, at most
- * SEED_IDS_MAX, and its own reseed marker carries them too). A run that finds the marker already there, whatever its first list
+ * named: SeedIds). This marker holds the welcome run's ids only: a `--reseed`
+ * never adds its ids to it (its own reseed marker carries them). A run that finds the marker already there, whatever its first list
  * showed (another run's creates may have landed only in part), waits while it
  * lacks `done` and then lists again, so its welcome shows what was seeded.
  * Nothing of the resident's but the selected texts is sent, and no text is
@@ -726,7 +726,7 @@ function seedBody(now: Date, selected: number, created: number, failed: number, 
  */
 export type SeedIds = { ids: string[]; noId: number };
 const NO_IDS: SeedIds = { ids: [], noId: 0 };
-/** At most this many ids on one marker (a `--reseed` adds to the welcome's). */
+/** At most this many ids on one marker (a run creates at most MAX_LISTED; a bound, never reached). */
 export const SEED_IDS_MAX = 20;
 
 /** `seeded` (seedLines) as SeedIds. Pure. */
@@ -738,13 +738,6 @@ function seedIdsOf(seeded: ReadonlyArray<{ id: string | null }>): SeedIds {
 /** The marker keys for `made`: `ids` only when there is one, `noId` only when above 0, so a run that created nothing writes today's bytes. Pure. */
 function seedIdKeys(made: SeedIds): { ids?: string[]; noId?: number } {
   return { ...(made.ids.length ? { ids: made.ids } : {}), ...(made.noId > 0 ? { noId: made.noId } : {}) };
-}
-
-/** The marker's earlier ids and noId (strings and a non-negative integer only; anything else counts as none), joined with `made`: no repeat, at most SEED_IDS_MAX. Pure. */
-function unionSeedIds(marker: Record<string, unknown>, made: SeedIds): SeedIds {
-  const before = Array.isArray(marker.ids) ? marker.ids.filter((id): id is string => typeof id === "string") : [];
-  const noId = Number.isInteger(marker.noId) && (marker.noId as number) > 0 ? (marker.noId as number) : 0;
-  return { ids: [...new Set([...before, ...made.ids])].slice(0, SEED_IDS_MAX), noId: noId + made.noId };
 }
 
 /** `body` as the marker's new content: temp file (0600) and rename. Throws on a filesystem failure. */
@@ -1430,7 +1423,7 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
     const codes = [...cutCodes, ...sentCodes].slice(0, SEED_CODES_MAX);
     const counts = { selected: all.length, created: seeded.length, failed };
     const made = seedIdsOf(seeded);
-    const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts, made) : null;
+    const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
     recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }), ...(cut ? { cutSkipped: cut } : {}) }, made);
     const read = again.read.kind === "listed" ? again.read : first.read;
     return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
@@ -1460,20 +1453,15 @@ function wouldCreate(lines: SeedLineInput[]): SeedCounts {
  * (as kept, refusedLine) is replaced by the new one in its place, its
  * `surfacedAt`, `notShown` and `questionWithheld` gone with it; other entries
  * stay as they are. Under the marker's lock (surfaceRefusedSeeds's), temp file
- * and rename. A done marker keeps its fields; a marker left claimed (no
+ * and rename. A done marker keeps its fields (the welcome's `ids` and `noId`
+ * as they were: a reseed's ids never go here); a marker left claimed (no
  * `done`) is completed with `done: true` unless it is younger than
  * RESEED_SEED_BUSY_MS (a welcome seeding right now, whose own write would
  * drop the entries: left alone); no marker, or one that is not a JSON object,
- * becomes recordSeed's shape with this run's counts. True when the entries
+ * becomes recordSeed's shape with this run's counts and no ids. True when the entries
  * were written. Never throws.
  */
-async function mergeReseedRefused(
-  home: string,
-  now: Date,
-  refused: RefusedSeed[],
-  counts: { selected: number; created: number; failed: number },
-  made: SeedIds = NO_IDS,
-): Promise<boolean> {
+async function mergeReseedRefused(home: string, now: Date, refused: RefusedSeed[], counts: { selected: number; created: number; failed: number }): Promise<boolean> {
   try {
     const path = join(home, WELCOME_SEED_FILE);
     const lock = await acquireStateLock(path, { waitMs: REFUSED_LOCK_WAIT_MS, staleMs: REFUSED_LOCK_STALE_MS });
@@ -1501,8 +1489,8 @@ async function mergeReseedRefused(
       replaceSeedMarker(
         home,
         marker
-          ? `${JSON.stringify({ ...marker, done: true, refused: list, ...seedIdKeys(unionSeedIds(marker, made)) })}\n`
-          : seedBody(now, counts.selected, counts.created, counts.failed, true, list as RefusedSeed[], made),
+          ? `${JSON.stringify({ ...marker, done: true, refused: list })}\n`
+          : seedBody(now, counts.selected, counts.created, counts.failed, true, list as RefusedSeed[]),
       );
       return true;
     } finally {
