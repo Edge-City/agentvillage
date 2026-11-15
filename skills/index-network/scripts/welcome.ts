@@ -39,7 +39,10 @@
  * It then lists the intents again (the creates leave it
  * WELCOME_RELIST_RESERVE_MS of the budget) and the welcome names the seeded
  * ones first ("Based on what you shared at signup, ..."); the marker then gets
- * `done`. A run that finds the marker already there, whatever its first list
+ * `done`, and, only when the run created any, `ids` (the Index ids of the
+ * lines it created, ids only, no text) and `noId` (how many landed with no id
+ * named: SeedIds; a `--reseed` that rewrites the marker adds its own, at most
+ * SEED_IDS_MAX, and its own reseed marker carries them too). A run that finds the marker already there, whatever its first list
  * showed (another run's creates may have landed only in part), waits while it
  * lacks `done` and then lists again, so its welcome shows what was seeded.
  * Nothing of the resident's but the selected texts is sent, and no text is
@@ -711,8 +714,37 @@ export function claimSeed(home: string, selected: number, now: Date = new Date()
   }
 }
 
-function seedBody(now: Date, selected: number, created: number, failed: number, done: boolean, refused: RefusedSeed[] = []): string {
-  return `${JSON.stringify({ seededAt: now.toISOString(), selected, created, failed, ...(done ? { done: true } : {}), ...(refused.length ? { refused } : {}) })}\n`;
+function seedBody(now: Date, selected: number, created: number, failed: number, done: boolean, refused: RefusedSeed[] = [], made: SeedIds = NO_IDS): string {
+  return `${JSON.stringify({ seededAt: now.toISOString(), selected, created, failed, ...(done ? { done: true } : {}), ...(refused.length ? { refused } : {}), ...seedIdKeys(made) })}\n`;
+}
+
+/**
+ * The Index ids of the lines a run created (seeded[].id when Index's answer
+ * named one) and `noId`, how many landed without one (seen active in the
+ * second list): ids only, never a text or title, never guessed. Kept on the
+ * seed marker for the control plane's record of seeded intents.
+ */
+export type SeedIds = { ids: string[]; noId: number };
+const NO_IDS: SeedIds = { ids: [], noId: 0 };
+/** At most this many ids on one marker (a `--reseed` adds to the welcome's). */
+export const SEED_IDS_MAX = 20;
+
+/** `seeded` (seedLines) as SeedIds. Pure. */
+function seedIdsOf(seeded: ReadonlyArray<{ id: string | null }>): SeedIds {
+  const ids = [...new Set(seeded.flatMap((s) => (s.id === null ? [] : [s.id])))].slice(0, SEED_IDS_MAX);
+  return { ids, noId: seeded.filter((s) => s.id === null).length };
+}
+
+/** The marker keys for `made`: `ids` only when there is one, `noId` only when above 0, so a run that created nothing writes today's bytes. Pure. */
+function seedIdKeys(made: SeedIds): { ids?: string[]; noId?: number } {
+  return { ...(made.ids.length ? { ids: made.ids } : {}), ...(made.noId > 0 ? { noId: made.noId } : {}) };
+}
+
+/** The marker's earlier ids and noId (strings and a non-negative integer only; anything else counts as none), joined with `made`: no repeat, at most SEED_IDS_MAX. Pure. */
+function unionSeedIds(marker: Record<string, unknown>, made: SeedIds): SeedIds {
+  const before = Array.isArray(marker.ids) ? marker.ids.filter((id): id is string => typeof id === "string") : [];
+  const noId = Number.isInteger(marker.noId) && (marker.noId as number) > 0 ? (marker.noId as number) : 0;
+  return { ids: [...new Set([...before, ...made.ids])].slice(0, SEED_IDS_MAX), noId: noId + made.noId };
 }
 
 /** `body` as the marker's new content: temp file (0600) and rename. Throws on a filesystem failure. */
@@ -733,9 +765,9 @@ function replaceSeedMarker(home: string, body: string): void {
  * Index refused (`refused`, only when there are any: SEED-REVISION) (temp
  * file and rename). Never throws: the claim already holds.
  */
-function recordSeed(home: string, now: Date, selected: number, created: number, failed: number, refused: RefusedSeed[] = []): void {
+function recordSeed(home: string, now: Date, selected: number, created: number, failed: number, refused: RefusedSeed[] = [], made: SeedIds = NO_IDS): void {
   try {
-    replaceSeedMarker(home, seedBody(now, selected, created, failed, true, refused));
+    replaceSeedMarker(home, seedBody(now, selected, created, failed, true, refused, made));
   } catch {
     // The marker stays as claimed (counts 0, no done): it still means the seed ran.
   }
@@ -874,7 +906,7 @@ async function seedWelcome(
   }
 
   const { mode, again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
-  recordSeed(home, now, selected.length, seeded.length, failed, refused);
+  recordSeed(home, now, selected.length, seeded.length, failed, refused, seedIdsOf(seeded));
   // SEED-REJECT part 3b: the codes ride on the branch only behind AV_SEED_TRAILER_V2, so with it off the branch is today's.
   const seed: SeedCounts = { intents_seeded: seeded.length, seed_failed: failed, ...(seedTrailerV2(home) ? { seed_codes: codes, seed_recovery_kinds: kinds } : {}) };
 
@@ -1397,8 +1429,9 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
     const { again, seeded, failed, refused, codes: sentCodes, kinds } = await seedLines(home, target, clock, lines, now);
     const codes = [...cutCodes, ...sentCodes].slice(0, SEED_CODES_MAX);
     const counts = { selected: all.length, created: seeded.length, failed };
-    const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
-    recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }), ...(cut ? { cutSkipped: cut } : {}) });
+    const made = seedIdsOf(seeded);
+    const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts, made) : null;
+    recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }), ...(cut ? { cutSkipped: cut } : {}) }, made);
     const read = again.read.kind === "listed" ? again.read : first.read;
     return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
   } catch {
@@ -1434,7 +1467,13 @@ function wouldCreate(lines: SeedLineInput[]): SeedCounts {
  * becomes recordSeed's shape with this run's counts. True when the entries
  * were written. Never throws.
  */
-async function mergeReseedRefused(home: string, now: Date, refused: RefusedSeed[], counts: { selected: number; created: number; failed: number }): Promise<boolean> {
+async function mergeReseedRefused(
+  home: string,
+  now: Date,
+  refused: RefusedSeed[],
+  counts: { selected: number; created: number; failed: number },
+  made: SeedIds = NO_IDS,
+): Promise<boolean> {
   try {
     const path = join(home, WELCOME_SEED_FILE);
     const lock = await acquireStateLock(path, { waitMs: REFUSED_LOCK_WAIT_MS, staleMs: REFUSED_LOCK_STALE_MS });
@@ -1462,8 +1501,8 @@ async function mergeReseedRefused(home: string, now: Date, refused: RefusedSeed[
       replaceSeedMarker(
         home,
         marker
-          ? `${JSON.stringify({ ...marker, done: true, refused: list })}\n`
-          : seedBody(now, counts.selected, counts.created, counts.failed, true, list as RefusedSeed[]),
+          ? `${JSON.stringify({ ...marker, done: true, refused: list, ...seedIdKeys(unionSeedIds(marker, made)) })}\n`
+          : seedBody(now, counts.selected, counts.created, counts.failed, true, list as RefusedSeed[], made),
       );
       return true;
     } finally {
@@ -1488,11 +1527,12 @@ function recordReseed(
   home: string,
   now: Date,
   body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[]; refusedMerged?: boolean; cutSkipped?: number },
+  made: SeedIds = NO_IDS,
 ): void {
   try {
     const path = join(home, `${WELCOME_RESEED_PREFIX}${now.toISOString().replace(/[:.]/g, "-")}.json`);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ reseededAt: now.toISOString(), ...body, ...(body.refused.length ? {} : { refused: undefined }) })}\n`, { mode: 0o600 });
+    writeFileSync(path, `${JSON.stringify({ reseededAt: now.toISOString(), ...body, ...(body.refused.length ? {} : { refused: undefined }), ...seedIdKeys(made) })}\n`, { mode: 0o600 });
   } catch {
     // Nothing to keep: the trailer still says what happened.
   }
