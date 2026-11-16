@@ -1,0 +1,28 @@
+name: Switchyard build
+
+on:
+  push:
+    paths:
+      - "switchyard/**"
+      - ".github/workflows/switchyard-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: switchyard
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app bundle
+        run: ./scripts/build-app.sh
+      - name: Zip
+        run: ditto -c -k --keepParent dist/Switchyard.app dist/Switchyard.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Switchyard
+          path: switchyard/dist/Switchyard.zip
