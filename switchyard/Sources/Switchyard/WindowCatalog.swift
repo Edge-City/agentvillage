@@ -35,6 +35,13 @@ final class WindowCatalog {
     private var mru: [CGWindowID] = []
     private var axCache: [CGWindowID: AXUIElement] = [:]
     private var resolving = Set<pid_t>()
+    private var lastResolve: [pid_t: Date] = [:]
+
+    init() {
+        // Applies to every accessibility call this process makes, so a hung app
+        // costs a quarter of a second at most instead of stalling the keyboard.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
+    }
 
     func noteActivated(_ entry: WindowEntry) {
         guard entry.id != 0 else { return }
@@ -70,7 +77,6 @@ final class WindowCatalog {
         // 1. Accessibility windows.
         for app in apps {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetMessagingTimeout(axApp, 0.25) // a hung app must not stall the switcher
             for window in AX.windows(axApp) where AX.isSwitchable(window) {
                 let wid = AX.windowID(window)
                 if wid != 0 {
@@ -89,7 +95,11 @@ final class WindowCatalog {
 
         // 2. Windows on other Spaces (including other apps' full screen Spaces).
         let visibleSpaces = currentSpaces()
-        for info in windowInfo([.excludeDesktopElements]) {
+        let allWindows = windowInfo([.excludeDesktopElements])
+        // Forget elements of windows that no longer exist; window IDs get reused.
+        let live = Set(allWindows.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
+        axCache = axCache.filter { live.contains($0.key) }
+        for info in allWindows {
             guard (info[kCGWindowLayer as String] as? Int) == 0,
                   let wid = info[kCGWindowNumber as String] as? CGWindowID, !seen.contains(wid),
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, let app = appByPID[pid],
@@ -173,6 +183,8 @@ final class WindowCatalog {
     /// result is cached for the next time the switcher opens.
     private func resolveInBackground(pid: pid_t) {
         guard !resolving.contains(pid) else { return }
+        if let last = lastResolve[pid], Date().timeIntervalSince(last) < 30 { return }
+        lastResolve[pid] = Date()
         resolving.insert(pid)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var found: [CGWindowID: AXUIElement] = [:]

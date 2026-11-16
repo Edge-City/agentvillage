@@ -10,6 +10,13 @@ enum Trigger: String, CaseIterable {
         get { Trigger(rawValue: UserDefaults.standard.string(forKey: "trigger") ?? "") ?? .option }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "trigger") }
     }
+
+    /// Trigger+` cycles the current app's windows. It can be switched off because
+    /// Option+` is also how accented letters are typed on many layouts.
+    static var currentAppShortcut: Bool {
+        get { UserDefaults.standard.object(forKey: "currentAppShortcut") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "currentAppShortcut") }
+    }
 }
 
 private enum Key {
@@ -33,6 +40,7 @@ final class SwitcherController {
     private var entries: [WindowEntry] = []
     private var index = 0
     private var pendingShow: DispatchWorkItem?
+    private var watchdog: Timer?
 
     /// Quick taps switch without ever drawing the panel, like Alt+Tab on Windows.
     private let showDelay: TimeInterval = 0.12
@@ -42,8 +50,27 @@ final class SwitcherController {
     @discardableResult
     func start() -> Bool {
         tap.handler = { [weak self] type, event in self?.handle(type, event) ?? false }
+        // If events were missed, the release of the trigger key may be among
+        // them. Never stay open on a guess.
+        tap.onInterrupted = { [weak self] in self?.cancel() }
+        if observers.isEmpty {
+            let center = NSWorkspace.shared.notificationCenter
+            for name in [NSWorkspace.sessionDidResignActiveNotification,
+                         NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
+                observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    self?.cancel()
+                })
+            }
+        }
         return tap.start()
     }
+
+    func stop() {
+        cancel()
+        tap.stop()
+    }
+
+    private var observers: [NSObjectProtocol] = []
 
     // MARK: - Keyboard
 
@@ -63,10 +90,14 @@ final class SwitcherController {
 
         case .keyDown:
             if !active {
-                guard held == trigger.flag, code == Key.tab || code == Key.backtick else { return false }
+                guard held == trigger.flag else { return false }
+                guard code == Key.tab || (code == Key.backtick && Trigger.currentAppShortcut) else { return false }
                 begin(currentAppOnly: code == Key.backtick, backwards: shift)
                 return true
             }
+            // A held key must never repeat an action that closes or quits something.
+            let repeating = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if repeating && (code == Key.q || code == Key.w || code == Key.returnKey) { return true }
             switch code {
             case Key.tab, Key.backtick: move(shift ? -1 : 1)
             case Key.right: move(1)
@@ -108,6 +139,14 @@ final class SwitcherController {
             self.panel.setThumbnail(image, for: id)
         }
 
+        // Safety net: if the release of the trigger key never reaches us (secure
+        // input, screen lock), notice that it is up and close without acting.
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            if !CGEventSource.flagsState(.combinedSessionState).contains(Trigger.current.flag) {
+                self?.cancel()
+            }
+        }
+
         let work = DispatchWorkItem { [weak self] in self?.showPanel() }
         pendingShow = work
         DispatchQueue.main.asyncAfter(deadline: .now() + showDelay, execute: work)
@@ -120,6 +159,8 @@ final class SwitcherController {
 
     private func end() {
         active = false
+        watchdog?.invalidate()
+        watchdog = nil
         pendingShow?.cancel()
         pendingShow = nil
         panel.orderOut(nil)

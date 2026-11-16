@@ -4,7 +4,7 @@ import AppKit
 /// permission; without it the switcher simply shows app icons.
 final class Thumbnailer {
     private var cache: [CGWindowID: NSImage] = [:]
-    private let queue = DispatchQueue(label: "switchyard.thumbnails", qos: .userInteractive, attributes: .concurrent)
+    private let queue = DispatchQueue(label: "switchyard.thumbnails", qos: .userInteractive)
     private let cid = CGSMainConnectionID()
 
     var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
@@ -23,8 +23,8 @@ final class Thumbnailer {
             queue.async { [weak self] in
                 var wid = id
                 let options = CaptureOption.ignoreGlobalClipShape | CaptureOption.nominalResolution
-                let list = CGSHWCaptureWindowList(cid, &wid, 1, options).takeRetainedValue() as NSArray
-                guard let first = list.firstObject else { return }
+                guard let list = CGSHWCaptureWindowList(cid, &wid, 1, options)?.takeRetainedValue() as NSArray?,
+                      let first = list.firstObject else { return }
                 let ref = first as CFTypeRef
                 guard CFGetTypeID(ref) == CGImage.typeID else { return }
                 let cgImage = ref as! CGImage

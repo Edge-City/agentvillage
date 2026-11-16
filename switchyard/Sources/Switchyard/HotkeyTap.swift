@@ -3,7 +3,10 @@ import AppKit
 /// A session-wide keyboard tap. The handler returns true to swallow an event.
 final class HotkeyTap {
     var handler: ((CGEventType, CGEvent) -> Bool)?
+    /// Called when macOS switches the tap off; events may have been missed.
+    var onInterrupted: (() -> Void)?
     private var port: CFMachPort?
+    private var source: CFRunLoopSource?
 
     var isRunning: Bool { port != nil }
 
@@ -20,12 +23,23 @@ final class HotkeyTap {
         else { return false }
         self.port = port
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         return true
     }
 
+    func stop() {
+        guard let port else { return }
+        CGEvent.tapEnable(tap: port, enable: false)
+        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        CFMachPortInvalidate(port)
+        self.port = nil
+        self.source = nil
+    }
+
     fileprivate func reenable() {
+        onInterrupted?()
         if let port { CGEvent.tapEnable(tap: port, enable: true) }
     }
 }

@@ -134,7 +134,8 @@ final class SwitcherPanel: NSPanel {
         guard !entries.isEmpty else { orderOut(nil); return }
 
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
+            ?? NSScreen.screens.first else { return }
         let area = screen.visibleFrame
         let margin: CGFloat = 14
         let maxWidth = area.width * 0.92 - 2 * margin

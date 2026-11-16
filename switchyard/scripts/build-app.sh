@@ -21,7 +21,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>Switchyard</string>
     <key>CFBundleDisplayName</key><string>Switchyard</string>
-    <key>CFBundleIdentifier</key><string>dev.switchyard.Switchyard</string>
+    <key>CFBundleIdentifier</key><string>io.github.timkosters.Switchyard</string>
     <key>CFBundleExecutable</key><string>Switchyard</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -35,5 +35,8 @@ PLIST
 
 # "-" is an ad-hoc signature: fine for local use, but macOS forgets the
 # Accessibility grant after every rebuild. A real identity avoids that.
-codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
+# The hardened runtime stops other processes from injecting code into the app
+# and borrowing its Accessibility and Screen Recording permissions.
+codesign --force --options runtime --sign "${SIGN_IDENTITY:--}" "$APP"
+codesign --verify --strict "$APP"
 echo "Built $APP"

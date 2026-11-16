@@ -4,7 +4,8 @@ import AppKit
 // (a) map an accessibility window to its CGWindowID, (b) see windows on other
 // Spaces, (c) focus one specific window of another app, or (d) capture a
 // window that is not on screen. Every serious macOS window switcher relies on
-// these same symbols; they have been stable since macOS 10.12.
+// these same symbols. They carry no compatibility guarantee, so results that
+// can be null are declared optional and checked.
 
 typealias CGSConnectionID = UInt32
 
@@ -12,15 +13,15 @@ typealias CGSConnectionID = UInt32
 func CGSMainConnectionID() -> CGSConnectionID
 
 @_silgen_name("CGSCopySpacesForWindows")
-func CGSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int, _ wids: CFArray) -> CFArray
+func CGSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int, _ wids: CFArray) -> CFArray?
 
 @_silgen_name("CGSCopyManagedDisplaySpaces")
-func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray
+func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray?
 
 @_silgen_name("CGSHWCaptureWindowList")
 func CGSHWCaptureWindowList(
     _ cid: CGSConnectionID, _ windowList: UnsafePointer<CGWindowID>, _ count: UInt32, _ options: UInt32
-) -> Unmanaged<CFArray>
+) -> Unmanaged<CFArray>?
 
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
