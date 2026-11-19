@@ -11,8 +11,10 @@ covers how to get a sandbox, the v2 manifest field by field with one worked
 example that passes the validator, how to run the checks before you open a pull
 request, what still needs a human and a fleet roll, and what is not built yet.
 This file is the reference for the rules and the native contracts below. Adding a generic (public read) app: the one-page [quickstart](../docs/MINI-APPS-QUICKSTART.md). How app actions are approved, the three install tiers and what mini-apps v2 does today: the [last three sections](#approvals-app-actions-run-on-their-own) of this file.
-`MINI_APPS_MANIFESTS` is off in production: a manifest in this repo does not
-change what a resident sees.
+The control plane serves the catalog from its own vendored v2 manifests while
+`MINI_APPS_MANIFESTS=1`, and from its reviewed constants otherwise. Either way,
+a manifest in this repo alone does not change what a resident sees: only the
+control plane's copy does.
 
 ## Start from a working app
 
@@ -824,39 +826,43 @@ In short:
 ## Install tiers
 
 Every catalog app is in one of three tiers (developer guide
-[section 9](../docs/MINI-APPS-DEVELOPER.md#9-install-tiers) has the detail):
+[section 9](../docs/MINI-APPS-DEVELOPER.md#9-install-tiers) has the detail and
+the sources):
 
-1. **Core**: `"staff": true`. The app comes with every agent and is never
-   removable. Platform apps: Gold Stars today, and the coming approval.md
-   mini-app.
-2. **Default**: installed for every agent, removable; an uninstall is
-   respected and the app is never installed again over it. Mosaic and For
-   Kicks. Until the flag exists, a one-time backfill run after the v2.1.12
-   roll installs them for paired residents in the mini-apps cohort who have not uninstalled them; the catalog flag for this
-   tier, `"default": true` beside `"staff"`, is v2.1.13 scope and is not in the
-   manifest schema yet (the schema is closed, so it is refused today).
-3. **Optional**: the resident installs it from the catalog. Every other app,
-   and every generic app.
+1. **Staff**: `"staff": true` on the control plane's catalog entry. The app is
+   installed for every agent in the mini-apps cohort and cannot be removed
+   (`409 mini_app_staff_locked`). Gold Stars, For Kicks, Mosaic and zzz.bot.
+2. **Default**: named in the control plane's `MINI_APPS_DEFAULT_INSTALL`.
+   Installed for every agent, removable; an uninstall is respected and the app
+   is never installed again over it. It is a control-plane setting, not a
+   manifest field: the closed schema has no `default` key.
+3. **Optional**: the resident installs it from the Mini-apps page in Agent
+   Village. Dizko, DreamStarter, Kismet, Edge Library, Favor Loop and every
+   generic app; Slopfolio and Edge City Volunteers for allowlisted tenants
+   only.
 
 ## Mini-apps v2 today
 
 The developer guide's
 [section 8](../docs/MINI-APPS-DEVELOPER.md#8-mini-apps-v2-today-what-works-what-ships-dark-what-needs-a-roll)
-has the table. In short (v2.1.12 is the overlay tag of 22 Oct, v2.1.13 the
-next):
+has the table and its sources. In short (v2.2.5 is the newest overlay tag):
 
-- **Works on a box at v2.1.12:** a generic read app, a public MCP read relay
-  (`service.kind` `mcp`, `auth.mode` `none`, every op `read`), taken from the
-  control plane's pinned catalog with a sha256-bound SKILL.md (ov#455, ov#460).
-  The cp half (cp#337) is open and dark, and no generic app enters the cp
-  catalog before the v2.1.12 roll covers the whole fleet. How to add one: the
-  [quickstart](../docs/MINI-APPS-QUICKSTART.md).
-- **Ships dark:** the Phase 1 generic dispatcher (app#532) and generic OAuth
-  (app#534) in the app server, and the generic approval card (ov#458 on the
-  overlay, cp#352 open on the control plane).
-- **Needs a roll:** the generic card needs v2.1.13 on the fleet, the box
-  installer passing a projection entry's `approval` through, and the cp's card
-  floor (`CARD_FLOOR_TAG`) before any card app can land. For Kicks proposing
-  its own member row (ov#457) also rides v2.1.13.
-- **Mini-apps v3:** token, OAuth and write partner apps, with per-app
-  app-server code.
+- **The catalog:** the control plane serves it from its vendored v2 manifests
+  while `MINI_APPS_MANIFESTS=1`, and offers reviewed SKILL.md bytes to boxes
+  while `MINI_APPS_SKILL_DELIVERY=1`. Its index names 21 apps: the four staff
+  apps above, Dizko and Slopfolio, five reviewed partner apps and ten generic
+  read apps.
+- **No per-app code:** a read-only public MCP relay (`service.kind` `mcp`,
+  `auth.mode` `none`, every op `read`, optionally its own context namespace)
+  is the only shape that needs none. Edge City adds it to the control-plane
+  catalog as its own entry; none of it ships in this repo, and no box release
+  is needed ([quickstart](../docs/MINI-APPS-QUICKSTART.md)).
+- **Per-app code and a fleet roll:** a token, OAuth or write app. DreamStarter,
+  Kismet, Edge Library, Favor Loop and Edge City Volunteers came this way
+  (Kismet's contract is [kismet/README.md](kismet/README.md); the others have
+  sections above). Each is offered only to a box at or above its own
+  overlay release, and the app server's dispatcher calls it with a service
+  key that Edge City sets.
+- **Ships dark:** generic OAuth (app#534) and the generic approval card
+  (ov#458, cp#352, app#533). For Kicks and Gold Stars are still the only apps
+  with a card.
