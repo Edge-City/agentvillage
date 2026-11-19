@@ -8,7 +8,7 @@ Adding a generic app (public reads plus its own Context, a control-plane change 
 
 Three things hold for everything below.
 
-- `MINI_APPS_MANIFESTS` is OFF in production. The control plane serves its six reviewed constants today. A manifest in this repo does not change what a resident sees.
+- The control plane serves the catalog from its own vendored v2 manifests while `MINI_APPS_MANIFESTS=1`, and from its reviewed constants otherwise (section 8). Either way, a manifest in this repo alone does not change what a resident sees: only the control plane's copy does.
 - A manifest is a review artifact. It is not an upload. Nothing you write here runs code on a resident's box.
 - Where a section says a thing is not built, do not build against it.
 
@@ -447,7 +447,6 @@ Phase 2:
 Also not done:
 
 - Honouring `listed: false`, and keeping an installed app that has dropped out of the v2 catalog. The control-plane half is merged on its `main` (cp#335). The app half (the grid, search and the direct link) is in review (app#491), not merged. Neither half does anything while `MINI_APPS_MANIFESTS` is off.
-- Turning `MINI_APPS_MANIFESTS` on. It stays off.
 - The bot's pull request comment, and its LLM half.
 
 Source:
@@ -538,7 +537,7 @@ With the containers off, the page shows your lines in a "Saved by <App name>" bl
 
 Each switch is on only when set to `1`. The control plane's `CONTEXT_CLAIMS` and `CONTEXT_APP_NAMESPACES` also take `true`, `yes` or `on`. Two more conditions hold per box: the box gets the two operations only when its overlay is rc44 or later and a roll proved it for that tenant, and a write also needs the box's approval gate verified.
 
-Which switches are on in production is an Edge City setting, and these repos do not record it. This guide does not claim any of them is on. `MINI_APPS_MANIFESTS` is off (top of this guide).
+Which switches are on in production is an Edge City setting, and these repos do not record it. This guide does not claim any of them is on.
 
 ### Not live yet
 
@@ -582,44 +581,45 @@ The approval layer (approval.md on the box, the policy template on the control p
 
 ## 8. Mini-apps v2 today: what works, what ships dark, what needs a roll
 
-v2.1.12 is the overlay tag of 22 Oct (`a9cf45c8`). v2.1.13 is the next one. "Dark" means merged, but switched off or not reachable by any partner app yet.
+v2.2.5 (`6ebb72de`) is the newest overlay tag. "Dark" means merged but switched off, or reachable by no partner app yet.
+
+The plain rule for a partner today: a read-only public MCP relay is the only shape that needs no per-app code from Edge City. A token, OAuth or write app needs per-app code (overlay bridge, app server, control plane) and a fleet roll.
 
 | Piece | State | What it still needs |
 | --- | --- | --- |
-| Generic read app: a public MCP read relay (`service.kind` `mcp`, `auth.mode` `none`, every op `read`, optionally its own context namespace), added to the control plane's pinned catalog in one cp pull request ([quickstart](MINI-APPS-QUICKSTART.md)) | **Works on a box at v2.1.12**: the box installer takes a generic app from the cp's pinned catalog (ov#455) and reads its SKILL.md safely (ov#460). The cp half, serving the reviewed SKILL.md bytes beside the projection (cp#337), is open and dark under `MINI_APPS_SKILL_DELIVERY`. | The v2.1.12 roll on the whole fleet first: no generic app enters the cp catalog before it (quickstart section 5, hard rule). Then cp#337 merged and deployed, and `MINI_APPS_MANIFESTS=1` and `MINI_APPS_SKILL_DELIVERY=1` on the cp. |
-| Phase 1 generic dispatcher (app#532) and generic OAuth with a grants table (app#534), in the app server | **Ships dark**: merged, off, opt-in per app. | No partner app reaches them yet: a box takes only the two generic operation lists (quickstart section 1), so an OAuth, token or write app is refused on the box. Those apps are mini-apps v3, with per-app app-server code (section 1). |
-| The ONE generic approval card: a `needs-card` op gets the For Kicks minimal card, four plain strings `item`, `total`, `when`, `shared`, shown as What, Total, When & where, Shared with, proposed under the op's own member class | **Ships dark**: the overlay half is merged (ov#458) after the v2.1.12 tag; the cp half (cp#352) is an open draft. | **A roll:** v2.1.13 on the fleet. Then the box installer must pass a projection entry's `approval` key through (today it refuses any generic entry key beyond `id`, `operations`, `skills`, `version`), and the cp must send `approval` only to a box at or above its card floor (`CARD_FLOOR_TAG`, v2.1.13, in cp#352). Until all of that is live, section 7's rule 4 holds: a partner app shows no card. |
-| For Kicks checkout on its own member row (`marketplace.app.action.forkicks.order.confirm`) | **Partly merged**: the cp accepts the member key beside the parent's (cp#351). The box still proposes the parent class; ov#457 (draft) moves it to the member class. | **A roll:** v2.1.13 with ov#457 on the fleet, then the member row pinned to ask in the policy template. Only after that may the parent row turn autonomous and the "Act through an installed app" setting offer "on its own". |
-| Install tier 2's flag, `"default": true` (section 9) | **Not built.** | v2.1.13 scope (section 9). Tonight a one-time backfill stands in for it. |
-| Token, OAuth or write partner apps | **Not built** for partners. | Mini-apps v3. |
+| The catalog served from the control plane's vendored v2 manifests, with reviewed SKILL.md bytes offered beside the projection | **Merged, behind two switches.** The vendored manifests serve only while `MINI_APPS_MANIFESTS=1`; otherwise the control plane's reviewed constants serve, and no generic app. The SKILL.md bytes are offered only while `MINI_APPS_SKILL_DELIVERY=1`; a changed skill then reaches compatible boxes through the control plane's skill-drift worker, without a fleet roll. Which switches are on is an Edge City setting. | Nothing from a partner. |
+| The apps in the catalog | The control plane's catalog index names 21 apps. Staff apps (section 9): Gold Stars, For Kicks, Mosaic, zzz.bot. First-party optional apps: Dizko (open) and Slopfolio (allowlisted tenants only). Five reviewed partner apps and ten generic read apps (the next two rows). zzz.bot 1.1.0 is served per box from v2.1.21, and Kismet 1.2.0 from v2.2.1; other boxes get the version before. | Nothing. |
+| Generic read app: a public MCP read relay (`service.kind` `mcp`, `auth.mode` `none`, every op `read`, optionally its own context namespace) | **Works.** The box takes a generic app from the control plane's catalog (ov#455, ov#460), the control plane offers its SKILL.md (cp#337), and the app server's relay calls the endpoint the catalog names. A builder's public read app goes in this way, as a control-plane catalog entry; none of it ships in this repo. Ten are in the catalog index, one of them for allowlisted tenants only. | One control-plane change by Edge City per app ([quickstart](MINI-APPS-QUICKSTART.md)). No box release. |
+| Reviewed partner apps (`app-token`, per-resident reads or writes): DreamStarter (ov#535), Kismet (ov#536), Edge Library (ov#539), Favor Loop (ov#570), Edge City Volunteers (ov#591) | **Merged.** Each has a bridge module in `plugins/village-bridge/`, entries in the box installer and bridge tables, its manifest vendored into the app server and the control plane, and its own release floor: the control plane never offers it to a box below v2.1.22 (DreamStarter, Kismet, Edge Library), v2.1.26 (Favor Loop) or v2.2.1 (Edge City Volunteers). Edge City Volunteers is for allowlisted tenants only; the other four are open. | Per app: review, the service key set by Edge City, an overlay release rolled to the boxes, and the app-server and control-plane changes. |
+| Generic dispatcher in the app server (app#532) | **Serves the reviewed partner apps.** Since app#1043 its set is derived from the app's vendored catalog: every vendored app that is keyed (`app-token`), OAuth or subject-separated, except the six apps with their own code (Gold Stars, Dizko, zzz.bot, Slopfolio, For Kicks, Mosaic). On app `main` that is the five reviewed partner apps. An app whose key is not set answers `503 mini_app_unconfigured`. | Per app: its manifest vendored into the app, a separation declaration if it keeps per-resident state, and its key set by Edge City. |
+| Generic OAuth with a grants table (app#534) | **Ships dark.** The dispatcher's bearer seam still returns "unavailable", so no OAuth app dispatches. zzz.bot and Slopfolio keep their own OAuth code. | Wiring the seam, then per-app review. |
+| The ONE generic approval card (four strings `item`, `total`, `when`, `shared`) | **Ships dark.** Merged on the box (ov#458, in v2.1.13), the control plane (cp#352) and the app's drafts (app#533). The dispatcher's draft seam still returns "unavailable", so a `prepare` or `needs-card` op is refused before any call. Only For Kicks and Gold Stars have a card, each through its own code. | Wiring the seam, then per-app review. |
+| For Kicks checkout on its own member row (ov#457) | **Open, a draft.** The checkout still proposes the parent class `marketplace.app.action`. | Review and a roll. |
+| Manifest push for the sandbox lane (cp#367) | **Merged, behind a switch.** It serves only while `MINI_APPS_MANIFEST_PUSH=1` and the manifest catalog are on. This guide does not claim it is on. | An Edge City setting. |
+| Conformance (ov#422), the review bot (ov#423) and the mini-app merge Action (ov#477) | **Merged.** Conformance and the bot are advisory. The merge Action does nothing unless the repository variable `MINI_APPS_AUTOMERGE` is `1`, and it never merges a `core` lane, which every new app is. | Nothing for a partner. |
 
 Source:
-- `release/RC-MANIFEST.md:58` (v2.1.12 = `a9cf45c8`: ov#455, ov#460 and ov#459 on top of v2.1.11; no generic app in the cp catalog until the v2.1.12 fleet roll is done).
-- `install/install_miniapps.ts:120` (the two generic operation lists) and `:307` (a generic entry's keys must be exactly `id`, `operations`, `skills`, `version`; anything else is `bundle_invalid`).
-- `plugins/village-bridge/_mini_app_card.py:1-25` (the generic card: four strings, the member class, no technical-card fallback, the cp's `approval` declaration), `:44` (`SHOWN`) and `:58` (`LABELS`); `plugins/village-bridge/_mini_apps.py:118-123` (the projection entry's `approval` key, absent for every app today).
-- `git log origin/main`: ov#458 is `cb116803`, after `a9cf45c8`.
-- Pull request states read on GitHub on 22 Oct: ov#455, ov#458, ov#460, app#532, app#534 and cp#351 merged; cp#337 open; cp#352 and ov#457 open drafts.
-- `CARD_FLOOR_TAG` and its value v2.1.13: cp#352's fold plan in Edge City's lanes log, 22 Oct (private to Edge City; not a repo file). The parent flip after the v2.1.13 roll: the same log, 22 Oct.
+- `release/RC-MANIFEST.md:79` (v2.2.5 = `6ebb72de`); `git tag` (v2.2.5 is the newest tag).
+- cp `control-plane/src/mini-apps-catalog.js:516-526` (the vendored manifests serve only when `MINI_APPS_MANIFESTS` is exactly `1`; otherwise the reviewed constants, no generic app), `:532` (the reviewed ids; any other id a manifest serves is generic). cp `README.md:89-93` (skill bytes reach compatible boxes through the skill-drift worker with both switches on, no fleet roll).
+- cp `control-plane/src/mini-apps/catalog.json` (21 ids) and `control-plane/src/mini-apps/skills/overlay.json` (the 11 overlay-sourced ids; the other ten are generic, one with `"visibility": "sandbox"`). cp `control-plane/src/mini-apps-catalog.js:10`, `:56`, `:142`, `:169` (the staff marks), `:126` (Slopfolio `restricted: true`), `:1156` (zzz.bot 1.1.0 from v2.1.21) and `:1248` (Kismet 1.2.0 from v2.2.1).
+- Generic path: cp `README.md:122-140` (a public read app is one control-plane change; this repo must not ship its `skills/<id>`); `install/install_miniapps.ts:248` (the two generic operation lists); app `src/lib/server/mini-apps/mcp.ts:111` (the relay calls the installed entry's `mcp.url`).
+- Reviewed partner apps: `install/install_miniapps.ts:43-56` and `plugins/village-bridge/_mini_apps.py:125-149` (the installer and bridge entries) and their modules in `plugins/village-bridge/`; cp `control-plane/src/mini-apps-catalog.js:186-193` (DreamStarter, Kismet and Edge Library open at their floor), `:368-373` (Favor Loop open), `:416-428` (Edge City Volunteers restricted), `:1186`, `:1223`, `:1234` (the floor tags).
+- App `src/lib/server/mini-apps/dispatch/registry.ts:11-48` (the derived set, `MINI_APPS_DISPATCH` as an override, `NOT_FLIPPED`), `dispatch/vendored.ts:27-29` (the eleven vendored manifests), `dispatch/residents.ts:78-101` (the five separation declarations), `dispatch/dispatch.ts:92-96` (`503 mini_app_unconfigured`), `dispatch/seam.ts:89-101` and `:116-120` (both seams unavailable).
+- `plugins/village-bridge/_forkicks.py:28` (`APPROVAL_CLASS`, the parent class). cp `control-plane/src/mini-apps-pushed.js:10` (the push switch). `scripts/mini-apps-automerge.ts:11-38` (kill switch and conditions); `scripts/mini-apps-review.ts:693` (a new app is `core`).
+- Pull request states read on GitHub on 19 Nov 2026: ov#457 an open draft; ov#422, ov#423, ov#455, ov#458, ov#460, ov#477, ov#535, ov#536, ov#539, ov#570, ov#591, cp#337, cp#352, cp#367, app#532, app#533, app#534 and app#1043 merged.
 
 ## 9. Install tiers
 
 Every catalog app is in one of three tiers. Edge City picks the tier; a partner app is tier 3.
 
-| Tier | Catalog flag | How it gets installed | Can the resident remove it? | Apps |
+| Tier | How it is set | How it gets installed | Can the resident remove it? | Apps |
 | --- | --- | --- | --- | --- |
-| 1. Core | `"staff": true` | Comes with every agent. | No, never removable. | Platform apps. Today Gold Stars, the only app the validator lets say it; the coming approval.md mini-app will be core too. |
-| 2. Default | `"default": true` (planned for v2.1.13; not in the schema yet) | Installed for every agent. | Yes. An uninstall is respected: the platform never installs the app again over it. | Mosaic and For Kicks. |
-| 3. Optional | Neither flag | The resident installs it from the catalog. | Yes. | Every other app, and every generic app. |
-
-Tonight tier 2 has no flag. Mosaic and For Kicks reach agents through a one-time backfill, run after the v2.1.12 roll, that installs each one exactly as the resident's own install does, for paired residents in the mini-apps cohort, and skips every resident who uninstalled it.
-
-The flag for v2.1.13 is `"default": true`, a catalog boolean beside `"staff"`. It needs three changes, and no pull request makes them yet (cp#352's successor or a small cp pull request):
-
-- The manifest schema and validator: a `default` key, here (`mini-apps/manifest.v2.schema.json`, `scripts/mini-apps-manifests.cjs`) and in the cp's copy. The schema is closed, so `"default": true` is refused today.
-- The cp catalog: serve `default` beside `staff`, and install a default app once for each agent, never over an uninstall.
-- The app's install path: the same install the resident's own install makes, so a default app shows as installed and can be removed like any other.
+| 1. Staff | `"staff": true` on the control plane's catalog entry, acted on while `CP_MINI_APPS_STAFF=1` | Installed for every agent in the mini-apps cohort at provisioning, rebuild and by the default-install job | No. A removal is refused `409 mini_app_staff_locked`. | Gold Stars, For Kicks, Mosaic, zzz.bot |
+| 2. Default | The control plane's `MINI_APPS_DEFAULT_INSTALL`, a comma list of reviewed ids. Not a manifest field: the schema is closed and has no `default` key. | Installed for every agent in the cohort, by the same paths | Yes. The removal is recorded and the app is never installed again over it. | Which ids it names is an Edge City setting. A generic app is never a default. |
+| 3. Optional | Neither | The resident installs it from the Mini-apps page | Yes | Dizko, DreamStarter, Kismet, Edge Library, Favor Loop and every generic app; Slopfolio and Edge City Volunteers for allowlisted tenants only |
 
 Source:
-- `mini-apps/README.md:65-68` (`"staff": true`: the app comes with every agent and is never removable) and `mini-apps/manifest.v2.schema.json:112-119` (`staff` and `listed`, no `default`).
-- `scripts/mini-apps-manifests.cjs:50-55` (only the pinned grant may say `staff`: Gold Stars alone) and `:534` (`staff_reserved`).
-- The three tiers, the approval.md mini-app as core, and Mosaic and For Kicks as default: Edge City's ruling in its lanes log, 22 Oct (private to Edge City; not a repo file). The backfill: the same log, 22 Oct.
+- cp `docs/RAILWAY.md:168` (`CP_MINI_APPS_STAFF`: installed through the Install path, `409 mini_app_staff_locked`) and `:169` (`MINI_APPS_DEFAULT_INSTALL`: removable, tombstone respected, reviewed ids only).
+- cp `control-plane/src/tenants.js:5490-5492` (provisioning) and `:7183-7189` (rebuild); `control-plane/src/mini-apps-default-install.js:12-13` (the job); `control-plane/src/mini-apps-defaults.js:12-13` (a default is a reviewed id, never a generic app).
+- cp `control-plane/src/mini-apps-catalog.js:10`, `:56`, `:142`, `:169` (the staff marks), `:126` and `:428` (`restricted: true`), `:190-191` (the reviewed partner apps are not staff: each is installed on the resident's ask).
+- `mini-apps/manifest.v2.schema.json:19` (closed) and `:112` (`staff`; no `default` key).
