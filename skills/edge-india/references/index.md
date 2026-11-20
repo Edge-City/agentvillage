@@ -12,6 +12,7 @@ Timestamps below record the last indexed content change, not the latest successf
 
 | Document | Source type | Published | Last content change indexed | Coverage |
 | --- | --- | --- | --- | --- |
+| [40 Goa Business Owners Built Their Own AI Tools in Three Weeks](./newsletter/40-goa-business-owners-built-their.md) | newsletter | 2026-11-16T17:17:03.000Z | 2026-11-16T17:27:02.126Z | Current source |
 | [A Typical Day (and Week) at Edge City India](./newsletter/a-typical-day-and-week-at-edge-city.md) | newsletter | 2026-09-24T14:22:28.000Z | 2026-09-30T21:31:09.778Z | Current source |
 | [Ambhasi: A Consciousness x AI Research Residency at Edge City India](./newsletter/ambhasi-a-consciousness-x-ai-research.md) | newsletter | 2026-09-22T12:34:28.000Z | 2026-09-30T21:31:09.778Z | Current source |
 | [Announcing Anima House: The Women’s Health Residency](./newsletter/announcing-anima-house-the-womens.md) | newsletter | 2026-08-21T13:27:10.000Z | 2026-09-30T21:31:09.778Z | Current source |
@@ -32,10 +33,10 @@ Timestamps below record the last indexed content change, not the latest successf
 | [Announcing the Ground Floor Residency](./newsletter/the-future-arrives-locally.md) | newsletter | 2026-08-11T14:49:45.000Z | 2026-09-30T21:15:43.517Z | Current source |
 | [The Road to Edge: Backroad Farm Caravan Experience](./newsletter/the-road-to-edge-backroad-farm-caravan.md) | newsletter | 2026-08-17T18:19:14.000Z | 2026-09-30T21:31:09.778Z | Current source |
 | [Tickets for Edge City India 2026](./newsletter/tickets-for-edge-city-india-2026.md) | newsletter | — | 2026-10-11T13:13:15.962Z | Current source |
-| [Volunteer at Edge City India 2026](./newsletter/volunteer-at-edge-city-india-2026.md) | newsletter | 2026-07-29T22:27:41.000Z | 2026-10-05T13:50:57.008Z | Current source |
+| [Volunteer at Edge City India 2026](./newsletter/volunteer-at-edge-city-india-2026.md) | newsletter | — | 2026-11-16T17:27:02.126Z | Current source |
 | [Welcome to Edge City India](./newsletter/welcome-to-edge-city-india.md) | newsletter | — | 2026-10-08T09:58:22.660Z | Current source |
 | [Announcing the Community Builders Residency   Blog   Edge City](./residencies/community-builders.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
 | [Creative Residency Edge City: Modern Renaissance   Blog   Edge City](./residencies/creator-residency.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
-| [Edge City India 2026](./website-content.md) | website | — | 2026-10-08T19:43:20.805Z | Current source |
+| [Edge City India 2026   Past Popup Village in Goa](./website-content.md) | website | — | 2026-11-07T23:57:02.153Z | Current source |
 | [About   Edge City](./website/about.md) | website | — | 2026-09-30T21:28:06.827Z | Current source |
-| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-13T18:28:19.266Z | Current source |
+| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-26T04:28:17.012Z | Current source |

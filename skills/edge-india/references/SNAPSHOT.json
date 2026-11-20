@@ -4,20 +4,25 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "0c9e6fed19db6f960c8b378e3deb9aa62b25b88e",
-    "commit_date": "2026-10-13T18:28:19.000Z"
+    "commit": "b13ce18fe208c1f2472dea4054c3ecf21a7deb64",
+    "commit_date": "2026-11-16T17:27:02.000Z"
   },
-  "synced_at": "2026-10-13T22:59:40.669Z",
+  "synced_at": "2026-11-20T08:00:09.059Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "a429a3eb252998b7abb2927c6f9d1ee3927c7b784a6d9a40d33c932e76b0668e",
-      "bytes": 5418
+      "sha256": "ff0c66d1aa9586ae22a9138a4540d8c1dce2a5c47168d8d236e693201c88887a",
+      "bytes": 5630
     },
     {
       "path": "manifest.json",
-      "sha256": "b678e3fb7c07af73efe87bbe0385246356da411dca7f6d446697a44e9e6cbeee",
-      "bytes": 11401
+      "sha256": "54f8d5229c9ce482a02d0d0d2ceec219944db4014861fa14783953d923584834",
+      "bytes": 11880
+    },
+    {
+      "path": "newsletter/40-goa-business-owners-built-their.md",
+      "sha256": "7e7b8054a9703012667be25b8ed251a3a19eb50a890c143e1e740cf4ccb9adde",
+      "bytes": 21833
     },
     {
       "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
@@ -121,8 +126,8 @@
     },
     {
       "path": "newsletter/volunteer-at-edge-city-india-2026.md",
-      "sha256": "18d5791c606a29d97b6b1e39873b9e604bffcd389e9aa68af766dd2068833bc9",
-      "bytes": 5027
+      "sha256": "669dd2fee189cbc810669b3ce2089cf1273e3a63c98bb79fa770f08de2290350",
+      "bytes": 5941
     },
     {
       "path": "newsletter/welcome-to-edge-city-india.md",
@@ -141,8 +146,8 @@
     },
     {
       "path": "website-content.md",
-      "sha256": "d6b5eb242d57d25f2fe7d4c42b78a121f880c80912920b36c72b397d865357f8",
-      "bytes": 45173
+      "sha256": "a401aba065e8ab1879ebf6476ca58fc80a296d99cd7fd7e575ba236aad5efcee",
+      "bytes": 45402
     },
     {
       "path": "website/about.md",
@@ -151,8 +156,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "036e7003fd4bf570bc570bdb5f7dda9d7bdf0752188294791ee18da86296e9cc",
-      "bytes": 31458
+      "sha256": "d486ca09932439a6770307587ddb54cf3d8389fa912d5457c493274a314b498f",
+      "bytes": 33123
     }
   ]
 }

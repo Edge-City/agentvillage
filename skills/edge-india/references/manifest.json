@@ -3,6 +3,15 @@
   "event": "edge-india-2026",
   "documents": [
     {
+      "path": "newsletter/40-goa-business-owners-built-their.md",
+      "title": "40 Goa Business Owners Built Their Own AI Tools in Three Weeks",
+      "url": "https://edgecityindia2026.substack.com/p/40-goa-business-owners-built-their",
+      "kind": "newsletter",
+      "published": "2026-11-16T17:17:03.000Z",
+      "hash": "e13af63f1c7d9111bcfda2853e6cd653725344aff5fb57adce2d5e5022ff7e13",
+      "indexed": "2026-11-16T17:27:02.126Z"
+    },
+    {
       "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
       "title": "A Typical Day (and Week) at Edge City India",
       "url": "https://edgecityindia2026.substack.com/p/a-typical-day-and-week-at-edge-city",
@@ -191,9 +200,9 @@
       "title": "Volunteer at Edge City India 2026",
       "url": "https://edgecityindia2026.substack.com/p/volunteer-at-edge-city-india-2026",
       "kind": "newsletter",
-      "published": "2026-07-29T22:27:41.000Z",
-      "hash": "49b8a0cbb73fb41c9129420fbb3753eea0b72224d123efb254e25db7960a4c16",
-      "indexed": "2026-10-05T13:50:57.008Z"
+      "updated": "2026-10-05T07:59:37.006Z",
+      "hash": "788c42edeafaa40b94d4d0726b946a87adc5b63d6f3d4a671144c5aa299dc70c",
+      "indexed": "2026-11-16T17:27:02.126Z"
     },
     {
       "path": "newsletter/welcome-to-edge-city-india.md",
@@ -222,11 +231,11 @@
     },
     {
       "path": "website-content.md",
-      "title": "Edge City India 2026",
+      "title": "Edge City India 2026 | Past Popup Village in Goa",
       "url": "https://www.edgecity.live/india26",
       "kind": "website",
-      "hash": "8cf0f0db7de9682adc000ec40483d55eda296ba12f8c59c56ce6c2feeb22e94b",
-      "indexed": "2026-10-08T19:43:20.805Z"
+      "hash": "5ef0d055e234313c64409efc74ba5a05fa014ad1a0117fb00057dbf80f766966",
+      "indexed": "2026-11-07T23:57:02.153Z"
     },
     {
       "path": "website/about.md",
@@ -241,9 +250,9 @@
       "title": "Edge City India 2026 Wiki",
       "url": "https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b",
       "kind": "wiki",
-      "updated": "2026-10-13T18:14:32.822Z",
-      "hash": "ab6501dd8b864587d740cdea455e889f89ef74e85e20eea1c64c1509ff3ff4f9",
-      "indexed": "2026-10-13T18:28:19.266Z"
+      "updated": "2026-10-26T04:14:01.501Z",
+      "hash": "e97c7007d1735bbcf06a2b33f42a5e193b75053d571a0b165f5edfaf5ad62fe9",
+      "indexed": "2026-10-26T04:28:17.012Z"
     }
   ]
 }

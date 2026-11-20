@@ -4,9 +4,9 @@ Source: https://edgecityindia2026.substack.com/p/volunteer-at-edge-city-india-20
 
 Source type: newsletter
 
-Published: 2026-07-29T22:27:41.000Z
+Source updated: 2026-10-05T07:59:37.006Z
 
-Last content change indexed: 2026-10-05T13:50:57.008Z
+Last content change indexed: 2026-11-16T17:27:02.126Z
 
 ---
 
@@ -51,6 +51,10 @@ The main areas we need support:
 Volunteering can start before the event kicks off. If you’re able to arrive a few days early to help with setup, that’s one of the most rewarding parts and a great way to bond with the team before the rest of the village shows up.
 
 If you’re a Goa local or based in India, we would especially love to have you involved. This is part of our commitment to working with the community around us to make Edge City India as accessible as possible.
+
+![](https://substackcdn.com/image/fetch/$s_!iboH!,w_720,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F34075434-1e3b-448e-9066-365642ddb527_6192x4128.jpeg)![](https://substackcdn.com/image/fetch/$s_!40zL!,w_720,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F5e005152-6db2-4ecb-b460-2af6939bca78_1280x964.jpeg)
+
+![](https://substackcdn.com/image/fetch/$s_!8v6-!,w_720,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F94bed15f-f716-48b0-89ac-df01e9d3e58d_1200x794.jpeg)![](https://substackcdn.com/image/fetch/$s_!Os9l!,w_720,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F27ab15a3-be8c-461e-98b3-6ea292f6723a_1280x964.jpeg)
 
 ## Commitments and ticket discounts
 
