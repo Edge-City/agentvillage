@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "This request named two different residents."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"subject_mismatch\",\"message\":\"This request named two different residents.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "subject_mismatch",
+    "message": "This request named two different residents."
+  },
+  "isError": true
+}

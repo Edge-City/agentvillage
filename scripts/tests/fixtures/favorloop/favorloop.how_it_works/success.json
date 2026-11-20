@@ -1,0 +1,44 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Favor Loop finds loops of 15-minute favors between residents, such as A helps B, B helps C and C helps A, when no two of them could swap directly; a loop starts only when everyone says yes.\",\"steps\":[\"Pick 1 to 3 favors you can give and 1 to 3 you would like, from a fixed menu of 15-minute favors, or say you only want to give.\",\"Favor Loop looks for two-way swaps, three-way loops and gift chains started by someone who only wants to give.\",\"Everyone in a proposed loop says yes or no within 6 hours. A no is never shown to the others.\",\"When everyone says yes, each person sees the Telegram handle (if shared) of the people they give to and receive from.\",\"After each favor, the person who received it confirms it. When every favor is confirmed, the loop is complete and lights up on the board.\"],\"shapes\":[{\"shape\":\"swap\",\"example\":\"A helps B and B helps A.\"},{\"shape\":\"loop3\",\"example\":\"A helps B, B helps C and C helps A.\"},{\"shape\":\"chain\",\"example\":\"Someone who only wants to give helps A, and A helps B.\"}],\"rules\":[\"Favors are free and take about 15 minutes. Never arrange payment.\",\"Meet in a public place such as The Circle, or online.\",\"Anyone can say no or leave at any time.\"],\"privacy\":[\"Favor Loop stores only the favors you pick, your availability and, if you choose, your Telegram handle.\",\"Your handle is shown only to people in a loop you said yes to.\",\"The board is anonymous.\",\"You can leave at any time, which deletes everything. All data is deleted on 30 Nov 2026.\"],\"board\":\"https://favorloop.fly.dev/board\"}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Favor Loop finds loops of 15-minute favors between residents, such as A helps B, B helps C and C helps A, when no two of them could swap directly; a loop starts only when everyone says yes.",
+    "steps": [
+      "Pick 1 to 3 favors you can give and 1 to 3 you would like, from a fixed menu of 15-minute favors, or say you only want to give.",
+      "Favor Loop looks for two-way swaps, three-way loops and gift chains started by someone who only wants to give.",
+      "Everyone in a proposed loop says yes or no within 6 hours. A no is never shown to the others.",
+      "When everyone says yes, each person sees the Telegram handle (if shared) of the people they give to and receive from.",
+      "After each favor, the person who received it confirms it. When every favor is confirmed, the loop is complete and lights up on the board."
+    ],
+    "shapes": [
+      {
+        "shape": "swap",
+        "example": "A helps B and B helps A."
+      },
+      {
+        "shape": "loop3",
+        "example": "A helps B, B helps C and C helps A."
+      },
+      {
+        "shape": "chain",
+        "example": "Someone who only wants to give helps A, and A helps B."
+      }
+    ],
+    "rules": [
+      "Favors are free and take about 15 minutes. Never arrange payment.",
+      "Meet in a public place such as The Circle, or online.",
+      "Anyone can say no or leave at any time."
+    ],
+    "privacy": [
+      "Favor Loop stores only the favors you pick, your availability and, if you choose, your Telegram handle.",
+      "Your handle is shown only to people in a loop you said yes to.",
+      "The board is anonymous.",
+      "You can leave at any time, which deletes everything. All data is deleted on 30 Nov 2026."
+    ],
+    "board": "https://favorloop.fly.dev/board"
+  }
+}

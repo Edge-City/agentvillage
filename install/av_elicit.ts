@@ -60,7 +60,7 @@ function memoryLimit(raw: unknown): number | null {
  * expected type, or a YAML merge key `<<` in `memory`) leaves the whole file alone with a warning.
  * No config value is echoed onto stdout. The plugin directory is staged with every other one under
  * `plugins/` (`stagePlugins`); the control plane writes the brief skill
- * (`skills/constitution-elicitation/`) itself, and the installer never copies or removes it.
+ * (`skills/odin-constitution/`; `skills/constitution-elicitation/` before GC-ELICIT v5) itself, and the installer never copies or removes it.
  */
 export function configureAvElicit(): AvElicitResult {
   const choice = avElicitChoice();

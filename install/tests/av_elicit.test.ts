@@ -5,7 +5,7 @@
  * 8000; unset changes nothing; off unlists it.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -211,8 +211,13 @@ test("install.ts runs the step once, resident only, after av-vote, the /village 
 });
 
 test("the control plane's brief skill is never copied over or removed by the installer", () => {
-  expect(EDGE_SKILL_NAMES as readonly string[]).not.toContain("constitution-elicitation");
-  expect(RETIRED_SKILL_DIRS as readonly string[]).not.toContain("constitution-elicitation");
+  // odin-constitution since GC-ELICIT v5 (Carter's review); constitution-elicitation was its name before, and a
+  // box may still hold that dir from a window opened under the old name: neither is shipped nor retired.
+  for (const dir of ["odin-constitution", "constitution-elicitation"]) {
+    expect(EDGE_SKILL_NAMES as readonly string[]).not.toContain(dir);
+    expect(RETIRED_SKILL_DIRS as readonly string[]).not.toContain(dir);
+    expect(existsSync(join(import.meta.dir, "..", "..", "skills", dir))).toBe(false);
+  }
 });
 
 test("ODIN never gets av-elicit: it is resident-only, and a full odin install with the flag on unlists it", () => {

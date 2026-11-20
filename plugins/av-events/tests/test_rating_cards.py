@@ -62,8 +62,15 @@ def planned(**over):
     return data
 
 
+def collab(**over):
+    data = {"event_type": "opportunity.collab_interest", "opportunity_id": OPP, "intention_id": None, "card": "collab", "revision": 1, "value": "yes", "at": AT, "message_hash": None}
+    data.update(over)
+    return data
+
+
 def events(av, plugin):
-    return [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("opportunity.rat") or e["event_type"] == "opportunity.pre_planned"]
+    kinds = ("opportunity.pre_planned", "opportunity.collab_interest")
+    return [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"].startswith("opportunity.rat") or e["event_type"] in kinds]
 
 
 def test_three_records_become_three_events_with_the_contracts_payloads(live, home, av):
@@ -87,6 +94,16 @@ def test_three_records_become_three_events_with_the_contracts_payloads(live, hom
     assert live._COLLECTOR.rating_tick().get("emitted") is None
 
 
+def test_the_collab_ask_and_answer_carry_the_collab_interest_scale(live, home, av):
+    hand_off(home, asked(card="collab"), collab(value="unsure"))
+    assert live._COLLECTOR.rating_tick().get("emitted") == 2
+    ask, answer = events(av, live)
+    assert ask["payload"] == {"question_version": "collab_interest_v1", "card": "collab", "message_hash": HASH, "window_hours": 24}
+    assert answer["event_type"] == "opportunity.collab_interest"
+    assert answer["payload"] == {"value": "unsure", "scale": "collab_interest_v1", "channel": "telegram_button", "revision": 1, "answered_at": AT}
+    assert answer["actor"] == "participant" and answer["evidence_class"] == "self_report"
+
+
 def test_event_ids_derive_from_type_opportunity_card_and_revision(live, home, av):
     hand_off(home, rated(), name="a.json")
     hand_off(home, rated(), name="b.json")
@@ -100,6 +117,7 @@ def test_event_ids_derive_from_type_opportunity_card_and_revision(live, home, av
     asked(message_hash=None), asked(value=3), asked(revision=2), asked(message_hash="x" * 64),
     rated(value=0), rated(value=6), rated(value="4"), rated(card="planned"), rated(message_hash=HASH),
     planned(value="maybe"), planned(card="fit"), planned(revision=0),
+    collab(value="maybe"), collab(value=["yes"]), collab(value={"v": 1}), collab(value="spark"), collab(card="planned"), collab(card="type"), collab(message_hash=HASH), rated(card="collab"), asked(card="type"),
     {**rated(), "note": "text"}, rated(opportunity_id="has space"), rated(intention_id=5), rated(at="2026-10-21T13:31:00"), rated(event_type="outcome.reported"),
 ])
 def test_a_record_not_exactly_the_shape_is_dropped_and_counted(live, home, av, record):

@@ -37,14 +37,21 @@ def load_plugin():
 class StateDb:
     """A state.db with the sessions and messages columns the plugin reads."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, active: bool = False, platform: bool = False):
+        """``active``: the store has Hermes's ``messages.active`` column (an older store has none).
+        ``platform``: it also has ``platform_message_id`` and ``display_kind`` (Hermes v2026.9.24's store)."""
         self.path = path
+        self.active = active
+        self.platform = platform
         con = sqlite3.connect(path)
         con.executescript(
             "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, session_key TEXT, chat_type TEXT,"
             " started_at REAL NOT NULL);"
             "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,"
-            " content TEXT, timestamp REAL NOT NULL);"
+            " content TEXT, timestamp REAL NOT NULL"
+            + (", active INTEGER NOT NULL DEFAULT 1, _compressed_summary INTEGER NOT NULL DEFAULT 0" if active else "")
+            + (", platform_message_id TEXT, display_kind TEXT" if platform else "")
+            + ");"
         )
         con.commit()
         con.close()
@@ -57,9 +64,18 @@ class StateDb:
         con.close()
         return sid
 
-    def message(self, sid: str, role: str, content, ts: float) -> None:
+    def message(self, sid: str, role: str, content, ts: float, active: int = 1, summary: int = 0,
+                platform_id: str = None, kind: str = None) -> None:
         con = sqlite3.connect(self.path)
-        con.execute("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)", (sid, role, content, ts))
+        if self.platform:
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp, active, _compressed_summary,"
+                        " platform_message_id, display_kind) VALUES (?,?,?,?,?,?,?,?)",
+                        (sid, role, content, ts, active, summary, platform_id, kind))
+        elif self.active:
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp, active, _compressed_summary)"
+                        " VALUES (?,?,?,?,?,?)", (sid, role, content, ts, active, summary))
+        else:
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)", (sid, role, content, ts))
         con.commit()
         con.close()
 
@@ -67,7 +83,7 @@ class StateDb:
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    for name in ("AV_ELICIT_SESSION_KEY", "TELEGRAM_HOME_CHANNEL"):
+    for name in ("AV_ELICIT_SESSION_KEY", "TELEGRAM_HOME_CHANNEL", "AV_GODCONST_ELICIT_CARDS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", OWNER)
     return tmp_path
@@ -76,6 +92,18 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def db(home):
     return StateDb(home / "state.db")
+
+
+@pytest.fixture
+def active_db(home):
+    """A state.db with Hermes's current ``messages.active`` column."""
+    return StateDb(home / "state.db", active=True)
+
+
+@pytest.fixture
+def platform_db(home):
+    """A state.db as Hermes v2026.9.24 writes it: ``active``, ``platform_message_id`` and ``display_kind``."""
+    return StateDb(home / "state.db", active=True, platform=True)
 
 
 @pytest.fixture

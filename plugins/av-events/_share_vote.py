@@ -167,6 +167,7 @@ except ImportError:  # pragma: no cover - Windows
 from . import _approval
 from . import _village_question as vq
 from ._core import DIR_MODE, FILE_MODE, derived_uuid7, epoch_from_iso, hermes_home, iso_from_epoch, sanitize, uuid7
+from ._kismet_link import names_kismet_signin_link
 
 logger = logging.getLogger("av-events")
 
@@ -1585,6 +1586,7 @@ REFUSALS: dict[str, str] = {
     "too_many_pending": (
         "Nothing was proposed: five digests are already waiting for the resident. Wait for their answers, "
         "or revoke one, before proposing another."
+        + _approval.APPROVALS_CHAT_LINE
     ),
     "digest_id_required": "Nothing was changed: this action needs the digest_id a share returned.",
     "digest_unknown": "Nothing was changed: this agent holds no digest with that digest_id.",
@@ -1649,7 +1651,7 @@ REFUSALS: dict[str, str] = {
 #: What each final or live state means, for the agent.
 STATE_MESSAGES: dict[str, str] = {
     "unfiled": "The approval service could not be reached; the request will be filed when it can. " + _NOT_APPROVAL,
-    "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL,
+    "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL + _approval.APPROVALS_CHAT_LINE,
     "cleared": "The resident's policy clears this; it is being done.",
     "starting": "It is being done now.",
     "emitting": "The resident approved it; it is being handed over now.",
@@ -1813,6 +1815,9 @@ def _share(args: dict) -> dict:
     if problem is not None:
         return _refuse(problem)
     if sanitize(text) != text:
+        return _refuse("text_sanitized")
+    if names_kismet_signin_link(text):
+        # ov#599 N1: the owner's one-time Kismet sign-in link is a credential; it never goes into a shared digest.
         return _refuse("text_sanitized")
     scope = args.get("scope")
     scope = "village" if scope is None or (isinstance(scope, str) and not scope.strip()) else scope

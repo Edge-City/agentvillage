@@ -698,6 +698,7 @@ def test_a_stated_capture_under_a_manual_policy_waits_for_the_resident(tctx, ser
     out = call(tctx, {"text": STATED, "source": "message"})
     iid = out["intention_id"]
     assert out["published"] is False and out["publish_refused"] == "approval_pending"
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
     assert index.requests == []
     serve.grant(f"{STATED_CLASS}:{iid}")
     poll(mods)
@@ -896,6 +897,7 @@ def test_confirm_checks_the_resident_answer_and_publishes_once(tctx, serve, inde
     # (4) a manual class with no grant: confirm refuses, starts nothing.
     assert out["success"] is False and out["error"] == "awaiting_resident"
     assert "cannot confirm it for them" in out["message"] and index.requests == []
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
     assert "start" not in serve.verbs()
     serve.grant(f"{INFERRED}:{iid}")
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c3")
@@ -919,9 +921,12 @@ def test_confirm_refusals(tctx, serve, index, mods, monkeypatch):
 
 
 def test_update_of_a_pending_intention_is_refused_and_withdraw_ends_it(tctx, serve, index, mods):
-    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    captured = call(tctx, {"text": TEXT, "source": "ambient"})
+    assert captured["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
+    iid = captured["intention_id"]
     out = call(tctx, {"action": "update", "intention_id": iid, "text": TEXT + "!"}, tool_call_id="c2")
     assert out["error"] == "approval_pending"
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
     assert json.loads(entry(mods, iid)["approval"]["payload"]) == {"text": TEXT}
     out = call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c3")
     assert out["success"] is True and out["published"] is False

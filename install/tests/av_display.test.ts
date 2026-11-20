@@ -126,7 +126,7 @@ test("rc42: the box config enables av-display and never writes display.suppress_
   }
   const plugin = join(dir, "..", "plugins", "av-display");
   const manifest = YAML.parse(readFileSync(join(plugin, "plugin.yaml"), "utf8")) as { version: string };
-  expect(manifest.version).toBe("0.4.0");
+  expect(manifest.version).toBe("0.5.0");
   const source = readFileSync(join(plugin, "__init__.py"), "utf8");
   expect(source).toContain('("gateway.run_turn", apply_hygiene_notices)');
   expect(source).toContain('"compression-turnhold notice",');

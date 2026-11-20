@@ -137,9 +137,13 @@ def test_callback_data_shape_and_the_64_byte_limit(plugin):
     assert plugin.parse_callback(plugin.planned_callback("y", nonce)) == ("planned", "y", nonce)
     assert plugin.parse_callback(plugin.planned_callback("n", nonce)) == ("planned", "n", nonce)
     assert len(plugin.planned_callback("n", nonce).encode("utf-8")) <= 64
+    for choice in plugin.COLLAB_VALUES:
+        data = plugin.collab_callback(choice, nonce)
+        assert len(data.encode("utf-8")) <= plugin.CALLBACK_DATA_MAX_BYTES
+        assert plugin.parse_callback(data) == ("collab", choice, nonce)
 
 
-@pytest.mark.parametrize("data", [None, "", "avr:f:0:" + "a" * 22, "avr:f:6:" + "a" * 22, "avr:p:x:" + "a" * 22, "avr:f:3:" + "a" * 21, "avr:f:3:" + "a" * 23, "avr:f:3:" + "é" * 22, *CORE_CALLBACKS])
+@pytest.mark.parametrize("data", [None, "", "avr:f:0:" + "a" * 22, "avr:f:6:" + "a" * 22, "avr:p:x:" + "a" * 22, "avr:c:x:" + "a" * 22, "avr:c:yes:" + "a" * 22, "avr:t:f:" + "a" * 22, "avr:f:3:" + "a" * 21, "avr:f:3:" + "a" * 23, "avr:f:3:" + "é" * 22, *CORE_CALLBACKS])
 def test_parse_refuses_anything_else(plugin, data):
     assert plugin.parse_callback(data) is None
 
@@ -188,27 +192,29 @@ def test_card_one_text_labels_privacy_and_manage_line(plugin):
     text = plugin.fit_text("Edge", "Maya <Rao>", "Climate & finance")
     assert text.startswith("How good a match was this suggestion from Edge?\nMaya &lt;Rao&gt;, about Climate &amp; finance\n")
     for value, label in plugin.LABELS.items():
-        assert f"{value}  {label}" in text
-    assert "Private: Maya &lt;Rao&gt; never sees your answer." in text
+        assert f"{plugin.EMOJI[value]}  {label}" in text
+    assert "\n\nMaya &lt;Rao&gt; never sees this.\n\n" in text
     assert "research team" not in text
     assert text.endswith("\n\n" + plugin.MANAGE_LINE)
     assert "about" not in plugin.fit_text("Edge", "Maya", None).splitlines()[1]
 
 
-def test_keyboards_one_row_numerals_and_yes_no(plugin):
+def test_keyboards_emoji_row_and_collab_yes_no_not_sure(plugin):
     rows = plugin.fit_rows("n" * 22, lambda t, d: Button(t, callback_data=d))
-    assert len(rows) == 1 and [b.text for b in rows[0]] == ["1", "2", "3", "4", "5"]
-    rows = plugin.planned_rows("n" * 22, lambda t, d: Button(t, callback_data=d))
-    assert len(rows) == 1 and [b.text for b in rows[0]] == ["Yes", "No"]
+    assert len(rows) == 1 and [b.text for b in rows[0]] == ["😕", "😐", "🙂", "😊", "🤩"]
+    rows = plugin.collab_rows("n" * 22, lambda t, d: Button(t, callback_data=d))
+    assert [[b.text for b in row] for row in rows] == [["Yes", "No"], ["Not sure yet"]]
+    assert [b.callback_data for row in rows for b in row] == [plugin.collab_callback(c, "n" * 22) for c in ("y", "n", "u")]
+    assert plugin.collab_text() == "Could you imagine collaborating with this person 🤝?"
 
 
 def test_mark_keyboard_checks_the_tapped_button_only(plugin):
     nonce = "n" * 22
     rows = plugin.fit_rows(nonce, lambda t, d: Button(t, callback_data=d))
     marked = plugin.mark_keyboard(rows, plugin.fit_callback(4, nonce), lambda t, d: Button(t, callback_data=d))
-    assert [b.text for b in marked[0]] == ["1", "2", "3", "✅ 4", "5"]
+    assert [b.text for b in marked[0]] == ["😕", "😐", "🙂", "✅ 😊", "🤩"]
     again = plugin.mark_keyboard(marked, plugin.fit_callback(2, nonce), lambda t, d: Button(t, callback_data=d))
-    assert [b.text for b in again[0]] == ["1", "✅ 2", "3", "4", "5"]
+    assert [b.text for b in again[0]] == ["😕", "✅ 😐", "🙂", "😊", "🤩"]
 
 
 # --------------------------------------------------------------------------- owner
@@ -239,9 +245,9 @@ def test_pickup_sends_card_one_records_the_ledger_and_hands_the_ask_over(plugin,
     sent = bot.sent[0]
     assert sent["chat_id"] == int(OWNER) and sent["parse_mode"] == "HTML"
     assert "Maya Rao, about Climate finance" in sent["text"]
-    assert [b.text for b in sent["reply_markup"].inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
+    assert [b.text for b in sent["reply_markup"].inline_keyboard[0]] == ["😕", "😐", "🙂", "😊", "🤩"]
     card = ledger(home)["cards"][OPP]
-    assert card["message_id"] == 101 and card["fit"] is None and card["planned"] is None and card["injected"] is False
+    assert card["message_id"] == 101 and card["fit"] is None and card["collab"] is None and card["injected"] is False
     assert card["nonce"] == plugin.make_nonce(plugin.hash_key(), OPP)
     assert plugin.epoch_from_iso(card["closes_at"]) == pytest.approx(T0 + 24 * 3600)
     (record,) = records(home)
@@ -322,14 +328,15 @@ def test_fit_tap_records_marks_sends_card_two_and_hands_the_event_over(plugin, h
     query = Query(plugin.fit_callback(4, nonce), bot, rows=rows)
     run(handler(plugin, now=T0 + 60)(types.SimpleNamespace(callback_query=query)))
     assert query.answers == ["Recorded: Good fit"]
-    assert [b.text for b in query.edits[0].inline_keyboard[0]] == ["1", "2", "3", "✅ 4", "5"]
+    assert [b.text for b in query.edits[0].inline_keyboard[0]] == ["😕", "😐", "🙂", "✅ 😊", "🤩"]
     card = ledger(home)["cards"][OPP]
     assert card["fit"] == {"value": 4, "revision": 1, "at": plugin.now_iso(T0 + 60)}
-    assert card["planned_message_id"] == 102
-    assert bot.sent[1]["text"] == "Did you already plan this meetup?"
-    assert [b.text for b in bot.sent[1]["reply_markup"].inline_keyboard[0]] == ["Yes", "No"]
+    assert card["collab_message_id"] == 102
+    assert plugin.epoch_from_iso(card["closes_at_collab"]) == pytest.approx(T0 + 60 + 24 * 3600)
+    assert bot.sent[1]["text"] == "Could you imagine collaborating with this person 🤝?"
+    assert [[b.text for b in row] for row in bot.sent[1]["reply_markup"].inline_keyboard] == [["Yes", "No"], ["Not sure yet"]]
     kinds = [(r["event_type"], r["card"], r["revision"], r["value"]) for r in records(home)]
-    assert kinds == [("opportunity.rating_asked", "fit", 1, None), ("opportunity.rated", "fit", 1, 4), ("opportunity.rating_asked", "planned", 1, None)]
+    assert kinds == [("opportunity.rating_asked", "fit", 1, None), ("opportunity.rated", "fit", 1, 4), ("opportunity.rating_asked", "collab", 1, None)]
     rated = [r for r in records(home) if r["event_type"] == "opportunity.rated"][0]
     assert rated["at"] == plugin.now_iso(T0 + 60) and rated["message_hash"] is None
 
@@ -360,22 +367,132 @@ def test_a_retap_is_a_revision_and_sends_no_second_card_two(plugin, home, on):
     assert [r["revision"] for r in records(home) if r["event_type"] == "opportunity.rated"] == [1, 2]
 
 
-def test_planned_tap_records_and_injects_the_line_once(plugin, home, on):
+@pytest.mark.parametrize("fit", [1, 2, 3, 4, 5])
+def test_every_rating_gets_the_collab_card(plugin, home, on, fit):
+    bot, nonce = tapped(plugin, home, on)
+    run(handler(plugin, now=T0 + 60)(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(fit, nonce), bot))))
+    assert len(bot.sent) == 2 and bot.sent[1]["text"] == "Could you imagine collaborating with this person 🤝?"
+
+
+def test_collab_tap_records_and_injects_the_line_once(plugin, home, on):
     ctx = Ctx()
     bot, nonce = tapped(plugin, home, on)
     h = handler(plugin, ctx=ctx, now=T0 + 60)
-    run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(4, nonce), bot))))
-    assert ctx.calls == []
-    run(h(types.SimpleNamespace(callback_query=Query(plugin.planned_callback("n", nonce), bot, message_id=102))))
-    assert ctx.calls == [("[Rating recorded] Maya Rao: 4/5 match fit; already planned: no.", f"agent:main:telegram:dm:{OWNER}")]
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(2, nonce), bot))))
+    assert ctx.calls == []  # the agent hears once card 2 resolves
+    query = Query(plugin.collab_callback("u", nonce), bot, message_id=102)
+    run(h(types.SimpleNamespace(callback_query=query)))
+    assert query.answers == ["Recorded: Not sure yet"]
+    assert ctx.calls == [("[Rating recorded] Maya Rao: 2/5 match fit; could imagine collaborating: unsure. Reply with exactly: Got it!", f"agent:main:telegram:dm:{OWNER}")]
     card = ledger(home)["cards"][OPP]
-    assert card["planned"] == {"value": "no", "revision": 1, "at": plugin.now_iso(T0 + 60)} and card["injected"] is True
+    assert card["collab"] == {"value": "unsure", "revision": 1, "at": plugin.now_iso(T0 + 60)} and card["injected"] is True
+    collab = [r for r in records(home) if r["event_type"] == "opportunity.collab_interest"]
+    assert collab == [{"event_type": "opportunity.collab_interest", "opportunity_id": OPP, "intention_id": None, "card": "collab", "revision": 1,
+                       "value": "unsure", "at": plugin.now_iso(T0 + 60), "message_hash": None}]
+    # A collab tap on card 1's message is refused; a revision does not inject again or send another card.
+    wrong = Query(plugin.collab_callback("y", nonce), bot, message_id=101)
+    run(h(types.SimpleNamespace(callback_query=wrong)))
+    assert wrong.answers == [plugin.INVALID]
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.collab_callback("y", nonce), bot, message_id=102))))
+    assert ledger(home)["cards"][OPP]["collab"]["revision"] == 2
+    assert len(ctx.calls) == 1 and len(bot.sent) == 2
+    # Card 2 closes 24 h after its own send.
+    late = Query(plugin.collab_callback("n", nonce), bot, message_id=102)
+    run(handler(plugin, ctx=ctx, now=T0 + 60 + 24 * 3600 + 1)(types.SimpleNamespace(callback_query=late)))
+    assert late.answers == [plugin.CLOSED]
+
+
+def test_a_retired_planned_card_is_still_recorded(plugin, home, on):
+    """A "Did you already plan this meetup?" card sent by an older release can still be answered."""
+    bot, nonce = tapped(plugin, home, on)
+    run(handler(plugin, now=T0 + 60)(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(4, nonce), bot))))
+    ledger_file = home / "av-events" / "proactive" / "rated.json"
+    data = json.loads(ledger_file.read_text())
+    data["cards"][OPP].update({"planned_message_id": 99, "closes_at_planned": plugin.now_iso(T0 + 60 + 24 * 3600)})
+    ledger_file.write_text(json.dumps(data))
+    query = Query(plugin.planned_callback("n", nonce), bot, message_id=99)
+    run(handler(plugin, now=T0 + 120)(types.SimpleNamespace(callback_query=query)))
+    assert query.answers == ["Recorded: No"]
     planned = [r for r in records(home) if r["event_type"] == "opportunity.pre_planned"]
-    assert planned == [{"event_type": "opportunity.pre_planned", "opportunity_id": OPP, "intention_id": None, "card": "planned", "revision": 1,
-                        "value": "no", "at": plugin.now_iso(T0 + 60), "message_hash": None}]
-    # A revision of card 2 does not inject again.
-    run(h(types.SimpleNamespace(callback_query=Query(plugin.planned_callback("y", nonce), bot, message_id=102))))
-    assert len(ctx.calls) == 1
+    assert [(r["card"], r["value"]) for r in planned] == [("planned", "no")]
+    assert len(bot.sent) == 2  # nothing more is sent
+
+
+def test_an_early_answer_never_leaves_the_card_locked(plugin, home, on):
+    """Review #492: "Already recorded" and "closed" used to keep the card in flight forever."""
+    bot, nonce = tapped(plugin, home, on)
+    h = handler(plugin, now=T0 + 60)
+    for value, answer in ((3, "Recorded: OK fit"), (3, "Already recorded: OK fit"), (5, "Recorded: Great fit")):
+        query = Query(plugin.fit_callback(value, nonce), bot)
+        run(h(types.SimpleNamespace(callback_query=query)))
+        assert query.answers == [answer]
+    late = Query(plugin.fit_callback(4, nonce), bot)
+    run(handler(plugin, now=T0 + 24 * 3600 + 1)(types.SimpleNamespace(callback_query=late)))
+    assert late.answers == [plugin.CLOSED]
+    assert plugin._in_flight == set()
+
+
+def test_a_claimed_injection_is_not_due_until_the_claim_lapses(plugin, home, on):
+    """Review #492: the tap and the pick-up must not inject one card twice."""
+    card = {"fit": {"value": 4}, "collab": {"value": "yes"}, "injected": False}
+    assert plugin.ready_to_inject(card, T0)
+    card["inject_claimed_at"] = plugin.now_iso(T0)
+    assert not plugin.ready_to_inject(card, T0 + 60)
+    assert plugin.ready_to_inject(card, T0 + plugin.INJECT_CLAIM_S + 1)
+    ctx = Ctx(accept=False)
+    bot, nonce = tapped(plugin, home, on)
+    h = handler(plugin, ctx=ctx, now=T0 + 60)
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(2, nonce), bot))))
+    assert plugin.claim_injection(None, OPP, T0 + 60) is None  # card 2 not answered yet
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.collab_callback("n", nonce), bot, message_id=102))))
+    # The refused attempt released its claim: the next pick-up may try again.
+    assert "inject_claimed_at" not in ledger(home)["cards"][OPP]
+    assert plugin.claim_injection(None, OPP, T0 + 61) is not None
+    assert plugin.claim_injection(None, OPP, T0 + 62) is None
+
+
+def test_a_collab_card_that_cannot_be_sent_settles_on_card_one(plugin, home, on):
+    """Review #492: a failed follow-up send used to hold the agent line for up to 24 h."""
+    ctx = Ctx()
+    bot, nonce = tapped(plugin, home, on)
+    h = handler(plugin, ctx=ctx, now=T0 + 60)
+    bot.fail = 1
+    query = Query(plugin.fit_callback(4, nonce), bot)
+    run(h(types.SimpleNamespace(callback_query=query)))
+    assert query.answers == ["Recorded: Good fit"]
+    card = ledger(home)["cards"][OPP]
+    assert card["collab_send_failed"] is True and card["collab_message_id"] is None and card["injected"] is True
+    assert ctx.calls == [("[Rating recorded] Maya Rao: 4/5 match fit; could imagine collaborating: not answered. Reply with exactly: Got it!", f"agent:main:telegram:dm:{OWNER}")]
+
+
+def test_a_collab_card_whose_send_timed_out_still_takes_its_tap(plugin, home, on):
+    """Review #497: Telegram may take the message even when the send call fails."""
+    ctx = Ctx()
+    bot, nonce = tapped(plugin, home, on)
+    bot.fail = 1
+    run(handler(plugin, ctx=ctx, now=T0 + 60)(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(3, nonce), bot))))
+    query = Query(plugin.collab_callback("y", nonce), bot, message_id=777)
+    run(handler(plugin, ctx=ctx, now=T0 + 120)(types.SimpleNamespace(callback_query=query)))
+    assert query.answers == ["Recorded: Yes"]
+    card = ledger(home)["cards"][OPP]
+    assert card["collab_message_id"] == 777 and card["collab"]["value"] == "yes"
+    assert len(ctx.calls) == 1  # told once, at the failed send
+    assert [r["value"] for r in records(home) if r["event_type"] == "opportunity.collab_interest"] == ["yes"]
+
+
+def test_an_older_releases_answered_planned_card_settles_at_once(plugin):
+    card = {"fit": {"value": 4}, "planned": {"value": "no"}, "injected": False, "closes_at": plugin.now_iso(T0 + 24 * 3600)}
+    assert plugin.ready_to_inject(card, T0 + 60)
+
+
+def test_the_pickup_injects_when_the_collab_card_is_left_unanswered(plugin, home, on):
+    ctx = Ctx()
+    bot, nonce = tapped(plugin, home, on)
+    h = handler(plugin, ctx=ctx, now=T0 + 60)
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(5, nonce), bot))))
+    assert pickup(plugin, bot, ctx=ctx, now=T0 + 60 + 24 * 3600 - 1) == {}
+    assert pickup(plugin, bot, ctx=ctx, now=T0 + 60 + 24 * 3600 + 1) == {"injected": 1}
+    assert ctx.calls == [("[Rating recorded] Maya Rao: 5/5 match fit; could imagine collaborating: not answered. Reply with exactly: Got it!", f"agent:main:telegram:dm:{OWNER}")]
 
 
 def test_injection_refused_or_erroring_never_blocks_the_tap(plugin, home, on):
@@ -385,7 +502,7 @@ def test_injection_refused_or_erroring_never_blocks_the_tap(plugin, home, on):
         bot, nonce = tapped(plugin, home, on)
         h = handler(plugin, ctx=ctx, now=T0 + 60)
         run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(1, nonce), bot))))
-        query = Query(plugin.planned_callback("y", nonce), bot, message_id=102)
+        query = Query(plugin.collab_callback("y", nonce), bot, message_id=102)
         run(h(types.SimpleNamespace(callback_query=query)))
         assert query.answers == ["Recorded: Yes"]
 
@@ -402,18 +519,18 @@ def test_each_card_has_its_own_24_hour_window_then_the_pickup_injects_card_one_a
     bot, nonce = tapped(plugin, home, on)
     run(handler(plugin, now=T0 + 60)(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(3, nonce), bot))))
     card = ledger(home)["cards"][OPP]
-    assert plugin.epoch_from_iso(card["closes_at_planned"]) == pytest.approx(T0 + 60 + 24 * 3600)
-    # Card 1 closed, card 2 still open: a planned tap is taken, a fit re-tap is not.
+    assert plugin.epoch_from_iso(card["closes_at_collab"]) == pytest.approx(T0 + 60 + 24 * 3600)
+    # Card 1 closed, card 2 still open: a collab tap is taken, a fit re-tap is not.
     late_fit = Query(plugin.fit_callback(2, nonce), bot)
     run(handler(plugin, now=T0 + 24 * 3600 + 1)(types.SimpleNamespace(callback_query=late_fit)))
     assert late_fit.answers == ["This question has closed."]
     assert pickup(plugin, bot, ctx=ctx, now=T0 + 24 * 3600 + 1) == {}  # card 2 still open: not injected yet
-    late = Query(plugin.planned_callback("y", nonce), bot, message_id=102)
+    late = Query(plugin.collab_callback("y", nonce), bot, message_id=102)
     run(handler(plugin, now=T0 + 60 + 24 * 3600 + 1)(types.SimpleNamespace(callback_query=late)))
     assert late.answers == ["This question has closed."]
-    assert ledger(home)["cards"][OPP]["planned"] is None
+    assert ledger(home)["cards"][OPP]["collab"] is None
     assert pickup(plugin, bot, ctx=ctx, now=T0 + 60 + 24 * 3600 + 1) == {"injected": 1}
-    assert ctx.calls == [("[Rating recorded] Maya Rao: 3/5 match fit; already planned: not answered.", f"agent:main:telegram:dm:{OWNER}")]
+    assert ctx.calls == [("[Rating recorded] Maya Rao: 3/5 match fit; could imagine collaborating: not answered. Reply with exactly: Got it!", f"agent:main:telegram:dm:{OWNER}")]
     # An unanswered card is never injected.
     stage(home, plugin, opp=OPP2)
     pickup(plugin, bot, now=T0)
@@ -573,11 +690,11 @@ def test_the_same_value_again_is_already_recorded_not_a_revision(plugin, home, o
     assert again.answers == ["Already recorded: Good fit"]
     assert ledger(home)["cards"][OPP]["fit"]["revision"] == 1
     assert [r["revision"] for r in records(home) if r["event_type"] == "opportunity.rated"] == [1]
-    run(h(types.SimpleNamespace(callback_query=Query(plugin.planned_callback("n", nonce), bot, message_id=102))))
-    same = Query(plugin.planned_callback("n", nonce), bot, message_id=102)
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.collab_callback("n", nonce), bot, message_id=102))))
+    same = Query(plugin.collab_callback("n", nonce), bot, message_id=102)
     run(h(types.SimpleNamespace(callback_query=same)))
     assert same.answers == ["Already recorded: No"]
-    assert len([r for r in records(home) if r["event_type"] == "opportunity.pre_planned"]) == 1
+    assert len([r for r in records(home) if r["event_type"] == "opportunity.collab_interest"]) == 1
 
 
 def test_a_mixed_case_uuid_is_one_card(plugin, home, on):
@@ -593,7 +710,7 @@ def test_injection_is_retried_up_to_the_cap_then_closed(plugin, home, on):
     bot, nonce = tapped(plugin, home, on)
     h = handler(plugin, ctx=ctx, now=T0 + 60)
     run(h(types.SimpleNamespace(callback_query=Query(plugin.fit_callback(4, nonce), bot))))
-    run(h(types.SimpleNamespace(callback_query=Query(plugin.planned_callback("n", nonce), bot, message_id=102))))
+    run(h(types.SimpleNamespace(callback_query=Query(plugin.collab_callback("y", nonce), bot, message_id=102))))
     assert ledger(home)["cards"][OPP]["inject_attempts"] == 1 and ledger(home)["cards"][OPP]["injected"] is False
     assert pickup(plugin, bot, ctx=ctx, now=T0 + 120) == {"inject_refused": 1}
     assert pickup(plugin, bot, ctx=ctx, now=T0 + 180) == {"inject_refused": 1}

@@ -1,6 +1,6 @@
 """The suggestion rating cards' events, from av-rate's hand-off files (data docs/design/suggestion-rating.md).
 
-`plugins/av-rate` sends the two Telegram button cards and records the taps; it never posts an
+`plugins/av-rate` sends the Telegram button cards and records the taps; it never posts an
 event itself. For every card sent and every tap it writes one file into
 `av-events/proactive/rating-events/` (0600 in a 0700 folder, by temp file and rename):
 
@@ -12,9 +12,10 @@ payload is built HERE, so the shape the door sees is this module's, not the file
 
 | `event_type` | payload (closed, every key required) | actor |
 |---|---|---|
-| `opportunity.rating_asked` | `question_version` (`match_fit_5_v1`), `card` (`fit` / `planned`), `message_hash` (the card text's keyed hash, 64 hex), `window_hours` (24) | `system` |
+| `opportunity.rating_asked` | `question_version` (`match_fit_5_v1`; `collab_interest_v1` for card 2), `card` (`fit` / `collab`; `planned` from older releases), `message_hash` (the card text's keyed hash, 64 hex), `window_hours` (24) | `system` |
 | `opportunity.rated` | `value` (1..5), `scale` (`match_fit_5_v1`), `channel` (`telegram_button`), `revision` (1..), `rated_at` | `participant`, `self_report` |
 | `opportunity.pre_planned` | `value` (`yes` / `no`), `channel`, `revision`, `answered_at` | `participant`, `self_report` |
+| `opportunity.collab_interest` | `value` (`yes` / `no` / `unsure`), `scale` (`collab_interest_v1`), `channel`, `revision`, `answered_at` | `participant`, `self_report` |
 
 Envelope: `opportunity_id` (the Index id, lower-cased when it is a UUID), `intention_id` (null unless
 the stage named one). Event ids are derived from (type, opportunity, card, revision), so a file read
@@ -45,8 +46,11 @@ WINDOW_HOURS = 24
 ASKED = "opportunity.rating_asked"
 RATED = "opportunity.rated"
 PRE_PLANNED = "opportunity.pre_planned"
-EVENT_TYPES = frozenset({ASKED, RATED, PRE_PLANNED})
-CARDS = frozenset({"fit", "planned"})
+COLLAB_INTEREST = "opportunity.collab_interest"
+COLLAB_SCALE = "collab_interest_v1"
+COLLAB_VALUES = ("yes", "no", "unsure")
+EVENT_TYPES = frozenset({ASKED, RATED, PRE_PLANNED, COLLAB_INTEREST})
+CARDS = frozenset({"fit", "planned", "collab"})
 RECORD_KEYS = frozenset({"event_type", "opportunity_id", "intention_id", "card", "revision", "value", "at", "message_hash"})
 FILE_KEYS = frozenset({"v", "written_at", "records"})
 REVISION_MAX = 1000
@@ -103,8 +107,11 @@ def valid_record(data: Any) -> Optional[dict]:
     elif event_type == RATED:
         if card != "fit" or type(value) is not int or not 1 <= value <= 5 or message_hash is not None:
             return None
-    else:
+    elif event_type == PRE_PLANNED:
         if card != "planned" or value not in ("yes", "no") or message_hash is not None:
+            return None
+    else:
+        if card != "collab" or not isinstance(value, str) or value not in COLLAB_VALUES or message_hash is not None:
             return None
     return {
         "event_type": event_type,
@@ -132,9 +139,12 @@ def payload_for(record: dict) -> dict:
     """The closed payload for a valid record, keys in the contract's order."""
     kind = record["event_type"]
     if kind == ASKED:
-        return {"question_version": SCALE, "card": record["card"], "message_hash": record["message_hash"], "window_hours": WINDOW_HOURS}
+        version = COLLAB_SCALE if record["card"] == "collab" else SCALE
+        return {"question_version": version, "card": record["card"], "message_hash": record["message_hash"], "window_hours": WINDOW_HOURS}
     if kind == RATED:
         return {"value": record["value"], "scale": SCALE, "channel": CHANNEL, "revision": record["revision"], "rated_at": record["at"]}
+    if kind == COLLAB_INTEREST:
+        return {"value": record["value"], "scale": COLLAB_SCALE, "channel": CHANNEL, "revision": record["revision"], "answered_at": record["at"]}
     return {"value": record["value"], "channel": CHANNEL, "revision": record["revision"], "answered_at": record["at"]}
 
 
@@ -215,5 +225,5 @@ def tick(state_dir: str, emit: Callable[..., Optional[dict]], now: Optional[floa
     return codes
 
 
-__all__ = ["ASKED", "CHANNEL", "DROPPED", "EVENT_TYPES", "PRE_PLANNED", "RATED", "SCALE", "SWITCH", "WINDOW_HOURS",
+__all__ = ["ASKED", "CHANNEL", "COLLAB_INTEREST", "COLLAB_SCALE", "DROPPED", "EVENT_TYPES", "PRE_PLANNED", "RATED", "SCALE", "SWITCH", "WINDOW_HOURS",
            "event_id_for", "events_dir", "payload_for", "tick", "valid_file", "valid_record"]

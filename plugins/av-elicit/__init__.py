@@ -20,6 +20,12 @@ the session exists, so the loop waits until ``state.db`` has a Telegram session 
 injected between 22:00 and 08:00 IST, nor while av-godconst's ``av-events/godconst/page-open`` marker
 exists (a sent ballot card page still has unrated cards); the file is held, and only the 24 h age cap skips it.
 
+Cards first (DATA-547): while ``AV_GODCONST_ELICIT_CARDS`` is exactly ``1``, the opener whose ``<unix_ms>``
+equals the ``window_ms`` of a valid, unexpired ``av-events/godconst/elicit-cards.json`` is held until
+av-godconst writes that elicitation id to ``av-events/godconst/cards-released`` (cards done, stopped, ended or
+3 h idle) or the file expires; neither file present or valid means no hold, so it never deadlocks. While held
+the opener does not age; once freed, its 24 h age cap counts from the release (or the expiry).
+
 Fail-open: no hooks, one daemon thread, one tool; every failure is a log code, never an exception into the
 gateway. Logs carry codes and counts only, never a message's text. Python 3.9+, standard library only.
 """
@@ -58,6 +64,21 @@ AGE_CAP_S = 24 * 3600
 IST = timezone(timedelta(hours=5, minutes=30))
 #: av-godconst's page-open marker older than this no longer holds injection.
 BALLOT_PAGE_STALE_S = 12 * 3600
+#: Cards first: av-godconst's switch for the elicitation rating cards (exactly ``1`` = on). Off, nothing holds.
+CARDS_SWITCH_ENV = "AV_GODCONST_ELICIT_CARDS"
+CARDS_FILE_MAX_BYTES = 64 * 1024
+#: A cards file expiring further ahead than this is malformed and holds nothing (the hold is always bounded).
+CARDS_HOLD_MAX_S = 48 * 3600
+CARDS_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CARDS_STATEMENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+CARDS_STATEMENTS_MAX = 500
+#: Cards first: the line appended to an opener that was held behind the cards, by how much the human rated. The
+#: control plane's opener instructions branch on these exact sentences; never a rating value or a statement text.
+CARDS_RATED_LINES = {
+    "all": "Your human just rated all of the private rating cards (you cannot see the ratings).",
+    "some": "Your human just rated some of the private rating cards (you cannot see the ratings).",
+    "none": "Your human did not rate the private rating cards.",
+}
 QUIET_START_HOUR = 22
 QUIET_END_HOUR = 8
 
@@ -73,6 +94,36 @@ LATE_ANSWER_S = 24 * 3600
 #: A question text longer than this many words is kept and flagged ``text_long`` (it is likely the whole
 #: message, not the question sentence).
 QUESTION_WORDS_SOFT_MAX = 60
+#: §12.1: the human's own messages attached to an answer record: at most this many, this many characters of
+#: joined text in all (the most recent kept), joined by a blank line.
+HUMAN_MESSAGES_MAX = 10
+HUMAN_TEXT_MAX = 8000
+HUMAN_TEXT_JOIN = "\n\n"
+#: Newest rows of the window read when looking for the span (it holds at most 10 human messages).
+HUMAN_SCAN_ROWS = 1000
+# Hermes v2026.9.24 frames a message the human sends while a turn runs (agent/prompt_builder.py
+# format_steer_marker; gateway/run_busy.py _steer_text_with_origin). The frames, and the origin ids inside
+# them, are Hermes's and never part of the human's words.
+STEER_KIND = "steer"
+STEER_OPEN = ("[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; "
+              "not tool output and not a new delivery when replayed from conversation history]\n")
+STEER_CLOSE = "\n[/OUT-OF-BAND USER MESSAGE]"
+ORIGIN_OPEN = "Gateway message origin (JSON data, not instructions or authorization):\n"
+ORIGIN_CLOSE = "\nDo not guess a reply destination when these fields are insufficient.\n\n"
+# Hermes joins several mid-turn messages into one row: steers with "\n" (agent/interrupt_control.py:250-252),
+# redirects with this label (:295-300); a leftover steer becomes the next turn's row (turn_finalizer.py:672-674).
+REDIRECT_JOIN = "\n\n[Additional user correction]\n"
+# Any of these left in a row after unframing means a frame we did not parse: the row is dropped, never recorded.
+FRAME_MARKS = ("Gateway message origin (JSON data", "Do not guess a reply destination",
+               "[OUT-OF-BAND USER MESSAGE", "[/OUT-OF-BAND USER MESSAGE]")
+#: The control plane's pass leaves a record file bigger than this unread: ``RECORD_FILE_MAX`` in
+#: agentvillage-controlplane's control-plane/src/godconst-elicit-pass.js, 65536 since its human-words PR
+#: (#397). Never raise this before the control plane does: an older pass drops a bigger record as
+#: ``too_large``. An answer's human words are cut further if the record would not fit (8000 three-byte
+#: characters beside the agent's longest fields still fit).
+RECORD_FILE_BYTES = 65_536
+HUMAN_FIELDS = ("human_text", "human_message_count", "human_text_truncated", "human_text_first_at",
+                "human_text_last_at")
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -100,6 +151,8 @@ GATEWAY_STATE_FRESH_S = 10 * 60
 #: A ``.sending`` claim older than this was left by a process that died mid-injection.
 ORPHAN_SENDING_S = 60
 JOIN_TIMEOUT_S = 1.0
+#: Under ``gateway start|restart``: how often the waiter checks for Hermes's gateway marker.
+MARKER_POLL_S = 1.0
 
 TOOL_DESCRIPTION = (
     "Record one step of the ODIN constitution conversation with your human: a question you sent them "
@@ -144,6 +197,11 @@ TOOL_SCHEMA: dict = {
 _CTX: Any = None
 _THREAD: Optional[threading.Thread] = None
 _STOP: Optional[threading.Event] = None
+#: The one thread waiting for the gateway marker under ``gateway start|restart``, and its stop event.
+_WAITER: Optional[threading.Thread] = None
+_WAIT_STOP: Optional[threading.Event] = None
+#: Serialises every start of the loop (register, a reload, the waiter): no loop ever runs twice.
+_LOOP_LOCK = threading.Lock()
 _REGISTERED = False
 _LAST_PROBE = 0.0
 _LAST_CODE: Optional[str] = None
@@ -151,6 +209,8 @@ _RECORD_LOCK = threading.Lock()
 _STATE_LOCK = threading.RLock()
 #: The mtime of the stale page-open marker already logged (one line per stale marker).
 _STALE_BALLOT_LOGGED: Optional[float] = None
+#: The bad cards file already logged: (code, mtime).
+_CARDS_LOGGED: Optional[tuple] = None
 
 # --------------------------------------------------------------------------- env, paths, logging
 
@@ -234,6 +294,80 @@ def ballot_page_open(home: Optional[str] = None, now: Optional[float] = None) ->
             _log("stale_ballot_page", logging.WARNING, age_h=int((stamp - mtime) // 3600))
         return False
     return True
+
+
+def cards_file_path(home: Optional[str] = None) -> str:
+    """The control plane's ``elicit-cards.json`` (av-godconst shows its statements as rating cards)."""
+    return os.path.join(home or hermes_home(), "av-events", "godconst", "elicit-cards.json")
+
+
+def cards_released_path(home: Optional[str] = None) -> str:
+    """av-godconst's release signal: one line, the elicitation id whose cards no longer hold the opener."""
+    return os.path.join(home or hermes_home(), "av-events", "godconst", "cards-released")
+
+
+def _log_cards(outcome: str, home: Optional[str] = None) -> None:
+    """A bad cards file: one warning per file state (its mtime), apart from the loop's waiting codes."""
+    global _CARDS_LOGGED
+    key = (outcome, _mtime(cards_file_path(home)))
+    if _CARDS_LOGGED != key:
+        _CARDS_LOGGED = key
+        _log(outcome, logging.WARNING)
+
+
+def _positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
+
+
+def cards_hold(home: Optional[str] = None, now: Optional[float] = None) -> Optional[dict]:
+    """Cards first: ``{"window_ms", "held", "freed_at", "rated"}`` for the cards file, or None when nothing can hold
+    (the switch is not exactly ``1``; the file missing, not a regular file, malformed, or expiring more than
+    ``CARDS_HOLD_MAX_S`` ahead). ``held`` while unexpired and not released; ``freed_at`` is the release
+    file's mtime (released) or the expiry (expired), the start of the opener's age cap. ``rated`` (``all``,
+    ``some``, ``none``) comes from the release line ``<elicitation_id> <rated>``; a bare id, an unknown word or
+    an expiry with no release is ``none``."""
+    if env(CARDS_SWITCH_ENV, home) != "1":
+        return None
+    stamp = time.time() if now is None else now
+    path = cards_file_path(home)
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+        # What av-godconst refuses to show must not hold either (it would never release).
+        _log_cards("cards_file_unsafe", home)
+        return None
+    data = _read_json(path, CARDS_FILE_MAX_BYTES)
+    if not isinstance(data, dict):
+        _log_cards("cards_file_invalid", home)
+        return None
+    eid, window, expires = data.get("elicitation_id"), data.get("window_ms"), data.get("expires_ms")
+    pool, ids = data.get("pool_id"), data.get("statement_ids")
+    if not (isinstance(eid, str) and CARDS_ID.match(eid) and isinstance(pool, str) and CARDS_ID.match(pool)
+            and _positive_int(window) and _positive_int(expires) and isinstance(ids, list)
+            and 0 < len(ids) <= CARDS_STATEMENTS_MAX
+            and all(isinstance(i, str) and CARDS_STATEMENT_ID.match(i) for i in ids) and len(set(ids)) == len(ids)):
+        # av-godconst's own checks (_logic.valid_trigger): a file it would only hold on never holds the opener.
+        _log_cards("cards_file_invalid", home)
+        return None
+    if expires / 1000.0 - stamp > CARDS_HOLD_MAX_S:
+        _log_cards("cards_file_too_far", home)
+        return None
+    raw, _ = _read_regular(cards_released_path(home), 256)
+    words = raw.split() if raw is not None else []
+    if words and words[0] == eid:
+        rated = words[1] if len(words) == 2 and words[1] in CARDS_RATED_LINES else "none"
+        return {"window_ms": window, "held": False, "freed_at": _mtime(cards_released_path(home)) or stamp, "rated": rated}
+    if stamp * 1000.0 >= expires:
+        return {"window_ms": window, "held": False, "freed_at": expires / 1000.0, "rated": "none"}
+    return {"window_ms": window, "held": True, "freed_at": None, "rated": None}
+
+
+def _cards_opener(name: str, cards: Optional[dict]) -> bool:
+    """`name` is the opener of the cards file's window."""
+    parsed = parse_stage_name(name)
+    return cards is not None and parsed is not None and parsed[1] == "open" and parsed[0] == cards["window_ms"]
 
 
 def state_db(home: Optional[str] = None) -> str:
@@ -726,6 +860,168 @@ def human_messages_since(since_s: float, home: Optional[str] = None) -> Optional
     return int(count or 0), (int(round(float(last) * 1000)) if last is not None else None)
 
 
+def _message_columns(path: str) -> Optional[set]:
+    """The ``messages`` table's column names (an older Hermes store has no ``active``); None when the store
+    cannot be read or has no such table."""
+    rows = _sqlite_rows(path, "PRAGMA table_info(messages)")
+    if not rows:
+        return None
+    return {row[1] for row in rows if len(row) > 1}
+
+
+def _filled(content: Any) -> bool:
+    return isinstance(content, str) and bool(content.strip())
+
+
+def _unframed(content: str, kind: Any) -> Optional[str]:
+    """The human's own text inside Hermes's mid-turn frames: a steer row loses its out-of-band marker, and
+    every gateway origin header (which carries chat, user and message ids) comes off with the joiner before
+    it; the messages Hermes joined into the row are rejoined with ``HUMAN_TEXT_JOIN``. None (the row is
+    dropped, never recorded) for a steer row of another shape, a header without its closing line, or any
+    frame text left after that (``FRAME_MARKS``)."""
+    if kind == STEER_KIND:
+        if not (content.startswith(STEER_OPEN) and content.endswith(STEER_CLOSE)):
+            return None
+        content = content[len(STEER_OPEN):-len(STEER_CLOSE)]
+    if ORIGIN_OPEN in content:
+        head, *blocks = content.split(ORIGIN_OPEN)
+        pieces = [head]
+        for block in blocks:
+            end = block.find(ORIGIN_CLOSE)
+            if end < 0:
+                return None
+            pieces.append(block[end + len(ORIGIN_CLOSE):])
+        for i in range(len(pieces) - 1):  # the joiner Hermes put before the next header
+            if pieces[i].endswith(REDIRECT_JOIN):
+                pieces[i] = pieces[i][:-len(REDIRECT_JOIN)]
+            elif pieces[i].endswith("\n"):
+                pieces[i] = pieces[i][:-1]
+        content = HUMAN_TEXT_JOIN.join(piece for piece in pieces if _filled(piece))
+    if any(mark in content for mark in FRAME_MARKS):
+        return None
+    return content
+
+
+def human_words(window_ms: int, home: Optional[str] = None) -> Optional[tuple]:
+    """The human's own messages for an ``answer`` record (contract §12.1), read verbatim from state.db.
+
+    Rows: user and assistant messages of the home DM (every session under the home key with
+    ``source = 'telegram'`` and ``chat_type = 'dm'``), ``active = 1`` when the column exists (and never a
+    context-compaction summary row), at or after ``window_ms``. Human rows are user rows whose content does
+    not start with ``NOTICE_PREFIX`` (blank ones carry no words and are passed over) and, when the store has
+    ``display_kind``, whose kind is NULL or ``steer``: Hermes persists every self-injected turn (a plugin's
+    ``inject_message`` such as av-rate's "[Rating recorded]" line, our own notices, heartbeats) with a
+    machinery kind (``internal_notification``), and never redirects or steers one into a running turn, while
+    what the human typed has none (a Telegram message, a redirect sent mid-request, ``/retry``) or ``steer``
+    (sent mid-tool). Hermes's frames around a mid-turn message come off (``_unframed``). The span is the human
+    rows after the latest assistant row with non-empty content that precedes the newest human row (the agent's
+    last reply; a tool-call-only row has empty content and does not end it), oldest first. Caps: at most 10
+    messages and 8000 characters of joined text, keeping the most recent whole messages; a newest message
+    longer than the cap alone keeps its first 8000 characters.
+
+    Returns ``(messages, truncated)``, ``messages`` a list of ``(content, epoch_s)`` oldest first and
+    ``truncated`` true when a cap cut anything; None when there is no home key or state.db cannot be read."""
+    key = session_key(home)
+    if not key:
+        return None
+    path = state_db(home)
+    columns = _message_columns(path)
+    if columns is None:
+        return None
+    where = ""
+    if "active" in columns:
+        where += " AND m.active = 1"
+    if "_compressed_summary" in columns:
+        where += " AND m._compressed_summary = 0"  # a context-compaction summary is neither side's words
+    kind = "NULL"
+    if "display_kind" in columns:
+        kind = "m.display_kind"  # an injected user row is not the human's; a steer row is, inside its marker
+        where += " AND (m.role = 'assistant' OR m.display_kind IS NULL OR m.display_kind = '" + STEER_KIND + "')"
+    rows = _sqlite_rows(
+        path,
+        "SELECT m.role, m.content, m.timestamp, " + kind + " FROM messages m JOIN sessions s ON s.id = m.session_id "
+        "WHERE s.source = 'telegram' AND s.chat_type = 'dm' AND s.session_key = ? "
+        "AND m.role IN ('user', 'assistant') AND m.timestamp >= ?" + where
+        + " ORDER BY m.timestamp DESC, m.id DESC LIMIT ?",
+        (key, window_ms / 1000.0, HUMAN_SCAN_ROWS),
+    )
+    if rows is None:
+        return None
+    span: list = []  # newest first
+    more = False
+    anchored = False  # a human row was seen, kept or dropped: the agent's reply before it ends the span
+    for role, content, at, row_kind in rows:
+        if role == "assistant":
+            if anchored and _filled(content):
+                break  # the agent's last reply before the newest human row
+            continue  # the current turn's own rows, or a tool-call-only row
+        if not _filled(content) or content.startswith(NOTICE_PREFIX):
+            continue
+        anchored = True
+        content = _unframed(content, row_kind)
+        if not _filled(content):
+            more = more or content is None  # a dropped row: the record says words were left out
+            continue
+        if len(span) == HUMAN_MESSAGES_MAX:
+            more = True
+            break
+        span.append((content, float(at)))
+    kept: list = []
+    size = 0
+    for content, at in span:
+        grown = size + len(content) + (len(HUMAN_TEXT_JOIN) if kept else 0)
+        if grown > HUMAN_TEXT_MAX:
+            more = True
+            if not kept:
+                kept.append((content[:HUMAN_TEXT_MAX], at))
+            break
+        kept.append((content, at))
+        size = grown
+    kept.reverse()
+    return kept, more
+
+
+def human_fields(messages: list, truncated: bool) -> dict:
+    """§12.1's five record fields from ``human_words``'s messages (none: count 0, text null)."""
+    return {
+        "human_text": HUMAN_TEXT_JOIN.join(c for c, _ in messages) if messages else None,
+        "human_message_count": len(messages),
+        "human_text_truncated": bool(truncated),
+        "human_text_first_at": now_iso(messages[0][1]) if messages else None,
+        "human_text_last_at": now_iso(messages[-1][1]) if messages else None,
+    }
+
+
+def record_bytes(record: dict) -> int:
+    """The record's size on disk, encoded exactly as ``write_private_json`` writes it."""
+    return len(json.dumps(record, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def fit_human_words(record: dict, messages: list, truncated: bool, limit: Optional[int] = None) -> dict:
+    """Keep an answer record within the control plane's per-file bound (``RECORD_FILE_BYTES`` unless ``limit``
+    says otherwise; its pass leaves a bigger file unread, so the whole answer would be lost): drop the oldest
+    messages, then cut the one left from its end, until the record fits. Any cut sets
+    ``human_text_truncated``. Returns the record, updated in place."""
+    limit = RECORD_FILE_BYTES if limit is None else limit
+    while len(messages) > 1 and record_bytes(record) > limit:
+        messages = messages[1:]
+        truncated = True
+        record.update(human_fields(messages, truncated))
+    if messages and record_bytes(record) > limit:
+        content, at = messages[0]
+        low, high = 0, len(content) - 1  # the longest prefix that fits (binary search; a prefix of 0 empties)
+        while low < high:
+            mid = (low + high + 1) // 2
+            record.update(human_fields([(content[:mid], at)], True))
+            if record_bytes(record) <= limit:
+                low = mid
+            else:
+                high = mid - 1
+        messages = [(content[:low], at)] if content[:low].strip() else []
+        record.update(human_fields(messages, True))
+    return record
+
+
 def turn_active(home: Optional[str] = None, now: Optional[float] = None) -> bool:
     """A turn is running: an unexpired row in state.db ``session_turn_leases``, or the gateway's own
     ``gateway_state.json`` reporting ``active_agents > 0`` (ignored when older than 10 minutes)."""
@@ -844,10 +1140,14 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         if not later:
             return "skipped_closed"
         pending = later
+    cards = cards_hold(home, stamp)
     fresh, aged = [], 0
     for name in pending:
         path = os.path.join(directory, name)
         at = staged_at(path)
+        if _cards_opener(name, cards):
+            # Held behind the cards: it does not age; once freed, the age cap counts from the release.
+            at = None if cards["held"] else max(at or 0.0, cards["freed_at"])
         if at is not None and stamp - at > AGE_CAP_S:
             aged += 1 if _rename_now(path, ".skipped", home, stamp) else 0
         else:
@@ -863,6 +1163,10 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         # A ballot card page is open with unrated cards: hold, as in quiet hours (only the age cap skips).
         _log_once("held_ballot_page", pending=len(fresh))
         return "held_ballot_page"
+    if cards is not None and cards["held"] and _cards_opener(fresh[0], cards):
+        # Cards first: the rating cards go before the agent's questions, until av-godconst releases or expiry.
+        _log_once("held_elicit_cards", pending=len(fresh))
+        return "held_elicit_cards"
     key = session_key(home)
     if not key:
         _log_once("no_session_key", logging.WARNING)
@@ -900,6 +1204,10 @@ def inject_pass(ctx: Any = None, home: Optional[str] = None, now: Optional[float
         _rename_now(claimed, ".skipped", home, stamp)
         _log("skipped", logging.WARNING, reason=code if raw is None else "invalid_inject")
         return "skipped_invalid"
+    if _cards_opener(fresh[0], cards) and cards.get("rated") in CARDS_RATED_LINES:
+        # An opener freed from behind the cards: one line on how much the human rated (a class, never a value).
+        text = text.rstrip("\n") + "\n" + CARDS_RATED_LINES[cards["rated"]]
+        _log("cards_rated_line", rated=cards["rated"])
     try:
         accepted = bool(inject_fn(text, session_key=key))
     except Exception as exc:  # noqa: BLE001
@@ -1030,10 +1338,11 @@ def validate_record(args: Any) -> dict:
 
 
 def build_record(fields: dict, trigger: Optional[str], now: Optional[float] = None,
-                 record_id: Optional[str] = None) -> dict:
+                 record_id: Optional[str] = None, human: Optional[dict] = None) -> dict:
     """The full 3c record: ``record_id`` uuid4, ``window_ms``, ``trigger`` from the plugin (question only),
-    ``recorded_at`` now."""
-    return {
+    ``recorded_at`` now; an answer also carries ``human``, §12.1's five fields (never from the agent).
+    Question and stop records carry none of them."""
+    record = {
         "record_id": record_id or str(uuid.uuid4()),
         "window_ms": fields.get("window_ms"),
         "kind": fields["kind"],
@@ -1050,6 +1359,9 @@ def build_record(fields: dict, trigger: Optional[str], now: Optional[float] = No
                           and len(fields["text"].split()) > QUESTION_WORDS_SOFT_MAX),
         "recorded_at": now_iso(now),
     }
+    if fields["kind"] == "answer" and isinstance(human, dict):
+        record.update({name: human.get(name) for name in HUMAN_FIELDS})
+    return record
 
 
 def confirmation(record: dict) -> str:
@@ -1095,7 +1407,18 @@ def record_elicitation(args: Any, session_id: Any, home: Optional[str] = None, n
         fields["agent_question_no"] = fields["question_no"]
         fields["question_no"] = assign_question_no(fields["kind"], fields["question_no"], asked)
         trigger = question_trigger(home, state["accepted_ms"]) if fields["kind"] == "question" else None
-        record = build_record(fields, trigger, stamp)
+        words = None
+        if fields["kind"] == "answer":
+            try:
+                words = human_words(window_ms, home)
+            except Exception as exc:  # noqa: BLE001 - the record is still written, without the words
+                _log("human_text_error", logging.WARNING, error=type(exc).__name__)
+            if words is None:
+                _log("human_text_unavailable", logging.WARNING)
+                words = ([], False)
+        record = build_record(fields, trigger, stamp, human=human_fields(*words) if words else None)
+        if words:
+            fit_human_words(record, *words)
         path = os.path.join(directory, f"{int(stamp * 1000)}-{record['record_id']}.json")
         try:
             write_private_json(path, record)
@@ -1114,7 +1437,9 @@ def record_elicitation(args: Any, session_id: Any, home: Optional[str] = None, n
                 _log("last_answer_write_failed", logging.WARNING, error=type(exc).__name__)
     _log("recorded", kind=record["kind"], question_no=record["question_no"], late=int(record["late"]),
          text_long=int(record["text_long"]),
-         agent_question_no=record["agent_question_no"], statements=len(record["statement_ids"]))
+         agent_question_no=record["agent_question_no"], statements=len(record["statement_ids"]),
+         **({"human_messages": record["human_message_count"], "human_truncated": int(record["human_text_truncated"])}
+            if record["kind"] == "answer" else {}))
     return confirmation(record)
 
 
@@ -1136,18 +1461,32 @@ def elicitation_record_tool(args: Any = None, **kwargs: Any) -> str:
 # --------------------------------------------------------------------------- loop and registration
 
 
-def gateway_argv(argv: Optional[list] = None) -> bool:
-    """``hermes gateway run`` (or ``start``) on the command line (av-approval's ``_plugins.gateway_argv``)."""
+def _gateway_subcommand(argv: Optional[list] = None) -> Optional[str]:
+    """The word after ``gateway`` in ``sys.argv[1:5]`` (``""`` for a bare ``hermes gateway``), else None."""
     args = [str(a) for a in (sys.argv if argv is None else argv)][1:5]
     if "gateway" not in args:
-        return False
+        return None
     rest = args[args.index("gateway") + 1:]
-    return not rest or rest[0] in ("run", "start")
+    return rest[0] if rest else ""
+
+
+def gateway_argv(argv: Optional[list] = None) -> bool:
+    """``hermes gateway run`` (or a bare ``hermes gateway``): a command line that always runs the gateway in
+    this process."""
+    return _gateway_subcommand(argv) in ("", "run")
+
+
+def gateway_handoff_argv(argv: Optional[list] = None) -> bool:
+    """``hermes gateway start`` or ``restart``: a command line that may or may not run the gateway here. With
+    no service manager, ``restart`` stops the old gateway and runs one in this process (``run_gateway``); with
+    one, ``start`` and ``restart`` only ask the service manager and exit. Only Hermes's ``_HERMES_GATEWAY=1``,
+    which ``gateway/run.py`` sets when it is imported (after plugins have registered), tells the two apart."""
+    return _gateway_subcommand(argv) in ("start", "restart")
 
 
 def gateway_process(argv: Optional[list] = None) -> bool:
-    """H1: this process is the gateway (its argv, or Hermes's ``_HERMES_GATEWAY=1``). In the TUI or a CLI,
-    ``inject_message`` goes to the local input queue, so the loop must never run there."""
+    """H1: this process is the gateway (``gateway run`` in argv, or Hermes's ``_HERMES_GATEWAY=1``). In the TUI
+    or a CLI, ``inject_message`` goes to the local input queue, so the loop must never run there."""
     return gateway_argv(argv) or os.environ.get(GATEWAY_MARKER) == "1"
 
 
@@ -1176,6 +1515,8 @@ def _on_unload() -> None:
     global _REGISTERED
     if _STOP is not None:
         _STOP.set()
+    if _WAIT_STOP is not None:
+        _WAIT_STOP.set()
     _REGISTERED = False
 
 
@@ -1200,11 +1541,54 @@ def register_record_tool(ctx: Any) -> bool:
 
 def start_loop() -> bool:
     """L1: a fresh stop Event per registration; an old thread is stopped and joined (briefly) first, so a
-    reload never leaves two loops on one event. Only in the gateway process (H1)."""
-    global _THREAD, _STOP
-    if not gateway_process():
+    reload never leaves two loops on one event. Only in the gateway process (H1).
+
+    Under ``hermes gateway start|restart`` the process may become the gateway only after plugins registered
+    (Hermes sets ``_HERMES_GATEWAY=1`` when it imports ``gateway/run.py``): one waiter thread then checks the
+    marker every second and starts the loop the first time it is ``1``. A restart that only hands off to the
+    service manager exits without the marker, so it never runs a loop. Returns True when the loop started now."""
+    with _LOOP_LOCK:
+        if gateway_process():
+            _start_loop_locked()
+            return True
+        if gateway_handoff_argv():
+            _start_waiter_locked()
+            _log("loop_waiting", reason="gateway_marker")
+            return False
         _log("loop_skipped", reason="not_gateway")
         return False
+
+
+def _await_gateway(stop: threading.Event) -> None:
+    """The waiter: start the loop once, the first time Hermes's gateway marker is ``1`` (never when the loop
+    already runs, or after unload or a direct start stopped this waiter)."""
+    while True:
+        if os.environ.get(GATEWAY_MARKER) == "1":
+            with _LOOP_LOCK:
+                if not stop.is_set() and not (_THREAD is not None and _THREAD.is_alive()):
+                    _start_loop_locked()
+                    _log("loop_started", reason="gateway_marker")
+            return
+        if stop.wait(MARKER_POLL_S):
+            return
+
+
+def _start_waiter_locked() -> None:
+    """At most one waiter per process (caller holds ``_LOOP_LOCK``)."""
+    global _WAITER, _WAIT_STOP
+    if _WAITER is not None and _WAITER.is_alive() and _WAIT_STOP is not None and not _WAIT_STOP.is_set():
+        return
+    stop = threading.Event()
+    _WAIT_STOP = stop
+    _WAITER = threading.Thread(target=_await_gateway, args=(stop,), name="av-elicit-wait", daemon=True)
+    _WAITER.start()
+
+
+def _start_loop_locked() -> None:
+    """Start the inject/probe thread (caller holds ``_LOOP_LOCK``); a waiting waiter is stopped first."""
+    global _THREAD, _STOP
+    if _WAIT_STOP is not None:
+        _WAIT_STOP.set()
     old_thread, old_stop = _THREAD, _STOP
     if old_stop is not None:
         old_stop.set()
@@ -1218,7 +1602,6 @@ def start_loop() -> bool:
     _STOP = stop
     _THREAD = threading.Thread(target=_loop, args=(stop,), name="av-elicit", daemon=True)
     _THREAD.start()
-    return True
 
 
 def register(ctx: Any) -> None:
@@ -1247,7 +1630,7 @@ __all__ = [
     "AGE_CAP_S", "FORMS", "KINDS", "NOTICE_PREFIX", "TOOL_NAME", "TOOL_SCHEMA", "TRIGGERS", "Refused",
     "assign_question_no", "ballot_page_marker", "ballot_page_open", "build_record", "busy_reason", "closed_path",
     "closed_time", "confirmation", "current_trigger", "current_window", "current_window_ms", "open_dones", "dm_session_exists", "done_files",
-    "elicitation_record_tool", "gateway_process", "human_messages_since", "in_quiet_hours", "inject_dir",
+    "elicitation_record_tool", "gateway_argv", "gateway_handoff_argv", "gateway_process", "human_messages_since", "human_words", "human_fields", "fit_human_words", "in_quiet_hours", "inject_dir",
     "inject_pass", "inject_text", "is_closed", "last_answer_time", "last_injected", "late_window_start",
     "load_window_state", "marker_applies", "open_done_times", "parse_stage_name", "probe_pass", "probe_path",
     "probe_payload", "question_trigger", "read_closed_marker", "record_elicitation", "records_dir",

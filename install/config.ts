@@ -160,14 +160,17 @@ export function capModelMaxTokens(): void {
 
 /**
  * LLM-429: make sure top-level `fallback_providers` holds `{provider: openrouter, model:
- * openai/gpt-6-luna}` (`FALLBACK_PROVIDER` / `FALLBACK_MODEL`), so the first upstream 429 on the
- * primary model answers that turn on luna with no wait instead of up to two Retry-After waits
- * and a dropped turn. Paths are per Hermes v2026.9.24 (0.21.5):
+ * openai/gpt-6-luna}` (`FALLBACK_PROVIDER` / `FALLBACK_MODEL`), so an error on the primary model
+ * that Hermes marks for fallback (an upstream 429 is the common one, not the only one) answers that
+ * turn on luna with no wait instead of up to two Retry-After waits and a dropped turn; and that
+ * `agent.reasoning_overrides["openai/gpt-6-luna"]` is `false`, so luna turns run with reasoning off.
+ * Paths are per Hermes v2026.9.24 (0.21.5):
  *
  * - Shape: what `hermes fallback add` appends, `{provider, model}` (hermes_cli/fallback_cmd.py:37-47,
  *   :189-191). No `api_key` or `base_url`: the openrouter route reads `OPENROUTER_API_KEY`, which
  *   the control plane already puts in the box's env (agent/auxiliary_client.py:2309-2317).
- * - When it fires: an OpenRouter "Provider returned error" 429 is `upstream_rate_limit`
+ * - When it fires: on any error Hermes marks for fallback, not only a 429. The common one: an
+ *   OpenRouter "Provider returned error" 429 is `upstream_rate_limit`
  *   (agent/error_classifier.py:1050-1054); the eager-fallback step switches on that first error,
  *   before the retry wait (agent/turn_recovery.py:1826-1842, called at agent/turn_api_error.py:161;
  *   the wait is :391-398). The primary comes back on the first turn after the cooldown
@@ -180,14 +183,30 @@ export function capModelMaxTokens(): void {
  *   file and keep this one (hermes_cli/config.py:3532-3578; bare `model` goes to `model.default`,
  *   :3401-3410); this step rewrites only `fallback_providers`.
  *
+ * - Reasoning off on luna (HOT-RASOOL, CLAIMS L26001): a luna turn with reasoning on stores luna's
+ *   encrypted reasoning items in the session history; every later call to the primary model through
+ *   OpenRouter then answers HTTP 400 ("encrypted reasoning ... from multiple providers"), which
+ *   falls back to luna again, self-sustaining. On fallback activation Hermes re-resolves reasoning
+ *   for the fallback model from config.yaml (agent/chat_completion_helpers.py:1956-1967 ->
+ *   hermes_constants.resolve_reasoning_config :1415-1438): the per-model override wins over
+ *   `agent.reasoning_effort`, YAML `false` parses to `{enabled: false}` (:1303-1325), and the
+ *   OpenRouter wire then sends `reasoning: {enabled: false, effort: "none"}`
+ *   (agent/transports/chat_completions.py:528), so a luna turn stores no reasoning items. The
+ *   config is loaded at fallback time (no restart), and the primary model's reasoning is untouched,
+ *   so the override is inert when no fallback fires. Sessions already poisoned still need /new.
+ *   Other overrides and other `agent` keys are kept; a luna override with another value becomes
+ *   `false` (a pin). `agent` or `agent.reasoning_overrides` that is not a mapping, or holds a YAML
+ *   merge key, is left alone with a warning.
+ *
  * An entry with the same provider and model (case and spaces aside, other keys ignored, like
  * Hermes's own duplicate check, fallback_cmd.py:186) counts as present. Entries a human added are
  * kept in order and luna is appended after them; nothing is ever removed. A single mapping (the
  * legacy one-entry shape Hermes also reads, hermes_cli/fallback_config.py:77-78) becomes a list
  * with that mapping first. The file is left alone, with a warning, when its top level is not a
  * mapping or holds a YAML merge key, or when `fallback_providers` is something else (a string, a
- * number). A config value is never echoed onto stdout. Idempotent: when luna is present the file
- * is not rewritten. The gateway re-reads the chain before each turn, no restart needed
+ * number). A config value is never echoed onto stdout. Idempotent: when luna is present and its
+ * override is already `false` the file is not rewritten. The gateway re-reads the chain before
+ * each turn, no restart needed
  * (gateway/run_config_loaders.py:516-553).
  */
 export function configureModelFallback(): void {
@@ -213,18 +232,83 @@ export function configureModelFallback(): void {
   }
   const same = (value: unknown, want: string): boolean =>
     typeof value === "string" && value.trim().toLowerCase() === want.toLowerCase();
-  if (entries.some((entry) => isMapping(entry) && same(entry.provider, FALLBACK_PROVIDER) && same(entry.model, FALLBACK_MODEL))) {
+  const hasLuna = entries.some(
+    (entry) => isMapping(entry) && same(entry.provider, FALLBACK_PROVIDER) && same(entry.model, FALLBACK_MODEL),
+  );
+  if (hasLuna) {
     console.log(`→ ${key} already has ${route}; left as is`);
-    return;
-  }
-  doc[key] = [...entries, { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL }];
-  writeConfig(doc);
-  if (entries.length === 0) {
-    console.log(`→ set ${key}: [${route}] (an upstream 429 on the primary model answers that turn on luna, no wait; LLM-429)`);
   } else {
-    const n = entries.length;
-    console.log(`→ added ${route} to ${key} after ${n} existing ${n === 1 ? "entry" : "entries"}`);
+    doc[key] = [...entries, { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL }];
+    if (entries.length === 0) {
+      console.log(`→ set ${key}: [${route}] (an upstream 429 on the primary model answers that turn on luna, no wait; LLM-429)`);
+    } else {
+      const n = entries.length;
+      console.log(`→ added ${route} to ${key} after ${n} existing ${n === 1 ? "entry" : "entries"}`);
+    }
   }
+  const reasoningOffSet = ensureFallbackReasoningOff(doc);
+  if (!hasLuna || reasoningOffSet) writeConfig(doc);
+}
+
+/**
+ * HOT-RASOOL (CLAIMS L26001): `agent.reasoning_overrides[FALLBACK_MODEL] = false` on `doc`, keeping
+ * every other `agent` key and every other override. Returns true when `doc` changed; false when the
+ * override was already `false`, when luna is the box's PRIMARY model (the override is per model,
+ * not per fallback: it would turn reasoning off for every turn, and a luna-primary box has no
+ * mixed-provider history to poison; review-b ov#514 S1), or when a non-mapping (or merge-keyed)
+ * `agent` / `reasoning_overrides` was left alone with a warning. The primary model is what the
+ * gateway sees: `HERMES_MODEL` in `$HERMES_HOME/.env` first (the control plane writes it), else
+ * `model` / `model.default` / `model.model` in config.yaml. See `configureModelFallback`.
+ */
+function ensureFallbackReasoningOff(doc: Record<string, unknown>): boolean {
+  const path = "agent.reasoning_overrides";
+  const byHand = `set ${path}[${FALLBACK_MODEL}]: false by hand`;
+  const kind = (value: unknown): string => (Array.isArray(value) ? "list" : typeof value);
+  const primary = primaryModel(doc);
+  if (primary !== undefined && primary.trim().toLowerCase() === FALLBACK_MODEL.toLowerCase()) {
+    console.log(`→ primary model is ${FALLBACK_MODEL}; left ${path}[${FALLBACK_MODEL}] unset (nothing mixed to poison; HOT-RASOOL L26001)`);
+    return false;
+  }
+  const agent = doc.agent;
+  if (agent !== undefined && agent !== null && !isMapping(agent)) {
+    console.log(`→ warning: agent is a ${kind(agent)}, not a mapping; left ${path} unset (${byHand})`);
+    return false;
+  }
+  const overrides = isMapping(agent) ? agent.reasoning_overrides : undefined;
+  if (overrides !== undefined && overrides !== null && !isMapping(overrides)) {
+    console.log(`→ warning: ${path} is a ${kind(overrides)}, not a mapping; left as is (${byHand})`);
+    return false;
+  }
+  if ((isMapping(agent) && "<<" in agent) || (isMapping(overrides) && "<<" in overrides)) {
+    console.log(`→ warning: YAML merge key "<<" in agent or ${path}; left as is (${byHand})`);
+    return false;
+  }
+  if (isMapping(overrides) && overrides[FALLBACK_MODEL] === false) return false;
+  doc.agent = {
+    ...(isMapping(agent) ? agent : {}),
+    reasoning_overrides: { ...(isMapping(overrides) ? overrides : {}), [FALLBACK_MODEL]: false },
+  };
+  console.log(`→ set ${path}[${FALLBACK_MODEL}]: false (luna turns store no encrypted reasoning; HOT-RASOOL L26001)`);
+  return true;
+}
+
+/**
+ * The box's primary model as the gateway resolves it: `HERMES_MODEL` from `$HERMES_HOME/.env`
+ * when set (last assignment wins, as python-dotenv does), else config.yaml `model` as a string or
+ * its `default` / `model` key when a mapping; `undefined` when none names a model.
+ */
+function primaryModel(doc: Record<string, unknown>): string | undefined {
+  const fromEnv = dotenvFileValue("HERMES_MODEL");
+  if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv;
+  const model = doc.model;
+  if (typeof model === "string" && model.trim()) return model;
+  if (isMapping(model)) {
+    for (const key of ["default", "model"]) {
+      const v = model[key];
+      if (typeof v === "string" && v.trim()) return v;
+    }
+  }
+  return undefined;
 }
 
 /**

@@ -4,10 +4,14 @@ Replaces the evening outcome ask's text question ("Did you and <name> meet? Repl
 useful, or missed.", overlay #198) with two Telegram button cards about the suggestion itself,
 sent by the resident's own bot and answered with a tap:
 
-  Card 1  "How good a match was this suggestion from <agentName>?"  five numeral buttons 1..5
-          (labels in the body: Not a fit / Weak fit / OK fit / Good fit / Great fit, scale
-          ``match_fit_5_v1``) and a privacy line.
-  Card 2  "Did you already plan this meetup?"  [Yes] [No], sent after card 1's first tap.
+  Card 1  "How good a match was this suggestion from <agentName>?"  five emoji buttons 😕 😐 🙂 😊 🤩
+          for 1..5 (labels in the body: Not a fit / Weak fit / OK fit / Good fit / Great fit, scale
+          ``match_fit_5_v1``), a privacy line and the manage line.
+  Card 2  "Could you imagine collaborating with this person 🤝?"  [Yes] [No] / [Not sure yet] (scale
+          ``collab_interest_v1``), sent after card 1's first tap, whatever the rating.
+
+The earlier card 2, "Did you already plan this meetup?" (``avr:p:``), is no longer sent; a tap on
+one still open from an older release is recorded as before (``opportunity.pre_planned``).
 
 **Who decides what to ask.** The evening trigger (``skills/index-network/scripts/rating-cards.ts``
 through ``proactive.ts``) picks the accepted connections to ask about and writes one stage file per
@@ -24,7 +28,7 @@ at a time). The same factory starts the pick-up: PTB's job queue every ``PICKUP_
 staged cards and injects the lines that are due.
 
 **The resident's controls** (wave 1). The cards go out under the installer's "Edge — evening
-questions" job and its manage line. Before a send the pick-up checks, exactly as the trigger does:
+questions" job and its manage line (on card 1). Before a send the pick-up checks, exactly as the trigger does:
 the job is not stopped (Hermes's job record ``cron/jobs.json``: a job named as the evening job
 whose id ``av-events/installed_jobs.json`` lists, ``enabled`` false, ``state`` ``paused`` or a
 ``paused_at`` means stopped; message-labels.ts ``storedJobEnabled``), this is not a team tenant
@@ -36,7 +40,7 @@ the stage to the next pick-up, never drop it; a stage older than ``STAGE_MAX_AGE
 dropped and counted.
 
 **callback_data** (under Telegram's 64 bytes): ``avr:f:<1-5>:<nonce>`` for card 1 and
-``avr:p:<y|n>:<nonce>`` for card 2. ``<nonce>`` is the first 22 base64url characters of
+``avr:c:<y|n|u>:<nonce>`` for card 2 (``avr:p:<y|n>:<nonce>`` for the retired planned card). ``<nonce>`` is the first 22 base64url characters of
 HMAC-SHA256(key, "avr|<opportunity_id>|match_fit_5_v1") under the tenant's av-events key
 (``av-events/hash.key``; this plugin's own ``av-events/av-rate.key`` when av-events has made none
 yet). The ledger maps a nonce back to its opportunity; a nonce not on file answers "no longer
@@ -45,8 +49,7 @@ valid". The nonce is routing only: the owner check and the message binding autho
 **A tap**: owner only (the box's own resident, in their private chat with the bot: the home
 channel's ids, ``TELEGRAM_HOME_CHANNEL``, or Hermes's approved pairings, exactly av-vote's rule),
 on a message the ledger knows (the tap's chat is the card's ``chat_id`` and its message id is
-card 1's or card 2's); card 1 inside the 24 h window after card 1 went out and card 2 inside its
-own 24 h window after card 2 went out, else "This question has closed." and no event; a re-tap
+card 1's or card 2's, or a retired planned card's); each card inside its own 24 h window after it went out, else "This question has closed." and no event; a re-tap
 with another value is a revision (``revision`` 1, 2, ...; last wins downstream), the same value
 again is answered "Already recorded" and records nothing. Answers the tap with "Recorded: <label>",
 marks the chosen button, sends card 2 after card 1's first tap, and hands the event over. Double
@@ -64,13 +67,15 @@ re-sent (``stage_resolved_pending``).
 **Three sinks per tap.**
 1. The events, through av-events (``plugins/av-events/_rating_cards.py`` reads
    ``av-events/proactive/rating-events/*.json`` on the flusher's cadence and emits
-   ``opportunity.rating_asked@1`` / ``opportunity.rated@1`` / ``opportunity.pre_planned@1`` with ids
+   ``opportunity.rating_asked@1`` / ``opportunity.rated@1`` / ``opportunity.collab_interest@1``
+   (``opportunity.pre_planned@1`` for a retired planned card) with ids
    derived from (type, opportunity, card, revision), so a re-send never doubles a row). This plugin
    never posts to the ingest API itself and never builds an envelope.
-2. The agent: after card 2 resolves (or when the windows close with only card 1 answered) one line
+2. The agent: after card 2 resolves (or its send failed, or both windows close with card 1
+   answered) one line
    is injected into the resident's DM session through ``ctx.inject_message`` (gated by Hermes on
    ``plugins.entries.av-rate.allow_gateway_injection: true``): ``[Rating recorded] <Name>: <value>/5
-   match fit; already planned: <yes|no|not answered>.`` Hermes persists that turn as
+   match fit; could imagine collaborating: <yes|no|unsure|not answered>. Reply with exactly: Got it!`` Hermes persists that turn as
    ``internal_notification`` (actor ``system`` on the data side). A refusal or an error is retried
    on later pick-ups up to ``INJECT_ATTEMPTS_MAX`` times (Hermes's ``inject_message`` returns one
    boolean for "flag off", "no live gateway" and "scheduling failed", so they cannot be told
@@ -120,7 +125,7 @@ PREFIX = "avr:"
 #: The PTB handler's pattern: scoped, so core callback flows fall through to Hermes.
 HANDLER_PATTERN = r"^avr:"
 NONCE_CHARS = 22
-CALLBACK_DATA = re.compile(r"^avr:(f:[1-5]|p:[yn]):([A-Za-z0-9_-]{22})$")
+CALLBACK_DATA = re.compile(r"^avr:(f:[1-5]|p:[yn]|c:[ynu]):([A-Za-z0-9_-]{22})$")
 #: Telegram's limit on callback_data (bytes, UTF-8).
 CALLBACK_DATA_MAX_BYTES = 64
 
@@ -132,17 +137,27 @@ WINDOW_S = WINDOW_HOURS * 3600
 CARD_FIT = "fit"
 CARD_PLANNED = "planned"
 LABELS = {1: "Not a fit", 2: "Weak fit", 3: "OK fit", 4: "Good fit", 5: "Great fit"}
+#: Card 1's buttons: one emoji per value, the words in the body (five labelled buttons do not fit a phone row).
+EMOJI = {1: "😕", 2: "😐", 3: "🙂", 4: "😊", 5: "🤩"}
 PLANNED_LABELS = {"y": "Yes", "n": "No"}
 PLANNED_VALUES = {"y": "yes", "n": "no"}
+CARD_COLLAB = "collab"
+COLLAB_SCALE = "collab_interest_v1"
+#: Card 2's buttons in order: Yes and No on one row, "Not sure yet" alone below; one letter each in callback_data.
+COLLAB_CHOICES = ("y", "n", "u")
+COLLAB_VALUES = {"y": "yes", "n": "no", "u": "unsure"}
+COLLAB_LABELS = {"y": "Yes", "n": "No", "u": "Not sure yet"}
 CHECK = "✅ "
-#: DATA-373: every scheduled message ends with its manage line, this card too.
+#: DATA-373: every scheduled message ends with its manage line, card 1 too (card 1 opens the set).
 MANAGE_LINE = "(Evening questions message - you can ask me to stop or manage it)"
 #: True whatever the resident's research consent: the plugin cannot know it, so it promises only
 #: what it can keep (the counterpart never sees the answer; where it goes beyond the agent's own
 #: records is the consent brief's to say, not this card's).
-PRIVACY_LINE = "Private: {name} never sees your answer."
+PRIVACY_LINE = "{name} never sees this."
 QUESTION_FIT = "How good a match was this suggestion from {agent}?"
-QUESTION_PLANNED = "Did you already plan this meetup?"
+QUESTION_COLLAB = "Could you imagine collaborating with this person 🤝?"
+#: Ends the injected line: the agent's reply to the taps is this and nothing else.
+REPLY_INSTRUCTION = "Reply with exactly: Got it!"
 
 ON_SWITCH = "AV_RATE_CARDS"
 SESSION_KEY_ENV = "AV_RATE_SESSION_KEY"
@@ -160,6 +175,9 @@ STAGE_MAX_AGE_S = 3 * 24 * 3600
 SEND_ATTEMPTS_MAX = 3
 #: An injection that is refused or errors is retried on later pick-ups this many times in all.
 INJECT_ATTEMPTS_MAX = 3
+#: An injection claimed this recently is in progress elsewhere (the tap or the pick-up); a claim
+#: older than this (a crash mid-injection) lapses and the card is due again.
+INJECT_CLAIM_S = 600
 #: A pending (write-ahead) card with no message id after this long is kept as asked, never re-sent.
 PENDING_MAX_AGE_S = 10 * 60
 STAGE_MAX_BYTES = 4096
@@ -617,14 +635,15 @@ def keyed_hash(key: bytes, text: str) -> str:
 
 def parse_callback(data: Any) -> Optional[tuple[str, str, str]]:
     """``(card, choice, nonce)`` for a well-formed ``avr:`` value inside 64 bytes: card ``fit`` with
-    choice ``1``..``5``, or ``planned`` with ``y``/``n``. Else None."""
+    choice ``1``..``5``, ``collab`` with one of COLLAB_CHOICES, or the retired ``planned`` with
+    ``y``/``n``. Else None."""
     if not isinstance(data, str) or len(data.encode("utf-8")) > CALLBACK_DATA_MAX_BYTES:
         return None
     match = CALLBACK_DATA.fullmatch(data)
     if match is None:
         return None
     kind, choice = match.group(1).split(":", 1)
-    return (CARD_FIT if kind == "f" else CARD_PLANNED), choice, match.group(2)
+    return {"f": CARD_FIT, "p": CARD_PLANNED, "c": CARD_COLLAB}[kind], choice, match.group(2)
 
 
 def fit_callback(value: int, nonce: str) -> str:
@@ -635,13 +654,18 @@ def planned_callback(choice: str, nonce: str) -> str:
     return f"avr:p:{choice}:{nonce}"
 
 
+def collab_callback(choice: str, nonce: str) -> str:
+    return f"avr:c:{choice}:{nonce}"
+
+
 def fit_rows(nonce: str, make_button: Callable[[str, str], Any], selected: Optional[int] = None) -> list[list[Any]]:
-    """One row of five numeral buttons; the selected one carries a check mark."""
-    return [[make_button((CHECK if selected == value else "") + str(value), fit_callback(value, nonce)) for value in range(1, 6)]]
+    """One row of five emoji buttons; the selected one carries a check mark."""
+    return [[make_button((CHECK if selected == value else "") + EMOJI[value], fit_callback(value, nonce)) for value in range(1, 6)]]
 
 
-def planned_rows(nonce: str, make_button: Callable[[str, str], Any], selected: Optional[str] = None) -> list[list[Any]]:
-    return [[make_button((CHECK if selected == choice else "") + PLANNED_LABELS[choice], planned_callback(choice, nonce)) for choice in ("y", "n")]]
+def collab_rows(nonce: str, make_button: Callable[[str, str], Any], selected: Optional[str] = None) -> list[list[Any]]:
+    buttons = [make_button((CHECK if selected == choice else "") + COLLAB_LABELS[choice], collab_callback(choice, nonce)) for choice in COLLAB_CHOICES]
+    return [buttons[:2], buttons[2:]]
 
 
 def fit_text(agent_name: str, name: str, headline: Optional[str]) -> str:
@@ -649,7 +673,7 @@ def fit_text(agent_name: str, name: str, headline: Optional[str]) -> str:
     lines = [html.escape(QUESTION_FIT.format(agent=agent_name))]
     lines.append(html.escape(f"{name}, about {headline}" if headline else name))
     lines.append("")
-    lines += [html.escape(f"{value}  {label}") for value, label in LABELS.items()]
+    lines += [html.escape(f"{EMOJI[value]}  {label}") for value, label in LABELS.items()]
     lines.append("")
     lines.append(html.escape(PRIVACY_LINE.format(name=name)))
     lines.append("")
@@ -657,8 +681,8 @@ def fit_text(agent_name: str, name: str, headline: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-def planned_text() -> str:
-    return html.escape(QUESTION_PLANNED)
+def collab_text() -> str:
+    return html.escape(QUESTION_COLLAB)
 
 
 # --------------------------------------------------------------------------- owner
@@ -792,22 +816,41 @@ def is_closed(card: dict, now: float) -> bool:
 
 
 def planned_closed(card: dict, now: float) -> bool:
-    """Card 2's own window, 24 h from its own send; before card 2 is sent, card 1's window."""
+    """The retired planned card's own window, 24 h from its own send (older releases only)."""
     if card.get("planned_message_id") is None:
         return is_closed(card, now)
     closes = epoch_from_iso(card.get("closes_at_planned"))
     return closes is None or now > closes
 
 
+def collab_closed(card: dict, now: float) -> bool:
+    """Card 2's own window, 24 h from its own send; before card 2 is sent, card 1's window."""
+    if card.get("collab_message_id") is None:
+        return is_closed(card, now)
+    closes = epoch_from_iso(card.get("closes_at_collab"))
+    return closes is None or now > closes
+
+
+def card_closed(card: dict, kind: str, now: float) -> bool:
+    if kind == CARD_FIT:
+        return is_closed(card, now)
+    return planned_closed(card, now) if kind == CARD_PLANNED else collab_closed(card, now)
+
+
+#: The ledger field holding each card's Telegram message id.
+MESSAGE_FIELD = {CARD_FIT: "message_id", CARD_PLANNED: "planned_message_id", CARD_COLLAB: "collab_message_id"}
+
+
 def card_message_matches(card: dict, kind: str, message_id: Any) -> bool:
-    """The tap's message is the card's own: card 1's `message_id` or card 2's `planned_message_id`.
-    A card whose id for that kind is unknown (a pending card resolved after a crash) binds on this
-    first tap instead."""
-    stored = card.get("message_id") if kind == CARD_FIT else card.get("planned_message_id")
+    """The tap's message is the card's own: card 1's `message_id`, card 2's `collab_message_id`, or
+    a retired planned card's `planned_message_id`. A card 1 whose id is unknown (a pending card
+    resolved after a crash) binds on this first tap instead."""
+    stored = card.get(MESSAGE_FIELD[kind])
     if stored is None:
-        # Card 1 with no id on file (a pending card resolved after a crash) binds now; a card 2
-        # that was never sent has no message a tap could come from.
-        return kind == CARD_FIT
+        # Card 1 with no id on file (a pending card resolved after a crash) binds now; so does a
+        # card 2 whose send reported failure (a timeout after Telegram took the message). A card 2
+        # never attempted has no message a tap could come from.
+        return kind == CARD_FIT or (kind == CARD_COLLAB and bool(card.get("collab_send_failed")))
     return str(stored) == str(message_id)
 
 
@@ -880,15 +923,22 @@ def planned_record(opportunity_id: str, intention_id: Optional[str], value: str,
             "card": CARD_PLANNED, "revision": revision, "value": value, "at": at, "message_hash": None}
 
 
+def collab_record(opportunity_id: str, intention_id: Optional[str], value: str, revision: int, at: str) -> dict:
+    return {"event_type": "opportunity.collab_interest", "opportunity_id": opportunity_id, "intention_id": intention_id,
+            "card": CARD_COLLAB, "revision": revision, "value": value, "at": at, "message_hash": None}
+
+
 # --------------------------------------------------------------------------- the agent hand-off
 
 
 def injected_line(card: dict) -> str:
     fit = card.get("fit") or {}
-    planned = card.get("planned") or {}
+    collab = card.get("collab") or {}
     value = fit.get("value")
-    planned_text_value = planned.get("value") if planned.get("value") in ("yes", "no") else "not answered"
-    return f"[Rating recorded] {card.get('name', 'This person')}: {value}/5 match fit; already planned: {planned_text_value}."
+    collab_value = collab.get("value") if collab.get("value") in COLLAB_VALUES.values() else "not answered"
+    # The resident has just tapped the cards: the agent's whole answer is a short acknowledgement.
+    return (f"[Rating recorded] {card.get('name', 'This person')}: {value}/5 match fit; "
+            f"could imagine collaborating: {collab_value}. {REPLY_INSTRUCTION}")
 
 
 def session_key_for(chat_id: str) -> str:
@@ -914,15 +964,40 @@ def inject(card: dict, chat_id: str, ctx: Any = None) -> str:
 
 
 def ready_to_inject(card: dict, now: float) -> bool:
-    """After card 2 resolves, or when both windows have closed with card 1 answered."""
+    """After card 2 resolves; after card 1 when card 2 could not be sent; or when both windows have
+    closed with card 1 answered."""
     if card.get("injected") or not card.get("fit"):
         return False
-    return bool(card.get("planned")) or (is_closed(card, now) and planned_closed(card, now))
+    claimed = epoch_from_iso(card.get("inject_claimed_at"))
+    if claimed is not None and now - claimed < INJECT_CLAIM_S:
+        return False
+    if card.get("collab"):
+        return True
+    # Card 2 could not be sent, or an older release's planned card was answered: card 1 settles it.
+    if card.get("collab_message_id") is None and (card.get("collab_send_failed") or card.get("planned")):
+        return True
+    return is_closed(card, now) and collab_closed(card, now)
+
+
+def claim_injection(home: Optional[str], opportunity_id: str, now: float) -> Optional[dict]:
+    """A snapshot of the card when it is due, claimed in the same critical section so a tap and the
+    pick-up never inject one card twice; else None."""
+
+    def claim(ledger: dict) -> Any:
+        card = ledger["cards"].get(opportunity_id)
+        if not isinstance(card, dict) or not ready_to_inject(card, now):
+            return None, False
+        card["inject_claimed_at"] = now_iso(now)
+        return dict(card)
+
+    snapshot, why = ledger_update(home, claim)
+    return snapshot if why is None else None
 
 
 def _settle_injection(card: dict, code: str) -> bool:
-    """Record one injection attempt on the card. True when the card is now final (injected, no
-    context, or out of attempts)."""
+    """Record one injection attempt on the card and release its claim. True when the card is now
+    final (injected, no context, or out of attempts)."""
+    card.pop("inject_claimed_at", None)
     if code == "injected" or code == "inject_no_ctx":
         card["injected"] = True
         card["injected_code"] = code
@@ -1068,14 +1143,14 @@ async def _send_staged(bot: Any, adapter: Any, make_button: Callable[[str, str],
                 "agent_name": stage["agent_name"],
                 "chat_id": chat,
                 "message_id": None,
-                "planned_message_id": None,
+                "collab_message_id": None,
                 "pending_since": now_iso(now),
                 "pid": os.getpid(),
                 "sent_at": None,
                 "closes_at": None,
-                "closes_at_planned": None,
+                "closes_at_collab": None,
                 "fit": None,
-                "planned": None,
+                "collab": None,
                 "injected": False,
             }
             return "reserved"
@@ -1150,8 +1225,8 @@ async def _inject_due(home: Optional[str], now: float, count: Callable[..., None
     if why is not None or not due:
         return
     for opportunity_id in due:
-        snapshot, why = ledger_update(home, lambda ledger: (dict(ledger["cards"].get(opportunity_id) or {}), False))
-        if why is not None or not snapshot or not ready_to_inject(snapshot, now):
+        snapshot = claim_injection(home, opportunity_id, now)
+        if not snapshot:
             continue
         code = await asyncio.to_thread(inject, snapshot, str(snapshot.get("chat_id", "")), ctx)
         count(code)
@@ -1227,6 +1302,15 @@ def record_tap(ledger: dict, opportunity_id: str, card: str, choice: str, now: f
         entry["fit"] = {"value": value, "revision": revision, "at": at}
         hand_off(rated_record(opportunity_id, entry.get("intention_id"), value, revision, at), home, now)
         return LABELS[value], str(value), revision
+    if card == CARD_COLLAB:
+        collab_value = COLLAB_VALUES[choice]
+        current = entry.get("collab") or {}
+        if current.get("value") == collab_value:
+            return COLLAB_LABELS[choice], collab_value, None
+        revision = int(current.get("revision", 0)) + 1
+        entry["collab"] = {"value": collab_value, "revision": revision, "at": at}
+        hand_off(collab_record(opportunity_id, entry.get("intention_id"), collab_value, revision, at), home, now)
+        return COLLAB_LABELS[choice], collab_value, revision
     value_text = PLANNED_VALUES[choice]
     current = entry.get("planned") or {}
     if current.get("value") == value_text:
@@ -1239,7 +1323,7 @@ def record_tap(ledger: dict, opportunity_id: str, card: str, choice: str, now: f
 
 def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any], make_markup: Callable[[list], Any],
                  home: Optional[str] = None, clock: Callable[[], float] = time.time, ctx: Any = None,
-                 send_planned: bool = True) -> Callable[[Any, Any], Awaitable[None]]:
+                 send_next: bool = True) -> Callable[[Any, Any], Awaitable[None]]:
     """The PTB callback for ``avr:`` taps."""
 
     async def on_tap(update: Any, context: Any = None) -> None:
@@ -1248,6 +1332,7 @@ def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any],
             return
         key: Optional[tuple[str, str]] = None
         recorded = False
+        handed_over = False
         try:
             data = getattr(query, "data", None)
             user = _positive_id(getattr(getattr(query, "from_user", None), "id", None))
@@ -1285,16 +1370,16 @@ def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any],
                 opportunity_id, entry = found
                 if str(entry.get("chat_id", "")) != str(chat) or not card_message_matches(entry, card_kind, message_id):
                     return ("message_mismatch", None), False
-                closed = is_closed(entry, now) if card_kind == CARD_FIT else planned_closed(entry, now)
-                if closed:
+                if card_closed(entry, card_kind, now):
                     return ("closed", None), False
-                if card_kind == CARD_FIT and entry.get("message_id") is None:
-                    entry["message_id"] = message_id
-                first_fit = card_kind == CARD_FIT and not entry.get("fit")
+                if card_kind in (CARD_FIT, CARD_COLLAB) and entry.get(MESSAGE_FIELD[card_kind]) is None:
+                    entry[MESSAGE_FIELD[card_kind]] = message_id
+                # The first answer to card 1, whatever the rating, sends card 2.
+                first = card_kind == CARD_FIT and not entry.get("fit")
                 label, _value, revision = record_tap(ledger, opportunity_id, card_kind, choice, now, home)
                 if revision is None:
-                    return ("already", (opportunity_id, label, first_fit, None)), False
-                return ("recorded", (opportunity_id, label, first_fit, revision)), True
+                    return ("already", (opportunity_id, label, first, None)), False
+                return ("recorded", (opportunity_id, label, first, revision)), True
 
             outcome, why = ledger_update(home, lambda ledger: _unwrap(take(ledger)))
             if why is not None:
@@ -1310,7 +1395,7 @@ def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any],
                 _log("closed")
                 await _answer(query, CLOSED)
                 return
-            opportunity_id, label, first_fit, revision = detail
+            opportunity_id, label, first, revision = detail
             if code == "already":
                 _log(ALREADY)
                 await _answer(query, f"Already recorded: {label}")
@@ -1318,13 +1403,16 @@ def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any],
             recorded = True
             _log(RECORDED, revision=revision)
             await _answer(query, f"Recorded: {label}")
+            handed_over = True  # the steps below release the key
         except Exception:  # noqa: BLE001 - fail-open: never raise into the gateway
             logger.warning("av-rate: tenant=%s outcome=handler_error", tenant_id8())
             if not recorded:
                 await _answer(query, FAILED)
-            if key is not None:
-                _in_flight.discard(key)
             return
+        finally:
+            # Every early return (closed, already recorded, not this card) frees the card for the next tap.
+            if key is not None and not handed_over:
+                _in_flight.discard(key)
         # Recorded and answered. Each later step fails on its own; none ever answers FAILED.
         try:
             rows = getattr(getattr(message, "reply_markup", None), "inline_keyboard", None)
@@ -1334,11 +1422,11 @@ def make_handler(adapter: Any = None, *, make_button: Callable[[str, str], Any],
                     await query.edit_message_reply_markup(reply_markup=make_markup(marked))
                 except Exception:  # noqa: BLE001 - a stale card is cosmetic
                     _log("edit_failed")
-            if first_fit and send_planned:
-                await _send_planned(query, message, nonce, opportunity_id, make_button, make_markup, home, now)
-            if card_kind == CARD_PLANNED:
-                snapshot, why = ledger_update(home, lambda ledger: (dict(ledger["cards"].get(opportunity_id) or {}), False))
-                if why is None and snapshot and ready_to_inject(snapshot, now):
+            if first and send_next:
+                await _send_collab(query, message, nonce, opportunity_id, make_button, make_markup, home, now)
+            if card_kind != CARD_FIT or first:
+                snapshot = claim_injection(home, opportunity_id, now)
+                if snapshot:
                     code = await asyncio.to_thread(inject, snapshot, str(snapshot.get("chat_id", "")), ctx)
                     _log(code)
 
@@ -1365,28 +1453,32 @@ def _unwrap(result: tuple[Any, bool]) -> Any:
     return outcome if save else (outcome, False)
 
 
-async def _send_planned(query: Any, message: Any, nonce: str, opportunity_id: str, make_button: Callable[[str, str], Any],
-                        make_markup: Callable[[list], Any], home: Optional[str], now: float) -> None:
+async def _send_collab(query: Any, message: Any, nonce: str, opportunity_id: str, make_button: Callable[[str, str], Any],
+                       make_markup: Callable[[list], Any], home: Optional[str], now: float) -> None:
+    """Card 2 after card 1's first tap."""
+    text = collab_text()
     bot = getattr(message, "get_bot", None)
     bot = bot() if callable(bot) else getattr(query, "bot", None) or getattr(message, "bot", None)
     chat = getattr(getattr(message, "chat", None), "id", None)
     if bot is None or chat is None:
-        _log("planned_no_bot")
+        _log("collab_no_bot")
+        _note_send_failed(home, opportunity_id)
         return
     try:
-        sent = await bot.send_message(chat_id=chat, text=planned_text(), parse_mode="HTML",
-                                      reply_markup=make_markup(planned_rows(nonce, make_button)))
+        sent = await bot.send_message(chat_id=chat, text=text, parse_mode="HTML",
+                                      reply_markup=make_markup(collab_rows(nonce, make_button)))
     except Exception:  # noqa: BLE001
-        _log("planned_send_failed")
+        _log("collab_send_failed")
+        _note_send_failed(home, opportunity_id)
         return
-    planned_id = getattr(sent, "message_id", None)
+    sent_id = getattr(sent, "message_id", None)
 
     def note(ledger: dict) -> Any:
         entry = ledger["cards"].get(opportunity_id)
         if entry is None:
             return None, False
-        entry["planned_message_id"] = planned_id
-        entry["closes_at_planned"] = now_iso(now + WINDOW_S)
+        entry["collab_message_id"] = sent_id
+        entry["closes_at_collab"] = now_iso(now + WINDOW_S)
         return entry.get("intention_id")
 
     intention_id, why = ledger_update(home, note)
@@ -1395,8 +1487,21 @@ async def _send_planned(query: Any, message: Any, nonce: str, opportunity_id: st
         return
     key = hash_key(home)
     if key is not None:
-        hand_off(asked_record(opportunity_id, intention_id, CARD_PLANNED, keyed_hash(key, planned_text()), now_iso(now)), home, now)
-    _log("planned_sent")
+        hand_off(asked_record(opportunity_id, intention_id, CARD_COLLAB, keyed_hash(key, text), now_iso(now)), home, now)
+    _log("collab_sent")
+
+
+def _note_send_failed(home: Optional[str], opportunity_id: str) -> None:
+    """Card 2 is never retried: a failed send lets card 1's answer settle the card for the agent."""
+
+    def note(ledger: dict) -> Any:
+        entry = ledger["cards"].get(opportunity_id)
+        if entry is None:
+            return None, False
+        entry["collab_send_failed"] = True
+        return None
+
+    ledger_update(home, note)
 
 
 # --------------------------------------------------------------------------- wiring
@@ -1461,11 +1566,11 @@ def register(ctx: Any) -> None:
 
 
 __all__ = [
-    "CALLBACK_DATA_MAX_BYTES", "CARD_FIT", "CARD_PLANNED", "CHANNEL", "EVENING_JOB_NAMES", "INJECT_ATTEMPTS_MAX", "LABELS",
+    "CALLBACK_DATA_MAX_BYTES", "CARD_COLLAB", "CARD_FIT", "CARD_PLANNED", "CHANNEL", "EMOJI", "EVENING_JOB_NAMES", "INJECT_ATTEMPTS_MAX", "LABELS",
     "MANAGE_LINE", "PRIVACY_LINE", "QUIET_DEFAULT_WINDOW", "SCALE", "STAGE_MAX_AGE_S", "WINDOW_HOURS", "asked_record",
     "card_message_matches", "cards_on", "evening_job_state", "fit_callback", "fit_rows", "fit_text", "hand_off", "hash_key",
-    "in_window", "injected_line", "is_owner_tap", "ledger_path", "ledger_update", "load_ledger", "make_handler", "make_nonce",
+    "collab_callback", "collab_closed", "collab_record", "collab_rows", "collab_text", "in_window", "injected_line", "is_owner_tap", "ledger_path", "ledger_update", "load_ledger", "make_handler", "make_nonce",
     "mark_keyboard", "parse_callback", "parse_window", "pick_up", "planned_callback", "planned_closed", "planned_record",
-    "planned_rows", "planned_text", "quiet_delivery", "quiet_hours", "rated_record", "ready_to_inject", "record_tap", "register",
+    "quiet_delivery", "quiet_hours", "rated_record", "ready_to_inject", "record_tap", "register",
     "save_ledger", "session_key_for", "stage_dir", "events_dir", "team_tenant", "valid_stage",
 ]
