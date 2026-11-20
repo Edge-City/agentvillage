@@ -12,7 +12,7 @@ Three things hold for everything below.
 - A manifest is a review artifact. It is not an upload. Nothing you write here runs code on a resident's box.
 - Where a section says a thing is not built, do not build against it.
 
-Every behaviour claim has a `Source:` line under its section. Paths with no prefix are in this repo on the branch `context/miniapps-manifest-v2`. A path marked `cp` is in the control-plane repo on its `main` (line numbers checked at `3fde1677`). A path marked `app` is in the app repo (`agentvillage-app`) on its `main` (checked at `1c79f6ea`). A path marked `ov#422` or `ov#423` is on that draft branch and is not on this branch yet. A path marked `cp#341` is on that open control-plane pull request (head `d0fa0ba1`) and is not live.
+Every behaviour claim has a `Source:` line under its section. Paths with no prefix are in this repo. A path marked `cp` is in the control-plane repo on its `main`. A path marked `app` is in the app repo (`agentvillage-app`) on its `main`. In sections 1 to 7, unless a line names another commit, line numbers were checked on this repo's branch `context/miniapps-manifest-v2` (since merged), cp `3fde1677` and app `1c79f6ea`, so they may have moved. A path marked `ov#422` or `ov#423` is at that pull request's head; both are merged. Sections 8 and 9 were checked on 19 Nov 2026.
 
 ## 1. How to get a sandbox
 
@@ -47,14 +47,15 @@ A sandbox needs an app that already exists in the catalog. Today a new app id is
 
 - The control-plane catalog needs a row for your id (a code constant today, or a vendored manifest once the manifest switch is on).
 - The installer's reviewed table in [install/install_miniapps.ts](../install/install_miniapps.ts) must name your id, version, skill and operations exactly. An unknown id is refused as `mini_apps_unreviewed_bundle`, unless it is a generic app (see the [quickstart](MINI-APPS-QUICKSTART.md)).
-- The box takes your skill from its pinned overlay checkout. A new app id or a changed skill therefore needs a fleet roll.
+- The box takes your skill from its pinned overlay checkout. A new app id therefore needs a fleet roll, and so does a changed skill unless the control plane's skill delivery is on (section 8).
 
 A service that needs OAuth, a card or a write also needs app-server code today. Only a public read-only MCP service needs no per-app app-server code.
 
-Zzz.bot and Slopfolio are the two apps on the sandbox lane today.
+In the control plane's catalog today, Slopfolio, Edge City Volunteers and one generic app are on the sandbox lane (section 8). Several manifests in this repo still say `sandbox` for apps the control plane now serves to everyone.
 
 Source:
-- `mini-apps/zzzbot/manifest.json:8` and `mini-apps/slopfolio/manifest.json:13` (`"visibility": "sandbox"`).
+- `mini-apps/zzzbot/manifest.json:8` and `mini-apps/slopfolio/manifest.json:13` (`"visibility": "sandbox"`). At cp `422bab80`: `control-plane/src/mini-apps-catalog.js:126` and `:428` (Slopfolio and Edge City Volunteers `restricted: true`), `:37-41` (zzz.bot open; its vendored manifest says `everyone`), `control-plane/src/mini-apps/green-room/manifest.json:16` (the generic app on `sandbox`).
+- cp `README.md:89-93` at `422bab80` (with both switches on, a changed skill reaches compatible boxes without a fleet roll).
 - `scripts/mini-apps-manifests.cjs:625` (a non-`everyone` app is served `restricted: true`) and `:613` (an `admins` app is served restricted too).
 - `install/install_miniapps.ts:20-27` (reviewed table), `:74-75` (unknown id refused), `:91,105` (skills come from the checkout's `skills` directory).
 - `scripts/tests/mini-app-manifests.test.ts:138-147` (every catalog entry must pass the installer).
@@ -63,11 +64,10 @@ Source:
 - cp `README.md:77-84`, `:93-108` (cohort still required; removal hides the app, withdraws its operations and context, and keeps the install intent) and `:129` (no tenant scope: restricted apps omitted).
 - cp `docs/RAILWAY.md:136-142` (the variable, and "Variable edits are human-only" at `:142`).
 - app `src/lib/server/mini-apps/catalog.ts:155` and `src/lib/server/mini-apps/context.ts:94-95` (what the agent's tool answers: `403 mini_app_not_installed`).
-- Design `MINIAPPS-PLATFORM-v2-design.md` section 0, row "skill delivery" (private to Edge City; not a repo file).
 
 ## 2. Manifest v2, field by field
 
-A manifest is one JSON file: `mini-apps/<app-id>/manifest.json`. The schema is [mini-apps/manifest.v2.schema.json](../mini-apps/manifest.v2.schema.json). The validator is [scripts/mini-apps-manifests.cjs](../scripts/mini-apps-manifests.cjs). The control plane and the app server use the same validator bytes.
+A manifest is one JSON file: `mini-apps/<app-id>/manifest.json`. The schema is [mini-apps/manifest.v2.schema.json](../mini-apps/manifest.v2.schema.json). The validator is [scripts/mini-apps-manifests.cjs](../scripts/mini-apps-manifests.cjs). The app server keeps a byte-for-byte copy of it. The control plane's copy can be newer: its CI runs that one.
 
 Rules that apply to the whole file:
 
@@ -91,9 +91,9 @@ Required fields are marked **req**.
 | `owner` | `github`: one login or up to 8. `org`: optional name. Not required by the validator. |
 | `credit` | `role` (`app` or `product`), `attendeeId` (a UUID), `name`. It names a reviewed attribution. Leave it out unless Edge City gives you the values. On a pushed manifest the credit names you: residents see "Built by \<your Rolodex name>", linked to your Rolodex entry. Send `credit.name` as "the developer" (any other value is refused: `credit_name_not_allowed`); the name shown comes from the Rolodex, never from the manifest. |
 | `visibility` **req** | `sandbox`, `admins` or `everyone`. |
-| `staff` | Only the Gold Stars app may set `true`. Anyone else is refused. `"staff": true` is install tier 1, core (section 9). |
-| `listed` | `false` hides the app from discovery: the grid, search, counts, staff lists and offers. A tenant the app's audience admits (the cohort, and for a `sandbox` or `admins` app the allowlist) can still open its direct link, install it and use it; nobody else can. Absent means listed. The schema's own description of this field is older and wrong on this point. Honouring the field is not fully built (section 5). |
-| `default` | Not a field yet. The schema is closed, so a manifest that says `"default": true` is refused today. It is the planned flag for install tier 2, default (section 9), in v2.1.13. |
+| `staff` | Only Gold Stars may set `true` in this repo's validator; the control plane's copy also lets For Kicks and Mosaic. Anyone else is refused. `"staff": true` is install tier 1, staff (section 9). |
+| `listed` | `false` hides the app from discovery: the grid, search, counts, staff lists and offers. A tenant the app's audience admits (the cohort, and for a `sandbox` or `admins` app the allowlist) can still open its direct link, install it and use it; nobody else can. Absent means listed. The schema's own description of this field is older and wrong on this point. Both halves that honour it are merged (cp#335, app#491) and act only while `MINI_APPS_MANIFESTS=1`. |
+| `default` | Not a field. The schema is closed, so a manifest that says `"default": true` is refused. Install tier 2, default, is a control-plane setting instead (section 9). |
 | `permissions` **req** | 1 to 32 items of `{kind, label, description}`. `kind` is `read` or `action`. Name every third party that receives data. |
 | `service` **req** | See below. |
 | `operations` **req** | 1 to 32 operations (exactly none for service kind `none`). See below. |
@@ -291,7 +291,7 @@ echo "exit=$?"
 
 This lane ran exactly this on the manifest above, against the validator at the base of this branch. It printed `{"ok":true}` and the exit code was 0.
 
-A pass here is not a publish. To appear in the catalog an app also needs a row in `mini-apps/catalog.json`, the control-plane catalog and the installer table (section 1). The repo test `bun test scripts/tests/mini-app-manifests.test.ts` checks every listed manifest, its canonical form and its skill hash. On a pull request that adds a new app this test is red until Edge City acts, and that is expected: it pins `catalog.json` to the six current ids, it refuses an app directory the index does not list, and once the id is listed it also needs the id in the installer's reviewed table.
+A pass here is not a publish. To appear in the catalog an app also needs a row in `mini-apps/catalog.json`, the control-plane catalog and the installer table (section 1). The repo test `bun test scripts/tests/mini-app-manifests.test.ts` checks every listed manifest, its canonical form and its skill hash. On a pull request that adds a new app this test is red until Edge City acts, and that is expected: it pins `catalog.json` to the current ids, it refuses an app directory the index does not list, and once the id is listed it also needs the id in the installer's reviewed table.
 
 Some failures you will see:
 
@@ -314,18 +314,19 @@ Source:
 - Validator: `scripts/mini-apps-manifests.cjs:306-311` (forbidden text), `:61-66` (reserved ids), `:365-382` (endpoint rules), `:385-405` (target path rules), `:461-466` (16 KiB input), `:474-485` (auth rules), `:488` (reserved id), `:492-495` (secretRef), `:496` (internal), `:499` (staff), `:514` (op prefix), `:517-522` (target kind and path), `:525-529` (ceilings, returns, approval), `:539-543` (prepare pair), `:544` (lane ceiling), `:545-548` (skill and event names).
 - Letter-first id: `mini-apps/manifest.v2.schema.json:271` (`skills[].name` pattern) and `scripts/mini-apps-manifests.cjs:546` (`skills[0].name` must equal `id`).
 - `approval`: `mini-apps/manifest.v2.schema.json:484-512` (only `prepare` is required) and `scripts/mini-apps-manifests.cjs:529` (required on a `needs-card` op, refused on any other). The `approval_summary_missing` note: ov#423 `scripts/mini-apps-review.ts:812`.
-- `listed`: `scripts/mini-apps-manifests.cjs:497-498` ("`listed: false` only hides an app") and `:627` (the served entry carries `listed: false`); the schema's older description is at `mini-apps/manifest.v2.schema.json:117`. The rule (hidden from discovery, not locked) is Edge City's product ruling of 20 Oct 2026. cp `control-plane/src/mini-apps-catalog.js:239` (`offered()`), `control-plane/src/mini-apps.js:207` (the tenant-scoped catalog still serves a hidden app its tenant is admitted to), `:211` (counts read offered apps only) and `:231-243` (install is gated by the allowlist, not by `listed`).
-- The new-app repo test: `scripts/tests/mini-app-manifests.test.ts:94` (the six ids), `:95` and `:106` (an unlisted directory is refused), `:138-147` (every listed entry must pass the installer).
+- `listed`: `scripts/mini-apps-manifests.cjs:497-498` ("`listed: false` only hides an app") and `:627` (the served entry carries `listed: false`); the schema's older description is at `mini-apps/manifest.v2.schema.json:117`. The rule (hidden from discovery, not locked) is Edge City's product ruling of 20 Oct 2026. cp `control-plane/src/mini-apps-catalog.js:239` (`offered()`), `control-plane/src/mini-apps.js:207` (the tenant-scoped catalog still serves a hidden app its tenant is admitted to), `:211` (counts read offered apps only) and `:231-243` (install is gated by the allowlist, not by `listed`). cp#335 and app#491 are merged (read on GitHub on 19 Nov 2026).
+- The new-app repo test: `scripts/tests/mini-app-manifests.test.ts:94` (the current ids, at `13f5ecfc`), `:95` and `:106` (an unlisted directory is refused), `:138-147` (every listed entry must pass the installer).
 - Defaults: `scripts/mini-apps-manifests.cjs:67`.
 - Served form: `scripts/mini-apps-manifests.cjs:616-643` (v1 entry; the relay form at `:621`; the non-read refusal at `:638`).
 - Canonical form and skill hash: `scripts/tests/mini-app-manifests.test.ts:129-136`, `:174`.
-- The example: validator run described above; the exit code is recorded in the lane report.
+- The example: validator run described above (exit code 0).
+- Validator copies: app `src/lib/server/mini-apps/manifests/mini-apps-manifests.cjs` at `2bd2f3d8` is this repo's file byte for byte; cp `control-plane/src/mini-apps-manifests.js:58-63` at `422bab80` (Gold Stars, For Kicks and Mosaic granted `staff`) against this repo's `scripts/mini-apps-manifests.cjs:57-63` (Gold Stars alone).
 
 ## 3. Conformance v0 and the review bot
 
 Run both on your own machine before you open a pull request. Neither needs a credential. Neither calls Agent Village.
 
-Both are draft pull requests (ov#422 and ov#423) and are not on this branch yet. Until they merge, check out the draft branch to run them. Their options may change.
+Both are merged (ov#422 and ov#423).
 
 ### Conformance v0
 
@@ -346,7 +347,7 @@ Fixtures are sample responses from your service, one file each: `<dir>/<operatio
 
 Exit codes: 0 passed, 1 failed, 2 refused (bad arguments, a pin mismatch, an unsafe `--out`).
 
-Checks it cannot run yet show as `NOT RUN`. These are: the live service checks, the card summary renderer and the fake approval daemon. A `NOT RUN` is never a pass. Today `passed: true` needs the pin, schema, skill hash and fixture checks to have run and passed. With no `--fixtures`, the fixture checks do not run, `passed` is false and the exit code is 1.
+Checks it does not run show as `NOT RUN`: the card summary renderer and the fake approval daemon always, and the live service checks unless you pass `--service <your own sandbox's https base URL>` (conformance v1, ov#438). The live checks are advisory: they never change `passed` or the exit code. A `NOT RUN` is never a pass. Today `passed: true` needs the pin, schema, skill hash and fixture checks to have run and passed. With no `--fixtures`, the fixture checks do not run, `passed` is false and the exit code is 1.
 
 This lane ran it on the worked example above with three small fixtures. It printed `passed: true` and the exit code was 0.
 
@@ -381,7 +382,7 @@ The bot is not a required check. A pull request can edit the workflow file and r
 Source:
 - ov#422 `scripts/mini-apps-conformance.ts:1-51` (header: checks, fixtures, output, exit codes), `:70-73` (required checks), `:78-83` (what `passed` means), `:358-361` (generic error codes), `:822-831` (flags). ov#422 `package.json:11` (the `conformance` script). ov#422 `mini-apps/README.md:75-92`.
 - ov#423 `scripts/mini-apps-review.ts:1-51` (header: lanes, verdicts, exit codes, known limits), `:93-99` (codes that always need a human), `:115` (a finding's `file` and `line` are optional), `:550-556` (the verdict), `:656` (a new app is core), `:897` (visibility may rise one step). ov#423 `.github/workflows/mini-apps-review.yml:25-41` (advisory, no comment, known limits) and `:44-49` (trigger paths).
-- Operating rule `P0-3-BOT-operating-rule.md` (private to Edge City; not a repo file): one comment edited in place, `DRY RUN` marker, never approve or merge, no check run in the first week.
+- Conformance v1: `scripts/mini-apps-conformance.ts:9-15` at `13f5ecfc` (`--service`; without it the live checks are not run; advisory, never `passed` or the exit code; the fake approval half always not run).
 
 ## 4. What needs a human, and what still needs a fleet roll
 
@@ -416,51 +417,47 @@ A roll means new overlay code reaches every box on a release train. These need o
 - The Hermes pin.
 - The structure of the `village` tool: a new top-level field or a new framing kind.
 
-Today a skill text change also needs a roll, because the box copies the skill from its pinned overlay checkout.
+A skill text change also needs a roll, because the box copies the skill from its pinned overlay checkout, unless the control plane's skill delivery is on (section 8).
 
-The design says that after Phase 2 these will be catalog data and will not need a roll: a new app, a new op, a budget, a skill text, a summary template, a visibility change and a context ceiling. That is a plan. It is not built (section 5).
+The plan is that after Phase 2 these will be catalog data and will not need a roll: a new app, a new op, a budget, a skill text, a summary template, a visibility change and a context ceiling. Only two parts are built: a generic app enters through the control-plane catalog alone ([quickstart](MINI-APPS-QUICKSTART.md)), and skill delivery (section 8). The rest is not built (section 5).
 
 Source:
-- Design `MINIAPPS-PLATFORM-v2-design.md` section 6.5 (what still needs a human), section 5 (lane rules) and section 2.3 (what still needs a roll). Private to Edge City; not repo files.
 - `install/install_miniapps.ts:20-27`, `:74-75`, `:91,105` (the installer table and the skill source).
+- cp `README.md:89-93` and `:122-140` at `422bab80` (skill delivery without a fleet roll; a generic app is one control-plane change).
 - ov#423 `scripts/mini-apps-review.ts:550-556` (the verdict: `FAIL` on any `M`; `NEEDS_HUMAN` for `core` or an always-human code; nothing else is added for the `everyone` lane by itself), `:93-99` (the always-human codes), `:76-80` and `:629-630` (baseline skills and other paths are `core`), `:656` (new app), `:797-798` (ceiling over the lane is `M`; a new ceiling above `private` is `S` in any lane), `:815` (needs-card added or changed), `:899-901` (OAuth and auth-mode changes), `:902-905` (events).
-- Operating rule `P0-3-BOT-operating-rule.md`, "NEEDS_HUMAN cases" (private).
 
 ## 5. What is not built yet
 
 Do not build against any of these.
 
+These were on this list and are now merged; section 8 says what each needs: the generic dispatcher (app#532, app#1043), skills delivered from the catalog (ov#455, ov#460, cp#337), the sandbox manifest push (cp#367), and honouring `listed: false` with keeping an installed app that has dropped out of the v2 catalog (cp#335, app#491; neither half does anything while `MINI_APPS_MANIFESTS` is off).
+
 Phase 1:
 
-- The generic approval card for any `needs-card` op. Its overlay half is merged dark (ov#458, after the v2.1.12 tag, so it ships in v2.1.13) and its control-plane half (cp#352) is open; neither is live (section 8). Today only For Kicks confirm shows a card. Writing `needs-card` in a manifest does not give you a card.
-- Generic OAuth and a generic grants table. Merged dark in the app server (app#534), not live: each live OAuth app has its own routes and tables today.
-- A generic dispatcher in the app server. Merged dark and opt-in per app (app#532), not live: each live app has its own code today.
-- Conformance v1: the live service checks, the fake approval daemon, and a bot verdict that is required.
+- The generic approval card for any `needs-card` op. Its box, control-plane and app halves are merged (ov#458, cp#352, app#533), but the app's draft seam still returns "unavailable", so it ships dark (section 8). Today only For Kicks confirm shows a card. Writing `needs-card` in a manifest does not give you a card.
+- Generic OAuth and a generic grants table. Merged dark in the app server (app#534): the dispatcher's bearer seam still returns "unavailable", and each OAuth app has its own routes and tables today.
+- Conformance v1 as a gate: its live service checks are merged but advisory (section 3); the fake approval daemon and a bot verdict that is required are not built.
 
 Phase 2:
 
 - The signed projection, and the box building its tool schema from the projection. The box still compares against hand-written constants today.
-- Skills delivered from the catalog. The box side is in v2.1.12 (ov#455, ov#460); the control-plane side (cp#337, dark under `MINI_APPS_SKILL_DELIVERY`) is open (section 8).
-- A route to push a sandbox manifest without a pull request.
-- Budgets read from the catalog by the overlay. The app server reads them from a static table that mirrors the manifest field names. The overlay keeps its own constants.
+- Budgets read from the catalog by the overlay. The overlay keeps its own constants. (The app server's dispatcher reads them from its vendored copies of the manifests.)
 
 Also not done:
 
-- Honouring `listed: false`, and keeping an installed app that has dropped out of the v2 catalog. The control-plane half is merged on its `main` (cp#335). The app half (the grid, search and the direct link) is in review (app#491), not merged. Neither half does anything while `MINI_APPS_MANIFESTS` is off.
 - The bot's pull request comment, and its LLM half.
 
 Source:
-- Design `MINIAPPS-PLATFORM-v2-design.md` section 8 (Phase 0 to Phase 3) and section 3.3. Private to Edge City; not repo files.
-- cp `control-plane/src/mini-apps-catalog.js:124` (the manifest catalog loads only when `MINI_APPS_MANIFESTS` is exactly `1`), `:222-239` (cp#335: everything it adds is inert with the switch off; `offered()`), `:290` and `:309` (an installed app the v2 catalog lacks is kept). cp#335 is merged; app#491 is an open draft pull request in the app repo.
+- Pull request states read on GitHub on 19 Nov 2026: ov#438, ov#455, ov#458, ov#460, cp#335, cp#337, cp#352, cp#367, app#491, app#532, app#533, app#534 and app#1043 merged. App `src/lib/server/mini-apps/dispatch/seam.ts` at `2bd2f3d8` (both seams unavailable, section 8); app `src/lib/server/mini-apps/dispatch/registry.ts:292` and `dispatch/vendored.ts:16-19` at `2bd2f3d8` (budgets from the vendored manifests).
+- cp `control-plane/src/mini-apps-catalog.js:124` (the manifest catalog loads only when `MINI_APPS_MANIFESTS` is exactly `1`), `:222-239` (cp#335: everything it adds is inert with the switch off; `offered()`), `:290` and `:309` (an installed app the v2 catalog lacks is kept). cp#335 and app#491 are merged.
 - `mini-apps/README.md:79` on the base commit (the manifest switch and the five constants).
 - cp `control-plane/src/mini-apps-approval.js:105,108` (only two operation pairs get a card).
 - cp `README.md:58` (no credit is recorded without a reviewed attribution).
-- App-server budgets: build report `MINIAPPS-V2-P0-2-build.md`, "Residuals" (private to Edge City).
 - ov#423 `.github/workflows/mini-apps-review.yml:25-29` (no comment in Phase 0).
 
 ## 6. Context store (per-app namespaces)
 
-An app that declares `data.context` gets a small store of one-line notes about the resident. The control plane keeps it. The resident's agent reads and writes it for the app. Once Edge City switches the Context page's parts on (see "What is switched on" below), the resident sees and controls it there. Today only Dizko has one.
+An app that declares `data.context` gets a small store of one-line notes about the resident. The control plane keeps it. The resident's agent reads and writes it for the app. Once Edge City switches the Context page's parts on (see "What is switched on" below), the resident sees and controls it there. Today Dizko, Mosaic and some generic apps have one.
 
 ### The two places on the Context page
 
@@ -533,7 +530,7 @@ With the containers off, the page shows your lines in a "Saved by <App name>" bl
 | cp `CONTEXT_APP_NAMESPACES` | cp `control-plane/src/context-app-namespaces.js:63`, `:65`; `control-plane/src/index.js:434` | The namespace routes are not routes. No box is given the two context operations. `_profile.md` has no app section. |
 | app `CONTEXT_CLAIMS` | app `src/lib/server/config.ts:376-378` | The app server refuses both operations (`503 mini_app_context_unavailable`). |
 | app `CONTEXT_SECTIONS` | app `src/lib/server/agent/context-sections.ts:103-105`, `src/app/(app)/context/page.tsx:10-15` | No containers and no Move. Lines can still be removed. |
-| cp `MINI_APPS_MANIFESTS` | cp `control-plane/src/mini-apps-catalog.js:124` | The five constants serve. Only Dizko declares a namespace. |
+| cp `MINI_APPS_MANIFESTS` | cp `control-plane/src/mini-apps-catalog.js:124` | The reviewed constants serve, and no generic app. Of them, only Dizko and Mosaic declare a namespace. |
 
 Each switch is on only when set to `1`. The control plane's `CONTEXT_CLAIMS` and `CONTEXT_APP_NAMESPACES` also take `true`, `yes` or `on`. Two more conditions hold per box: the box gets the two operations only when its overlay is rc44 or later and a roll proved it for that tenant, and a write also needs the box's approval gate verified.
 
@@ -553,26 +550,25 @@ Where the proposal and the code disagree, the code is what runs. For example, th
 
 Edge City has also decided that what feeds Index is pinned: the resident's cards that feed Index (the decision names `here`, `curious`, `work` and `meet`) stay in Edge City India 2026, and the resident cannot change their visibility. That is not built yet. It names those four cards, not your app's block, so the rules above for your lines are what runs today.
 
-cp#341 is open, not merged and not live. It does not help a partner's app. With `MINI_APPS_MANIFESTS` on, if an app's manifest fails to load at boot, its namespace answers `403 app_no_context` today. cp#341 would keep it open at the installed version only for the five first-party apps, whose reviewed built-in definition stands in. For any other app nothing changes, and with the switch off it changes nothing at all.
+cp#341 is merged. It does not help a partner's app. With `MINI_APPS_MANIFESTS` on, if an app's manifest fails to load at boot, cp#341 keeps its namespace open at the installed version only for five first-party apps (Gold Stars, Dizko, zzz.bot, Slopfolio, For Kicks), whose reviewed built-in definition stands in. Any other app's namespace answers `403 app_no_context`. With the switch off it changes nothing at all.
 
 Source:
 - Namespace: cp `control-plane/src/context-app-namespaces.js:7-10` (card, origin, scopes, the resident moves it), `:15-25` (GET and PUT, `suppressed`, `replace`, a moved line keeps its scopes), `:26-33` (refusals), `:68-73` (only `maxEntries` is read), `:83-90` (one line, 200 code points), `:96-110` (a claim is exactly `{ text }`), `:113-124` (new lines `{agent, app:<id>}`), `:138-151` (the gate), `:252-262` (neutralised lines, the heading), `:271-299` (the `_profile.md` section).
 - Store rules: cp `control-plane/src/context-claims.js:19-26` (suppression, a producer's scopes apply to new claims only), `:128-138` (app rows: the generic routes refuse them; a move keeps `app:<id>`), `:844-846`, `:862-863` (a PATCH keeps the app row on its card and scope).
 - Tiers: cp `control-plane/src/context-sections.js:8-11` and `:44-48` (the three scope sets), `:61` (an app block with no row is Private), `:129-133` (a block's container only narrows a new line). cp `control-plane/src/visibility/vocab.js:6-7` (the two visibilities), `:72-76` (Skylight only for its own cards); `control-plane/src/visibility/visibility-vocab.v1.json:9-17` (readers; `apps.*` never Skylight), `:32-36` (`public` and `village` are both Edge City India 2026), `:51-54` (a move into Edge City India 2026 writes agent and index). cp `control-plane/src/context-snapshots.js:20-31` (a snapshot needs the resident's research consent) and `:124-134` (an app line enters a snapshot only of scope `index` or `skylight`).
 - Tags: app `src/lib/visibility/visibility-vocab.v1.json:2` (the vocabulary), `:4-8` (two ids, their words), `:9-17` (readers; Skylight's eight cards), `:18` and `:20-50` (fail closed; scopes, guess, removed, sections and marks to ids), `:55-66` (the audience request, the two tokens, the refusal); cp `control-plane/src/visibility/visibility-vocab.v1.json` is the same bytes (both sha256 `b7a02a21`). cp `control-plane/src/visibility/vocab.js:39-43` (an id from scopes), `:51-57` (fail closed; a guess is Private), `:84-85` (the stored tiers). App `src/lib/visibility/vocab.ts:152-160` (only that audience, only within the token's allowance; a reader reads only its own id). App `src/lib/server/skylight/context.ts:100-113` (the request, the tokens, `403 audience_refused`, never a guess or a Private line), `:121-128` (the older shared token, for now). New app lines: cp `control-plane/src/context-app-namespaces.js:113-124`. Box marks: `skills/index-network/scripts/context-tags.ts:89-113`, `skills/index-network/scripts/memory_signal_gate.py:202-207`.
-- Pinned Index cards: a decision in Edge City's lanes log, 20 Oct (private to Edge City; not a repo file). Not in code yet: app `src/lib/agent/sections.ts:435-436` pins only Profile, Recently learned and Message transcripts.
+- Pinned Index cards: not in code yet: app `src/lib/agent/sections.ts:435-436` pins only Profile, Recently learned and Message transcripts.
 - Page: app `src/lib/agent/sections.ts:19-24` (two containers, no public container, no `skylight` on a move), `:54`, `:61-67`, `:70-76` (the containers and their words), `:466` (an app block starts Private), `:476-480` (every move writes `village` or `private`). App `src/lib/server/agent/context-sections.ts:62-70`, `:79-86`, `:96-99` (Move is one PATCH; an app line keeps its scope). App `src/lib/server/agent/context-apps.ts:11-27` (the block, the remove, an uninstalled app's lines stay). App `src/components/context/ContextPage.tsx:1280-1289` (the block with the sections off or on), `:1563-1583` (the block as a widget, badges). Block drag: cp `control-plane/src/context-widgets.js:14-24`, `:28-36`.
 - Box: cp `control-plane/src/context-profile-render.js:11-13`, `:370-374` (app sections after "Shared on the Context page"), `:603` (only with `CONTEXT_APP_NAMESPACES`). `plugins/village-memory/__init__.py:46-48`, `:299-304` (a group chat or cron run stops before that heading). `mini-apps/README.md:343-371` (the two operations; saves only when asked; the gate).
 - Ceiling: `mini-apps/manifest.v2.schema.json:228-254` (`ceiling` optional), `scripts/mini-apps-manifests.cjs:544` (no `public` for `everyone`), `:633-634` (the served entry carries `maxEntries` only). ov#423 `scripts/mini-apps-review.ts:92` (lane ceilings), `:795-798` (missing is `S`, over the lane is `M`, new above private is `S`), `:93-99` (`context_ceiling_missing` is not an always-human code) and `:550-556` (so it passes in `sandbox`). No other reader: `git grep` for `ceiling` in cp `control-plane/src` (outside the validator and the vendored manifests), app `src` and this repo's `plugins`, `install` and `skills` finds no context-ceiling read.
-- Switches: cp `control-plane/src/context-sources.js:151-154` (the values the control plane takes), `control-plane/src/mini-apps.js:84-91` (no context operations while the routes are off), `control-plane/src/mini-apps-catalog.js:27` and `:79-82` (Dizko's namespace and its operations), `:363` and `:371-372` (rc44 and later, proven). App `src/lib/server/mini-apps/context.ts:52-55`, `:137`, `:152` (both operations need claims mode), `:72`, `:75-87` (the write's arguments: plain strings, sent on as `{ text }`; `mini_app_context_invalid`, `mini_app_context_full`), `:89-107` (the control plane's refusals as the tool's codes: `mini_app_not_installed`, `mini_app_no_context`, `mini_app_context_full`). App `src/lib/server/mini-apps/catalog.ts:155` (an app not installed: `403 mini_app_not_installed` before any context call). App `src/lib/server/agent/context-apps.ts:27` (the control plane's claims routes off: no app block).
-- cp#341 `control-plane/src/context-app-namespaces.js:145-152` (`namespaceDefinitionOf`, through `catalog.servedDefinition`) and `:177-192` (the gate). The fallback exists only for the five built-in apps: cp `control-plane/src/mini-apps-catalog.js:245-255` (`lastValidSource` is built from the five constants). On cp `main`: `:146-149` (a dropped app has no definition, so `app_no_context`).
-- Proposal: `APP-CONTEXT-MODEL-proposal.md` sections 2, 3 and 5 (private to Edge City; not a repo file).
+- Switches: cp `control-plane/src/context-sources.js:151-154` (the values the control plane takes), `control-plane/src/mini-apps.js:84-91` (no context operations while the routes are off), `control-plane/src/mini-apps-catalog.js:27` and `:79-82` (Dizko's namespace and its operations), `:363` and `:371-372` (rc44 and later, proven). At cp `422bab80`: `control-plane/src/mini-apps-catalog.js:32` and `:172` (Dizko's and Mosaic's namespaces, the only two among the reviewed constants), `control-plane/src/mini-apps/flo/manifest.json` and `haas/manifest.json` (generic apps with a `data.context` block). App `src/lib/server/mini-apps/context.ts:52-55`, `:137`, `:152` (both operations need claims mode), `:72`, `:75-87` (the write's arguments: plain strings, sent on as `{ text }`; `mini_app_context_invalid`, `mini_app_context_full`), `:89-107` (the control plane's refusals as the tool's codes: `mini_app_not_installed`, `mini_app_no_context`, `mini_app_context_full`). App `src/lib/server/mini-apps/catalog.ts:155` (an app not installed: `403 mini_app_not_installed` before any context call). App `src/lib/server/agent/context-apps.ts:27` (the control plane's claims routes off: no app block).
+- cp#341, merged; at cp `422bab80`: `control-plane/src/context-app-namespaces.js:210-217` (`namespaceDefinitionOf`, through `catalog.servedDefinition`) and `:262-276` (the gate; `403 app_no_context`). The fallback exists only for five built-in apps: cp `control-plane/src/mini-apps-catalog.js:987-989` (`lastValidSource` is built from the Gold Stars, Dizko, zzz.bot, Slopfolio and For Kicks constants).
 
 ## 7. Approvals: what your app's actions feel like
 
 The approval layer (approval.md on the box, the policy template on the control plane) is there to be smooth for residents and for you. It never blocks an essential capability, and it never makes the chat awkward. Four rules, in force for every partner app:
 
-1. **Your actions roll into the classes that exist.** The policy template (`control-plane/templates/resident-approval-policy.md` in the control-plane repo) already has a row for everything an app can do: `marketplace.app.read` (a reviewed app's public read, autonomous), `marketplace.app.action` (an installed app acting for the resident) and `marketplace.app.install`. App actions run on their own by default: reads, writes and context lines already do. The parent row `marketplace.app.action` still asks today; the only partner action that reaches it is the For Kicks checkout, which is meant to ask. It turns autonomous, and the "Act through an installed app" setting's label with it, once For Kicks moves to its own member row (v2.1.13). Only a payment such as the For Kicks checkout shows a card, and it will do so through one member row Edge City pins to ask for that exact operation (cp#351, merged, lets the control plane accept that member key; ov#457, in review for v2.1.13, makes the box propose it; today it rides the parent row); a developer never adds one. A developer never adds a class, a row or a gate; a new app's reads and context writes run on their own by default. If your app needs something those rows do not name, say so in the pull request and Edge City decides; do not write policy.
+1. **Your actions roll into the classes that exist.** The policy template (`control-plane/templates/resident-approval-policy.md` in the control-plane repo) already has a row for everything an app can do: `marketplace.app.read` (a reviewed app's public read, autonomous), `marketplace.app.action` (an installed app acting for the resident) and `marketplace.app.install`. App actions run on their own by default: reads, writes and context lines already do. The parent row `marketplace.app.action` still asks today; the only partner action that reaches it is the For Kicks checkout, which is meant to ask. It turns autonomous, and the "Act through an installed app" setting's label with it, once For Kicks moves to its own member row. Only a payment such as the For Kicks checkout shows a card, and it will do so through one member row Edge City pins to ask for that exact operation (cp#351, merged, lets the control plane accept that member key; ov#457, an open draft, would make the box propose it; today it rides the parent row); a developer never adds one. A developer never adds a class, a row or a gate; a new app's reads and context writes run on their own by default. If your app needs something those rows do not name, say so in the pull request and Edge City decides; do not write policy.
 2. **Only a genuinely gated action shows a card, and that card is first-class.** Today exactly one partner action is gated: a payment, the For Kicks checkout (`forkicks.order.confirm`; today under the parent row `marketplace.app.action`, soon its own member row pinned to ask). A card for such an action must arrive fast and be a simplified friendly card: four plain strings (`order`, `total`, `pickup`, `name`), no technical preview. Each string must fit the minimal card whole (core's quote limit, plain characters; `card_value_fits` in `plugins/village-bridge/_forkicks.py`), or the box falls back to the technical card; long item names are the usual cause. The loop closes in the resident's own chat with their agent: the order is placed within a few seconds of the tap (a 2 s pass while a card waits, `FORKICKS_POLL_S` in `plugins/village-bridge/__init__.py`, since v2.1.12), and the box sends a fixed product line through Hermes's native sender, today "Approved: your For Kicks order is placed. Pickup: {place} · {time}." (`PLACED_LINE` in `plugins/village-bridge/_forkicks_grant.py`). That message is not model text: your app supplies the facts, never the words, and nothing the model writes can claim an order was placed. The resident is never asked to confirm again in chat.
 3. **The For Kicks flow is the reference.** It shipped in overlay v2.1.11 (ov#446, merge `d0c12e5f`). Read it before designing any gated action: the card and its refusals in `plugins/village-bridge/_forkicks.py` (`APPROVAL_CLASS`, `CARD_KEYS`, the golden vectors `plugins/village-bridge/tests/vectors/forkicks-approval-card.{md,json}`); placing the order on the resident's tap and telling them in chat in `plugins/village-bridge/_forkicks_grant.py`; the words the agent uses while the card waits in `plugins/village-bridge/_mini_apps.py` (`ORDER_PLACED_ON_APPROVAL`); the app builds and hashes the card payload at prepare (`forkicks.ts` in the app repo), the box never builds it.
 **How we gate more later.** Today app actions run on their own and only payments show a card. If Edge City later needs to gate a specific action, or wants finer-grained approval for one, it does so the same way as the For Kicks payment: by pinning that exact operation with a member row, which the platform then proposes that operation under (the row alone changes nothing). Edge City decides that, not the developer, and the default for everything else stays on its own. Your part: mark a genuinely payment-like operation `needs-card` in the manifest, and Edge City reviews it.
