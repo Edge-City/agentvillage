@@ -20,7 +20,7 @@ For a partner developer adding a **generic** mini-app. A generic app is a change
 | `manifest.json` | `control-plane/src/mini-apps/<id>/manifest.json` |
 | (none) | `control-plane/src/mini-apps/catalog.json`: append `"<id>"` to `apps` |
 
-Adding an app turns these cp tests red: `tests/mini-apps-manifests.test.js` (the six-id lists and the catalog golden, whose flag-off and flag-on halves then differ for good), `tests/mini-apps-v2-landing.test.js`, `tests/mini-apps-skills.test.js`, and `tests/mini-apps.test.js` under `MINI_APPS_MANIFESTS=1`. That is a test-design change Edge City makes in your pull request (the golden has no regeneration tool), until those tests derive the catalog.
+The same pull request adds your app's row to `GRANTS` in `control-plane/tests/mini-apps-generic-grants.test.js` (index order, your manifest's grant fields as literals); without it that test fails. The other cp tests take the generic apps from `catalog.json`, so there is no golden to regenerate (the cp's README, "Add a public read app").
 
 The skill (`skills/hello-village/SKILL.md`, with a final newline):
 
@@ -119,7 +119,7 @@ The manifest (`JSON.stringify(value, null, 2)` plus a newline; `visibility: "san
 }
 ```
 
-The catalog index after the append: `{"catalog": 2, "apps": [..., "mosaic", "hello-village"]}`, written in the same canonical form.
+The catalog index after the append: `{"catalog": 2, "apps": [..., "hello-village"]}`, written in the same canonical form.
 
 ## 3. The sha256 pin
 
@@ -155,8 +155,8 @@ The cp records `offer_missing`, `operations_not_generic` and `budget` itself, be
 1. **Review.** Edge City reviews the cp pull request: the manifest, the permissions, every line of the skill.
 2. **Press and deploy.** After review it is merged and the cp is deployed. The cp serves manifests and offers skills only with `MINI_APPS_MANIFESTS=1` and `MINI_APPS_SKILL_DELIVERY=1`.
 3. **First box.** Edge City adds your app id to `MINI_APPS_TENANT_ALLOWLIST` with your tenant (staff only; never put a tenant id in a pull request). Only that box is offered the app.
-4. **Fleet precondition (hard rule).** An older installer refuses the whole projection, not just your app, so a generic app may enter the cp catalog only after the WHOLE fleet runs an overlay release with the generic installer. Until that roll is done your pull request stays open, reviewed but unmerged. It is opened to the cohort (a later `visibility` change) after the first box has run it. A generic app is an optional app (install tier 3): each resident installs it ([developer guide section 9](MINI-APPS-DEVELOPER.md#9-install-tiers)).
-5. **CI precondition.** cp CI treats an app outside `skills/overlay.json` as cp-sourced, held to its own pin, from the generic-delivery change onward. Before that change is on the cp's `main`, a generic-app pull request is red; that is expected.
+4. **Fleet precondition.** An installer older than the generic one (v2.1.12) refuses the whole projection, not just your app, so the rule was that no generic app enters the cp catalog before the whole fleet runs that release. Ten generic apps are merged in the cp catalog now, and the cp's README ("Add a public read app") names no fleet wait for a new one. Your app is opened to the cohort (a later `visibility` change) after the first box has run it. A generic app is an optional app (install tier 3): each resident installs it ([developer guide section 9](MINI-APPS-DEVELOPER.md#9-install-tiers)).
+5. **CI.** cp CI treats an app outside `skills/overlay.json` as cp-sourced, held to its own pin (cp#337, merged).
 
 ## 6. What not to do
 
