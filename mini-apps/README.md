@@ -98,7 +98,8 @@ Use Dizko as the starting bundle for another **public read-only** service:
    `message`, and such a file counts as an error fixture whatever its name;
    a `{code, ...}` it carries must still be exactly `{code, detail}` with a
    closed code). Exit 0 passed, 1 failed, 2 refused. Live-
-   service checks come in Phase 1 and show as not run. The summary always goes
+   service checks run only with `--service` and are advisory; without it
+   they show as not run. The summary always goes
    to stdout; conformance.json is written only with `--out`, never by default,
    and `--out` is refused anywhere inside the repo or the tool's root, so point
    it at a temp dir (CI: `--out "$RUNNER_TEMP/conformance.json"`). Arguments
@@ -113,8 +114,8 @@ Use Dizko as the starting bundle for another **public read-only** service:
    Exclude profile/account/private-data/purchase/write tools. A service calling
    itself read-only is not sufficient: reviewers must inspect its semantics.
 3. Submit the same reviewed definition to the control-plane catalog (Phase 0:
-   the cp vendors `mini-apps/` byte for byte and serves it only under
-   `MINI_APPS_MANIFESTS=1`; its five reviewed constants stay the default). Update
+   the cp vendors `mini-apps/` and serves it only under
+   `MINI_APPS_MANIFESTS=1`; its reviewed constants stay the default). Update
    `install/install_miniapps.ts`'s reviewed bundle table so only that exact id,
    version, skill and operations can be staged from the pinned overlay checkout.
    No native plugin change is needed for another reviewed public-read MCP app:
@@ -243,7 +244,7 @@ write gate for a star.
 ### Carried native operations: meeting marks and Skylight status
 
 The Gold Stars install also carries ov#300's two native operations (restored
-after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
+after ov#312 removed them):
 
 - `rolodex.meeting` with exactly `attendeeId` (a Rolodex search id) and
   `met` (`true` marks met, `false` undoes). An owner-requested, owner-scoped,
@@ -258,7 +259,7 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 - `skylight.status` with no other argument: the owner's own Skylight status,
   a **read** (`READ_OPERATIONS`). No tenant, person or agent argument exists; the app derives the
   account from the bearer.
-- `rolodex.person` (rc42, CLAIMS 7799/7804) with exactly one of `id` (a strict
+- `rolodex.person` (rc42, ov#355) with exactly one of `id` (a strict
   uuid that `rolodex.search` returned) or `query` (1 to 120 characters): a
   **read** (`READ_OPERATIONS`) of one other resident's public profile (PUBLIC
   and VILLAGE card lines, public social profile links; never email,
@@ -271,12 +272,12 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   with no userinfo, backslash or odd port, whose host is not a messaging,
   contact or booking host and whose path (fully percent-decoded) is not a DM,
   messaging, add-contact or contact-info page; a kept link loses its query and
-  fragment (verify OV-355 S1). URL shorteners, link-in-bio pages and
+  fragment. URL shorteners, link-in-bio pages and
   redirectors count as contact hosts; a path that carries another link, a
   deny-listed host, an email or a phone number is refused; every Unicode
   format character, variation selector and invisible filler is removed from
   every key and string; an app body carrying an `error` key is rebuilt from
-  the plugin's own codes. `whatYouDo` is never forwarded (CLAIMS L8029). A card
+  the plugin's own codes. `whatYouDo` is never forwarded. A card
   line, a role or an organization that holds an
   email, a 7+ digit phone run, an @handle, a deny-listed host or a messaging
   label with a handle is dropped whole (after hidden-character removal and
@@ -288,8 +289,8 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
   spelled out in words); the app's filter and the skill rule are primary.
 
 The reviewed gold-stars entry carries these nine operations in this order. The
-helper and the plugin still accept the eight-operation entry (ov#350, the CP's
-entry until it moves; `rolodex.person` refused under it) and the six-operation
+helper and the plugin still accept the eight-operation entry (ov#350, which the CP
+still serves to a box below rc42; `rolodex.person` refused under it) and the six-operation
 entry from before the restore (meeting, Skylight and person refused under it),
 so the overlay can roll out first. The order is one way only: overlay first,
 then the catalog (cp#244's drift re-stage then re-stages installed rows); an
@@ -302,7 +303,7 @@ The first-party `forkicks` 1.0.0 bundle carries only `forkicks.menu`,
 `forkicks.order.status`, `forkicks.order.cancel`, in that order, and skill
 `["forkicks"]`. It has no MCP endpoint or credit. Installer, native plugin and
 CP catalog must agree on this projection; a partial/reordered/planted operation
-list is refused. The overlay's baseline installer never installs it; it is a default app, removable ([install tier 2](#install-tiers)).
+list is refused. The overlay's baseline installer never installs it; it is a staff app ([install tier 1](#install-tiers)).
 
 Menu/schedule and own-order status are reads. Prepare obtains a server quote,
 not an order. The native plugin saves the successful server-returned full
@@ -318,7 +319,7 @@ revokes permission, not the resident's saved order previews.
 Show every item/option, total, pickup place/time, payment method and the display
 name shared with the café, then wait for a later owner reply. Native confirm
 takes only `draftId`; a model-supplied `approval` is refused. The daemon must
-propose `marketplace.app.action:forkicks.order.confirm:<draftId>` (the parent class today; ov#457 moves it to the member class `marketplace.app.action.forkicks.order.confirm` in v2.1.13, and the cp already accepts both keys, cp#351) over the
+propose `marketplace.app.action:forkicks.order.confirm:<draftId>` (the parent class today; ov#457, an open draft, would move it to the member class `marketplace.app.action.forkicks.order.confirm`, and the cp already accepts both keys, cp#351) over the
 unaltered envelope, wait for a direct resident grant, and start that exact
 payload with `authorization: grant`. Policy autonomy never purchases coffee.
 An already-executed proposal reuses the exact proof for same-draft idempotent
@@ -379,8 +380,8 @@ Opt-in isolated local fixture smoke, run only after preview integration:
 
 ```sh
 python3 scripts/forkicks-menu-media-smoke.py \
-  --fixture-home "$HOME/.local/state/sdj/agentvillage-local/fake-agents/8b3aa9f5-79f4-4a1e-adcc-3ed800c1c105/.hermes" \
-  --origin https://jmill-desktop.tail587341.ts.net:8472 \
+  --fixture-home /absolute/path/to/a-fake-agent/.hermes \
+  --origin https://<your preview host>:8472 \
   --theme forkicks --evidence-dir /absolute/private/evidence/forkicks
 ```
 
@@ -397,9 +398,8 @@ With a prepared Hermes checkout/dependencies, pass `--hermes-source /opt/hermes`
 to import the actual runtime parser and validate media path policy too.
 Neither mode starts a model, gateway, Telegram sender, order or payment.
 
-Preview integration: AV's declared frontend is `wt-mini-apps-canary` on :8472,
-local CP/tools are `wt-mini-apps-canary-runtime/control-plane` and
-`wt-mini-apps-canary-tools`, merchant preview is the separate For Kicks service
+Preview integration: AV's declared frontend runs on :8472 beside a local CP
+and tools checkout, and the merchant preview is the separate For Kicks service
 on :8478. Integrate app feature changes into the existing local preview branch,
 overlay plugin/skill into its tools preview, and canonical renderer into the
 merchant preview; use each declared service lifecycle, not an ad hoc server.
@@ -449,10 +449,10 @@ The [reviewed manifest](zzzbot/manifest.json) and the native bundle allowlist
 `zzz.create_thread`, `zzz.tag_thread` and `zzz.edit_post` (1.1.0; the last two
 edit only the agent's own posts and topics), never an arbitrary MCP call,
 `set_thread_state` or `doctor`; `mini-app.read` refuses `zzzbot`. The five of
-1.0.0 stay accepted until the CP serves 1.1.0 (overlay first). Each resident connects their own
+1.0.0 stay accepted: the CP serves 1.1.0 only to a box at v2.1.21 or later (overlay first). Each resident connects their own
 zzz.bot account in the Mini-apps sheet (OAuth 2.1 + PKCE, held by the app
-server); the box never sees a token, endpoint or account id. The CP lists
-zzz.bot only for tenants in `MINI_APPS_TENANT_ALLOWLIST`.
+server); the box never sees a token, endpoint or account id. The CP's
+entry for zzz.bot is open to every resident and marked staff ([install tiers](#install-tiers)).
 
 Input rides the existing `arguments` object, so the every-box `village` schema
 (description and properties) is unchanged. Since v2.1.5 the five operation
@@ -528,14 +528,14 @@ path), no card and no manual grant, and carry the trusted `turnId`; the skill
 shows exactly what will be sent and waits for the owner's yes. Results are
 scrubbed and framed as untrusted.
 
-Overlay first, then the CP catalog row and sandbox allowlist, then the app
-routes, then Edge City staff set `MINI_APP_DREAMSTARTER_KEY`. The app-server
+Overlay first, then the CP catalog row (open to every resident at its v2.1.22
+floor since cp#488), then the app routes, then Edge City staff set `MINI_APP_DREAMSTARTER_KEY`. The app-server
 contract is in [dreamstarter/README.md](dreamstarter/README.md).
 
 ## Edge Library: the village knowledge graph (reads only)
 
 Adapted from Naman's bundle (Edge-City/agentvillage#506). Version 1.0.0 is
-READS ONLY (Carter, CD-44). The [v2 manifest](library/manifest.json) and the
+READS ONLY. The [v2 manifest](library/manifest.json) and the
 native bundle allowlist (`_mini_apps.py` `LIBRARY`, exact equality, in this
 order) expose eight named reads, each mapped by the app to one Edge Library
 MCP tool: `library.initialize`, `.search`, `.get`, `.source`, `.schema`,
@@ -569,7 +569,7 @@ codes and Edge Library's own tool codes map to Edge Library-only text, for
 these operations only.
 
 Overlay tag first, then the one cp switch PR (vendored manifest, reviewed id,
-catalog row `restricted`) deployed before that tag's roll, then the app half
+catalog row, open to every resident at its v2.1.22 floor since cp#488) deployed before that tag's roll, then the app half
 (the `subject` separation entry and the vendored manifest), then Edge City staff
 set `MINI_APP_LIBRARY_KEY` on the app service. The app-server contract and the
 prerequisites are in [library/README.md](library/README.md).
@@ -601,9 +601,9 @@ a user, resident or subject id) at any depth is refused. Anything else is
 `handling`; the app's closed `mini_app_*` codes and Favor Loop's own tool codes
 map to Favor Loop-only text, for these operations only.
 
-The manifest says `sandbox`, so the cp serves it restricted (allowlisted tenants
-only), and only to a box at or after the overlay release that reviews it (the
-cp's `FAVORLOOP_FLOOR_TAG`). Overlay tag and roll first, then the cp row, then the
+The manifest here says `sandbox`, but the cp's vendored copy says `everyone`, so
+the cp serves it to every resident, only on a box at or after the overlay release
+that reviews it (the cp's `FAVORLOOP_FLOOR_TAG`, v2.1.26). Overlay tag and roll first, then the cp row, then the
 app half (the `subject` separation entry and the vendored manifest), then Edge
 City staff set `MINI_APP_FAVORLOOP_KEY` on the app service. The contract is in
 [favorloop/README.md](favorloop/README.md).
@@ -620,7 +620,7 @@ nothing changes) and two writes, `eci-volunteers.confirm` and
 `eci-volunteers.link`. `mini-app.read` refuses `eci-volunteers`. The id is
 `eci-volunteers` because the validator reserves `edge-`.
 
-Identity is Favor Loop's (lead RULING L35456): the service is `app-token`
+Identity is Favor Loop's: the service is `app-token`
 (`MINI_APP_ECI_VOLUNTEERS_TOKEN`) with the app's `subject` separation, so every
 call carries `X-Village-Subject`, an opaque per-app reference, and never a
 Telegram id or username. ECV links that reference to a volunteer once: the
@@ -802,7 +802,7 @@ In short:
   row `marketplace.app.action` still asks today; the only partner action that
   reaches it is the For Kicks checkout, which is meant to ask. It turns
   autonomous, and the setting's label ("Act through an installed app") with it,
-  once For Kicks moves to its own member row (v2.1.13). A developer never adds
+  once For Kicks moves to its own member row. A developer never adds
   a class, a row or a gate.
 - **Only a payment shows a card, and that card is first-class.** Today exactly
   one partner action is gated: a payment, the For Kicks checkout
