@@ -164,6 +164,18 @@ class ApprovalTest(unittest.TestCase):
         self.assertIn("approvals bot", mini.APPROVE_IN_BOT)
         self.assertIn("SAME draftId", mini.APPROVE_IN_BOT)
 
+    def test_pending_instructions_include_public_approvals_chat(self):
+        self.assertEqual(mini.APPROVALS_CHAT_URL, "https://t.me/AgentVillageApprovalsBot")
+        for instruction in (mini.APPROVE_IN_BOT, mini.ORDER_APPROVE_IN_BOT, mini.ORDER_PLACED_ON_APPROVAL):
+            with self.subTest(instruction=instruction):
+                self.assertIn('Open approvals chat: ' + mini.APPROVALS_CHAT_URL, instruction)
+                self.assertIn('SAME draftId', instruction)
+                self.assertNotIn('?start=', instruction)
+                self.assertNotIn('t.me/c/', instruction)
+        for instruction in (mini.ORDER_CARD_NOT_RAISED, mini.ORDER_APPROVAL_REFUSED,
+                            mini.ORDER_APPROVAL_UNAVAILABLE, mini.ORDER_CARD_CLOSED):
+            self.assertNotIn(mini.APPROVALS_CHAT_URL, instruction)
+
     def test_changed_payload_hash_refused(self):
         self.ap.propose.side_effect = lambda *args: answer(dict(ok=True, task="propose:" + "a" * 32, decision="requested", payload_hash="wrong"))
         self.assertIsNone(mini.authorize_send(self.preview, self.draft)[0])
@@ -306,7 +318,8 @@ class ProjectionTest(unittest.TestCase):
 
     def test_new03_app_operations_accepted_by_exact_shape_only(self):
         # NEW-03 (rc44): a non-Gold-Stars app carries exactly the public read, or the read plus its own
-        # context namespace read and write (newest first). Anything else refuses the whole projection.
+        # context namespace read and write (newest first). Anything else refuses that app alone (RA42 ov S1:
+        # per app, as the installer's checkApp); the reviewed apps of the same file stay installed.
         read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
         self.assertEqual(mini.APP_OPERATIONS_ACCEPTED, ((read, ctx_read, ctx_write), (read,)))
         self.assertIn(ctx_read, mini.READ_OPERATIONS)
@@ -350,12 +363,13 @@ class ProjectionTest(unittest.TestCase):
                 with self.subTest(operations=operations):
                     for op in everything:
                         self.assertFalse(mini.installed(home, "dizko", op))
-                        self.assertFalse(mini.installed(home, "gold-stars", op))  # the whole projection is refused
+                        # RA42 ov S1: dizko alone is refused; Gold Stars keeps exactly its own operations.
+                        self.assertEqual(mini.installed(home, "gold-stars", op), op in mini.GOLD_STARS["operations"])
 
     def test_mosaic_entries_granted_like_dizko_and_skills_must_be_exactly_mosaic(self):
         # MOSAIC (app#486, rides v2.1.9): no plugin change. The generic branch grants Mosaic's two reviewed
         # lists (install/install_miniapps.ts) only with skills exactly ["mosaic"]; `[]`, a missing name or
-        # another skill refuses the whole projection, Gold Stars included.
+        # another skill refuses Mosaic alone (RA42 ov S1: per app); Gold Stars stays installed.
         read, ctx_read, ctx_write = "mini-app.read", "mini-app.context.read", "mini-app.context.write"
         gold = {"id": "gold-stars", **mini.GOLD_STARS}
         mosaic = {"id": "mosaic", "version": "1.0.0", "skills": ["mosaic"]}
@@ -372,7 +386,7 @@ class ProjectionTest(unittest.TestCase):
                 path.write_text(json.dumps({"version": 1, "apps": [gold, {**mosaic, "skills": skills, "operations": [read, ctx_read, ctx_write]}]}))
                 with self.subTest(skills=skills):
                     self.assertFalse(mini.installed(home, "mosaic", ctx_read))
-                    self.assertFalse(mini.installed(home, "gold-stars", "rolodex.search"))
+                    self.assertTrue(mini.installed(home, "gold-stars", "rolodex.search"))
             # An install of another app never carries Mosaic's operations.
             path.write_text(json.dumps({"version": 1, "apps": [gold, {"id": "dizko", "version": "1.0.0", "skills": ["dizko"], "operations": [read, ctx_read, ctx_write]}]}))
             self.assertFalse(mini.installed(home, "mosaic", ctx_read))

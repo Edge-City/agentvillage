@@ -1,0 +1,56 @@
+{
+  "manifest": 2,
+  "id": "hello-village",
+  "name": "Hello Village",
+  "version": "1.0.0",
+  "description": "An example generic mini-app. It reads an invented daily greeting and keeps one line in its own Context.",
+  "homepage": "https://hello-village.example/",
+  "visibility": "sandbox",
+  "permissions": [
+    {
+      "kind": "read",
+      "label": "Read the daily greeting",
+      "description": "Read an invented greeting from the app's public tool. No accounts, profiles or purchases."
+    },
+    {
+      "kind": "read",
+      "label": "Keep a line in your Context",
+      "description": "Save a short line the app writes for your agent in your Context, Private until you move it."
+    }
+  ],
+  "service": {
+    "kind": "mcp",
+    "baseUrl": "https://hello-village.example/mcp",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "operations": [
+    {
+      "name": "hello-village.read",
+      "class": "read",
+      "target": {
+        "tool": "read_greeting"
+      },
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ],
+  "data": {
+    "context": {
+      "maxEntries": 4,
+      "ceiling": "private"
+    }
+  },
+  "skills": [
+    {
+      "name": "hello-village",
+      "version": "1.0.0",
+      "sha256": "314ef3753253ddf5c562a245368c951afe4d2b1f96e249873ea580aac3d92d68",
+      "path": "skills/hello-village/SKILL.md"
+    }
+  ]
+}

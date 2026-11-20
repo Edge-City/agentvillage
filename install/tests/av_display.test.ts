@@ -87,7 +87,7 @@ test("install.ts runs the step right after configureIndexLinks, as a bare statem
   const main = text.slice(text.indexOf("function main(): void {"));
   const body = main.slice(0, main.indexOf("\n}\n"));
   expect(body.match(/^.*configureAvDisplay.*$/gm)).toEqual(["  configureAvDisplay();"]);
-  expect(body).toMatch(/^  configureIndexLinks\(\);\n  configureAvDisplay\(\);$/m);
+  expect(body).toMatch(/^  if \(resident\) configureIndexLinks\(\);\n  configureAvDisplay\(\);$/m);
 });
 
 test("the plugin directory exists where the installer stages plugins from", () => {
@@ -126,7 +126,7 @@ test("rc42: the box config enables av-display and never writes display.suppress_
   }
   const plugin = join(dir, "..", "plugins", "av-display");
   const manifest = YAML.parse(readFileSync(join(plugin, "plugin.yaml"), "utf8")) as { version: string };
-  expect(manifest.version).toBe("0.4.0");
+  expect(manifest.version).toBe("0.5.0");
   const source = readFileSync(join(plugin, "__init__.py"), "utf8");
   expect(source).toContain('("gateway.run_turn", apply_hygiene_notices)');
   expect(source).toContain('"compression-turnhold notice",');
@@ -232,5 +232,5 @@ test("rc44: install.ts runs the menu step right after configureAvVote, as a bare
   const main = text.slice(text.indexOf("function main(): void {"));
   const body = main.slice(0, main.indexOf("\n}\n"));
   expect(body.match(/^.*configureVillageMenu.*$/gm)).toEqual(["  configureVillageMenu();"]);
-  expect(body).toMatch(/^  configureAvVote\(\);\n  \/\/ rc44 .*\n  configureVillageMenu\(\);$/m);
+  expect(body).toMatch(/^  if \(resident\) configureAvVote\(\);\n  \/\/ rc44 .*\n  configureVillageMenu\(\);$/m);
 });

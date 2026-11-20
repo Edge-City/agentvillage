@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "INVALID: q: Invalid input: expected string, received undefined"
+    }
+  ],
+  "structuredContent": {
+    "code": "invalid_arguments",
+    "detail": "q: Invalid input: expected string, received undefined"
+  },
+  "isError": true
+}

@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, s
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateProjection } from "../../install/install_miniapps";
+import { REVIEWED_MINI_APPS, validateProjection } from "../../install/install_miniapps";
 
 // Mini-apps v2 Phase 0, P0-1 (MINIAPPS-PLATFORM-v2-design.md §1.1, §1.3, §8): the CI check over
 // mini-apps/**. Every published manifest (mini-apps/catalog.json) is a valid v2 manifest by the ONE
@@ -23,9 +23,9 @@ import { validateProjection } from "../../install/install_miniapps";
 // Nothing on a box reads these files yet (no skill, plugin or installer step): data only, no roll.
 //   bun test scripts/tests/mini-app-manifests.test.ts
 
-const MODULE_SHA256 = "177a48d1c2320689a1e08724f5ed9a109433d15c12d0396a0262d98f9cf2afbb";
-const SCHEMA_SHA256 = "ab1af282cb667b2116331879bd4c390d545a4452c944a0a6159edf1a4ac9f729";
-const PINS_SHA256 = "7394b24f925f293af386cef5962eda27b28dbb72cb02ba1dd94e787dc7899df1";
+const MODULE_SHA256 = "777542ef0eb3145be81badb8a1383638a0a000dc3b725d307239f3c52f55df88";
+const SCHEMA_SHA256 = "13de632e759feb71a02694b9a10335b2662ab6e5d27393927623fab0757f8a92";
+const PINS_SHA256 = "108a8598fb8fe95afa012fbc812b6caa42960a10cef0bfa5342ad67f85fec0e1";
 const REPO = join(import.meta.dir, "..", "..");
 const DIR = join(REPO, "mini-apps");
 const m = createRequire(import.meta.url)("../mini-apps-manifests.cjs");
@@ -79,19 +79,26 @@ describe("the shared files", () => {
     expect(bytes("mini-apps/manifest.v2.schema.json").toString("utf8")).toBe(JSON.stringify(m.SCHEMA, null, 2) + "\n");
   });
 
-  test.skipIf(!process.env.AV_CONTROLPLANE_DIR)("cmp: the control plane's copies and vendored manifests, byte for byte (AV_CONTROLPLANE_DIR)", () => {
+  // cp#337 N4 (generic apps are cp-sourced): the cp's index may hold generic apps that never enter this repo, so
+  // catalog.json is compared as "this index == the cp's index filtered to the reviewed ids, in the cp's order";
+  // the validator, the schema, the pins and every reviewed manifest stay byte for byte.
+  test.skipIf(!process.env.AV_CONTROLPLANE_DIR)("cmp: the control plane's copies and vendored manifests, byte for byte; its index filtered to the reviewed ids is this index (AV_CONTROLPLANE_DIR)", () => {
     const cp = join(process.env.AV_CONTROLPLANE_DIR!, "control-plane", "src");
     const pairs = [["scripts/mini-apps-manifests.cjs", "mini-apps-manifests.js"],
-      ...["manifest.v2.schema.json", "manifests.pins.json", "catalog.json", ...index.apps.map((id: string) => `${id}/manifest.json`)]
+      ...["manifest.v2.schema.json", "manifests.pins.json", ...index.apps.map((id: string) => `${id}/manifest.json`)]
         .map(file => [`mini-apps/${file}`, `mini-apps/${file}`])];
     for (const [mine, theirs] of pairs) expect([mine, Buffer.compare(readFileSync(join(cp, theirs)), bytes(mine))]).toEqual([mine, 0]);
+    const theirs = JSON.parse(readFileSync(join(cp, "mini-apps", "catalog.json"), "utf8"));
+    const reviewed = new Set(REVIEWED_MINI_APPS.map(app => app.id));
+    expect([theirs.catalog, theirs.apps.filter((id: string) => reviewed.has(id))]).toEqual([index.catalog, index.apps]);
+    for (const id of theirs.apps.filter((id: string) => !reviewed.has(id))) expect([id, lstatSync(join(cp, "mini-apps", "skills", id, "SKILL.md")).isFile()]).toEqual([id, true]);
   });
 });
 
 describe("mini-apps/: the published catalog", () => {
   test("catalog.json is a valid index, in the order the cp serves, and mini-apps/ holds only reviewed catalog files", () => {
     expect(m.checkSchema(index, m.INDEX_SCHEMA)).toEqual([]);
-    expect(index.apps).toEqual(["gold-stars", "dizko", "zzzbot", "slopfolio", "forkicks", "mosaic"]);
+    expect(index.apps).toEqual(["gold-stars", "dizko", "zzzbot", "slopfolio", "forkicks", "mosaic", "dreamstarter", "kismet", "library", "favorloop", "eci-volunteers"]);
     expect(treeViolations(DIR, index.apps)).toEqual([]);
   });
 
@@ -295,7 +302,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
       if (m.checkSchema(x).length) { expect([url, want]).not.toEqual([url, null]); continue; }
       expect([url, reasons(m.validateManifest(x))]).toEqual([url, want ? [`/service/baseUrl ${want}`] : []]);
     }
-    expect(index.apps.filter((id: string) => manifest(id).service.baseUrl).length).toBe(3);
+    expect(index.apps.filter((id: string) => manifest(id).service.baseUrl).length).toBe(8); // ov#556: Favor Loop is the seventh; ov#450: Edge City Volunteers the eighth
   });
 
   test("N2: deep nesting is a dropped manifest with a code, never a throw; the catalog serves the rest", () => {
@@ -309,7 +316,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
     const byId = Object.fromEntries(index.apps.map((id: string) => [id, manifest(id)]));
     byId.dizko = deep(20000);
     const built = m.buildCatalog(index, byId);
-    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "zzzbot", "slopfolio", "forkicks", "mosaic"]);
+    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "zzzbot", "slopfolio", "forkicks", "mosaic", "dreamstarter", "kismet", "library", "favorloop", "eci-volunteers"]);
     expect(built.dropped).toEqual([{ id: "dizko", code: m.CODE, errors: [{ path: "/operations/0/input", reason: "too_large" }] }]);
   });
 
@@ -328,7 +335,7 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
     const byId: Record<string, any> = Object.fromEntries(index.apps.map((id: string) => [id, manifest(id)]));
     Object.defineProperty(byId.zzzbot, "name", { enumerable: true, get() { throw new RangeError("Maximum call stack size exceeded"); } });
     const built = m.buildCatalog(index, byId);
-    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "dizko", "slopfolio", "forkicks", "mosaic"]);
+    expect(built.manifests.map((x: { id: string }) => x.id)).toEqual(["gold-stars", "dizko", "slopfolio", "forkicks", "mosaic", "dreamstarter", "kismet", "library", "favorloop", "eci-volunteers"]);
     expect(built.dropped).toEqual([{ id: "zzzbot", code: m.CODE, errors: [{ path: "/", reason: "unvalidatable" }] }]);
   });
 });

@@ -441,13 +441,20 @@ function expectDraft(run: Run, stdout: string, stderr: string): void {
 
 /**
  * The seed marker after a seed: exactly `{seededAt, selected, created,
- * failed, done: true}` in that order and a newline, mode 0600, seededAt the
- * run's own time.
+ * failed, done: true}` in that order, then `ids` (distinct Index ids) and
+ * `noId` only when the run created a line, one entry per created line
+ * between them, and a newline, mode 0600, seededAt the run's own time.
  */
 function expectSeedMarker(counts: { selected: number; created: number; failed: number }, t0: number, t1: number): void {
   const raw = readFileSync(join(home, SEED_MARKER), "utf8");
   const marker = JSON.parse(raw) as Record<string, unknown>;
-  expect(raw).toBe(`${JSON.stringify({ seededAt: marker.seededAt, ...counts, done: true })}\n`);
+  const ids = (marker.ids ?? []) as string[];
+  const noId = (marker.noId ?? 0) as number;
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const id of ids) expect(id).toMatch(/^aaaaaaaa-0000-4000-8000-[0-9a-f]{12}$/);
+  expect(ids.length + noId).toBe(counts.created);
+  const made = { ...(ids.length ? { ids } : {}), ...(noId ? { noId } : {}) };
+  expect(raw).toBe(`${JSON.stringify({ seededAt: marker.seededAt, ...counts, done: true, ...made })}\n`);
   const at = Date.parse(String(marker.seededAt));
   expect(new Date(at).toISOString()).toBe(String(marker.seededAt));
   expect(at).toBeGreaterThanOrEqual(t0 - 1000);

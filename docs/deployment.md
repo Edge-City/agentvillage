@@ -201,6 +201,10 @@ hidden, not deleted.
 
 **MoralMod arm (OV-249).** A resident whose `AV_MORALMOD_ARM` is `on` gets Index's Hermes plugin `index-network` at the commit pinned in `install/install_index_plugin.ts`, enabled, with its 16 `index_*` tools and a pass-through `index/negotiator.ts`; any other value (absent included) is off and a roll drops it from `plugins.enabled` and removes the plugin's `Index morning` cron job and launcher; the arm is read from `.env` first, so write it there, before the install; a failed plugin install leaves the roll going and prints `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar>` (README, "Install", step 9). The installer patches the installed plugin's `sidecar.py` on every ON run so the negotiator child gets an allowlisted env (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `BUN_OPTIONS=--no-env-file` and the plugin's `INDEX_*` names, no `.env` secret, and Bun loads no `.env*` from the gateway's working directory); when the pinned anchor is not found exactly once the plugin is not enabled, as OFF removes it, and the line says `sidecar`. ON needs the approval gate verified on the same run (`AV_APPROVAL_ENABLED=1`, a live fire the daemon answered, no `AV_APPROVAL_ALLOW_UNPATCHED_HERMES` override); without it the plugin is withheld as OFF removes it and the line says `gate`. The gate only routes the writes to the daemon: whether the accept (`index_update_opportunity`, class `opportunity.accept`, autonomous in the template) waits for the resident's tap is that tenant's policy row.
 
+**GODCONST follow-up questions (GC-ELICIT, `av-elicit`).** Opt-in per tenant, like recall. The control plane sets the flag: for a tenant its own gate admits (`GODCONST_ELICIT_ENABLED=1` and the tenant in `GODCONST_ELICIT_TENANTS`, ids, `all` or `none`) it writes `AV_ELICIT_ENABLED=1` into that box's `.env` before the install that should enable it, and the installer reads it from the environment first, else `.env`. Nothing on the box decides who is elicited. With the flag on, the installer (`install/av_elicit.ts`) lists `av-elicit` in `plugins.enabled`, sets `plugins.entries.av-elicit.allow_gateway_injection: true` (Hermes's gate on a plugin injecting a turn into a session), and raises `memory.memory_char_limit` to 8000 when it is unset or lower (the agent's private gap list needs the room; the fleet default is 2200; a higher value is kept). A box without the flag is left exactly as it was: no key is read or written. Any other non-blank value (`0`, `off`) is the rollback: the plugin leaves `plugins.enabled` and its injection key is removed; the memory cap stays, since lowering it could cut what the agent saved. A `plugins.disabled` entry for `av-elicit` also stops it loading and is kept. The step is never fatal. The plugin directory is staged on every box like every other one and does nothing unless listed; when listed it injects only what the control plane stages under `$HERMES_HOME/av-events/elicit/inject/`, and nothing while the `closed` marker is there. The brief skill `skills/odin-constitution/` (named `constitution-elicitation` before GC-ELICIT v5) is written by the control plane at open and removed at close; the installer never copies or removes it. av-approval counts `av-elicit` as an expected, conditional plugin (`expected_plugins.json`), so a box without it is not short a plugin and a box with it is not quarantined; `AV_ELICIT_SESSION_KEY` (an optional session-key override for testing with your own bot) is `not_secret` in `custody_keys.json`.
+
+**Release plan (GODCONST, its own overlay cut).** The suggestion rating cards (`av-rate`, #442) ship in their own earlier release. GODCONST follows in a separate, later overlay cut that carries `av-elicit` (#478), its installer step (#480) and the Telegram ballot plugin (#483). All three merge to `main` dark: with `AV_ELICIT_ENABLED` unset, the GC-ELICIT step leaves a box unchanged. The cut goes through the usual Tag release path with its `release/RC-MANIFEST.md` line; the people who build these features never tag a release or add that line themselves. Then one GODCONST roll, `scope: test-tenants`, whose canaries are the four staff bots (staff cohort, excluded from analysis): amita `c6b7a17b-83e3-4b11-9779-f6666cf7e3af`, carter `aa9a5de3-6753-4650-ac4e-a63423075954`, timour `314f1fb6-c27a-4eb1-b13a-637075b8ebf4`, jmill `48de9369-a811-4824-bbfb-5f255491f55c`. A 48 hour canary follows. After it, the flag is flipped per tenant, not by another roll: the control plane writes `AV_ELICIT_ENABLED=1` into that tenant's `.env`, and the next install on that box (an update or a re-run) enables the plugin. The flips start with the four staff bots, Amita's first: open one elicitation against a closed pool, then check that the opener arrives in her Telegram DM and that the `.done` and `records/` files appear. Each send to the other three waits for her go. Flags beyond the four, and widening the control plane's `GODCONST_ELICIT_TENANTS` to `all`, need explicit clearance (the contract, section 1). The cut and the roll alone ask no resident anything.
+
 **When it refuses.** A refusal changes nothing. The common ones: the tag is
 lightweight, missing or not on `main`; a branch has the tag's name; seed files
 changed without `allow_seed_change`; the control plane is unhealthy or has not
@@ -214,10 +218,27 @@ unreachable, busy, outcome unknown, or failed. Check every failed, unknown or
 busy resident by hand. To resume, start a new run with the same tag: healthy
 residents are skipped and the stopped one is updated again at its normal turn.
 
-**Roll back.** Run the workflow with the previous tag, test tenants first. A
+**Roll back.** Run the workflow with the previous tag, test tenants first; on
+a box that has run v2.2.5 or later, back out instead with a forward tag that
+keeps runner digest `a99f640d`, never the previous tag by number (see the A-93
+paragraph below). A
 rollback is an ordinary roll and restarts every resident in scope again. Going
 back to a release from before DATA-314 needs one more step per resident first;
 see "The proactive jobs" below.
+
+**Backing out the any-slot runner (A-93).** From v2.2.5 (rider #606; v2.2.3
+was never tagged) the zzz
+autonomy runner accepts any of the five schedule phases. Back it out with a
+forward tag whose `AUTONOMY_SHIPPED` (`install/zzz_autonomy_job.ts`) still
+lists runner digest `a99f640d`. Never roll v2.2.4, v2.2.2 or earlier onto a
+box that has staged that runner (v2.2.4 is the hotfix on v2.2.2 and carries
+its installer): the older installer refuses the runner it does not
+know (`zzz_autonomy_shim_not_ours`), drops the `Edge — zzz event autonomy` and
+`Edge — zzz pairs` jobs, and every later stage fails the same way until the
+file is deleted by hand. A plain `git revert` of #606 does the same, so a
+revert must keep that digest. If one of them must be rolled anyway, first delete
+`$HERMES_HOME/scripts/zzz_autonomy_runner.py` (`~/.hermes` by default) on each
+autonomy box; the box then stages like one that never had the job.
 
 **What Roll does not guarantee.** That the agent answers. That Telegram
 messages sent during a restart arrive (Hermes drops them on a cold start; the

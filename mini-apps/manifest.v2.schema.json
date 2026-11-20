@@ -33,7 +33,7 @@
     "version": {
       "type": "string",
       "maxLength": 80,
-      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})(-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?$"
+      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
     },
     "description": {
       "type": "string",
@@ -274,7 +274,7 @@
           "version": {
             "type": "string",
             "maxLength": 80,
-            "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})(-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?$"
+            "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
           },
           "sha256": {
             "type": "string",
@@ -508,6 +508,44 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 3000
+            },
+            "card": {
+              "description": "The generic approval card: four dotted paths under the prepare op preview, each naming a string, and bind, the (request path, preview path) equalities the app enforces at prepare. Every other preview key must be bound.",
+              "type": "object",
+              "required": [
+                "item",
+                "total",
+                "when",
+                "shared",
+                "bind"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/cardPath"
+                },
+                "total": {
+                  "$ref": "#/$defs/cardPath"
+                },
+                "when": {
+                  "$ref": "#/$defs/cardPath"
+                },
+                "shared": {
+                  "$ref": "#/$defs/cardPath"
+                },
+                "bind": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "$ref": "#/$defs/cardPath"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -517,6 +555,11 @@
       "type": "string",
       "maxLength": 200,
       "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]{0,63}){1,8}$"
+    },
+    "cardPath": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(\\.[A-Za-z_][A-Za-z0-9_]{0,63}){0,7}$"
     }
   }
 }

@@ -1,6 +1,6 @@
 name: village-bridge
 version: 1.2.0
-description: "Installed curated mini-apps: manually approved Gold Stars (with owner-requested Rolodex meeting mark/undo and the owner's read-only Skylight status) and public Dizko discovery. Revocable account access; rejects groups, cron and delegated children."
+description: "Installed curated mini-apps with revocable account access. Rejects groups, delegated children and ordinary cron; permits only installer-managed zzz.bot private-pair cron roots for bounded pair reads, replies and one fixed empty-room introduction."
 author: Edge City
 kind: standalone
 provides_tools:

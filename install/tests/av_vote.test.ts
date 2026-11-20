@@ -82,8 +82,8 @@ test("install.ts runs the step right after configureAvDisplay, as a bare stateme
   const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
   const main = text.slice(text.indexOf("function main(): void {"));
   const body = main.slice(0, main.indexOf("\n}\n"));
-  expect(body.match(/^.*configureAvVote.*$/gm)).toEqual(["  configureAvVote();"]);
-  expect(body).toMatch(/^  configureAvDisplay\(\);\n  configureAvVote\(\);$/m);
+  expect(body.match(/^.*configureAvVote.*$/gm)).toEqual(["  if (resident) configureAvVote();"]);
+  expect(body).toMatch(/^  configureAvDisplay\(\);\n  if \(resident\) configureAvVote\(\);$/m);
 });
 
 test("the plugin directory exists where the installer stages plugins from", () => {

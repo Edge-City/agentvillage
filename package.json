@@ -7,6 +7,9 @@
   "bin": {
     "agentvillage": "./install/install.ts"
   },
+  "scripts": {
+    "conformance": "bun scripts/mini-apps-conformance.ts"
+  },
   "files": [
     "install/*.ts",
     "workspace/**/*.md",

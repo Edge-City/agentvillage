@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Your Kismet answers are updated."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":true,\"created\":false,\"text\":\"Your Kismet answers are updated.\",\"message\":\"updated\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "created": false,
+    "text": "Your Kismet answers are updated.",
+    "message": "updated"
+  }
+}

@@ -1,0 +1,9 @@
+# my box
+model:
+  default: "anthropic/claude-haiku-4.5"   # pinned
+  provider: 'openrouter'
+
+  # base_url: x
+  context_length: 90000
+agent:
+  system_prompt: 'A long prompt: with a colon continued on a second line'

@@ -1,0 +1,4185 @@
+{
+ "about": "Mini-apps generic approval card (item 6): input = a needs-card op's manifest `approval.card` declaration, the prepare op's preview, and (optionally) the prepare request; output = the approval payload {item, total, when, shared} with its payloadHash and the propose summary (or summaryError), or the refusal code. A vector marked requestOnly needs the request: an implementation without one (the control plane) skips it. Byte-identical copies in agentvillage-app and agentvillage-controlplane tests. Spec: plugins/village-bridge/tests/vectors/mini-app-card.md.",
+ "valueMax": 278,
+ "platformKeys": [
+  "appId",
+  "draftId",
+  "operation"
+ ],
+ "summaryMaxBytes": 4096,
+ "summaryHtmlMaxBytes": 3000,
+ "labels": {
+  "item": "What",
+  "total": "Total",
+  "when": "When & where",
+  "shared": "Shared with"
+ },
+ "vectors": [
+  {
+   "name": "acme: a generic app's preview -> the four strings, every bind equal to the request",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "acme: no request given (the cp's check): binds resolve on the preview, equality is the app's",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "acme: the platform keys appId, operation and draftId are skipped (bound by the approval key), never shown",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.rental.confirm",
+    "draftId": "d-acme-1",
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "acme: a newline in item: not minimal (no row carries lines; no technical-card fallback)",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours\n2 \u00d7 Paddle (spare)"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "acme: an empty bind list is fine when every key is shown",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": []
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird"
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "acme: a bound path may hold a whole object (bound whole)",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "order",
+      "request"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "order": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "acme: accents and non-Latin scripts stay whole",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Cr\u00e8me br\u00fbl\u00e9e"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: \u0938\u0942\u0930\u094d\u092f",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "1 \u00d7 Cr\u00e8me br\u00fbl\u00e9e",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: \u0938\u0942\u0930\u094d\u092f"
+   },
+   "payloadHash": "81381c0a2db48641558413f269abef4a7b23fcc66dcefe48403549386b0cef07",
+   "summary": "What: 1 \u00d7 Cr\u00e8me br\u00fbl\u00e9e\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: \u0938\u0942\u0930\u094d\u092f"
+  },
+  {
+   "name": "acme: a decomposed e + U+0301 (one combining mark) fits",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Cafe\u0301 tour"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "1 \u00d7 Cafe\u0301 tour",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "281876e02c6254bcf6c7b4d06163071cac59246e95ac22f7469961947f19e5e3",
+   "summary": "What: 1 \u00d7 Cafe\u0301 tour\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "forkicks through a declaration (target-card): For Kicks' own four strings, one engine",
+   "declaration": {
+    "item": "card.order",
+    "total": "card.total",
+    "when": "card.pickup",
+    "shared": "card.name",
+    "bind": [
+     [
+      "items",
+      "items"
+     ],
+     [
+      "fulfilment",
+      "fulfilment"
+     ],
+     [
+      "paymentMethod",
+      "paymentMethod"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "forkicks",
+    "operation": "forkicks.order.confirm",
+    "draftId": "d-target",
+    "card": {
+     "order": "1 \u00d7 Iced latte (Oat milk, Miso caramel syrup)",
+     "total": "\u20b90, pay by UPI",
+     "pickup": "For Kicks Mandrem \u00b7 21 Oct 2026",
+     "name": "Alex"
+    },
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": [
+       "opt-0-0",
+       "opt-0-1"
+      ]
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "paymentMethod": "upi"
+   },
+   "request": {
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 1,
+      "optionIds": [
+       "opt-0-0",
+       "opt-0-1"
+      ]
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "paymentMethod": "upi"
+   },
+   "card": {
+    "item": "1 \u00d7 Iced latte (Oat milk, Miso caramel syrup)",
+    "total": "\u20b90, pay by UPI",
+    "when": "For Kicks Mandrem \u00b7 21 Oct 2026",
+    "shared": "Alex"
+   },
+   "payloadHash": "d8ba145dfbd064106ba12490324034fa100974e93f619b722c16249cf0e3a1d5",
+   "summary": "What: 1 \u00d7 Iced latte (Oat milk, Miso caramel syrup)\nTotal: \u20b90, pay by UPI\nWhen & where: For Kicks Mandrem \u00b7 21 Oct 2026\nShared with: Alex"
+  },
+  {
+   "name": "forkicks through a declaration (two lines): a multi-line order does not fit the generic card",
+   "declaration": {
+    "item": "card.order",
+    "total": "card.total",
+    "when": "card.pickup",
+    "shared": "card.name",
+    "bind": [
+     [
+      "items",
+      "items"
+     ],
+     [
+      "fulfilment",
+      "fulfilment"
+     ],
+     [
+      "paymentMethod",
+      "paymentMethod"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "forkicks",
+    "operation": "forkicks.order.confirm",
+    "draftId": "d-two",
+    "card": {
+     "order": "2 \u00d7 Cold brew (Oat milk, Large)\n1 \u00d7 Butter croissant",
+     "total": "\u20b9760, card at pickup",
+     "pickup": "For Kicks Mandrem \u00b7 21 Oct 2026",
+     "name": "Alex"
+    },
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 2,
+      "optionIds": [
+       "opt-0-0",
+       "opt-0-1"
+      ]
+     },
+     {
+      "itemId": "item-1",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "paymentMethod": "card_on_pickup"
+   },
+   "request": {
+    "items": [
+     {
+      "itemId": "item-0",
+      "qty": 2,
+      "optionIds": [
+       "opt-0-0",
+       "opt-0-1"
+      ]
+     },
+     {
+      "itemId": "item-1",
+      "qty": 1,
+      "optionIds": []
+     }
+    ],
+    "fulfilment": {
+     "type": "pickup",
+     "locationId": "mandrem",
+     "date": "2026-10-21"
+    },
+    "paymentMethod": "card_on_pickup"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "declaration missing a field (shared) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration without bind -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith"
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration path in JSONPath form ($.) -> invalid",
+   "declaration": {
+    "item": "$.rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration path with an array index -> invalid",
+   "declaration": {
+    "item": "rental.0",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration path deeper than 8 segments -> invalid",
+   "declaration": {
+    "item": "a.b.c.d.e.f.g.h.i",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration shows the reserved appId -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "appId",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration shows one path twice -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "price.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration shows a path under another shown path -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "price",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "declaration bind entry not a pair -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "preview not an object -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": [
+    {
+     "rental": {
+      "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+     },
+     "price": {
+      "text": "\u20b91200, pay at the jetty"
+     },
+     "slot": {
+      "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+     },
+     "sharedWith": "Your display name: Sunbird",
+     "request": {
+      "kayakId": "k-2",
+      "hours": 2,
+      "slotId": "s-0700"
+     }
+    }
+   ],
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a missing path (slot.text) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {},
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a path through a non-object (price is a string) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": "\u20b91200",
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a non-string value (an integer total) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": 1200
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a non-string value (null) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": null,
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a non-string value (a list of lines) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": [
+      "1 \u00d7 Sit-on-top kayak",
+      "2 hours"
+     ]
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a top-level preview key neither shown nor bound (note) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    },
+    "note": "bring sunscreen"
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a nested preview key neither shown nor bound (price.currency) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty",
+     "currency": "INR"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "an empty object beside the shown ones is a key neither shown nor bound -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    },
+    "extras": {}
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a preview key that is not a path segment (a.b) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours",
+     "a.b": "x"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound preview path missing (with the request) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "requestOnly": true,
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound value differs from the request -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-9",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "requestOnly": true,
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound request path missing -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2
+   },
+   "requestOnly": true,
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound value equal in text but not in type (2 vs \"2\") -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": "2",
+    "slotId": "s-0700"
+   },
+   "requestOnly": true,
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound value equal in Python but not in JSON (true vs 1) -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 1,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": true,
+    "slotId": "s-0700"
+   },
+   "requestOnly": true,
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a newline in total: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200\npay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a carriage return in item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak\r2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a line separator U+2028 in item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak\u20282 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a zero-width space in when: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct\u200b 07:00"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a bidi override in shared: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: \u202eSunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a tab in shared: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name:\tSunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "exactly 278 code points in total: fits",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "4fdbea7a8e85ac77063b9d705c45518085ff380ed1bfd180a1d0d774f37528eb",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "279 code points in total: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "280 code points in total: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "281 code points in total: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "item: two lines that For Kicks' Order row would fit (U+000A drawn as 3): not minimal here",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "an empty total: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": ""
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a shared of spaces only: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "   ",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a total of spaces only: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": " "
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a return arrow U+21B5 in item (fakes core's line mark): not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak \u21b5 2 \u00d7 Paddle"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a halfwidth arrow U+FFE9 (NFKC arrow) in item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak \uffe9 2 \u00d7 Paddle"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a return arrow U+21B5 in shared (every string): not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird \u21b5",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a control picture U+2424 in when: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct \u2424 07:00"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "an empty line inside item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak\n\n2 \u00d7 Paddle"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a trailing newline in item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak\n"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a guillemet U+00AB in when (core marks it): not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct \u00ab07:00"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a return symbol U+23CE in item: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Kayak \u23ce 2 \u00d7 Paddle"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a no-break space in shared: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display\u00a0name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "three combining marks in a row: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Cafe\u0301\u0301\u0301 tour"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a variation selector (default-ignorable) in when: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct\ufe0f 07:00"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "a Hangul filler in shared: not minimal",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: \u3164",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "four fitting strings whose summary passes 4096 UTF-8 bytes: the summary is too long",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f"
+    },
+    "price": {
+     "text": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f"
+    },
+    "slot": {
+     "text": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f"
+    },
+    "sharedWith": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f",
+    "total": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f",
+    "when": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f",
+    "shared": "\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f\ud83c\udf3f"
+   },
+   "payloadHash": "18370cbc21a8b1c8209f1931f93feadb7664ecd9b942cd914add4ddc960ad99e",
+   "summaryError": "approval_card_too_long"
+  },
+  {
+   "name": "four fitting strings whose escaped summary passes 3000 bytes: the summary is too long",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+    },
+    "price": {
+     "text": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+    },
+    "slot": {
+     "text": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+    },
+    "sharedWith": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "total": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "when": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "shared": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+   },
+   "payloadHash": "cfaea24e0c6ea349a14d3786498cfc563f0805d09a4a6177638b69c04e64c873",
+   "summaryError": "approval_card_too_long"
+  },
+  {
+   "name": "a summary at exactly 3000 escaped bytes: fits",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "price": {
+     "text": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+    },
+    "slot": {
+     "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    },
+    "sharedWith": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "total": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "when": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    "shared": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+   },
+   "payloadHash": "bafe93d64e029232f6d78e7c83ed4a8cffb5e1441b765e6a74be0e0e40b84bac",
+   "summary": "What: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nTotal: &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\nWhen & where: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\nShared with: &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+  },
+  {
+   "name": "a summary at 3001 escaped bytes: the summary is too long",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "price": {
+     "text": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+    },
+    "slot": {
+     "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    },
+    "sharedWith": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "card": {
+    "item": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "total": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&",
+    "when": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    "shared": "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"
+   },
+   "payloadHash": "9b76c1bfb2d8d95f4c3d1ae0f1a80df67367f347da5f38281c3b26c539124f19",
+   "summaryError": "approval_card_too_long"
+  },
+  {
+   "name": "an unshown object chain 8 deep -> invalid",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    },
+    "a": {
+     "b": {
+      "c": {
+       "d": {
+        "e": {
+         "f": {
+          "g": {
+           "h": "x"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "a bound object chain 8 deep is covered whole",
+   "declaration": {
+    "item": "rental.summary",
+    "total": "price.text",
+    "when": "slot.text",
+    "shared": "sharedWith",
+    "bind": [
+     [
+      "kayakId",
+      "request.kayakId"
+     ],
+     [
+      "hours",
+      "request.hours"
+     ],
+     [
+      "slotId",
+      "request.slotId"
+     ],
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "preview": {
+    "rental": {
+     "summary": "1 \u00d7 Sit-on-top kayak, 2 hours"
+    },
+    "price": {
+     "text": "\u20b91200, pay at the jetty"
+    },
+    "slot": {
+     "text": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty"
+    },
+    "sharedWith": "Your display name: Sunbird",
+    "request": {
+     "kayakId": "k-2",
+     "hours": 2,
+     "slotId": "s-0700"
+    },
+    "a": {
+     "b": {
+      "c": {
+       "d": {
+        "e": {
+         "f": {
+          "g": {
+           "h": "x"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "request": {
+    "kayakId": "k-2",
+    "hours": 2,
+    "slotId": "s-0700",
+    "a": {
+     "b": {
+      "c": {
+       "d": {
+        "e": {
+         "f": {
+          "g": {
+           "h": "x"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "card": {
+    "item": "1 \u00d7 Sit-on-top kayak, 2 hours",
+    "total": "\u20b91200, pay at the jetty",
+    "when": "Sat 24 Oct 2026, 07:00 \u00b7 North jetty",
+    "shared": "Your display name: Sunbird"
+   },
+   "payloadHash": "68e30c06ffe7f96a3189c4448f9125d569d2a59d8d5ed853bbcbb213273cb129",
+   "summary": "What: 1 \u00d7 Sit-on-top kayak, 2 hours\nTotal: \u20b91200, pay at the jetty\nWhen & where: Sat 24 Oct 2026, 07:00 \u00b7 North jetty\nShared with: Your display name: Sunbird"
+  },
+  {
+   "name": "cp: a generic order: four strings by path, items and location bound",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "card": {
+    "item": "2 \u00d7 Masala chai",
+    "total": "\u20b9120, pay by UPI",
+    "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+    "shared": "Resident"
+   },
+   "payloadHash": "b707e08e75093cf067bc2f729200547901530d4ed8feb4ce07116c41447d6785",
+   "summary": "What: 2 \u00d7 Masala chai\nTotal: \u20b9120, pay by UPI\nWhen & where: Acme Kiosk \u00b7 23 Oct 2026, 10:30\nShared with: Resident"
+  },
+  {
+   "name": "cp: non-ASCII strings stay whole",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "R\u00e9sidente \u0928\u092e\u0938\u094d\u0924\u0947"
+    }
+   },
+   "card": {
+    "item": "2 \u00d7 Masala chai",
+    "total": "\u20b9120, pay by UPI",
+    "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+    "shared": "R\u00e9sidente \u0928\u092e\u0938\u094d\u0924\u0947"
+   },
+   "payloadHash": "8411a673a76b2e3bb4182926ebd255adf2082fa035f161be005e2a0790777ee7",
+   "summary": "What: 2 \u00d7 Masala chai\nTotal: \u20b9120, pay by UPI\nWhen & where: Acme Kiosk \u00b7 23 Oct 2026, 10:30\nShared with: R\u00e9sidente \u0928\u092e\u0938\u094d\u0924\u0947"
+  },
+  {
+   "name": "cp: a bound path covers its whole subtree",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": {
+      "anything": [
+       1,
+       {
+        "deep": true
+       }
+      ]
+     }
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "card": {
+    "item": "2 \u00d7 Masala chai",
+    "total": "\u20b9120, pay by UPI",
+    "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+    "shared": "Resident"
+   },
+   "payloadHash": "b707e08e75093cf067bc2f729200547901530d4ed8feb4ce07116c41447d6785",
+   "summary": "What: 2 \u00d7 Masala chai\nTotal: \u20b9120, pay by UPI\nWhen & where: Acme Kiosk \u00b7 23 Oct 2026, 10:30\nShared with: Resident"
+  },
+  {
+   "name": "cp: a preview key neither shown nor bound -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ],
+     "note": "extra"
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: a top-level key neither shown nor bound -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    },
+    "tracking": "t-1"
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: an empty object neither shown nor bound -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    },
+    "meta": {}
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: an array neither shown nor bound -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    },
+    "extras": []
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: a missing path -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: a number where a string is declared -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": 120,
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: an object where a string is declared -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": {
+      "first": "Resident"
+     }
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: null where a string is declared -> invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": null
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: exactly 278 code points: fits",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "card": {
+    "item": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "total": "\u20b9120, pay by UPI",
+    "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+    "shared": "Resident"
+   },
+   "payloadHash": "038633b0d6349d1a6f01ab4ebbde27fd33485cfca13c9dba3e82014485aafe45",
+   "summary": "What: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nTotal: \u20b9120, pay by UPI\nWhen & where: Acme Kiosk \u00b7 23 Oct 2026, 10:30\nShared with: Resident"
+  },
+  {
+   "name": "cp: 279 code points: not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: an empty string: not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": ""
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: a newline in any string: not minimal (no row carries lines)",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai\n1 \u00d7 Bun",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: a refused character (U+00AB, core's mark opener): not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00ab 23 Oct",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: three combining marks in a row: not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Re\u0301\u0301\u0301sident"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: one combining mark: fits",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Re\u0301sident"
+    }
+   },
+   "card": {
+    "item": "2 \u00d7 Masala chai",
+    "total": "\u20b9120, pay by UPI",
+    "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+    "shared": "Re\u0301sident"
+   },
+   "payloadHash": "b91adc35ed2dde23ff9c350a96b85d5b02260bd22406f80a412b1142d00fd2dd",
+   "summary": "What: 2 \u00d7 Masala chai\nTotal: \u20b9120, pay by UPI\nWhen & where: Acme Kiosk \u00b7 23 Oct 2026, 10:30\nShared with: Re\u0301sident"
+  },
+  {
+   "name": "cp: a zero-width space: not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident\u200b"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: a no-break space: not minimal",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "2 \u00d7 Masala chai",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ]
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident\u00a0A"
+    }
+   },
+   "error": "approval_card_not_minimal"
+  },
+  {
+   "name": "cp: structure before fit: an unshown key beside a long string is invalid",
+   "declaration": {
+    "item": "order.summary",
+    "total": "order.total",
+    "when": "pickup.when",
+    "shared": "shared.name",
+    "bind": [
+     [
+      "items",
+      "order.items"
+     ],
+     [
+      "locationId",
+      "pickup.locationId"
+     ]
+    ]
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "order": {
+     "summary": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "total": "\u20b9120, pay by UPI",
+     "items": [
+      {
+       "sku": "chai",
+       "qty": 2
+      }
+     ],
+     "note": "x"
+    },
+    "pickup": {
+     "when": "Acme Kiosk \u00b7 23 Oct 2026, 10:30",
+     "locationId": "kiosk-1"
+    },
+    "shared": {
+     "name": "Resident"
+    }
+   },
+   "error": "approval_card_invalid"
+  },
+  {
+   "name": "cp: a flat preview: the four strings at the top, nothing bound",
+   "declaration": {
+    "item": "what",
+    "total": "total",
+    "when": "when",
+    "shared": "shared",
+    "bind": []
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "what": "1 \u00d7 Ticket",
+    "total": "\u20b90",
+    "when": "Fri 24 Oct, 18:00 \u00b7 Main hall",
+    "shared": "Resident"
+   },
+   "card": {
+    "item": "1 \u00d7 Ticket",
+    "total": "\u20b90",
+    "when": "Fri 24 Oct, 18:00 \u00b7 Main hall",
+    "shared": "Resident"
+   },
+   "payloadHash": "55d7a5398076f0347157a14c31b5bf6b83a3834a4292117523643ced35b78293",
+   "summary": "What: 1 \u00d7 Ticket\nTotal: \u20b90\nWhen & where: Fri 24 Oct, 18:00 \u00b7 Main hall\nShared with: Resident"
+  },
+  {
+   "name": "cp: a key that is no path segment -> invalid",
+   "declaration": {
+    "item": "what",
+    "total": "total",
+    "when": "when",
+    "shared": "shared",
+    "bind": []
+   },
+   "preview": {
+    "appId": "acme",
+    "operation": "acme.order.confirm",
+    "draftId": "d-acme-1",
+    "what": "1 \u00d7 Ticket",
+    "total": "\u20b90",
+    "when": "Fri",
+    "shared": "Resident",
+    "a-b": "x"
+   },
+   "error": "approval_card_invalid"
+  }
+ ]
+}

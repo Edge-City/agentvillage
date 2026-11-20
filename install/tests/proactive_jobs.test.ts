@@ -172,9 +172,11 @@ describe("the seven proactive jobs (DATA-314, DATA-430)", () => {
     const followUpPrompt = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "negotiation")!);
     expect(followUpPrompt).not.toMatch(/reply met|not useful|missed/i);
     expect(followUpPrompt).toContain("Ask nothing about how it went");
+    // Suggestion rating cards: the evening prompt no longer carries the text question; the av-rate
+    // plugin sends button cards instead, and the old sentence lives on only behind AV_OUTCOME_TEXT_ASK.
     const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
-    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else.");
-    expect(evening).toContain("`Did you and <name> meet? Reply met, not useful, or missed.`");
+    expect(evening).not.toContain("outcomeQuestion");
+    expect(evening).not.toMatch(/reply met|not useful|missed/i);
     expect(outcomeQuestion("Maya")).toBe("Did you and Maya meet? Reply met, not useful, or missed.");
   });
 
@@ -209,10 +211,7 @@ describe("the seven proactive jobs (DATA-314, DATA-430)", () => {
     const arms = (reply: string) => pattern.test(normalise(reply));
     for (const { reply } of seed.cases.arm as Array<{ reply: string }>) expect([reply, arms(reply)]).toEqual([reply, true]);
     for (const reply of seed.cases.unarmed as string[]) expect([reply, arms(reply)]).toEqual([reply, false]);
-    // The sentence the evening prompt pins, with a name in it, and the trigger's own question: exactly, with no normalising.
-    const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
-    const sentence = evening.match(/`(Did you and <name> meet\? [^`]+)`/)![1];
-    expect(pattern.test(sentence.replace("<name>", "Maya"))).toBe(true);
+    // The trigger's own question (the text path, behind AV_OUTCOME_TEXT_ASK): exactly, with no normalising.
     expect(pattern.test(outcomeQuestion("Maya"))).toBe(true);
     expect(pattern.test(outcomeQuestion("M".repeat(40)))).toBe(true);
     expect(arms(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);

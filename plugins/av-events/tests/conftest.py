@@ -76,12 +76,13 @@ AV_ENV_VARS = (
     "AV_EVENTS_NEGOTIATOR_LLM_SCOPE",
     "AV_MORALMOD_OWN_KEY",
     "MORALMOD_LLM_API_KEY",
-    # PRAYER P3: the `pray` tool.
-    "AV_PRAY",
+    # The control plane's origin, read by the cp tools (ask_village, ask_odin, search_village, query_village).
     "CONTROL_PLANE_URL",
     # ASK-VILLAGE: the `ask_village` tool.
     "AV_ASK_VILLAGE",
     "EDGEOS_API_KEY",
+    # ODIN-ASK: the `ask_odin` tool.
+    "AV_ASK_ODIN",
     # VILLAGE SEARCH: the `search_village` tool.
     "AV_SEARCH_VILLAGE",
     # R-DEON: the village tools kept out of Hermes's tool_search bridge.

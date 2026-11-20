@@ -16,6 +16,7 @@ A short, warm note the user can read in under a minute, written for this user. I
    - When `connections.names` is not empty, one line naming them in plain text, for example "Among them: Maya, Arjun and Lena."
    - Always, as the last line of this part: `Connections: ` followed by `connections.link` exactly as given.
 5. When `approvalsWaiting` is above 0, one plain line: "N things are waiting for your yes or no in your approvals." When it is 1: "One thing is waiting for your yes or no in your approvals." Write only the count; never describe or guess what they are, and do not ask the user to approve anything here.
+   After that count line, include: `Open approvals chat: https://t.me/AgentVillageApprovalsBot`
 6. One line: `Agent Village: ` followed by `villageLink` exactly as given. Write it once, and nowhere else in the brief.
 7. Optionally, one short closing question that invites the user to correct or sharpen your read of what they care about today. It is about them and the day, never about configuring you.
 

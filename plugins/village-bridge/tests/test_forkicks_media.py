@@ -36,11 +36,17 @@ class MenuSkillTest(unittest.TestCase):
     def test_menu_requests_default_to_images_with_verbatim_markers_and_explicit_fallback(self):
         skill = (Path(__file__).resolve().parents[3] / "skills/forkicks/SKILL.md").read_text()
         guidance = skill.split("## Menu and places\n", 1)[1].split("## Prepare", 1)[0]
-        defaults = guidance.split("For an explicit text-only request", 1)[0]
-        for phrase in ("Show me the menu", "What's on the menu?", "What do you have?"):
+        defaults = guidance.split("A structured menu read", 1)[0]
+        for phrase in ("Tell me about", "What's on the menu?", "What do you have?"):
             self.assertIn(phrase, defaults)
-        self.assertIn('{"operation":"forkicks.menu","format":"image"}` by default', defaults)
-        self.assertIn("do not require the resident to say “image”", defaults)
+        self.assertIn('{"operation":"forkicks.menu","format":"image"}`', defaults)
+        self.assertIn("**complete current menu as images**", defaults)
+        self.assertIn("send **every returned", defaults)
+        self.assertIn("board page** before any item list or recommendation", defaults)
+        self.assertIn("not a selected list of drinks", defaults)
+        self.assertIn("Do not ask whether they", defaults)
+        self.assertIn("pick only the first page", defaults)
+        self.assertIn("does not fulfil a resident's question", guidance)
         self.assertIn("Copy **every returned MEDIA line verbatim**", guidance)
         self.assertIn("each on its own line outside JSON/code/quotes", guidance)
         self.assertIn("explicitly say the image\nfailed", guidance)

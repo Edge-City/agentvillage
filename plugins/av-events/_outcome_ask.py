@@ -85,6 +85,11 @@ STAGED_JOBS = {"Edge — evening questions": "evening"}
 #: The one action that stages today.
 ACTION = "evening"
 
+#: Superseded by the suggestion rating cards (plugins/av-rate; data docs/design/suggestion-rating.md):
+#: arming, the answer and the pass run only with this on (`_core.env_flag_on`), default off, for one
+#: release, then this module goes.
+TEXT_ASK_SWITCH = "AV_OUTCOME_TEXT_ASK"
+
 #: Fixed by this code, never taken from a file.
 ASKED_BY = "outcome_cron"
 WINDOW_DAYS = 1
