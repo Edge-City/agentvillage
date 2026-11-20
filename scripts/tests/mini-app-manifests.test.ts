@@ -23,9 +23,11 @@ import { REVIEWED_MINI_APPS, validateProjection } from "../../install/install_mi
 // Nothing on a box reads these files yet (no skill, plugin or installer step): data only, no roll.
 //   bun test scripts/tests/mini-app-manifests.test.ts
 
-const MODULE_SHA256 = "777542ef0eb3145be81badb8a1383638a0a000dc3b725d307239f3c52f55df88";
+const MODULE_SHA256 = "a91cdab00f3067a3c14381ecb427e49d5e292504bf0befc337edb291b5b7c537";
 const SCHEMA_SHA256 = "13de632e759feb71a02694b9a10335b2662ab6e5d27393927623fab0757f8a92";
-const PINS_SHA256 = "108a8598fb8fe95afa012fbc812b6caa42960a10cef0bfa5342ad67f85fec0e1";
+const PINS_SHA256 = "6b05818658bf4773cc0ac43851e9c6aa8e8be46744e4630a84453ffe99da5a88";
+// STAFF MARK 3-REPO (v2.1.17, lead L24457): the ids FIRST_PARTY grants `staff` (ov#411 Gold Stars; For Kicks and Mosaic).
+const STAFF_GRANTED = ["gold-stars", "forkicks", "mosaic"];
 const REPO = join(import.meta.dir, "..", "..");
 const DIR = join(REPO, "mini-apps");
 const m = createRequire(import.meta.url)("../mini-apps-manifests.cjs");
@@ -156,16 +158,19 @@ describe("mini-apps/: the published catalog", () => {
   test("service.kind none: Mosaic's manifest serves the installer's two Mosaic lists, no mcp block; every other form is refused", () => {
     const mosaic = manifest("mosaic");
     expect(mosaic).toMatchObject({ service: { kind: "none" }, operations: [], data: { context: { maxEntries: 12 } } });
-    expect(m.FIRST_PARTY.mosaic).toEqual({ none: true });
+    expect(m.FIRST_PARTY.mosaic).toEqual({ none: true, staff: true });
     expect(Object.entries(m.FIRST_PARTY).filter(([, grant]: [string, any]) => Object.hasOwn(grant, "none")).map(([id]) => id)).toEqual(["mosaic"]);
     const base = m.v1Entry(mosaic), context = m.v1Entry(mosaic, { person: true, context: true });
     expect([base.operations, context.operations]).toEqual([["mini-app.read"], ["mini-app.read", "mini-app.context.read", "mini-app.context.write"]]);
+    // MOSAIC FOR EVERYONE (review-a S3, cp#417): `"visibility": "everyone"`, so neither entry is restricted.
+    expect(mosaic.visibility).toBe("everyone");
     for (const entry of [base, context]) {
-      expect([entry.restricted, entry.data, Object.hasOwn(entry, "mcp")]).toEqual([true, { context: { maxEntries: 12 } }, false]);
+      expect([Object.hasOwn(entry, "restricted"), entry.staff, entry.data, Object.hasOwn(entry, "mcp")]).toEqual([false, true, { context: { maxEntries: 12 } }, false]);
       const projection = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: entry.operations, skills: entry.skills }] };
       expect(validateProjection(projection)).toEqual(projection);
     }
-    const as = (id: string) => (x: any) => { x.id = id; x.skills = [{ ...x.skills[0], name: id, path: `skills/${id}/SKILL.md` }]; };
+    // Mosaic's manifest under another id, less Mosaic's staff mark (its grant too, v2.1.17): each case fails for its one reason.
+    const as = (id: string) => (x: any) => { delete x.staff; x.id = id; x.skills = [{ ...x.skills[0], name: id, path: `skills/${id}/SKILL.md` }]; };
     const cases: [string, (x: any) => void, string[]][] = [
       ["a third party", as("acme-notes"), ["/service/kind none_first_party_only"]],
       ["dizko (first party, not granted)", as("dizko"), ["/service/kind none_first_party_only"]],
@@ -279,6 +284,8 @@ describe("the validator: secretRef, baseUrl hosts, nesting depth", () => {
     }
     x.skills = [{ ...x.skills[0], name: "acme", path: "skills/acme/SKILL.md" }];
     x.service.auth.secretRef = "MINI_APP_ACME_TOKEN";
+    // Nor For Kicks' staff mark (its pinned grant too, v2.1.17).
+    delete x.staff;
     return x;
   };
 
@@ -381,9 +388,10 @@ describe("the validator, fold 2: staff and listed, every endpoint field, linear 
       const today = json(m.v1Entry(plain(id), { person: true, context: true }));
       for (const marks of [{ staff: false }, { listed: true }, { staff: false, listed: true }])
         expect([id, json(m.v1Entry({ ...plain(id), ...marks }, { person: true, context: true }))]).toEqual([id, today]);
-      // Only gold-stars may say staff, and only staff: true (the pinned grant); listed, if present, is false.
+      // Only a granted id may say staff, and only staff: true (the pinned grant); each of the three does. listed, if present, is false.
       const real = manifest(id);
-      if (Object.hasOwn(real, "staff")) expect([id, real.staff]).toEqual(["gold-stars", true]);
+      expect([id, Object.hasOwn(real, "staff")]).toEqual([id, STAFF_GRANTED.includes(id)]);
+      if (Object.hasOwn(real, "staff")) expect([id, real.staff]).toEqual([id, true]);
       if (Object.hasOwn(real, "listed")) expect([id, real.listed]).toEqual([id, false]);
       expect(reasons(m.validateManifest(real))).toEqual([]);
     }
@@ -393,7 +401,7 @@ describe("the validator, fold 2: staff and listed, every endpoint field, linear 
   });
 
   test("S1 (security finding): staff comes from the pinned grant alone; listed: false is open to any app and never raises visibility", () => {
-    expect(Object.entries(m.FIRST_PARTY).filter(([, grant]: [string, any]) => grant.staff === true).map(([id]) => id)).toEqual(["gold-stars"]);
+    expect(Object.entries(m.FIRST_PARTY).filter(([, grant]: [string, any]) => grant.staff === true).map(([id]) => id)).toEqual(STAFF_GRANTED);
     const acme = plain("forkicks");
     acme.id = "acme";
     for (const op of acme.operations) { op.name = op.name.replace(/^forkicks\./, "acme."); if (op.approval) op.approval.prepare = op.approval.prepare.replace(/^forkicks\./, "acme."); }
@@ -401,13 +409,19 @@ describe("the validator, fold 2: staff and listed, every endpoint field, linear 
     acme.service.auth.secretRef = "MINI_APP_ACME_TOKEN";
     expect(reasons(m.validateManifest(acme))).toEqual([]);
     expect(reasons(m.validateManifest({ ...acme, staff: true }))).toEqual(["/staff staff_reserved"]);
-    for (const id of index.apps.filter((id: string) => id !== "gold-stars"))
+    for (const id of index.apps.filter((id: string) => !STAFF_GRANTED.includes(id)))
       expect([id, reasons(m.validateManifest({ ...plain(id), staff: true }))]).toEqual([id, ["/staff staff_reserved"]]);
+    // v2.1.17: For Kicks and Mosaic are granted: saying it is valid, served staff, and their real manifests say it.
+    for (const id of ["forkicks", "mosaic"]) {
+      expect([id, reasons(m.validateManifest({ ...plain(id), staff: true }))]).toEqual([id, []]);
+      expect([id, m.v1Entry({ ...plain(id), staff: true }).staff, m.v1Entry(manifest(id)).staff]).toEqual([id, true, true]);
+      expect([id, Object.hasOwn(m.v1Entry(plain(id)), "staff")]).toEqual([id, false]);
+    }
     expect(m.v1Entry({ ...plain("gold-stars"), staff: true }).staff).toBe(true);
     expect(Object.hasOwn(m.v1Entry(plain("gold-stars")), "staff")).toBe(false);
     expect(Object.hasOwn(m.v1Entry(manifest("gold-stars")), "staff")).toBe(manifest("gold-stars").staff === true);
     // Nothing adds it: v1Entry on a manifest that never passed the validator writes no staff either.
-    for (const x of [{ ...acme, staff: true }, { ...plain("forkicks"), staff: true }]) expect(Object.hasOwn(m.v1Entry(x), "staff")).toBe(false);
+    for (const x of [{ ...acme, staff: true }, { ...plain("dizko"), staff: true }, { ...plain("zzzbot"), staff: true }]) expect(Object.hasOwn(m.v1Entry(x), "staff")).toBe(false);
     for (const x of [{ ...acme, listed: false }, ...index.apps.map((id: string) => ({ ...plain(id), listed: false }))])
       expect([x.id, reasons(m.validateManifest(x)), m.v1Entry(x).listed]).toEqual([x.id, [], false]);
     for (const visibility of ["sandbox", "admins"]) {
