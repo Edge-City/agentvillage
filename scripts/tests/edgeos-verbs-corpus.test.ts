@@ -8,7 +8,9 @@
  * (src/cli/hook.ts refineCredentialReads) adds `account.credential` (human-only under the template) to a
  * reader whose words it cannot expand when the working directory holds credential material, so the v2.1.9
  * curl recipes (`-H "Authorization: Bearer $EDGEOS_API_KEY"`) were denied on every default box. The
- * skill's script runs carry no `$` word: the scripts read the key themselves.
+ * skill's script runs carry no `$` word: the scripts read the key themselves. Core 0.4.7 (APRV-533) stopped
+ * reading a literal `-H` or a `--url` value as a file read, so from 0.4.7 on those v2.1.9 recipes are
+ * `network.call` from the Hermes folder too; `-H @FILE` is still a read of FILE.
  *
  * The box: a temp HOME with `.hermes/` (HERMES_HOME) holding `config.yaml`, a `.env` with dummy values
  * (`EDGEOS_API_KEY=example-not-a-key`; nothing real) and the skill's scripts at `skills/edgeos/scripts/`
@@ -17,7 +19,8 @@
  * review-b's organ-probe2.mjs does. Each command is sent as a Hermes `terminal` pre_tool_call with
  * `workdir` = HERMES_HOME (the box default; the assertion) and `workdir` = the home directory (recorded
  * only: the scripts' relative paths resolve from the Hermes folder alone, so the skill never sends them
- * from `~`). A positive control proves the probe sees the block: the v2.1.9 RSVP curl from HERMES_HOME
+ * from `~`). A positive control proves the probe sees the block: the v2.1.9 RSVP curl with its header
+ * read from the box's `.env` (`-H @.env`, a credential read under every core since 0.4.6) from HERMES_HOME
  * must be denied.
  *
  * It needs an approval-md checkout BUILT at the pinned version (`dist/src/cli/main.js`) named by
@@ -124,9 +127,14 @@ function verbRuns(): [string, string][] {
   return out;
 }
 
-/** The v2.1.9 RSVP recipe (continuations joined): the positive control. */
-const LEGACY_RSVP =
-  'curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" -H "Content-Type: application/json" ' +
+/**
+ * The positive control: the v2.1.9 RSVP recipe (continuations joined) with its Authorization header read from
+ * the box's `.env` (`-H @.env`). APRV-533 (core 0.4.7): curl opens a file for `-H` only as `-H @FILE`, so the
+ * literal header of the v2.1.9 recipe is no longer a credential read and that recipe is `network.call` from
+ * HERMES_HOME; `-H @.env` is judged as before, `account.credential` there, under 0.4.6, 0.4.7 and 0.4.8 alike.
+ */
+const CONTROL =
+  'curl -s -X POST -H @.env -H "Content-Type: application/json" ' +
   '--url "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/3fa85f64-5717-4562-b3fc-2c963f66afa6" -d \'{}\'';
 
 interface Box {
@@ -204,7 +212,7 @@ describe.skipIf(!HAVE_CORE)("the real approval hook allows every edgeos skill co
     expect(JSON.parse(readFileSync(join(CORE, "package.json"), "utf8")).version).toBe(APPROVAL_MD_PINNED);
   });
 
-  test("every command: allowed with workdir = HERMES_HOME; the v2.1.9 curl is denied there (control)", async () => {
+  test("every command: allowed with workdir = HERMES_HOME; a curl reading .env (-H @.env) is denied there (control)", async () => {
     const b = box();
     const commands = skillCommands();
     expect(commands.length).toBeGreaterThanOrEqual(11 + 4 + 2 + 3);
@@ -221,8 +229,8 @@ describe.skipIf(!HAVE_CORE)("the real approval hook allows every edgeos skill co
     }
     // approval N1: the class of every skill command, so the class-diff table reads off this test.
     expect([...new Set(classes)]).toEqual(["exec.local"]);
-    const control = hook(b, LEGACY_RSVP, b.hermes);
-    rows.push(`control\thh=${control.exit}\t-\t${LEGACY_RSVP}`);
+    const control = hook(b, CONTROL, b.hermes);
+    rows.push(`control\thh=${control.exit}\t-\t${CONTROL}`);
     if (process.env.EDGEOS_CORPUS_PRINT) console.log(rows.join("\n"));
     // The class-diff table, v2.1.9 curl -> v2.1.10 verb, per recipe (ov#437 PR body "Class change").
     const diff: string[] = ["recipe\tv2.1.9 class from HERMES_HOME (hook exit)\tv2.1.9 class from ~ (hook exit)\tv2.1.10 class (hook exit from HERMES_HOME)"];
@@ -233,13 +241,16 @@ describe.skipIf(!HAVE_CORE)("the real approval hook allows every edgeos skill co
       const old = LEGACY[heading];
       const oldHh = await classesOf(old, b.hermes, b.hermes);
       const oldHome = await classesOf(old, b.home, b.hermes);
-      expect([heading, oldHh]).toEqual([heading, "account.credential+network.call"]);
+      // APRV-533 (core 0.4.7): a literal -H value and a --url value are not credential reads, so the v2.1.9
+      // curl is network.call from HERMES_HOME as from ~ (0.4.6 gave account.credential+network.call there).
+      expect([heading, oldHh]).toEqual([heading, "network.call"]);
       expect([heading, oldHome]).toEqual([heading, "network.call"]);
       diff.push(`${heading}\t${oldHh} (${hook(b, old, b.hermes).exit})\t${oldHome} (${hook(b, old, b.home).exit})\t${await classesOf(command, b.hermes, b.hermes)} (${hook(b, command, b.hermes).exit})`);
     }
     expect([...seen].sort()).toEqual(Object.keys(LEGACY).sort());
     if (process.env.EDGEOS_CORPUS_PRINT) console.log(diff.join("\n"));
     expect(held).toEqual([]);
+    expect(await classesOf(CONTROL, b.hermes, b.hermes)).toBe("account.credential+network.call");
     expect(control.exit).not.toBe(0);
     expect(control.out).toContain("account.credential");
   }, 600_000);
