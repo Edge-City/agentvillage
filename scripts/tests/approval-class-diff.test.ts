@@ -45,7 +45,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
@@ -187,9 +187,18 @@ describe("the class-diff job and script (static)", () => {
         expect(e.tool).toBe("village");
         const op = String(e.input?.operation);
         const appId = e.input?.appId as string | undefined;
-        const manifests = ["dizko", "forkicks", "gold-stars", "mosaic", "slopfolio", "zzzbot"].map((id) => JSON.parse(readFileSync(join(REPO, "mini-apps", id, "manifest.json"), "utf8")) as { id: string; operations: { name: string; target?: { tool: string } }[]; data?: unknown });
+        // Every mini-app this tree ships (each mini-apps/<id>/manifest.json), not a fixed list: main adds apps
+        // (eci-volunteers, kismet, ...) whose operations expected.json declares.
+        const manifests = readdirSync(join(REPO, "mini-apps"), { withFileTypes: true })
+          .filter((d) => d.isDirectory() && existsSync(join(REPO, "mini-apps", d.name, "manifest.json")))
+          .map((d) => JSON.parse(readFileSync(join(REPO, "mini-apps", d.name, "manifest.json"), "utf8")) as { id: string; operations: { name: string; target?: { tool: string } }[]; data?: unknown });
         const named = manifests.some((m) => m.operations.some((o) => o.name === op || (op === "mini-app.read" && m.id === appId && o.target?.tool === e.input?.tool)) || (op.startsWith("mini-app.context.") && m.id === appId && m.data !== undefined));
-        expect(named).toBe(true);
+        // Or an operation of the village tool's own schema enum that no manifest carries (approval.md's
+        // extractor gives each such operation one envelope, B-167N M2): zzz.schedule_posts today.
+        const bridge = readFileSync(join(REPO, "plugins", "village-bridge", "__init__.py"), "utf8");
+        const enumText = bridge.match(/"operation": \{"type": "string", "enum": \[([^\]]*)\]\}/)?.[1] ?? "";
+        const inEnum = [...enumText.matchAll(/"([^"]+)"/g)].some((m) => m[1] === op);
+        expect([op, named || inEnum]).toEqual([op, true]);
         keys.add(`${op}:${appId ?? ""}.${String(e.input?.tool ?? "")}`);
       }
       const limiting = [e, ...(e.propose ? [e.propose] : [])].some((l) => l.decision !== "auto" || l.class === "marketplace.app.action");
