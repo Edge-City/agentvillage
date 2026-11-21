@@ -1,6 +1,6 @@
 /**
- * The approval.md CLASS-DIFF release gate on the overlay side (B-167, lead
- * ruling CLAIMS L15681 (1), EDGEOS-BLOCK): scripts/approval-class-diff.sh and
+ * The approval.md CLASS-DIFF release gate on the overlay side (B-167, the
+ * release ruling, EDGEOS-BLOCK): scripts/approval-class-diff.sh and
  * the `class-diff` job in .github/workflows/test.yml.
  *
  * Always: the job runs the script against the PR's base or, on a push or a Tag

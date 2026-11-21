@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CLASS-DIFF of this overlay's shipped calls between the approval.md core the
-# base pins and the core this tree pins (B-167 release gate, lead ruling
-# CLAIMS L15681 (1); EDGEOS-BLOCK).
+# base pins and the core this tree pins (B-167 release gate, the release
+# ruling; EDGEOS-BLOCK).
 #
 # One source of truth: the extractor and the check are approval.md's own
 # (scripts/overlay-recipes-extract.mjs, scripts/overlay-recipes-check.mjs,

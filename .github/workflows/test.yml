@@ -197,7 +197,7 @@ jobs:
         env:
           AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
 
-  # CLASS-DIFF release gate (B-167; lead ruling CLAIMS L15681 (1); EDGEOS-BLOCK).
+  # CLASS-DIFF release gate (B-167, the release ruling; EDGEOS-BLOCK).
   #
   # Core 0.4.6 reached the boxes on 19 Oct and every EdgeOS recipe this overlay
   # ships moved from auto (network.call) to a human-only deny (policy.core):
