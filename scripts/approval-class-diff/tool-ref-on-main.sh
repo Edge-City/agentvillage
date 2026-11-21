@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The approval.md tool ref must be a commit approval.md main pointed at, at or above the
-# floor, and the clone must be exactly that commit (B-167N fold 1 M4, review-b's refute
-# CLAIMS L18667, lead RULING L18671; fold 2 S-D1 + M-D1, review-b's DELTA L18777, lead
-# RULING L18781).
+# floor, and the clone must be exactly that commit (B-167N fold 1 M4, from the review's refute
+# and its ruling; fold 2 S-D1 + M-D1, from the review's delta and its ruling).
 #
 # The check compares the overlay's expected.json with the copy approval.md pins
 # (scripts/overlay-recipes/expected.json, PIN_EXPECTED in its ci.yml), read from the
@@ -11,7 +10,7 @@
 #
 # - First-parent of main (fold 2 S-D1): approval.md's merge queue merges with merge
 #   commits, so every commit pushed to a PR branch that later merged is an ANCESTOR of
-#   main (1828 of 2519 on 2026-10-21; review-b's 34741830 passed fold 1). Only main's
+#   main (1828 of 2519 on 2026-10-21; the review's 34741830 passed fold 1). Only main's
 #   first-parent line is the states main itself held: a merge result the queue built
 #   and tested, never an intermediate branch commit whose bytes no reviewer saw as a
 #   whole. (A queue group of several PRs also puts its in-between merge results on
@@ -21,7 +20,7 @@
 #   main's head when this was written; move it to the commit that merges #668 when the
 #   ref moves there.
 # - Intact (fold 2 M-D1): tool-intact.sh, so a clone whose files were changed after
-#   checkout (review-b: a dirty tree on a main commit passed fold 1) fails here.
+#   checkout (the review: a dirty tree on a main commit passed fold 1) fails here.
 #
 # Ancestry is read with git over the fixed https URL, not the GitHub compare API: the
 # API answers ancestry only (which the first-parent test implies) and cannot tell a

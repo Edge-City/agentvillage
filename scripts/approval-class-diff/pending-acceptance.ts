@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * B-167N fold 1 S2 (review-b's refute, CLAIMS L18667; lead RULING L18671): an
+ * B-167N fold 1 S2 (the review's refute and its ruling): an
  * acceptance Carter has not dated yet must never turn main red and halt Tag release
  * (tag-release.yml's tag job needs a green test.yml), and must never let a new
  * limitation ship unaccepted.
@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
  * The exact message approval.md's acceptanceErrorsN gives an undated accepted_at, under the
  * LIMITING label limitingReasons builds (overlay-recipes-newcalls.mjs, ce36c9d9: 161-171, 463):
  * the label holds no parenthesis, the date is a JSON string without escapes or null, and the
- * line ends where approval.md's does. B-167N fold 2 N-D1 (review-b's DELTA L18777): the fold 1
+ * line ends where approval.md's does. B-167N fold 2 N-D1 (the review's delta): the fold 1
  * pattern, `\(.*\)` and no end anchor, also matched a WRONG accepted_by message whose JSON value
  * carried this text, and waived it. Anything else fails closed (no waiver).
  */

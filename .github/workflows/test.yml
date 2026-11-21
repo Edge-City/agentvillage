@@ -216,7 +216,7 @@ jobs:
   # scripts/approval-class-diff/allowlist.json names it with a reason. At an
   # unchanged pin it is approval.md's corpus check for this tree.
   #
-  # Fold 1 (review-b's refute): every call runs through each core's REAL
+  # Fold 1 (the review's refute): every call runs through each core's REAL
   # `approval hook hermes` in a box layout (HOME/.hermes with a dummy .env, the
   # skills and workspace, APPROVAL_HERMES_HOME set): recipes as terminal calls
   # at $HERMES_HOME, $HOME, workspace and unset, harness calls as Hermes tool
@@ -235,7 +235,7 @@ jobs:
   # floor in tool-ref-on-main.sh, so this job stays red until that PR merges and
   # the ref (and the floor) move to the commit that merges it.
   #
-  # B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): the tool is
+  # B-167N fold 2 M-D1 (the review's delta and its ruling): the tool is
   # a fresh clone in the runner's temp dir, outside this checkout, so no file of
   # the PR is on its path; nothing is installed in it; `bun install` here ignores
   # lifecycle scripts; tool-intact.sh proves the clone is the ref, clean and
@@ -244,7 +244,7 @@ jobs:
   # files bun and npm read, and the overlay code approval.md's extractor imports
   # (install/install_index.ts and its imports), are code-owned.
   #
-  # B-167N NEW-CALLS (Carter L17349, L17375; spec approval L17350): every call
+  # B-167N NEW-CALLS (the owner's no-regression ruling and its spec): every call
   # NEW or CHANGED against the previous release tag (recipes, and the harness-
   # tool envelopes approval.md's extractor derives from the mini-app manifests
   # and the gated plugin tools) must carry its declared outcome in

@@ -25,7 +25,7 @@
 # (human-only or refused) fails unless the allowlist lists it with Carter's
 # acceptance, so a recipe EDIT into a denied shape fails too (ov#427 replayed).
 #
-# B-167N NEW-CALLS (Carter L17349, L17375; spec approval L17350; folds P1-P7):
+# B-167N NEW-CALLS (the owner's no-regression ruling and its spec; folds P1-P7):
 # every call that is NEW or CHANGED against the previous release (shell recipes,
 # and the harness-tool envelopes the extractor derives from the mini-app
 # manifests and the gated plugin tools) needs its outcome declared in
@@ -56,7 +56,7 @@
 #                            acceptance on calls unchanged since the previous release, with a
 #                            warning (B-167N fold 1 S2; scripts/approval-class-diff/pending-acceptance.ts)
 #
-# B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): no overlay config
+# B-167N fold 2 M-D1 (the review's delta and its ruling): no overlay config
 # reaches the tool. bun runs only through tbun: from the tool clone's directory (bun
 # reads bunfig.toml, .env and tsconfig.json from its cwd, so an overlay bunfig.toml
 # preload ran inside every extractor call before), with an empty config, an empty

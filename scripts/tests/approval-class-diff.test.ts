@@ -23,20 +23,20 @@
  * - NEW (B-167N): a recipe only in the head with no declared outcome fails (exit 1),
  *   and passes once expected.json declares exactly what the hook does (exit 0).
  *
- * B-167N NEW-CALLS (Carter L17349, L17375; spec approval L17350; folds P1-P7),
+ * B-167N NEW-CALLS (the owner's no-regression ruling and its spec; folds P1-P7),
  * the same script and the same real hook: a class other than declared, an
  * expected card that runs auto (hazard B), a limiting entry accepted by anyone
  * but human:carter, a stale or duplicate entry each fail (exit 1); a core move
  * on an unchanged recipe is reported as "changed (core move)" (P3).
  *
- * B-167N fold 1 (review-b's refute CLAIMS L18667; release's half per lead RULING
- * L18671): the previous release is an annotated vX.Y.Z tag on main that main's
+ * B-167N fold 1 (the review's refute; this repo's half, per its
+ * ruling): the previous release is an annotated vX.Y.Z tag on main that main's
  * release/RC-MANIFEST.md names, on every event (S3, N6); the approval.md tool ref
  * must be on approval.md main (M4); an undated acceptance on an unchanged call
  * fails pull requests only and never halts Tag release (S2); live-compare keys by
  * the closed-set rule and never passes an empty run (N4); CODEOWNERS gaps (N7).
  *
- * B-167N fold 2 (review-b's DELTA CLAIMS L18777; lead RULING L18781): the tool is a fresh
+ * B-167N fold 2 (the review's delta and its ruling): the tool is a fresh
  * clone outside the overlay checkout, the job's bun install ignores lifecycle scripts, bun
  * runs from the clone with an empty config, the clone is proved unchanged at the ref check
  * and right before the check, and every path that can run code in the job is code-owned
@@ -200,7 +200,7 @@ describe("the class-diff job and script (static)", () => {
       }
     }
     expect(keys.size).toBe(doc.entries.length);
-    // The For Kicks order's purchase card, the reason P1 exists (approval L17395).
+    // The For Kicks order's purchase card, the reason P1 exists (the approval ruling).
     const order = doc.entries.find((e) => e.input?.operation === "forkicks.order.confirm");
     expect(order?.propose?.class).toBe("marketplace.app.action");
     expect(order?.propose?.decision).toBe("card");
@@ -237,7 +237,7 @@ describe("B-167N P7: the live decision lines compare with expected.json mechanic
   });
 });
 
-// --- B-167N fold 1 (review-b's refute, CLAIMS L18667; release's half, lead RULING L18671) -----------
+// --- B-167N fold 1 (the review's refute; this repo's half, per its ruling) -----------
 
 const GIT_ID = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "init.defaultBranch=main"];
 function gitOut(cwd: string, ...args: string[]): string {
@@ -332,7 +332,7 @@ describe("B-167N fold 1 M4: the approval.md tool ref must be an ancestor of appr
   });
 });
 
-// --- B-167N fold 2 (review-b's DELTA, CLAIMS L18777; lead RULING L18781) ---------------------------
+// --- B-167N fold 2 (the review's delta and its ruling) ---------------------------
 // M-D1: the same PR must not be able to change the tool, or the pinned copy the check reads, after
 // the ref check. S-D1: the ref must be a commit approval.md main pointed at (its first-parent line),
 // not a merge-queue branch commit, and not older than the floor. N-D1, N-D2.
@@ -449,7 +449,7 @@ describe("B-167N fold 2 M-D1: the tool runs from a fresh clone the PR cannot tou
     for (const p of closure.packages) expect(p.startsWith("node:") || p === "yaml").toBe(true);
   });
 
-  test("(d) review-b's dirty tree on a main commit fails: a tracked edit, an untracked or ignored file, a same-size same-mtime rewrite, a moved HEAD", () => {
+  test("(d) the review's dirty tree on a main commit fails: a tracked edit, an untracked or ignored file, a same-size same-mtime rewrite, a moved HEAD", () => {
     const up = mkdtempSync(join(root, "intact-up-"));
     gitOut(up, "init", "-q");
     const m1 = commitOn(up, "m1", { "scripts/overlay-recipes/expected.json": '{"entries":[]}\n', "scripts/overlay-recipes-check.mjs": "process.exit(0);\n", ".gitignore": "node_modules/\n" });
@@ -498,7 +498,7 @@ describe("B-167N fold 2 M-D1: the tool runs from a fresh clone the PR cannot tou
     expect(spawnSync("bash", [INTACT, mkdtempSync(join(root, "intact-none-")), m2], { encoding: "utf8" }).status).toBe(2);
   });
 
-  test("(c) review-b's bunfig.toml preload (and a .env) in the overlay never runs inside approval-class-diff.sh; a tool tree changed while the extractor ran stops the script before the check", () => {
+  test("(c) the review's bunfig.toml preload (and a .env) in the overlay never runs inside approval-class-diff.sh; a tool tree changed while the extractor ran stops the script before the check", () => {
     const stubTool = (name: string, extractBody: string): { dir: string; sha: string } => {
       const dir = join(mkdtempSync(join(root, `stub-${name}-`)), "tool");
       mkdirSync(dir, { recursive: true });
@@ -577,7 +577,7 @@ describe("B-167N fold 2 M-D1: the tool runs from a fresh clone the PR cannot tou
 describe("B-167N fold 2 S-D1 + N-D2: the tool ref is a commit approval.md main pointed at, at or above the floor; a failed fetch fails closed", () => {
   const ON_MAIN = join(REPO, "scripts", "approval-class-diff", "tool-ref-on-main.sh");
 
-  test("a merge-queue branch commit (review-b's 34741830 shape) fails though main descends from it; a merge result passes; a ref below the floor fails", () => {
+  test("a merge-queue branch commit (the review's 34741830 shape) fails though main descends from it; a merge result passes; a ref below the floor fails", () => {
     const up = mkdtempSync(join(root, "fp-up-"));
     gitOut(up, "init", "-q");
     const m1 = commitOn(up, "m1");
@@ -617,7 +617,7 @@ describe("B-167N fold 2 S-D1 + N-D2: the tool ref is a commit approval.md main p
     expect(text).toContain("url=${2:-https://github.com/approval-md/approval.md.git}");
   });
 
-  test("N-D2 (review-b's MB2): a fetch of approval.md main that fails exits 2, never 0", () => {
+  test("N-D2 (the review's MB2): a fetch of approval.md main that fails exits 2, never 0", () => {
     const up = mkdtempSync(join(root, "fetch-up-"));
     gitOut(up, "init", "-q");
     const m1 = commitOn(up, "m1");
@@ -630,7 +630,7 @@ describe("B-167N fold 2 S-D1 + N-D2: the tool ref is a commit approval.md main p
 });
 
 describe("B-167N fold 2 N-D1: only the exact pending accepted_at message is waivable", () => {
-  test("review-b's crafted accepted_by, whose JSON value carries the accepted_at text, is not waived", async () => {
+  test("the review's crafted accepted_by, whose JSON value carries the accepted_at text, is not waived", async () => {
     const { pendingOnly } = (await import("../approval-class-diff/pending-acceptance")) as { pendingOnly: (d: unknown, err: string) => { ok: boolean; waived: string[]; why: string[] } };
     const KEY = "village#forkicks.order";
     const NEWCALLS_ERR = "1 new-calls finding(s) (B-167N): a new or changed call with no declared outcome.";

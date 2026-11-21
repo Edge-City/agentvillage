@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The previous release a commit is measured against (B-167 S-2; B-167N fold 1 S3 + N6,
-# review-b's refute CLAIMS L18667, lead RULING L18671).
+# the review's refute and its ruling).
 #
 # A release is a tag that ONLY the Tag release button makes on an approved line:
 # - its name is vX.Y.Z (no -rcN, no leading zeros, nothing after);

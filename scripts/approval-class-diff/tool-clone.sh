@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # A fresh clone of approval.md at exactly the commit the class-diff job names, in a
-# directory the overlay checkout does not contain (B-167N fold 2 M-D1; lead RULING L18781).
+# directory the overlay checkout does not contain (B-167N fold 2 M-D1, per the ruling on the review's delta).
 #
 # Before this fold the tool was an actions/checkout inside the workspace, which the
-# PR's own code could reach and rewrite (review-b: a root package.json postinstall
+# PR's own code could reach and rewrite (the review: a root package.json postinstall
 # overwrote the pinned expected.json; a bunfig.toml preload ran inside the gate).
 # Here the job clones into $RUNNER_TEMP, nothing is installed in the clone (its gate
 # scripts import only node: builtins and each other; the core comes from npm with

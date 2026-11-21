@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The approval.md tool clone is exactly the commit the job names, and nothing in it
-# has changed (B-167N fold 2 M-D1; review-b's DELTA, CLAIMS L18777; lead RULING L18781).
+# has changed (B-167N fold 2 M-D1; the review's delta and its ruling).
 #
 # The check reads the pinned expected.json, and runs its own code, from this clone.
 # tool-ref-on-main.sh proves the COMMIT is one approval.md main pointed at; this
