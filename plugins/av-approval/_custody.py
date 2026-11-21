@@ -68,9 +68,10 @@ MANIFEST_PATH = Path(__file__).resolve().with_name("custody_keys.json")
 #: The names stripped whatever the decisions file says (it lives where the agent's user can write).
 #: MORALMOD_LLM_API_KEY: the MoralMod OpenRouter key, read only by av-events inside the gateway.
 #: AV_GODCONST_BALLOT_KEY: the resident's GODCONST ballot credential, read only by av-godconst inside the gateway.
+#: AV_THOR_KEY: the resident's THOR nudge card credential, read only by av-godconst inside the gateway.
 FLOOR: frozenset[str] = frozenset({
     "INDEX_API_KEY", "INDEX_SESSION_TOKEN", "AV_EVENTS_TOKEN", "AV_BACKUP_TOKEN", "ADMIN_TOKEN",
-    "MORALMOD_LLM_API_KEY", "AV_GODCONST_BALLOT_KEY",
+    "MORALMOD_LLM_API_KEY", "AV_GODCONST_BALLOT_KEY", "AV_THOR_KEY",
 })
 #: config.yaml: `av_approval: {custody: false}` turns custody off. Anything else, or absent, is on.
 CONFIG_KEYS = ("av_approval", "custody")

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { REVIEWED_MINI_APPS, zzzMarkerOnDisk, zzzMarkerScan } from "../install_miniapps";
-import { reconcileZzzManagedJob, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT, ZZZ_JOB_TOOLSETS, ZZZ_SHIPPED_SHA256, zzzShippedFile } from "../zzz_managed_job";
+import { OWNED_FILE_MAX_BYTES, reconcileZzzManagedJob, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT, ZZZ_JOB_TOOLSETS, ZZZ_SHIPPED_SHA256, zzzShippedFile } from "../zzz_managed_job";
+import { withSymlinkPlantedAfterCheck } from "./plant_after_check";
 
 const fake = join(import.meta.dir, "fake_hermes.ts");
 const fakeJobPython = join(import.meta.dir, "fake_hermes_job_python.ts");
@@ -116,6 +117,24 @@ test("installed ZZZ projection owns one script-only Hermes job; revocation remov
   expect(existsSync(join(home, "skills", "zzzbot", "SKILL.md"))).toBe(true);
 });
 
+test("v2.1.20: a symlink swapped in after the shim check is replaced, never followed (temp file + rename)", () => {
+  const { home, stage, jobs } = fakeBox();
+  expect(stage(projection).status).toBe(0);
+  const shim = join(home, "scripts", ZZZ_JOB_SCRIPT);
+  const outside = join(home, "outside-target");
+  rmSync(shim);
+  writeFileSync(outside, "resident outside file");
+  // plainFile(shim) sees no shim; the symlink lands between that check and the write.
+  expect(withSymlinkPlantedAfterCheck(shim, outside, () => reconcileZzzManagedJob(home, true)).planted).toBe(true);
+  expect(readFileSync(outside, "utf8")).toBe("resident outside file");
+  const meta = lstatSync(shim);
+  expect(meta.isFile() && !meta.isSymbolicLink()).toBe(true);
+  expect(meta.mode & 0o777).toBe(0o700);
+  expect(readFileSync(shim)).toEqual(SHIPPED_SHIM);
+  expect(readdirSync(join(home, "scripts")).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  expect(jobs()).toHaveLength(1);
+});
+
 test("N7: the whole-turn lock alone marks managed state and revocation removes it", () => {
   const { home, stage, jobs } = fakeBox();
   mkdirSync(join(home, "zzzbot"));
@@ -194,8 +213,9 @@ function seedState(home: string) {
 
 test("S1 teardown scope (nonav L17033): a failed stage removes ONLY the zzz job, shim, managed files and state", () => {
   const { home, stage, jobs } = fakeBox();
-  const full = { version: 1, apps: REVIEWED_MINI_APPS };
-  const unknown = { version: 1, apps: [...REVIEWED_MINI_APPS, { id: "unknown_app", version: "1.0.0", operations: ["mini-app.read"], skills: ["unknown_app"] }] };
+  const legacyReviewed = REVIEWED_MINI_APPS.filter(app=>app.id!=="zzz-autonomy-runner");
+  const full = { version: 1, apps: legacyReviewed };
+  const unknown = { version: 1, apps: [...legacyReviewed, { id: "unknown_app", version: "1.0.0", operations: ["mini-app.read"], skills: ["unknown_app"] }] };
   for (const failure of [{ input: "not json" as unknown, args: [] as string[] }, { input: unknown, args: [] }, { input: full, args: ["--force"] }]) {
     expect(stage(full).status).toBe(0);
     expect(jobs()).toHaveLength(1);
@@ -939,11 +959,26 @@ for (const replaced of MARKER_PATHS) test(`N12: a once-on box's teardown preserv
       expect(Object.fromEntries(Object.entries(lsnapshot(home)).filter(([key]) => key === replaced || key.startsWith(`${replaced}/`)))).toEqual(kept);
       expect(readFileSync(join(home, "zzzbot", "resident.txt"), "utf8")).toBe("mine");
       expect(lsnapshot(elsewhere)).toEqual(outside);
-      // Torn down: no marker left, so the next stage and verify are main's (the notice only), with nothing spawned.
-      for (const args of [[], ["--verify"], [], ["--verify"]]) {
-        const again = spiedStage(home, alone, args);
-        expect(`${row} ${args}: ${again.status} ${again.stderr}|${again.spawns}`).toBe(`${row} ${args}: 0 ${notice([replaced])}|`);
+      // Torn down: the next stage and verify are main's (the notice only), with nothing spawned.
+      // Stage may normalize mini-apps.json after a failed input, so snapshot after that first stage.
+      const again = spiedStage(home, alone);
+      expect(`${row} stage: ${again.status} ${again.stderr}|${again.spawns}`).toBe(`${row} stage: 0 ${notice([replaced])}|`);
+      const settled = lsnapshot(home);
+      const verified = spiedStage(home, alone, ["--verify"]);
+      expect(`${row} verify: ${verified.status} ${verified.stderr}|${verified.spawns}`).toBe(`${row} verify: 0 ${notice([replaced])}|`);
+      expect(lsnapshot(home)).toEqual(settled);
+      // A link to our original bytes following a failed stage is the strongest repeat control at every marker.
+      if (label === "symlink to the original bytes" && typeof input === "string") {
+        const restaged = spiedStage(home, alone);
+        expect(`${row} restage: ${restaged.status} ${restaged.stderr}|${restaged.spawns}`).toBe(`${row} restage: 0 ${notice([replaced])}|`);
+        expect(lsnapshot(home)).toEqual(settled);
+        const reverified = spiedStage(home, alone, ["--verify"]);
+        expect(`${row} reverify: ${reverified.status} ${reverified.stderr}|${reverified.spawns}`).toBe(`${row} reverify: 0 ${notice([replaced])}|`);
+        expect(lsnapshot(home)).toEqual(settled);
       }
+      expect(Object.fromEntries(Object.entries(lsnapshot(home)).filter(([key]) => key === replaced || key.startsWith(`${replaced}/`)))).toEqual(kept);
+      expect(readFileSync(join(home, "zzzbot", "resident.txt"), "utf8")).toBe("mine");
+      expect(lsnapshot(elsewhere)).toEqual(outside);
     }
   }
 }, 30000);
@@ -987,7 +1022,7 @@ test("N12: the shipped sha table holds this checkout's managed-file bytes, and o
   writeFileSync(at("runner"), SHIPPED_RUNNER);
   writeFileSync(at("prompt"), SHIPPED_PROMPT);
   writeFileSync(at("near"), Buffer.concat([SHIPPED_LEGACY_SHIM, Buffer.from(" ")]));
-  writeFileSync(at("big"), Buffer.alloc(65537));
+  writeFileSync(at("big"), Buffer.alloc(OWNED_FILE_MAX_BYTES + 1));
   symlinkSync(at("shim"), at("link"));
   mkdirSync(at("dir"));
   expect(spawnSync("/usr/bin/mkfifo", [at("fifo")]).status).toBe(0);

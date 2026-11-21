@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "NOT_FOUND: No such source."
+    }
+  ],
+  "structuredContent": {
+    "code": "not_found",
+    "detail": "No such source."
+  },
+  "isError": true
+}

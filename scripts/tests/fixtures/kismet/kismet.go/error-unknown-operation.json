@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Kismet does not know that operation."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"unknown_operation\",\"message\":\"Kismet does not know that operation.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "unknown_operation",
+    "message": "Kismet does not know that operation."
+  },
+  "isError": true
+}

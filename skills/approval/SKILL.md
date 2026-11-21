@@ -1,6 +1,6 @@
 ---
 name: approval
-description: Installed only for residents who opted in to approval.md. Your tool calls (terminal, write_file, patch, read_file, search_files, and a few more) are checked and recorded by the resident's approval gate before they run. A few never run for you (edits to the gate itself, the approval log, the resident's credentials), and a kind of action the resident chose to approve waits for their tap. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
+description: Installed for every resident. Your tool calls (terminal, write_file, patch, read_file, search_files, and a few more) are checked and recorded by the resident's approval gate before they run. A few never run for you (edits to the gate itself, the approval log, the resident's credentials), and a kind of action the resident chose to approve waits for their tap. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
 ---
 
 # Approval gate

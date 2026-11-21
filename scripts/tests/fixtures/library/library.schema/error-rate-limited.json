@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "RATE_LIMITED: Too many calls: at most 60 a minute for each resident. Try again in a minute."
+    }
+  ],
+  "structuredContent": {
+    "code": "rate_limited",
+    "detail": "Too many calls: at most 60 a minute for each resident. Try again in a minute."
+  },
+  "isError": true
+}

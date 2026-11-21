@@ -1,0 +1,13 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "NOT_FOUND: No such node."
+    }
+  ],
+  "structuredContent": {
+    "code": "not_found",
+    "detail": "No such node."
+  },
+  "isError": true
+}

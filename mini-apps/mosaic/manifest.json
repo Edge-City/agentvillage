@@ -26,8 +26,8 @@
   "skills": [
     {
       "name": "mosaic",
-      "version": "1.0.0",
-      "sha256": "b5b5e7e6d4e5b98d29d3a2c6784e6fb5b8ebbb5bf85e33556b8b5f0060710604",
+      "version": "1.0.1",
+      "sha256": "b3ae7aae9f6b70eed5030a3b21fbc02b2f716e33a36ee1281b9346903dc591c5",
       "path": "skills/mosaic/SKILL.md"
     }
   ]

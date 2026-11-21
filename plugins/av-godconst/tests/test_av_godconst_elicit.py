@@ -39,7 +39,7 @@ EXPIRES_MS = int(CLOSES * 1000)
 READ = f"/tenants/{TENANT}/godconst/elicitation-cards"
 RATE = f"/tenants/{TENANT}/godconst/elicitation-ratings"
 SESSION_KEYS = {"elicitation_id", "nonce", "order", "expires_ms", "status", "started_at", "header_message_id", "page",
-                "cards", "rated", "dropped", "send_failures"}
+                "cards", "rated", "dropped", "send_failures", "last_activity_at", "released"}
 
 
 def run(coro):
@@ -251,16 +251,28 @@ def assert_nothing_private_on_disk(home):
         for position, card in session["cards"].items():
             assert position.isdigit() and set(card) == {"message_id"} and type(card["message_id"]) is int
     for item in stored["ended"]:
-        assert set(item) == {"elicitation_id", "nonce", "status", "at"}
+        assert set(item) == {"elicitation_id", "nonce", "status", "at", "rated"}
     assert not os.path.exists(marker(home)) or os.path.getsize(marker(home)) == 0
     assert not os.path.exists(os.path.join(home, "av-godconst", "ballot.json"))  # the ballot is never touched
 
 
-FU = "Follow-up (not your ballot)"
+FU = "Optional follow-up"
+HEADER = ("Help shape the god agents for future Edge City popup villages: rate a few rules (optional)\n\n"
+          "Rate as many as you like, skip any. Only the research team sees your ratings.\n\n"
+          "1  Strongly oppose inclusion\n2  Oppose inclusion\n3  Neutral\n4  Support inclusion\n5  Strongly support inclusion")
+SCALE = "1 strongly oppose · 3 neutral · 5 strongly support"
+NEXT = "Next, your agent will share a few tough calls a god agent might face."
+DONE = f"All rated. Thank you! {NEXT}"
+STOPPED = f"Stopped. The ratings you gave are kept. {NEXT}"
 
 
 def first_line(msg):
     return msg.text.splitlines()[0]
+
+
+def card_no(msg):
+    """A card's 1-based place in the order, from its buttons (gce:r:<nonce>:<position>:<value>): the text never numbers it."""
+    return int(msg.reply_markup.inline_keyboard[0][0].callback_data.split(":")[3]) + 1
 
 
 def open_ballot_page(P, home, status="active"):
@@ -365,35 +377,203 @@ def test_no_file_malformed_expired_or_unsafe_shows_nothing(plugin, elicit, monke
     assert bot.sent == [] and server.calls == []
 
 
-def test_a_pending_opener_holds_the_page_and_the_next_pair_follows_once_it_clears(plugin, elicit, caplog):
+def released(home):
+    path = os.path.join(home, "av-events", "godconst", "cards-released")
+    if not os.path.exists(path):
+        return None
+    assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+    raw = open(path, encoding="utf-8").read()
+    assert raw.endswith("\n") and raw.count("\n") == 1  # one line: the elicitation id
+    return raw.strip()
+
+
+def test_cards_first_a_pending_opener_no_longer_holds_the_cards(plugin, elicit):
+    """Cards first (DATA-547): the control plane stages the opener after the cards file; av-elicit holds the opener,
+    so the cards go out at once, one pair per page, and nothing is released while they are live."""
     bot, server = Bot(), Server(plugin)
     write_trigger(elicit)
     txt = stage_inject(elicit, "1761280000000-open.txt")
-    assert pass_(plugin, bot, server) == "opener_pending"
-    os.rename(txt, txt[:-4] + ".sending")
-    assert pass_(plugin, bot, server) == "opener_pending"
-    assert bot.sent == [] and server.calls == []
-    os.rename(txt[:-4] + ".sending", txt[:-4] + ".done")
     assert pass_(plugin, bot, server) == "sent"
-    # Mid-page, a new staged opener holds the next pair even after a tap rates the current one.
-    nxt = stage_inject(elicit, "1761280000001-next.txt")
+    assert [card_no(c) for c in bot.cards()] == [1, 2]  # one pair per page
+    assert released(elicit) is None and os.path.exists(marker(elicit))
+    # A claimed (.sending) or a new follow-up file holds nothing either: a rated pair brings the next one.
+    os.rename(txt, txt[:-4] + ".sending")
+    stage_inject(elicit, "1761280000001-next.txt")
     first, second = bot.cards()
     tap(plugin, server, first, 3)
     tap(plugin, server, second, 3)
-    assert len(bot.cards()) == 2
-    assert pass_(plugin, bot, server, now=DAY + 60) == "opener_pending"
-    os.rename(nxt, nxt[:-4] + ".done")
-    assert pass_(plugin, bot, server, now=DAY + 120) == "sent"
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3 of 6", f"{FU} · Statement 4 of 6"]
-    # An inject directory that cannot be listed holds too, and says so.
+    assert [card_no(c) for c in bot.cards()] == [1, 2, 3, 4]
+    assert released(elicit) is None
+    assert not hasattr(plugin, "opener_pending")
+
+
+def test_the_card_set_is_the_apps_read_not_the_files_list(plugin, elicit):
+    """The control plane's file lists every pool id; the app's read returns at most 10 (whole pairs). Only what the
+    read returns is shown, so a resident never sees more than the app's cap."""
+    bot, server = Bot(), Server(plugin, n=10)
+    write_trigger(elicit, ids=[f"s{i:03d}" for i in range(1, 31)])
+    assert pass_(plugin, bot, server) == "sent"
+    assert len(ledger(elicit)["session"]["order"]) == 10
+    for page in range(5):
+        a, b = bot.cards()[-2:]
+        tap(plugin, server, a, 3)
+        tap(plugin, server, b, 4)
+    assert len(bot.cards()) == 10 and [card_no(c) for c in bot.cards()] == list(range(1, 11))
+    assert bot.sent[-1].text == DONE and released(elicit) == f"{EID} all"
+
+
+def test_all_rated_releases_the_opener(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    for _ in range(3):
+        a, b = bot.cards()[-2:]
+        assert released(elicit) is None
+        tap(plugin, server, a, 4)
+        tap(plugin, server, b, 2)
+    assert bot.sent[-1].text == DONE and ledger(elicit)["session"]["status"] == "done"
+    assert released(elicit) == f"{EID} all" and ledger(elicit)["session"]["released"] is True
+    assert pass_(plugin, bot, server, now=DAY + 60) == "idle"
+    assert released(elicit) == f"{EID} all"
+    assert_nothing_private_on_disk(elicit)
+
+
+def test_stop_releases_the_opener(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    tap(plugin, server, bot.cards()[0], 4)
+    header = bot.header()
+    tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
+    assert ledger(elicit)["ended"][-1]["status"] == "stopped" and released(elicit) == f"{EID} some"
+
+
+@pytest.mark.parametrize("ending", ["withdrawn", "expired", "refused", "replaced"])
+def test_every_ending_releases_the_opener(plugin, elicit, ending):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit, expires_ms=int((DAY + 3600) * 1000) if ending == "expired" else EXPIRES_MS)
+    pass_(plugin, bot, server)
+    assert released(elicit) is None
+    if ending == "withdrawn":
+        remove_trigger(elicit)
+        pass_(plugin, bot, server, now=DAY + 60)
+        assert released(elicit) is None  # one miss could be a rewrite in flight
+        assert pass_(plugin, bot, server, now=DAY + 120) == "ended_withdrawn"
+    elif ending == "expired":
+        assert pass_(plugin, bot, server, now=DAY + 3600) == "ended_expired"
+    elif ending == "refused":
+        server.refuse = (403, "not_non_voter")
+        tap(plugin, server, bot.cards()[0], 3)
+    else:
+        write_trigger(elicit, eid=EID2)
+        server.refuse = (503, None)  # the new one's read fails: only the old one is released
+        pass_(plugin, bot, server, now=DAY + 60)
+    assert ledger(elicit)["ended"][-1]["elicitation_id"] == EID
+    assert released(elicit) == f"{EID} none"
+
+
+def test_a_tombstone_without_a_session_releases_and_a_lost_write_is_made_good(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    server.saved = {sid: 3 for sid in server.order}  # all rated on the web already: nothing to show
+    write_trigger(elicit)
+    assert pass_(plugin, bot, server) == "all_rated" and bot.sent == []
+    assert released(elicit) == f"{EID} all"
+    os.unlink(os.path.join(elicit, "av-events", "godconst", "cards-released"))
+    assert pass_(plugin, bot, server, now=DAY + 60) == "ended_here"
+    assert released(elicit) == f"{EID} all"
+
+
+def test_three_idle_hours_release_and_the_cards_stay_tappable(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    idle = plugin.CARDS_HOLD_IDLE_S
+    assert idle == 3 * 3600
+    assert pass_(plugin, bot, server, now=DAY + idle - 1) == "idle" and released(elicit) is None
+    # A tap is activity: the 3 h count again from it.
+    tap(plugin, server, bot.cards()[0], 5, clock=DAY + 3600)
+    assert pass_(plugin, bot, server, now=DAY + idle + 60) == "idle" and released(elicit) is None
+    assert pass_(plugin, bot, server, now=DAY + 3600 + idle) == "idle"
+    assert released(elicit) == f"{EID} some"
+    stored = ledger(elicit)
+    assert stored["session"]["released"] is True and stored["session"]["status"] == "active" and stored["ended"] == []
+    assert not os.path.exists(marker(elicit))  # released cards no longer hold the page-open marker
+    # Still tappable; the next pair follows; nothing re-holds.
+    q = tap(plugin, server, bot.cards()[1], 2, clock=DAY + 5 * 3600)
+    assert q.answers == ["Saved: Oppose inclusion"]
+    assert [card_no(c) for c in bot.cards()] == [1, 2, 3, 4]
+    assert released(elicit) == f"{EID} some" and not os.path.exists(marker(elicit))
+    assert_nothing_private_on_disk(elicit)
+
+
+def test_a_ledger_from_before_cards_first_counts_idle_from_now(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    stored = ledger(elicit)
+    del stored["session"]["last_activity_at"], stored["session"]["released"]
+    plugin.save_elicit_ledger(stored)
+    assert pass_(plugin, bot, server, now=DAY + 10 * 3600) == "idle" and released(elicit) is None
+    assert pass_(plugin, bot, server, now=DAY + 13 * 3600) == "idle" and released(elicit) == f"{EID} none"
+
+
+def test_stop_with_nothing_rated_releases_none_and_says_what_comes_next(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    header = bot.header()
+    tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
+    assert bot.sent[-1].text == STOPPED and released(elicit) == f"{EID} none"
+    assert ledger(elicit)["ended"][-1]["rated"] == "none"
+
+
+def test_the_rated_class_counts_positions_never_values(plugin):
+    session = {"order": ["a", "b", "c", "d"], "rated": [], "dropped": []}
+    assert plugin.rated_class(session) == "none" and plugin.rated_class(None) == "none"
+    session["rated"] = [0]
+    assert plugin.rated_class(session) == "some"
+    session["rated"], session["dropped"] = [0, 1, 3], [2]
+    assert plugin.rated_class(session) == "all"  # a dropped statement is not owed
+    session["dropped"] = [0, 1, 2, 3]
+    session["rated"] = []
+    assert plugin.rated_class(session) == "none"
+
+
+def test_an_idle_release_is_updated_when_the_rest_get_rated(plugin, elicit):
+    bot, server = Bot(), Server(plugin, n=2)
+    write_trigger(elicit, ids=["s001", "s002"])
+    pass_(plugin, bot, server)
+    first, second = bot.cards()
+    tap(plugin, server, first, 2, clock=DAY + 60)
+    pass_(plugin, bot, server, now=DAY + 60 + plugin.CARDS_HOLD_IDLE_S)
+    assert released(elicit) == f"{EID} some"
+    tap(plugin, server, second, 2, clock=DAY + 4 * 3600)
+    assert bot.sent[-1].text == DONE
+    pass_(plugin, bot, server, now=DAY + 4 * 3600 + 60)
+    assert released(elicit) == f"{EID} all"
+
+
+def test_the_ended_reconcile_keeps_the_tombstones_class(plugin, elicit):
+    bot, server = Bot(), Server(plugin)
+    write_trigger(elicit)
+    pass_(plugin, bot, server)
+    tap(plugin, server, bot.cards()[0], 4)
+    header = bot.header()
+    tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
+    os.unlink(os.path.join(elicit, "av-events", "godconst", "cards-released"))
+    assert pass_(plugin, bot, server, now=DAY + 60) == "ended_here"
+    assert released(elicit) == f"{EID} some"
+
+
+def test_a_release_that_cannot_be_written_never_raises(plugin, elicit, caplog):
     caplog.set_level(logging.INFO)
-    inject = os.path.join(elicit, "av-events", "elicit", "inject")
-    for name in os.listdir(inject):
-        os.unlink(os.path.join(inject, name))
-    os.rmdir(inject)
-    open(inject, "w").close()
-    assert plugin.opener_pending() is True
-    assert "outcome=inject_list_failed" in caplog.text
+    path = os.path.join(elicit, "av-events", "godconst", "cards-released")
+    os.makedirs(path)  # a directory where the file goes: the write fails
+    assert plugin.release_cards(EID, "done") is False
+    assert "outcome=elicit_release_unwritable" in caplog.text and EID not in caplog.text
+    os.rmdir(path)
+    assert plugin.release_cards(EID, "done") is True and released(elicit) == f"{EID} none"
+    assert plugin.release_cards(EID, "done") is True  # idempotent
 
 
 def test_no_page_at_night_and_no_home_chat(plugin, elicit, monkeypatch):
@@ -413,12 +593,14 @@ def test_start_sends_a_labelled_header_and_the_first_pair_of_the_files_statement
     write_trigger(elicit, ids=["s005", "s002", "s003"])  # the read's order wins; s001, s004, s006 are never shown
     assert pass_(plugin, bot, server) == "sent"
     header, *cards = bot.sent
-    assert first_line(header) == f"{FU}: 3 constitution statements to rate (optional)"
-    assert "separate from the official constitution ballot" in header.text and "Tap again to change a rating" in header.text
-    assert "5  Strongly support inclusion" in header.text and "Open until 10:30 IST, Sun 25 Oct." in header.text
+    # Cards first (DATA-547): the header is the first message the resident sees, before the agent's questions.
+    assert header.text == HEADER
+    assert "Open until" not in header.text and "IST" not in header.text  # the box's file expiry is no deadline to show
+    assert not any(ch.isdigit() for ch in header.text.split("\n\n")[0] + header.text.split("\n\n")[1])  # no count
     assert "Submit" not in header.text and "remind" not in header.text.lower()
     assert [[b.text for b in row] for row in header.reply_markup.inline_keyboard] == [["Stop these cards"]]
-    assert [first_line(c) for c in cards] == [f"{FU} · Statement 1 of 3", f"{FU} · Statement 2 of 3"]
+    assert [c.text.splitlines()[-1] for c in cards] == [SCALE, SCALE] and [card_no(c) for c in cards] == [1, 2]
+    assert all(FU not in c.text for c in cards)  # said once, in the header
     assert f"{TEXT} s002" in cards[0].text and f"{TEXT} s003" in cards[1].text
     assert "odin" not in cards[0].text.lower() and "agent" not in cards[0].text.lower()
     assert [b.text for b in cards[0].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
@@ -445,10 +627,9 @@ def test_taps_post_one_rating_advance_and_revisions_still_save_after_all_are_rat
     assert q.answers == ["Saved: Oppose inclusion (changed)"]
     tap(plugin, server, second, 5)
     third = bot.cards()[2]
-    assert first_line(third) == f"{FU} · Statement 3 of 3"
+    assert first_line(third) == f"{TEXT} s003" and card_no(third) == 3
     tap(plugin, server, third, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated. Thank you: your ratings are saved.")
-    assert "change a rating until 10:30 IST, Sun 25 Oct." in bot.sent[-1].text
+    assert bot.sent[-1].text == DONE
     stored = ledger(elicit)
     assert stored["session"]["status"] == "done" and stored["ended"] == []
     assert not os.path.exists(marker(elicit))
@@ -482,7 +663,7 @@ def test_saved_ratings_are_prefilled_and_a_fully_rated_pair_moves_on(plugin, eli
     assert [b.text for b in cards[3].reply_markup.inline_keyboard[0]] == ["1", "2", "3", "4", "5"]
     assert ledger(elicit)["session"]["rated"] == [0, 1, 2]
     tap(plugin, server, cards[3], 3)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 4 statements rated.")
+    assert bot.sent[-1].text == DONE
     bot2 = Bot()
     write_trigger(elicit, eid=EID2, ids=["s001"])
     assert pass_(plugin, bot2, server) == "all_rated"
@@ -503,10 +684,10 @@ def test_an_unknown_statement_drops_only_that_card(plugin, elicit):
     assert tap(plugin, server, second, data=again).answers == ["This statement is no longer available."]
     assert len(server.calls) == calls  # no call for a dropped card
     tap(plugin, server, first, 5)  # the pair needs nothing more: the next pair goes
-    assert [first_line(c) for c in bot.cards()[-2:]] == [f"{FU} · Statement 3 of 4", f"{FU} · Statement 4 of 4"]
+    assert [card_no(c) for c in bot.cards()[-2:]] == [3, 4]
     for card in bot.cards()[-2:]:
         tap(plugin, server, card, 1)
-    assert bot.sent[-1].text.startswith(f"{FU}: all 3 statements rated.")
+    assert bot.sent[-1].text == DONE
     assert_nothing_private_on_disk(elicit)
 
 
@@ -518,7 +699,7 @@ def test_a_statement_the_read_no_longer_returns_is_dropped(plugin, elicit):
     server.order.remove("s004")
     tap(plugin, server, first, 2)
     tap(plugin, server, second, 2)
-    assert [first_line(c) for c in bot.cards()[2:]] == [f"{FU} · Statement 3 of 4"]
+    assert [card_no(c) for c in bot.cards()[2:]] == [3]
     assert ledger(elicit)["session"]["dropped"] == [3]
     tap(plugin, server, bot.cards()[2], 2)
     assert ledger(elicit)["session"]["status"] == "done"
@@ -750,7 +931,7 @@ def test_stop_ends_it_and_keeps_what_was_saved(plugin, elicit):
     header = bot.header()
     q = tap(plugin, server, header, data=header.reply_markup.inline_keyboard[0][0].callback_data)
     assert q.answers == ["Stopped. The ratings you gave are kept."] and q.edited == [None]
-    assert bot.sent[-1].text == f"{FU}: stopped, no more statement cards. The ratings you gave are kept."
+    assert bot.sent[-1].text == STOPPED
     stored = ledger(elicit)
     assert stored["session"] is None and stored["ended"][-1]["status"] == "stopped"
     assert server.saved == {"s001": 4} and not os.path.exists(marker(elicit))
@@ -799,7 +980,7 @@ def test_both_modes_at_once_the_ballot_goes_first(plugin, elicit, monkeypatch):
     # A stopped ballot does not hold.
     open_ballot_page(plugin, elicit, status="stopped")
     assert pass_(plugin, bot, server) == "sent"
-    assert all(first_line(c).startswith(FU) for c in bot.cards())
+    assert all(c.text.splitlines()[-1] == SCALE for c in bot.cards())
     # The ballot active again mid-page: a tap saves, the next pair waits for the ballot.
     open_ballot_page(plugin, elicit)
     first, second = bot.cards()
@@ -860,9 +1041,9 @@ def test_a_corrupt_typed_ledger_of_either_mode_counts_as_not_open(plugin, elicit
     assert "outcome=page_marker_unknown mode=elicit" in caplog.text
 
 
-def test_a_rated_pair_clears_the_marker_until_the_next_pair_is_sent(plugin, elicit):
-    bot, server = Bot(), Server(plugin)
-    write_trigger(elicit)
+def test_a_rated_pair_clears_the_marker_when_nothing_follows(plugin, elicit):
+    bot, server = Bot(), Server(plugin, n=2)
+    write_trigger(elicit, ids=["s001", "s002"])
     pass_(plugin, bot, server)
     stage_inject(elicit, "1761280000001-next.txt")
     first, second = bot.cards()
@@ -909,7 +1090,7 @@ def test_nothing_is_injected_or_emitted(plugin, elicit):
     assert "inject_message" not in source and "emit_event" not in source
 
 
-def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
+def test_the_factory_wires_all_three_handlers_and_passes(plugin, elicit):
     pytest.importorskip("telegram")
     handlers, jobs = [], []
 
@@ -919,8 +1100,8 @@ def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
 
     app = type("App", (), {"add_handler": lambda self, h: handlers.append(h), "job_queue": JobQueue(), "bot": Bot()})()
     plugin._wire_telegram(app, None)
-    assert [h.pattern.pattern for h in handlers] == ["^gcb:", "^gce:"] and all(h.block is False for h in handlers)
-    assert len(jobs) == 1 and jobs[0][1] == plugin.PASS_INTERVAL_S
+    assert [h.pattern.pattern for h in handlers] == ["^gcb:", "^gce:", "^avt:"] and all(h.block is False for h in handlers)
+    assert [(j[1], j[2]) for j in jobs] == [(plugin.PASS_INTERVAL_S, "av-godconst-pass"), (plugin.SEND_NOW_CHECK_S, "av-godconst-send-now")]
     seen = []
 
     async def fake_ballot(*a, **k):
@@ -929,9 +1110,12 @@ def test_the_factory_wires_both_handlers_and_both_passes(plugin, elicit):
     async def fake_elicit(*a, **k):
         seen.append("elicit")
 
-    plugin.pass_once, plugin.elicit_pass_once = fake_ballot, fake_elicit
+    async def fake_thor(*a, **k):
+        seen.append("thor")
+
+    plugin.pass_once, plugin.elicit_pass_once, plugin.thor_pass_once = fake_ballot, fake_elicit, fake_thor
     run(jobs[0][0]())
-    assert seen == ["ballot", "elicit"]
+    assert seen == ["ballot", "elicit", "thor"]
 
 
 def test_the_pass_and_the_tap_never_raise(plugin, elicit, monkeypatch):
@@ -961,7 +1145,7 @@ def test_the_pass_and_the_tap_never_raise(plugin, elicit, monkeypatch):
 
     assert pass_(plugin, Broken(), server, now=DAY + 120) == "sent"
     # Any helper raising.
-    for name in ("read_elicit_trigger", "load_elicit_ledger", "opener_pending", "home_chat_id"):
+    for name in ("read_elicit_trigger", "load_elicit_ledger", "ballot_holds_elicit", "home_chat_id"):
         with monkeypatch.context() as m:
             m.setattr(plugin, name, boom)
             assert pass_(plugin, bot, server, now=DAY + 900) in ("pass_error", "idle")
@@ -986,3 +1170,23 @@ def test_the_ballot_key_stays_in_custody(plugin):
     assert plugin.CREDENTIAL_ENV == "AV_GODCONST_BALLOT_KEY"
     with open(os.path.join(root, "plugins", "av-approval", "_custody.py"), encoding="utf-8") as handle:
         assert '"AV_GODCONST_BALLOT_KEY"' in handle.read()
+
+
+def test_cards_say_the_god_agent_never_odin_and_only_on_screen():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gc_logic", os.path.join(os.path.dirname(__file__), "..", "_logic.py"))
+    L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
+    cases = {
+        "ODIN must ask first.": "The god agent must ask first.",
+        "Residents can overrule ODIN. ODIN's power ends there.": "Residents can overrule the god agent. The god agent's power ends there.",
+        "The ODIN agent logs nothing; the ODIN agent's notes stay private.": "The god agent logs nothing; the god agent's notes stay private.",
+        "Odin: be kind": "The god agent: be kind",
+        '"ODIN never lies."': '"The god agent never lies."',
+        "for the ODIN council": "for the god agent council",
+        "ODINSON and Odinic stay": "ODINSON and Odinic stay",
+        "No change here": "No change here",
+    }
+    for given, shown in cases.items():
+        assert L.god_agent_text(given) == shown
+    assert L.elicit_card_text("ODIN asks first & waits").splitlines()[0] == "The god agent asks first &amp; waits"
+    assert "ODIN" in L.card_text(0, 1, "c", "ODIN asks first")  # the official ballot's cards are not touched

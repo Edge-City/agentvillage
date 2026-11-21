@@ -24,7 +24,7 @@ from .conftest import PLUGIN_DIR, ExplodingCtx, FakeCtx, load_plugin, write_gate
 REPO = PLUGIN_DIR.parents[1]
 PH = "example-not-a-key"
 STRIP = {"INDEX_API_KEY", "INDEX_SESSION_TOKEN", "AV_EVENTS_TOKEN", "AV_BACKUP_TOKEN", "ADMIN_TOKEN",
-         "MORALMOD_LLM_API_KEY", "AV_GODCONST_BALLOT_KEY"}
+         "MORALMOD_LLM_API_KEY", "AV_GODCONST_BALLOT_KEY", "AV_THOR_KEY"}
 
 
 def custody():
@@ -54,7 +54,7 @@ class FakeProviderBase(abc.ABC):
 
 SOURCE = {"PATH": "/usr/bin:/bin", "INDEX_API_KEY": PH, "index_api_key": PH, "AV_EVENTS_TOKEN": PH,
           "AV_BACKUP_TOKEN": PH, "INDEX_SESSION_TOKEN": PH, "EDGEOS_API_KEY": PH, "AV_POPUP_ID": PH,
-          "TELEGRAM_BOT_TOKEN": PH, "AV_GODCONST_BALLOT_KEY": PH}
+          "TELEGRAM_BOT_TOKEN": PH, "AV_GODCONST_BALLOT_KEY": PH, "AV_THOR_KEY": PH}
 
 
 def _run_bash_calls_the_builder(self, command):
@@ -194,7 +194,7 @@ def test_install_covers_all_three_surfaces_and_strips_case_folded(caplog):
         covered = c.install(importer=importer)
     assert covered == {"provider": True, "foreground": True, "execute_code": True}
     lines = [(r.levelno, r.getMessage()) for r in caplog.records]
-    assert lines == [(logging.INFO, "av-approval: custody: 7 names withheld from agent-run code "
+    assert lines == [(logging.INFO, "av-approval: custody: 8 names withheld from agent-run code "
                                     "(provider, foreground, execute_code)")]
 
     fg = modules["tools.environments.local"]._make_run_env({"AV_BACKUP_TOKEN": PH, "EXTRA": "1"})
@@ -208,6 +208,9 @@ def test_install_covers_all_three_surfaces_and_strips_case_folded(caplog):
     # agent-readable EDGEOS_API_KEY does.
     assert "AV_GODCONST_BALLOT_KEY" not in ec and "AV_GODCONST_BALLOT_KEY" not in fg
     assert "AV_GODCONST_BALLOT_KEY" in c.FLOOR
+    # THOR nudge card: the same for its key: no agent-run child gets a copy (the residual is the ballot key's: .env).
+    assert "AV_THOR_KEY" not in ec and "AV_THOR_KEY" not in fg
+    assert "AV_THOR_KEY" in c.FLOOR
 
     assert len(providers) == 1
     provider = providers[0]

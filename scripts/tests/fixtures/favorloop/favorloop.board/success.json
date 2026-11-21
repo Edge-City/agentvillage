@@ -1,0 +1,38 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"8 residents have joined; 3 loops proposed, 2 accepted, 1 completed and 3 favors confirmed.\",\"simulated\":false,\"counts\":{\"members\":8,\"loopsProposed\":3,\"loopsAccepted\":2,\"loopsCompleted\":1,\"favorsConfirmed\":3},\"recentLoops\":[{\"shape\":\"chain\",\"favors\":[\"goa_tips\",\"ai_tool_setup\"],\"status\":\"accepted\"},{\"shape\":\"loop3\",\"favors\":[\"portrait_photo\",\"code_review\",\"stretch_session\"],\"status\":\"completed\"}]}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "8 residents have joined; 3 loops proposed, 2 accepted, 1 completed and 3 favors confirmed.",
+    "simulated": false,
+    "counts": {
+      "members": 8,
+      "loopsProposed": 3,
+      "loopsAccepted": 2,
+      "loopsCompleted": 1,
+      "favorsConfirmed": 3
+    },
+    "recentLoops": [
+      {
+        "shape": "chain",
+        "favors": [
+          "goa_tips",
+          "ai_tool_setup"
+        ],
+        "status": "accepted"
+      },
+      {
+        "shape": "loop3",
+        "favors": [
+          "portrait_photo",
+          "code_review",
+          "stretch_session"
+        ],
+        "status": "completed"
+      }
+    ]
+  }
+}

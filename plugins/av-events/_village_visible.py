@@ -1,5 +1,5 @@
-"""R-DEON: the village tools, and av-elicit's `elicitation_record`, stay in the model's tool list
-when Hermes's `tool_search` is on.
+"""R-DEON: the village tools, av-elicit's `elicitation_record` and av-events' `ask_odin` stay in the
+model's tool list when Hermes's `tool_search` is on.
 
 Why. Hermes v2026.9.24 (`tools/tool_search.py`) replaces every deferrable tool in the model's
 tool list with three bridge tools (`tool_search`, `tool_describe`, `tool_call`). A tool is
@@ -22,6 +22,10 @@ GC-ELICIT (24 Oct) added av-elicit's `elicitation_record`, the one tool not of t
 deferred behind the bridge, the GODCONST elicitation tool was never called in two live Haiku runs
 (the agent saved what it learned to memory instead), even when the notice named `tool_search` and
 `tool_call`.
+
+ODIN-ASK-VISIBLE (27 Oct) added av-events' `ask_odin` (ODIN-ASK; registered only behind `AV_ASK_ODIN`):
+deferred behind the bridge and named nowhere in the resident's AGENTS.md, a Haiku agent asked to put a
+question to ODIN answered that it had no line to it.
 
 How. `install()` rebinds `tools.tool_search._core_tool_names` (one module attribute, as
 `_prompt_refresh` rebinds `build_turn_context`) to Hermes's own set plus each name in
@@ -61,7 +65,9 @@ WRAPPED_NAME = "_core_tool_names"
 #: `query_village` (`_query_village.py`); village-bridge's one `village` tool (rolodex and gold
 #: stars are its operations, `plugins/village-bridge/__init__.py`, `ctx.register_tool`). Plus
 #: av-elicit's `elicitation_record` (`plugins/av-elicit/__init__.py` TOOL_NAME, TOOLSET; GC-ELICIT),
-#: which Haiku never reached through the bridge. The registry is read on every assembly, so a
+#: which Haiku never reached through the bridge. Plus av-events' `ask_odin` (`_ask_odin.py` TOOL_NAME,
+#: TOOLSET; ODIN-ASK-VISIBLE), registered only behind `AV_ASK_ODIN`: a box with the switch off has no
+#: such tool, so the lookup adds nothing. The registry is read on every assembly, so a
 #: plugin that registers after av-events installs the wrapper (av-elicit loads later) still counts.
 VISIBLE_TOOLS: Dict[str, str] = {
     "ask_village": "av-events",
@@ -69,6 +75,7 @@ VISIBLE_TOOLS: Dict[str, str] = {
     "query_village": "av-events",
     "village": "village",
     "elicitation_record": "av-elicit",
+    "ask_odin": "av-events",
 }
 
 _MARK = "__av_village_visible__"
