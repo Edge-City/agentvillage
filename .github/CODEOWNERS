@@ -1,0 +1,47 @@
+# The approval.md release gate's own files (B-167 CLASS-DIFF, B-167N NEW-CALLS).
+# expected.json declares each new call's outcome and carries Carter's acceptance
+# on a limiting one; accepted_by is text an author can write, so the control is
+# this review plus approval.md's pin of the same file (PIN_EXPECTED in its ci.yml).
+# Effective only once the main ruleset requires code-owner review (Carter's hand).
+/scripts/approval-class-diff/expected.json   @soycarts
+/scripts/approval-class-diff/                @soycarts
+/scripts/approval-class-diff.sh              @soycarts
+/.github/workflows/test.yml                  @soycarts
+/.github/CODEOWNERS                          @soycarts
+# B-167N fold 1 N7 (review-b's refute): the gated-tool list the extractor reads, the
+# release enforcement point (Tag release tags only on a green test.yml), the manifest
+# the release rule reads (previous-release.sh, S3), and the gate's own tests.
+/install/install_approval.ts                 @soycarts
+/.github/workflows/tag-release.yml           @soycarts
+/scripts/tag-release.ts                      @soycarts
+/scripts/tests/approval-class-diff.test.ts   @soycarts
+/release/RC-MANIFEST.md                      @soycarts
+# B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): every path that can
+# run code, or choose the code that runs, in the class-diff job before or during the
+# check. The root files bun and npm read (lifecycle scripts, the lockfile, preload and
+# registry config, tsconfig paths, .env)...
+/package.json                                @soycarts
+/bun.lock                                    @soycarts
+/bun.lockb                                   @soycarts
+/bunfig.toml                                 @soycarts
+/.npmrc                                      @soycarts
+/tsconfig.json                               @soycarts
+/jsconfig.json                               @soycarts
+/.env                                        @soycarts
+/.env.*                                      @soycarts
+# ...and the overlay code approval.md's extractor executes: it imports
+# install/install_index.ts (DIGEST_CRON_SPECS) under bun, so that module and every
+# file it imports run inside the extractor, after the ref check and before the check.
+# scripts/tests/approval-class-diff.test.ts recomputes this import closure and fails
+# when a file in it is missing here.
+/install/install_index.ts                    @soycarts
+/install/args.ts                             @soycarts
+/install/config.ts                           @soycarts
+/install/env.ts                              @soycarts
+/install/hermes_cli.ts                       @soycarts
+/install/paths.ts                            @soycarts
+/skills/index-network/scripts/hermes-cli.ts  @soycarts
+/skills/index-network/scripts/job-settings.ts @soycarts
+/skills/index-network/scripts/message-labels.ts @soycarts
+/skills/index-network/scripts/pause-job.ts   @soycarts
+/skills/index-network/scripts/state-lock.ts  @soycarts
