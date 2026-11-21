@@ -761,6 +761,229 @@
           "manual": "card"
         }
       }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.inferred.index): the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing publishes without the resident's yes.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.inferred.index",
+        "key": "intent.publish.inferred.index:0193a6c0-0000-7000-8000-000000000001",
+        "summary": "Publish to Index an intention your agent inferred (intention 0193a6c0-0000-7000-8000-000000000001).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:401",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.stated.index): the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, which the village default gives this class.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.stated.index",
+        "key": "intent.publish.stated.index:0193a6c0-0000-7000-8000-000000000002",
+        "summary": "Publish to Index an intention you stated (intention 0193a6c0-0000-7000-8000-000000000002).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:401",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.inferred.index): the first propose of a held intention, behind no hooked call (the av-events plugin owns no gated tool): this class is manual in the village default, so the resident gets a minimal card and Index publishes only on a yes.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.inferred.index",
+        "key": "intent.publish.inferred.index:0193a6c0-0000-7000-8000-000000000003",
+        "summary": "Publish to Index an intention your agent inferred (intention 0193a6c0-0000-7000-8000-000000000003).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:424",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.stated.index): the first propose of a held intention, behind no hooked call (the av-events plugin owns no gated tool): this class is autonomous in the village default, so a stated intention publishes with no card; under ask or manual it cards.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.stated.index",
+        "key": "intent.publish.stated.index:0193a6c0-0000-7000-8000-000000000004",
+        "summary": "Publish to Index an intention you stated (intention 0193a6c0-0000-7000-8000-000000000004).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:424",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Digest share: the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing is sent without the resident's yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "digest.share",
+        "key": "digest.share:5b0c1f2e-0000-4000-8000-000000000001",
+        "summary": "Share a digest your agent drafted with the village until 2026-11-28T10:00:00Z (digest 5b0c1f2e-0000-4000-8000-000000000001).",
+        "payload": {
+          "digest_id": "5b0c1f2e-0000-4000-8000-000000000001",
+          "scope": "village",
+          "text": "A fixture digest about my week",
+          "expires_at": "2026-11-28T10:00:00Z"
+        },
+        "source": "plugins/av-events/_share_vote.py:1077",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Village vote: the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing is sent without the resident's yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "village.vote",
+        "key": "village.vote:weekly-2026-11-21:6c1d2e3f-0000-4000-8000-000000000002",
+        "summary": "Answer to send for you: Yes (option yes). Weekly village question weekly-2026-11-21: “Should the fixture pass?”",
+        "payload": {
+          "question_id": "weekly-2026-11-21",
+          "answer": "yes"
+        },
+        "source": "plugins/av-events/_share_vote.py:1077",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "refused"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Digest share: the first propose of a held entry, behind no hooked call (the av-events plugin owns no gated tool); the class is manual in the village default, so the resident gets a minimal card and nothing is sent without a yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "digest.share",
+        "key": "digest.share:5b0c1f2e-0000-4000-8000-000000000002",
+        "summary": "Share a digest your agent drafted with the village until 2026-11-28T10:00:00Z (digest 5b0c1f2e-0000-4000-8000-000000000002).",
+        "payload": {
+          "digest_id": "5b0c1f2e-0000-4000-8000-000000000002",
+          "scope": "village",
+          "text": "A fixture digest about my week",
+          "expires_at": "2026-11-28T10:00:00Z"
+        },
+        "source": "plugins/av-events/_share_vote.py:1119",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Village vote: the first propose of a held entry, behind no hooked call (the av-events plugin owns no gated tool); the class is manual in the village default, so the resident gets a minimal card and nothing is sent without a yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "village.vote",
+        "key": "village.vote:weekly-2026-11-22:6c1d2e3f-0000-4000-8000-000000000002",
+        "summary": "Answer to send for you: Yes (option yes). Weekly village question weekly-2026-11-22: “Should the fixture pass?”",
+        "payload": {
+          "question_id": "weekly-2026-11-22",
+          "answer": "yes"
+        },
+        "source": "plugins/av-events/_share_vote.py:1119",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
     }
   ]
 }
