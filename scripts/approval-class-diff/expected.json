@@ -66,14 +66,17 @@
             "paymentMethod": "upi"
           }
         },
-        "source": "plugins/village-bridge/_forkicks.py:127-140",
+        "source": "plugins/village-bridge/_forkicks.py:345",
+        "accepts": [
+          "requested"
+        ],
         "decision": "card",
         "card_style": "minimal",
         "matrix": {
           "ask": "card",
-          "autonomous": "auto",
-          "supervised-retro": "auto",
-          "supervised-live": "sampled",
+          "autonomous": "refused",
+          "supervised-retro": "refused",
+          "supervised-live": "refused",
           "manual": "card"
         }
       },
@@ -442,6 +445,322 @@
       },
       "reason": "EdgeOS RSVP runs on its own today with no card (B-172 cancelled, DECISIONS 21 Oct): pinned so no core or template move adds a gate to it.",
       "owner": "skills/edgeos (EdgeOS skill; B-167N pin)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.initialize"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.initialize): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.guide"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.guide): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_hours"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_hours): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_shifts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_shifts): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.get_shift"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.get_shift): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.plan_view"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.plan_view): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.open_shifts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.open_shifts): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_requests"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_requests): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.move_targets"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.move_targets): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.propose"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.propose): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.confirm"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers write (eci-volunteers.confirm): the hook sees the village tool, marketplace.app.read, autonomous in the village default; the bridge sends it only for a code a propose showed in this conversation, and no daemon propose sits behind it.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.link"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers write (eci-volunteers.link): the hook sees the village tool, marketplace.app.read, autonomous in the village default; the bridge sends it only for a code a propose showed in this conversation, and no daemon propose sits behind it.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "kismet.web_link"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Kismet web link (kismet.web_link): opens Kismet on the web in the owner's private chat; the hook sees the village tool, marketplace.app.read, autonomous in the village default; no daemon propose behind it.",
+      "owner": "ov#599 (Kismet 1.2.0)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "zzz.schedule_posts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "zzz.bot repeating posts (zzz.schedule_posts, an owner-only write on the owner's ask): the hook sees the village tool, marketplace.app.read, autonomous in the village default; no daemon propose behind it.",
+      "owner": "ov#595 (zzzbot repeating posts)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "gold-stars.send",
+        "draftId": "gs-draft-0001"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Gold Stars send: the hook sees the village tool (marketplace.app.read, autonomous); the bridge then proposes marketplace.app.action.gold-stars.send, autonomous in the village default, so a confirmed star sends with no card; under ask or manual it cards.",
+      "owner": "overlay 944244c3 (Gold Stars mini-app; B-133 policy row)",
+      "propose": {
+        "class": "marketplace.app.action.gold-stars.send",
+        "key": "marketplace.app.action.gold-stars.send:gs-draft-0001",
+        "summary": "Send one Gold Star: Test resident",
+        "payload": {
+          "appId": "gold-stars",
+          "operation": "gold-stars.send",
+          "preview": {
+            "appId": "gold-stars",
+            "attendeeId": "att-0001",
+            "draftId": "gs-draft-0001",
+            "note": "Thank you for the fixture",
+            "recipientName": "Test resident",
+            "visibility": "named"
+          }
+        },
+        "source": "plugins/village-bridge/_mini_apps.py:379",
+        "accepts": [
+          "autonomous",
+          "requested"
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "refused",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
     }
   ]
 }
