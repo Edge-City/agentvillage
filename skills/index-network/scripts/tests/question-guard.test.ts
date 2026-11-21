@@ -184,3 +184,40 @@ describe("surviving mutants of the 2372cbf8 refute, now pinned on the denylist a
     expect(questionGuardHit("What are your seed phrases?")).toBe("vocab");
   });
 });
+
+describe("ov#516 fold: the five village and Odin tool names tool_categories v4 added are guarded (lead RULED (a))", () => {
+  const V4_NAMES = ["ask_village", "search_village", "query_village", "ask_odin", "pray"];
+  const camel = (name: string) => name.replace(/_(\w)/g, (_m, c: string) => c.toUpperCase());
+
+  test("a question naming one is withheld in every spelling, as welcome-seed.test.ts's every-builtin-name rule spells it", () => {
+    for (const name of V4_NAMES) {
+      for (const form of [name, camel(name), name.replace(/_/g, "-"), name.replace(/_/g, " "), name.replace(/_/g, ""), name.toUpperCase()]) {
+        expect({ form, out: refusedQuestion(`Could you use ${form} for me?`).question }).toEqual({ form, out: null });
+      }
+      // The denylist alone (the third check) reads each by the tool-name fold.
+      for (const form of [name.replace(/_/g, "-"), name.replace(/_/g, " "), camel(name), name.replace(/_/g, "")]) {
+        expect({ form, out: questionDenylistHit(`Could you use ${form} for me?`) }).toEqual({ form, out: "tool_name" });
+      }
+    }
+  });
+
+  test("`village` alone stays unguarded: \"would you ask the village\" passes the tool-name fold with `the` kept; without it, `ask village` is the name", () => {
+    expect(questionDenylistHit("Would you ask the village?")).toBeNull();
+    expect(questionDenylistHit("Would you ask village?")).toBe("tool_name");
+    expect(questionDenylistHit("What would you search the village for?")).toBeNull();
+    // Through the whole guard it is withheld before the denylist, as it was before this fold: `ask` is not a word of the vocabulary.
+    expect(refusedQuestion("Would you ask the village?")).toEqual({ question: null, withheld: "vocab" });
+  });
+
+  test("everyday uses: `pray` as a whole word, and a two-part name inside joined words, now hit the denylist alone; the whole guard withholds them by the vocabulary first, unchanged", () => {
+    const NOW_TOOL_NAME = ["What do you pray for?", "Pray tell, what are you hoping for?", "Who can ask Odin for help?", "Who would you research village life with?"];
+    for (const question of NOW_TOOL_NAME) {
+      expect({ question, hit: questionDenylistHit(question) }).toEqual({ question, hit: "tool_name" });
+      expect({ question, hit: questionGuardHit(question) }).toEqual({ question, hit: "vocab" });
+    }
+    // A one-part name is a whole word only: `prayers` and `praying` are not `pray`.
+    for (const question of ["What are your prayers?", "Who is praying?", "Who in the village would you ask?"]) {
+      expect({ question, hit: questionDenylistHit(question) }).toEqual({ question, hit: null });
+    }
+  });
+});
