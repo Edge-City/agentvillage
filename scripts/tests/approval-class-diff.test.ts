@@ -944,7 +944,8 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
     () => {
       const run = fixture("core-move", ["0.4.5", [STAY, FIXED]], ["0.4.6", [STAY, FIXED]]);
       expect(run.status).toBe(1);
-      expect(run.md).toMatch(/^NEW-CALLS FAIL \d+ BLOCKING: .*0 new, 1 changed \(0 bytes, 1 core move\)/m);
+      // The tool's summary says "core move or propose" since the approval.md fold that extracts daemon proposes.
+      expect(run.md).toMatch(/^NEW-CALLS FAIL \d+ BLOCKING: .*0 new, 1 changed \(0 bytes, 1 core move or propose\)/m);
       expect(run.md).toContain("`: changed (core move) call with no declared outcome");
     },
     LONG,
