@@ -259,7 +259,7 @@ jobs:
     timeout-minutes: 25
     env:
       # APPROVAL_MD_TOOL_REF, see the comment above: the one place the ref is named.
-      AV_APPROVAL_MD_TOOL_REF: cd5b41284a248931bd972def49e191d33d646027 # APPROVAL_MD_TOOL_REF: head of the approval.md NEW-CALLS PR (stacked on #678); moves to that PR's merge commit on approval.md main when it merges, with floor_default in tool-ref-on-main.sh
+      AV_APPROVAL_MD_TOOL_REF: 412365ad2801d15ed5763e58c966b7f6d3cf08aa # APPROVAL_MD_TOOL_REF: head of the approval.md NEW-CALLS PR (stacked on #678); moves to that PR's merge commit on approval.md main when it merges, with floor_default in tool-ref-on-main.sh
     steps:
       # Full history, every branch and tag: every event measures against the
       # previous release (the overlay the boxes run), not HEAD^1 (B-167 fold 1 S-2;
