@@ -16,6 +16,7 @@ import {
   staggeredSchedule,
 } from "../install_index";
 import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
+import { syncZzzInstalledJobId, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT } from "../zzz_job_registry";
 import YAML from "yaml";
 
 const SEED = "ix_integration_seed";
@@ -119,6 +120,13 @@ function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<
   if (spec.noAgent) job.no_agent = true;
   if (spec.failureDeliver) job.failure_deliver = spec.failureDeliver;
   return { ...job, ...rc29PauseState(spec) };
+}
+
+function currentZzzJob(id: string): Record<string, unknown> & { id: string } {
+  return { id, name: ZZZ_JOB_NAME, script: ZZZ_JOB_SCRIPT, enabled: true, no_agent: true,
+    enabled_toolsets: ["village", "no_mcp"], workdir: null, deliver: "local", failure_deliver: "local",
+    schedule: { kind: "cron", expr: "*/10 * * * *" }, repeat: { times: null, completed: 0 },
+    skills: [], skill: null, context_from: null, monitor_script: null, monitor_url: null };
 }
 
 /** rc29 installs the pending alert paused (pending_alert_off.test.ts); a fixture of an installed tenant holds it so. */
@@ -394,6 +402,74 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
 
   const removes = cronCalls().filter((argv) => argv[1] === "remove");
   expect(removes).toEqual([["cron", "remove", "old1"]]);
+});
+
+test("Index preserves only the exact installer-owned ZZZ job shape", () => {
+  const exact = currentZzzJob("aaaaaaaaaaaa");
+  writeJobs([
+    exact,
+    { ...exact, id: "bbbbbbbbbbbb", script: "other.sh" },
+    { ...exact, id: "cccccccccccc", enabled_toolsets: ["village"] },
+    { ...exact, id: "dddddddddddd", no_agent: false },
+    { ...exact, id: "eeeeeeeeeeee", workdir: "/tmp" },
+    { ...exact, id: "ffffffffffff", enabled: false },
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls().filter((argv) => argv[1] === "remove")).toEqual([
+    ["cron", "remove", "bbbbbbbbbbbb"], ["cron", "remove", "cccccccccccc"],
+    ["cron", "remove", "dddddddddddd"], ["cron", "remove", "eeeeeeeeeeee"],
+    ["cron", "remove", "ffffffffffff"],
+  ]);
+});
+
+test("only a confirmed ZZZ job gains registry provenance and survives Index reconciliation", () => {
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
+  const zzz = currentZzzJob("aaaaaaaaaaaa");
+  writeJobs([...ours, zzz]);
+  expect(() => syncZzzInstalledJobId(home, "bbbbbbbbbbbb")).toThrow("zzz_job_not_confirmed");
+  expect(() => syncZzzInstalledJobId(home, zzz.id)).not.toThrow();
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls().filter((argv) => argv[1] === "remove")).toEqual([]);
+  expect(installedIds()).toEqual([...ours.map((job) => job.id as string), zzz.id].sort());
+  expect(JSON.parse(readFileSync(join(home, "av-events", "installed_jobs.json"), "utf8")).zzzJobId).toBe(zzz.id);
+
+  // A new confirmed ID replaces the old one without dropping Index IDs.
+  const next = "bbbbbbbbbbbb";
+  writeJobs([...ours, { ...zzz, id: next }]);
+  syncZzzInstalledJobId(home, next);
+  expect(installedIds()).toEqual([...ours.map((job) => job.id as string), next].sort());
+  reconcileDigestCronJobs({ ...process.env });
+  expect(installedIds()).toContain(next);
+  expect(installedIds()).not.toContain(zzz.id);
+
+  // Revoke removes only the last confirmed ZZZ ID.
+  writeJobs(ours);
+  syncZzzInstalledJobId(home, null);
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+});
+
+test("a ZZZ name or stale registry marker cannot label a lookalike", () => {
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
+  const lookalike = { ...currentZzzJob("aaaaaaaaaaaa"), no_agent: false };
+  writeJobs([...ours, lookalike]);
+  expect(() => syncZzzInstalledJobId(home, lookalike.id)).toThrow("zzz_job_not_confirmed");
+  mkdirSync(join(home, "av-events"), { recursive: true });
+  writeFileSync(join(home, "av-events", "installed_jobs.json"), JSON.stringify({ ids: [lookalike.id], zzzJobId: lookalike.id }));
+  reconcileDigestCronJobs({ ...process.env });
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+});
+
+test("Index does not adopt an exact-shaped ZZZ job without installer provenance", () => {
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
+  const zzz = currentZzzJob("aaaaaaaaaaaa");
+  writeJobs([...ours, zzz]);
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls().filter((argv) => argv[1] === "remove")).toEqual([]);
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+  syncZzzInstalledJobId(home, zzz.id);
+  expect(installedIds()).toEqual([...ours.map((job) => job.id as string), zzz.id].sort());
 });
 
 test("token usage audit cron is removed when opted out", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -9,10 +9,16 @@ import {
   BRIDGE_ERROR_CODES, CHECKS, GENERIC_ERROR_CODES, REQUIRED, Refusal, SECRET_PATTERNS, allowedErrorCode, bumpOf, bumpVerdict,
   loadValidator, main, parseArgs, passedOf, redact, requiredBump, runConformance, secretFindings, secretPattern, show, strictJson,
   summary, withoutAnnotations, type Report, type Result,
+  ADVISORY, MAX_SERVICE_REQUESTS, OUR_HOSTS, SERVICE_DEADLINE_MS, describeValue, inputCompatibility, mainAsync, ownReport, runConformanceAsync, serviceTarget, shapeProblems, tlsDial, type ServiceDeps,
+  toolErrorProblems,
 } from "../mini-apps-conformance";
+import { createServer, type ServerResponse } from "node:http";
+import { createServer as createTlsServer } from "node:tls";
+import { connect as netConnect, type AddressInfo } from "node:net";
 
 // Mini-apps v2 Phase 0, P0-5 (MINIAPPS-PLATFORM-v2-design.md section 5.3 items 1, 4-template, 5): the
-// conformance v0 script. Synthetic manifests and fixtures only, in throwaway directories; no network.
+// conformance v0 script, plus v1 (items 2-3, --service). Synthetic manifests and fixtures only, in
+// throwaway directories; the v1 tests talk only to a local stub through a mocked resolver and dialer.
 //   bun test scripts/tests/mini-apps-conformance.test.ts
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -107,7 +113,7 @@ describe("a synthetic app that conforms", () => {
       expect(r.manifest).toBe("mini-apps/acme/manifest.json");
       expect(Object.fromEntries(r.results.map(x => [x.check, x.pass]))).toEqual({
         "manifest.validator_pin": true, "manifest.schema": true, "skills.sha256": true, "version.bump": null,
-        "service.reachability": null, "service.budgets": null,
+        "service.reachability": null, "service.budgets": null, "service.error_bodies": null,
         "approval.prepare_pair": true, "approval.summary_render": null, "approval.fake_cp": null,
         "hygiene.fixtures": true, "hygiene.secrets": true, "hygiene.duplicate_keys": true, "hygiene.error_bodies": true,
       });
@@ -145,7 +151,8 @@ describe("not_run is never a pass", () => {
       const results = all(true).map(x => x.check === check ? { ...x, pass: null } : x);
       expect([check, passedOf(results)]).toEqual([check, !REQUIRED.has(check)]);
       const failed = all(true).map(x => x.check === check ? { ...x, pass: false } : x);
-      expect([check, passedOf(failed)]).toEqual([check, false]);
+      // A failed check fails the run, except an advisory v1 service row (owner ruling on ov#438).
+      expect([check, passedOf(failed)]).toEqual([check, ADVISORY.has(check)]);
     }
     expect([...REQUIRED].sort()).toEqual(["hygiene.duplicate_keys", "hygiene.error_bodies", "hygiene.fixtures", "hygiene.secrets",
       "manifest.schema", "manifest.validator_pin", "skills.sha256"]);
@@ -1259,7 +1266,7 @@ describe("the real manifests in mini-apps/catalog.json", () => {
   const index = JSON.parse(readFileSync(join(REPO, "mini-apps", "catalog.json"), "utf8"));
   const EXPECTED = {
     "manifest.validator_pin": true, "manifest.schema": true, "skills.sha256": true, "version.bump": null,
-    "service.reachability": null, "service.budgets": null,
+    "service.reachability": null, "service.budgets": null, "service.error_bodies": null,
     "approval.prepare_pair": true, "approval.summary_render": null, "approval.fake_cp": null,
     "hygiene.fixtures": null, "hygiene.secrets": null, "hygiene.duplicate_keys": null, "hygiene.error_bodies": null,
   };
@@ -1296,5 +1303,1022 @@ describe("the real manifests in mini-apps/catalog.json", () => {
       .toEqual([true, "matches: skills/mosaic/SKILL.md", "no needs-card operation"]);
     expect(r.passed).toBe(false);
     expect(main([path], { cwd: REPO, print: () => {}, warn: () => {} })).toBe(1);
+  });
+});
+
+// ---- Conformance v1: the service checks (section 5.3 items 2-3), only with --service ----------------------
+// A local stub server on 127.0.0.1 serves the logic; the resolver and the dialer are mocked (ServiceDeps),
+// so the suite believes it talks to a public address of "sandbox.acme-dev.example" and nothing leaves this
+// machine. The refusal tests prove that a refused address is never connected to: the dial spy is never
+// called and the real stub listening on 127.0.0.1 accepts no connection.
+const V1 = join(import.meta.dir, "fixtures", "conformance-v1");
+// The v1 tests start local servers and wait on real timers; under a loaded machine 5 s is too tight.
+setDefaultTimeout(30_000);
+const SERVICE = "https://sandbox.acme-dev.example/mcp";
+const PUBLIC = "93.184.215.14";
+type Seen = { method: string; url: string; names: string[]; headers: Record<string, string>; body: string };
+type Stub = { seen: Seen[]; deps: ServiceDeps; dials: { address: string; host: string; port: number }[]; resolves: string[]; connections: () => number; port: number; close: () => Promise<void> };
+async function stub(handler: (req: Seen, res: ServerResponse) => void | Promise<void>, resolveTo: (n: number) => { address: string; family: number }[] = () => [{ address: PUBLIC, family: 4 }]): Promise<Stub> {
+  const seen: Seen[] = [], dials: Stub["dials"] = [], resolves: string[] = [];
+  let connections = 0;
+  const server = createServer((req, res) => {
+    const parts: Buffer[] = [];
+    req.on("data", (d: Buffer) => parts.push(d));
+    req.on("end", () => {
+      const names: string[] = [];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) names.push(req.rawHeaders[i].toLowerCase());
+      const s: Seen = { method: req.method ?? "", url: req.url ?? "", names, headers: req.headers as Record<string, string>, body: Buffer.concat(parts).toString("utf8") };
+      seen.push(s);
+      Promise.resolve(handler(s, res)).catch(() => res.destroy());
+    });
+  });
+  server.on("connection", () => { connections++; });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as AddressInfo).port;
+  const deps: ServiceDeps = {
+    resolve: async host => { resolves.push(host); return resolveTo(resolves.length); },
+    dial: to => { dials.push(to); return netConnect(port, "127.0.0.1"); },
+  };
+  const close = () => new Promise<void>(r => { (server as any).closeAllConnections?.(); server.close(() => r()); setTimeout(r, 500); });
+  return { seen, deps, dials, resolves, connections: () => connections, port, close };
+}
+const json = (res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) => {
+  const body = JSON.stringify(value);
+  res.writeHead(status, { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)), ...headers });
+  res.end(body);
+};
+const TOOLS = JSON.parse(readFileSync(join(V1, "mcp-tools.json"), "utf8"));
+/** A Streamable HTTP MCP server for acme: two tools/list pages, lookup answers per its q. */
+function mcpServer(opts: { lookup?: (args: any, res: ServerResponse, id: number) => void; sse?: boolean; session?: string; init?: (res: ServerResponse) => boolean } = {}) {
+  return (req: Seen, res: ServerResponse) => {
+    const msg = JSON.parse(req.body || "{}");
+    const answer = (result: unknown) => {
+      if (opts.sse) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress", params: {} })}\n\n`);
+        res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n\n`);
+        return; // Streamable HTTP may keep the stream open; the suite must not wait for EOF.
+      }
+      json(res, 200, { jsonrpc: "2.0", id: msg.id, result });
+    };
+    if (msg.method === "initialize") {
+      if (opts.init && opts.init(res)) return;
+      json(res, 200, { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "acme", version: "1" } } },
+        { "mcp-session-id": opts.session ?? "sess-123", "set-cookie": "sid=abc; Path=/" });
+      return;
+    }
+    if (msg.method === "notifications/initialized") { res.writeHead(202); res.end(); return; }
+    if (msg.method === "tools/list") {
+      if (!msg.params?.cursor) return answer({ tools: TOOLS.slice(0, 1), nextCursor: "p2" });
+      return answer({ tools: TOOLS.slice(1) });
+    }
+    if (msg.method === "tools/call" && msg.params?.name === "lookup") {
+      if (opts.lookup) return opts.lookup(msg.params.arguments, res, msg.id);
+      if (msg.params.arguments.q === "missing") return answer({ isError: true, content: [{ type: "text", text: "No such item." }], structuredContent: { code: "not_found", detail: "No such item." } });
+      return answer({ content: [{ type: "text", text: "Two things." }], structuredContent: { items: [{ name: "a", rank: 1 }, { name: "b", rank: 2 }] }, more: true });
+    }
+    json(res, 200, { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "no" } });
+  };
+}
+function httpsJsonAcme(extra: (m: any) => void = () => {}): any {
+  const m = acme();
+  m.service = { kind: "https-json", auth: { mode: "none" } };
+  m.operations[0].target = { method: "POST", path: "/api/lookup" };
+  m.operations[1].target = { method: "POST", path: "/api/quote" };
+  m.operations[2].target = { method: "POST", path: "/api/place" };
+  extra(m);
+  return m;
+}
+/** A catalog whose --fixtures directory is a copy of conformance-v1/<kind>/, edited by `edit`. */
+function v1Catalog(kind: "mcp" | "https-json", manifest: any = kind === "mcp" ? acme() : httpsJsonAcme(), edit: (files: Record<string, string>) => void = () => {}): Catalog {
+  const files: Record<string, string> = {};
+  for (const name of readdirSync(join(V1, kind, "acme.lookup"))) files[`acme.lookup/${name}`] = readFileSync(join(V1, kind, "acme.lookup", name), "utf8");
+  edit(files);
+  return catalog({ manifest, fixtures: files });
+}
+async function withStub<T>(handler: Parameters<typeof stub>[0], fn: (s: Stub) => Promise<T>, resolveTo?: Parameters<typeof stub>[1]): Promise<T> {
+  const s = await stub(handler, resolveTo);
+  try { return await fn(s); } finally { await s.close(); }
+}
+const runV1 = (c: Catalog, s: Stub, service = SERVICE) => runConformanceAsync({ manifest: c.path, fixtures: c.fixtures, service }, { cwd: c.root, service: s.deps });
+const v1Rows = (r: Report) => Object.fromEntries(["service.reachability", "service.budgets", "service.error_bodies", "approval.fake_cp"].map(k => [k, row(r, k).pass]));
+async function refusalOf(p: Promise<unknown>): Promise<string> {
+  try { await p; return "no refusal"; } catch (e) { return e instanceof Refusal ? e.reason : `other ${e}`; }
+}
+
+describe("v1: not run by default, never REQUIRED", () => {
+  test("without --service the three service rows are not_run with a how-to note; REQUIRED is the v0 set; a conforming app still passes", async () => {
+    expect([...REQUIRED].sort()).toEqual(["hygiene.duplicate_keys", "hygiene.error_bodies", "hygiene.fixtures", "hygiene.secrets",
+      "manifest.schema", "manifest.validator_pin", "skills.sha256"]);
+    for (const check of ["service.reachability", "service.budgets", "service.error_bodies"]) expect(REQUIRED.has(check)).toBe(false);
+    await withStub(mcpServer(), async s => {
+      withCatalog({ fixtures: GOOD_FIXTURES }, c => {
+        const r = run(c);
+        invariants(r);
+        for (const check of ["service.reachability", "service.budgets", "service.error_bodies"]) {
+          expect([check, row(r, check).pass, row(r, check).note.startsWith("advisory (v1): not run by default (conformance v1): ")]).toEqual([check, null, true]);
+        }
+        expect(row(r, "service.reachability").note).toContain("--service");
+        expect(r.passed).toBe(true);
+      });
+      // runConformanceAsync without --service: the same report, and no resolve and no dial.
+      const c = catalog({ fixtures: GOOD_FIXTURES });
+      try {
+        const r = await runConformanceAsync({ manifest: c.path, fixtures: c.fixtures }, { cwd: c.root, service: s.deps });
+        expect(r).toEqual(run(c));
+      } finally { cleanup(c); }
+      expect([s.resolves.length, s.dials.length, s.connections()]).toEqual([0, 0, 0]);
+    });
+  });
+  test("advisory (owner ruling on ov#438): a v1 service row, run or not, passed or FAILED, never changes passed; a required row still does", () => {
+    expect([...ADVISORY].sort()).toEqual(["service.budgets", "service.error_bodies", "service.reachability"]);
+    for (const check of ADVISORY) expect(REQUIRED.has(check)).toBe(false);
+    const base = CHECKS.map(check => ({ check, pass: REQUIRED.has(check) ? true : null, note: "" }));
+    expect(passedOf(base as Result[])).toBe(true);
+    for (const check of ADVISORY) {
+      for (const value of [false, true, null]) expect([check, value, passedOf(base.map(r => r.check === check ? { ...r, pass: value } : r) as Result[])]).toEqual([check, value, true]);
+    }
+    expect(passedOf(base.map(r => ADVISORY.has(r.check) ? { ...r, pass: false } : r) as Result[])).toBe(true);
+    // Everything else is unchanged: a failed optional v0 row and a missing required row still fail the run.
+    expect(passedOf(base.map(r => r.check === "version.bump" ? { ...r, pass: false } : r) as Result[])).toBe(false);
+    expect(passedOf(base.map(r => r.check === "hygiene.secrets" ? { ...r, pass: null } : r) as Result[])).toBe(false);
+  });
+  test("advisory end to end: every service row FAILS against the stub, yet passed is true, mainAsync exits 0, and the summary marks the rows advisory (v1)", async () => {
+    await withStub((req, res) => json(res, 500, { code: "unavailable", detail: "down" }), async s => {
+      const c = v1Catalog("https-json");
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        invariants(r);
+        expect(Object.fromEntries([...ADVISORY].map(k => [k, row(r, k).pass]))).toEqual({ "service.reachability": false, "service.budgets": false, "service.error_bodies": false });
+        expect([...REQUIRED].every(k => row(r, k).pass === true)).toBe(true);
+        expect(r.passed).toBe(true);
+        const lines: string[] = [];
+        const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", "https://sandbox.acme-dev.example/", "--out", c.out], { cwd: c.root, service: s.deps, print: x => lines.push(x), warn: () => {} });
+        expect(code).toBe(0);
+        expect(JSON.parse(readFileSync(c.out, "utf8")).passed).toBe(true);
+        const text = lines.join("\n");
+        for (const k of ADVISORY) expect(text).toContain(`FAIL    ${k}: advisory (v1): `);
+        expect(text.split("\n").at(-1)).toBe("passed: true");
+        // A failing REQUIRED row still fails the run with the same advisory rows.
+        writeFileSync(join(c.fixtures, "acme.lookup", "ok.json"), "{\"a\":1,\"a\":2}");
+        expect((await runV1(c, s, "https://sandbox.acme-dev.example/")).passed).toBe(false);
+      } finally { cleanup(c); }
+    });
+  });
+  test("the sync entries refuse --service (it needs the network): runConformance and main", () => {
+    withCatalog({ fixtures: GOOD_FIXTURES }, c => {
+      let reason = "";
+      try { runConformance({ manifest: c.path, fixtures: c.fixtures, service: SERVICE }, { cwd: c.root }); } catch (e) { reason = (e as Refusal).reason; }
+      expect(reason).toBe("service_needs_runConformanceAsync");
+      const warned: string[] = [];
+      expect(main([c.path, "--service", SERVICE], { cwd: c.root, print: () => {}, warn: s => warned.push(s) })).toBe(2);
+      expect(warned.join("")).toContain("service_needs_mainAsync");
+    });
+  });
+});
+
+describe("v1 network safety: the URL, the address, redirects, budgets, credentials", () => {
+  test("rule 1: --service must pass the validator's endpointRefusal and not be an Agent Village host; refused before any resolve or connection, through mainAsync (exit 2)", async () => {
+    const { validator } = loadValidator(REPO);
+    const refused: [string, string][] = [
+      ["http://sandbox.acme-dev.example/mcp", "service_url_url"],
+      ["https://127.0.0.1/mcp", "service_url_internal_host"],
+      ["https://169.254.169.254/latest/meta-data/", "service_url_internal_host"],
+      ["https://[::1]/mcp", "service_url_internal_host"],
+      ["https://8.8.8.8/mcp", "service_url_ip_literal"],
+      ["https://2130706433/mcp", "service_url_internal_host"],
+      ["https://localhost/mcp", "service_url_internal_host"],
+      ["https://metadata.google.internal/computeMetadata/v1/", "service_url_internal_host"],
+      ["https://box.local/mcp", "service_url_internal_host"],
+      ["https://sandbox/mcp", "service_url_internal_host"],
+      ["https://sandbox.acme-dev.example:8443/mcp", "service_url_port"],
+      ["https://u:p@sandbox.acme-dev.example/mcp", "service_url_userinfo"],
+      ["https://sandbox.acme-dev.example/mcp?x=1", "service_url_not_canonical"],
+      ["https://sandbox.acme-dev.example", "service_url_not_canonical"],
+      ["https://Sandbox.acme-dev.example/mcp", "service_url_not_canonical"],
+      ["https://agents.edgecity.live/api/v1/village-bridge/tool", "service_is_an_agent_village_host"],
+      ["https://edgecity.live/", "service_is_an_agent_village_host"],
+      ["https://control-plane-production-606c.up.railway.app/", "service_is_an_agent_village_host"],
+      // review-b N1 on ov#438: EdgeOS, the old Esmeralda cp and the app's Railway domain.
+      ["https://api.edgeos.world/", "service_is_an_agent_village_host"],
+      ["https://edgecity.edgeos.world/mcp", "service_is_an_agent_village_host"],
+      ["https://edgeos.world/", "service_is_an_agent_village_host"],
+      ["https://control-plane-production-b752.up.railway.app/", "service_is_an_agent_village_host"],
+      ["https://agentvillage-app-production.up.railway.app/api/v1/village-bridge/tool", "service_is_an_agent_village_host"],
+    ];
+    for (const [url, reason] of refused) {
+      let got = "";
+      try { serviceTarget(url, validator); } catch (e) { got = (e as Refusal).reason; }
+      expect([url, got]).toEqual([url, reason]);
+    }
+    expect(serviceTarget(SERVICE, validator)).toEqual({ url: SERVICE, host: "sandbox.acme-dev.example", basePath: "/mcp" });
+    expect(serviceTarget("https://my-app.up.railway.app/", validator).host).toBe("my-app.up.railway.app");
+    for (const ok of ["https://edgecity.live.attacker.example/", "https://edgeos.world.attacker.example/", "https://notedgeos.world/", "https://zzz.bot/mcp"]) {
+      expect([ok, serviceTarget(ok, validator).url]).toEqual([ok, ok]);
+    }
+    expect([...OUR_HOSTS].sort()).toEqual(["agentvillage-app-production.up.railway.app", "control-plane-production-606c.up.railway.app",
+      "control-plane-production-b752.up.railway.app", "edgecity.live", "edgeos.world"]);
+    await withStub(mcpServer(), async s => {
+      const c = v1Catalog("mcp");
+      try {
+        writeFileSync(c.out, staleReport());
+        for (const [url, reason] of refused.slice(0, 6)) {
+          const warned: string[] = [];
+          const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", url, "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: x => warned.push(x) });
+          // An argument refusal: exit 2 and the file at --out untouched.
+          expect([url, code, warned.join("").includes(`refused: ${reason}`), readFileSync(c.out, "utf8")]).toEqual([url, 2, true, staleReport()]);
+        }
+      } finally { cleanup(c); }
+      expect([s.resolves.length, s.dials.length, s.connections()]).toEqual([0, 0, 0]);
+    });
+  });
+
+  test("rule 2: a name resolving to a private, loopback, link-local, metadata or special-purpose address is refused WITHOUT connecting (mocked resolver; the stub on 127.0.0.1 gets no connection)", async () => {
+    const internal: [string, string][] = [
+      ["127.0.0.1", "service_address_internal"],
+      ["10.1.2.3", "service_address_internal"],
+      ["172.16.9.9", "service_address_internal"],
+      ["192.168.1.10", "service_address_internal"],
+      ["100.64.0.1", "service_address_internal"],
+      ["0.0.0.0", "service_address_internal"],
+      ["169.254.10.10", "service_address_internal"],
+      ["169.254.169.254", "service_address_metadata"],
+      ["169.254.170.2", "service_address_metadata"],
+      ["100.100.100.200", "service_address_metadata"],
+      ["192.0.0.192", "service_address_metadata"],
+      ["fd00:ec2::254", "service_address_metadata"],
+      ["::1", "service_address_internal"],
+      ["::", "service_address_internal"],
+      ["fe80::1", "service_address_internal"],
+      ["fe80::1%en0", "service_address_unparseable_or_scoped"],
+      ["fc00::5", "service_address_internal"],
+      ["::ffff:127.0.0.1", "service_address_internal"],
+      ["::ffff:169.254.169.254", "service_address_metadata"],
+      ["64:ff9b::a9fe:a9fe", "service_address_internal"],
+      ["2002:a9fe:a9fe::1", "service_address_special_purpose"],
+      ["2001:0:4136:e378::1", "service_address_special_purpose"],
+      ["192.0.2.7", "service_address_special_purpose"],
+      ["224.0.0.1", "service_address_internal"],
+      ["not-an-ip", "service_address_unparseable_or_scoped"],
+    ];
+    for (const [address, reason] of internal) {
+      await withStub(mcpServer(), async s => {
+        // This dialer WOULD reach the live stub on 127.0.0.1 if the guard let it through.
+        s.deps.dial = to => { s.dials.push(to); return netConnect(s.port, "127.0.0.1"); };
+        const c = v1Catalog("mcp");
+        try {
+          writeFileSync(c.out, staleReport());
+          expect([address, await refusalOf(runV1(c, s))]).toEqual([address, reason]);
+          const warned: string[] = [];
+          const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", SERVICE, "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: x => warned.push(x) });
+          // A run refusal: exit 2, our own stale report removed, nothing written.
+          expect([address, code, warned.join("").includes(reason), existsSync(c.out)]).toEqual([address, 2, true, false]);
+        } finally { cleanup(c); }
+        await new Promise(r => setTimeout(r, 20));
+        expect([address, s.resolves.length, s.dials.length, s.connections(), s.seen.length]).toEqual([address, 2, 0, 0, 0]);
+      }, () => [{ address, family: address.includes(":") ? 6 : 4 }]);
+    }
+  });
+
+  test("rule 2: ANY refused answer refuses the name (a public and a private answer together); an empty or failed resolution fails reachability, no connection", async () => {
+    await withStub(mcpServer(), async s => {
+      const c = v1Catalog("mcp");
+      try { expect(await refusalOf(runV1(c, s))).toBe("service_address_internal"); } finally { cleanup(c); }
+      expect([s.dials.length, s.connections()]).toEqual([0, 0]);
+    }, () => [{ address: PUBLIC, family: 4 }, { address: "10.0.0.8", family: 4 }]);
+    for (const resolveTo of [() => [], () => { throw new Error("ENOTFOUND"); }]) {
+      await withStub(mcpServer(), async s => {
+        const c = v1Catalog("mcp");
+        try {
+          const r = await runV1(c, s);
+          invariants(r);
+          expect(v1Rows(r)).toEqual({ "service.reachability": false, "service.budgets": null, "service.error_bodies": null, "approval.fake_cp": null });
+          expect(row(r, "service.reachability").note).toBe("advisory (v1): sandbox.acme-dev.example does not resolve");
+        } finally { cleanup(c); }
+        expect([s.dials.length, s.connections()]).toEqual([0, 0]);
+      }, resolveTo as any);
+    }
+  });
+
+  test("rule 2: DNS rebinding: the name is resolved once, and every connection of the run goes to that one checked address", async () => {
+    await withStub(mcpServer(), async s => {
+      const c = v1Catalog("mcp");
+      try {
+        const r = await runV1(c, s);
+        expect(v1Rows(r)).toEqual({ "service.reachability": true, "service.budgets": true, "service.error_bodies": true, "approval.fake_cp": null });
+      } finally { cleanup(c); }
+      expect(s.resolves).toEqual(["sandbox.acme-dev.example"]);
+      expect(s.dials.length).toBeGreaterThanOrEqual(6);
+      expect(s.dials.every(d => d.address === PUBLIC && d.host === "sandbox.acme-dev.example" && d.port === 443)).toBe(true);
+    }, n => n === 1 ? [{ address: PUBLIC, family: 4 }] : [{ address: "127.0.0.1", family: 4 }]);
+  });
+
+  test("rule 3: no redirect is ever followed, to another host or the same one; its body is not read", async () => {
+    for (const [location, where] of [["https://evil.example/mcp", "another host"], ["https://sandbox.acme-dev.example/v2/mcp", "the same host"], ["/elsewhere", "the same host"]]) {
+      // The redirect's body is never read: here it declares more than any cap, and the answer is still the redirect.
+      await withStub(mcpServer({ init: res => { res.socket?.end(`HTTP/1.1 302 Found\r\nlocation: ${location}\r\ncontent-length: 300000\r\n\r\nhello`); return true; } }), async s => {
+        const c = v1Catalog("mcp");
+        try {
+          const r = await runV1(c, s);
+          expect(v1Rows(r)).toEqual({ "service.reachability": false, "service.budgets": null, "service.error_bodies": null, "approval.fake_cp": null });
+          expect(row(r, "service.reachability").note).toContain(`initialize: a 302 redirect to ${where}, never followed`);
+        } finally { cleanup(c); }
+        expect([location, s.dials.length, s.seen.map(x => x.url)]).toEqual([location, 1, ["/mcp"]]);
+      });
+    }
+    // https-json: a read op path that redirects fails reachability and its call; nothing else is fetched.
+    await withStub((req, res) => { res.writeHead(307, { location: "https://evil.example/x", "content-length": "0" }); res.end(); }, async s => {
+      const c = v1Catalog("https-json");
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        expect(row(r, "service.reachability").pass).toBe(false);
+        expect(row(r, "service.budgets").note).toContain("a 307 redirect to another host, never followed");
+      } finally { cleanup(c); }
+      expect(s.seen.map(x => x.url)).toEqual(["/api/lookup", "/api/lookup"]);
+    });
+  });
+
+  test("rule 4: a read op's call is cut off at its timeoutMs and its maxResponseBytes (declared, chunked or close-delimited)", async () => {
+    const slow = acme();
+    slow.operations[0].timeoutMs = 300;
+    await withStub(mcpServer({ lookup: (args, res, id) => { setTimeout(() => json(res, 200, { jsonrpc: "2.0", id, result: {} }), 4000); } }), async s => {
+      const c = v1Catalog("mcp", slow);
+      try {
+        const started = Date.now();
+        const r = await runV1(c, s);
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(row(r, "service.budgets").pass).toBe(false);
+        expect(row(r, "service.budgets").note).toContain("acme.lookup/ok.request.json: no complete answer within 300 ms");
+      } finally { cleanup(c); }
+    });
+    const big = "x".repeat(5000); // maxResponseBytes of acme.lookup is 4096
+    const shapes: [string, (res: ServerResponse, id: number) => void, string][] = [
+      // A declared length over the cap is refused from the header, before any body byte is read (here the body is cut short).
+      ["content-length", (res, id) => { res.socket?.end("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 5000\r\n\r\n{"); }, "content-length 5000 is over maxResponseBytes 4096"],
+      ["chunked", (res, id) => { res.writeHead(200, { "content-type": "application/json" }); res.write(JSON.stringify({ jsonrpc: "2.0", id, result: { big } }).slice(0, 3000)); setTimeout(() => res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { big } }).slice(3000)), 20); }, "the body is over maxResponseBytes 4096"],
+      ["sse", (res, id) => { res.writeHead(200, { "content-type": "text/event-stream" }); res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", id, result: { big } })}\n\n`); }, "the body is over maxResponseBytes 4096"],
+    ];
+    for (const [name, answer, want] of shapes) {
+      await withStub(mcpServer({ lookup: (args, res, id) => answer(res, id) }), async s => {
+        const c = v1Catalog("mcp");
+        try {
+          const r = await runV1(c, s);
+          expect([name, row(r, "service.budgets").pass, row(r, "service.budgets").note.includes(want)]).toEqual([name, false, true]);
+        } finally { cleanup(c); }
+      });
+    }
+    // https-json: a close-delimited body (no content-length, no chunking) over the cap.
+    await withStub((req, res) => { res.socket?.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n${JSON.stringify({ items: [], big })}`); res.socket?.end(); }, async s => {
+      const c = v1Catalog("https-json");
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        expect(row(r, "service.budgets").note).toContain("acme.lookup/ok.request.json: the body is over maxResponseBytes 4096");
+      } finally { cleanup(c); }
+    });
+  });
+
+  test("rule 3: the default dial is TLS verified for the name: a certificate the system does not trust is refused, and nothing is read", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "conformance-tls-")));
+    try {
+      const made = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"),
+        "-days", "2", "-subj", "/CN=sandbox.acme-dev.example", "-addext", "subjectAltName=DNS:sandbox.acme-dev.example"], { encoding: "utf8" });
+      if (made.status !== 0) { console.log("openssl unavailable: TLS dial test skipped"); return; }
+      let handshakes = 0, bytes = 0;
+      const server = createTlsServer({ key: readFileSync(join(dir, "k.pem")), cert: readFileSync(join(dir, "c.pem")) }, sock => { handshakes++; sock.on("data", (d: Buffer) => { bytes += d.length; }); });
+      await new Promise<void>(r => server.listen(0, "127.0.0.1", () => r()));
+      const port = (server.address() as AddressInfo).port;
+      try {
+        const c = v1Catalog("mcp");
+        try {
+          const deps: ServiceDeps = { resolve: async () => [{ address: PUBLIC, family: 4 }], dial: to => tlsDial({ ...to, address: "127.0.0.1", port }) };
+          const r = await runConformanceAsync({ manifest: c.path, fixtures: c.fixtures, service: SERVICE }, { cwd: c.root, service: deps });
+          expect(row(r, "service.reachability").pass).toBe(false);
+          expect(row(r, "service.reachability").note).toMatch(/initialize: could not connect or read \((?:DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\)/);
+        } finally { cleanup(c); }
+        expect([handshakes, bytes]).toEqual([0, 0]);
+      } finally { server.close(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("rule 5: no credential is ever sent: a fixed header list, no Authorization or Cookie (a Set-Cookie is not kept), nothing from the environment", async () => {
+    const saved = { ...process.env };
+    process.env.AUTHORIZATION = "Bearer " + "A1b2".repeat(8);
+    process.env.MINI_APP_ACME_TOKEN = "tok-" + "A1b2".repeat(8);
+    try {
+      await withStub(mcpServer(), async s => {
+        const c = v1Catalog("mcp");
+        try { expect((await runV1(c, s)).passed).toBe(true); } finally { cleanup(c); }
+        const allowed = ["host", "user-agent", "accept", "accept-encoding", "connection", "content-type", "content-length", "mcp-protocol-version", "mcp-session-id"];
+        expect(s.seen.length).toBeGreaterThanOrEqual(6);
+        for (const req of s.seen) {
+          expect(req.names.filter(n => !allowed.includes(n))).toEqual([]);
+          expect(JSON.stringify(req)).not.toContain("A1b2A1b2");
+        }
+        // The server-issued session id is echoed after initialize; the cookie is not.
+        expect(s.seen.slice(1).every(r => r.headers["mcp-session-id"] === "sess-123" && r.headers["mcp-protocol-version"] === "2025-06-18")).toBe(true);
+      });
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+});
+
+describe("v1 checks against a stub sandbox", () => {
+  test("mcp, auth none: initialize 2025-06-18, tools/list (two pages) holds every target.tool, read calls fixture-shaped, error body closed; prepare and needs-card never called", async () => {
+    for (const sse of [false, true]) {
+      await withStub(mcpServer({ sse }), async s => {
+        const c = v1Catalog("mcp");
+        try {
+          const r = await runV1(c, s);
+          invariants(r);
+          expect([sse, v1Rows(r)]).toEqual([sse, { "service.reachability": true, "service.budgets": true, "service.error_bodies": true, "approval.fake_cp": null }]);
+          expect(row(r, "service.reachability").note).toContain("initialize answers 2025-06-18; tools/list holds every target.tool (3 tool(s))");
+          expect(row(r, "service.budgets").note).toStartWith("advisory (v1): 1 read call(s) answered within timeoutMs and maxResponseBytes");
+          expect(row(r, "service.error_bodies").note).toStartWith("advisory (v1): 1 error call(s) answered like their fixture: exactly {code, detail} with its closed code");
+          expect(row(r, "approval.fake_cp").note).toContain("Not checkable without a card");
+          expect(r.passed).toBe(true);
+        } finally { cleanup(c); }
+        const methods = s.seen.map(x => JSON.parse(x.body || "{}")).map(m => m.method === "tools/call" ? `tools/call ${m.params.name}` : m.method);
+        expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list", "tools/list", "tools/call lookup", "tools/call lookup"]);
+      });
+    }
+  });
+
+  test("https-json, auth none: each read op path answers 2xx or a documented 4xx; only the read path is ever requested", async () => {
+    await withStub((req, res) => {
+      const args = JSON.parse(req.body || "{}");
+      if (args.q === "missing") return json(res, 404, { code: "not_found", detail: "No such item." });
+      json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "2026-10-20", extra: [1, 2] });
+    }, async s => {
+      const c = v1Catalog("https-json");
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/v1/");
+        invariants(r);
+        expect(v1Rows(r)).toEqual({ "service.reachability": true, "service.budgets": true, "service.error_bodies": true, "approval.fake_cp": null });
+        expect(row(r, "service.reachability").note).toContain("write, prepare and needs-card paths are never called");
+      } finally { cleanup(c); }
+      expect(s.seen.map(x => `${x.method} ${x.url} ${x.body}`)).toEqual([
+        "POST /v1/api/lookup {\"q\":\"missing\"}", "POST /v1/api/lookup {\"q\":\"things\"}"]);
+    });
+  });
+
+  test("fixture shape: a missing key, a wrong type or a wrong element shape fails service.budgets with its pointer; extra keys are fine", async () => {
+    const answers: [unknown, string][] = [
+      [{ items: [{ name: "a", rank: 1 }] }, "acme.lookup/ok.request.json: /asOf is missing"],
+      [{ items: { name: "a" }, asOf: "x" }, "/items is object, the fixture has array"],
+      [{ items: [{ name: "a", rank: "1" }], asOf: "x" }, "/items/0/rank is string, the fixture has number"],
+      [[1, 2], "/ is array, the fixture has object"],
+    ];
+    for (const [body, want] of answers) {
+      await withStub((req, res) => json(res, JSON.parse(req.body).q === "missing" ? 404 : 200, JSON.parse(req.body).q === "missing" ? { code: "not_found", detail: "x" } : body), async s => {
+        const c = v1Catalog("https-json");
+        try {
+          const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+          expect([want, row(r, "service.budgets").pass, row(r, "service.budgets").note.includes(want)]).toEqual([want, false, true]);
+          // Advisory: the failed v1 row is reported, and the run still passes on its required set.
+          expect(r.passed).toBe(true);
+        } finally { cleanup(c); }
+      });
+    }
+    expect(shapeProblems({ a: null, b: [{ c: 1 }] }, { a: "anything", b: [], z: 1 })).toEqual([]);
+  });
+
+  test("live error bodies: an extra key, an open code, another code than the fixture's, a 5xx, a 2xx, or (mcp) a JSON-RPC error where the fixture says a code each fail service.error_bodies", async () => {
+    const bad: [number, unknown, string][] = [
+      [404, { code: "not_found", detail: "x", trace: "y" }, "keys are code, detail, trace, not exactly code, detail"],
+      [400, { code: "boom", detail: "x" }, "code boom is not in the closed set for acme"],
+      [409, { code: "conflict", detail: "x" }, "code conflict, the fixture says not_found"],
+      [503, { code: "unavailable", detail: "x" }, "HTTP 503, the fixture is an error body (a documented 4xx)"],
+      [200, { items: [] }, "HTTP 200, the fixture is an error body"],
+      [404, { code: "not_found", detail: "Contact sk-" + "A1b2".repeat(6) }, "the answer holds a secret pattern at /detail (sk_key)"],
+    ];
+    for (const [status, body, want] of bad) {
+      await withStub((req, res) => JSON.parse(req.body).q === "missing" ? json(res, status, body) : json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "x" }), async s => {
+        const c = v1Catalog("https-json");
+        try {
+          const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+          expect([want, row(r, "service.error_bodies").pass, row(r, "service.error_bodies").note.includes(want)]).toEqual([want, false, true]);
+          expect(JSON.stringify(r)).not.toContain("A1b2A1b2");
+        } finally { cleanup(c); }
+      });
+    }
+    await withStub(mcpServer({ lookup: (args, res, id) => args.q === "missing"
+      ? json(res, 200, { jsonrpc: "2.0", id, error: { code: -32000, message: "nope" } })
+      : json(res, 200, { jsonrpc: "2.0", id, result: { content: [], structuredContent: { items: [] } } }) }), async s => {
+      const c = v1Catalog("mcp");
+      try {
+        const r = await runV1(c, s);
+        // A JSON-RPC error is a conforming MCP error answer, but not where the fixture says a closed code.
+        expect(row(r, "service.error_bodies").note).toContain("a JSON-RPC error -32000, the fixture says code not_found");
+      } finally { cleanup(c); }
+    });
+  });
+
+  test("reachability (mcp): a wrong protocol, a missing tool, or a manifest looser than the tool's inputSchema fails", async () => {
+    await withStub(mcpServer({ init: res => { json(res, 200, { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05" } }); return true; } }), async s => {
+      const c = v1Catalog("mcp");
+      try { expect(row(await runV1(c, s), "service.reachability").note).toContain("initialize answers protocol 2024-11-05, not 2025-06-18"); } finally { cleanup(c); }
+    });
+    const missing = acme();
+    missing.operations[1].target = { tool: "quote_v2" };
+    await withStub(mcpServer(), async s => {
+      const c = v1Catalog("mcp", missing);
+      try {
+        const r = await runV1(c, s);
+        expect(row(r, "service.reachability").note).toContain("acme.order.prepare: tool quote_v2 is not in tools/list");
+        // Listing is safe; calling a prepare is not: still only lookup is called.
+        expect(s.seen.map(x => JSON.parse(x.body || "{}")).filter(m => m.method === "tools/call").map(m => m.params.name)).toEqual(["lookup", "lookup"]);
+      } finally { cleanup(c); }
+    });
+    expect(inputCompatibility({ type: "object", properties: { q: { type: "string" } } }, { type: "object", properties: { q: { type: "string" }, n: { type: "integer" } }, required: ["n"] }))
+      .toEqual(["the tool requires n, the manifest does not"]);
+    expect(inputCompatibility({ type: "object", properties: { q: { type: "string" }, z: {} } }, { type: "object", properties: { q: { type: "integer" } }, additionalProperties: false }))
+      .toEqual(["q is \"string\" here, \"integer\" in the tool", "the manifest allows z, the tool does not"]);
+    expect(inputCompatibility({ type: "object", properties: { n: { type: "integer" } }, required: ["n"] }, { type: "object", properties: { n: { type: "number" } }, required: ["n"] })).toEqual([]);
+  });
+
+  test("oauth / app-token: only the refusal without a token is checked (401; 401 or 403); budgets and error bodies are not_run; discovery is fetched only on the --service host", async () => {
+    const oauth = (discovery: string) => { const m = acme(); m.service.auth = { mode: "oauth", oauth: { resource: "https://acme.example/mcp", scopes: ["acme:read"], discovery } }; return m; };
+    await withStub((req, res) => req.url === "/.well-known/oauth-authorization-server" ? json(res, 200, { issuer: "https://sandbox.acme-dev.example" }) : json(res, 401, { error: "unauthorized" }), async s => {
+      const c = v1Catalog("mcp", oauth("https://sandbox.acme-dev.example/.well-known/oauth-authorization-server"));
+      try {
+        const r = await runV1(c, s);
+        expect(v1Rows(r)).toEqual({ "service.reachability": true, "service.budgets": null, "service.error_bodies": null, "approval.fake_cp": null });
+        expect(row(r, "service.reachability").note).toContain("refuses a call without a token (HTTP 401); oauth discovery answers 200 with a JSON object");
+        expect(row(r, "service.budgets").note).toBe("advisory (v1): auth oauth: a read needs a credential, and conformance never sends one");
+      } finally { cleanup(c); }
+      expect(s.seen.map(x => `${x.method} ${x.url}`)).toEqual(["POST /mcp", "GET /.well-known/oauth-authorization-server"]);
+      expect(s.seen.every(x => !x.names.includes("authorization") && !x.names.includes("cookie"))).toBe(true);
+    });
+    await withStub((req, res) => json(res, 200, { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }), async s => {
+      const c = v1Catalog("mcp", oauth("https://auth.acme.example/.well-known/oauth-authorization-server"));
+      try {
+        const r = await runV1(c, s);
+        expect(row(r, "service.reachability").pass).toBe(false);
+        expect(row(r, "service.reachability").note).toContain("without a token it answers HTTP 200, not 401 (auth oauth)");
+        expect(row(r, "service.reachability").note).toContain("oauth discovery is on auth.acme.example, not the --service host: not fetched");
+      } finally { cleanup(c); }
+      expect(s.seen.length).toBe(1);
+    });
+    const token = httpsJsonAcme(m => { m.service.auth = { mode: "app-token", secretRef: "MINI_APP_ACME_TOKEN" }; });
+    await withStub((req, res) => json(res, 403, { code: "not_authorized", detail: "x" }), async s => {
+      const c = v1Catalog("https-json", token);
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        expect(v1Rows(r)).toEqual({ "service.reachability": true, "service.budgets": null, "service.error_bodies": null, "approval.fake_cp": null });
+      } finally { cleanup(c); }
+      expect(s.seen.map(x => x.url)).toEqual(["/api/lookup"]);
+      expect(s.seen[0].names.includes("authorization")).toBe(false);
+    });
+  });
+
+  test("what is never called: no request fixture, a GET with arguments, a read op declared PUT/DELETE; internal and invalid manifests resolve nothing", async () => {
+    await withStub(mcpServer(), async s => {
+      const c = catalog({ fixtures: GOOD_FIXTURES }); // no .request.json at all
+      try {
+        const r = await runV1(c, s);
+        expect(v1Rows(r)).toEqual({ "service.reachability": true, "service.budgets": null, "service.error_bodies": null, "approval.fake_cp": null });
+        expect(row(r, "service.budgets").note).toContain("acme.lookup: no <name>.request.json");
+        expect(r.passed).toBe(true); // v1 not run never blocks
+      } finally { cleanup(c); }
+    });
+    for (const [method, body, want] of [["GET", "{\"q\":\"things\"}", "a GET op takes no arguments yet"], ["PUT", "{}", "a read op with method PUT is never called"], ["DELETE", "{}", "a read op with method DELETE is never called"]]) {
+      await withStub((req, res) => json(res, 200, { items: [], asOf: "x" }), async s => {
+        const c = v1Catalog("https-json", httpsJsonAcme(m => { m.operations[0].target.method = method; }), files => {
+          files["acme.lookup/ok.request.json"] = body;
+          delete files["acme.lookup/error-not-found.request.json"];
+        });
+        try {
+          const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+          expect([method, row(r, "service.budgets").pass, row(r, "service.budgets").note.includes(want)]).toEqual([method, null, true]);
+        } finally { cleanup(c); }
+        expect([method, s.seen.length]).toEqual([method, 0]);
+      });
+    }
+    // A GET read op with {} is called, with no body.
+    await withStub((req, res) => json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "x" }), async s => {
+      const c = v1Catalog("https-json", httpsJsonAcme(m => { m.operations[0].target.method = "GET"; }), files => {
+        files["acme.lookup/ok.request.json"] = "{}";
+        delete files["acme.lookup/error-not-found.request.json"];
+      });
+      try { expect(row(await runV1(c, s, "https://sandbox.acme-dev.example/"), "service.budgets").pass).toBe(true); } finally { cleanup(c); }
+      expect(s.seen.map(x => `${x.method} ${x.url} ${x.body}`)).toEqual(["GET /api/lookup "]);
+    });
+    await withStub(mcpServer(), async s => {
+      const gold = runConformanceAsync({ manifest: "mini-apps/gold-stars/manifest.json", service: SERVICE }, { cwd: REPO, service: s.deps });
+      const r = await gold;
+      expect(row(r, "service.reachability").note).toContain("service.kind internal");
+      const c = catalog({ manifest: { ...acme(), extra: 1 }, fixtures: GOOD_FIXTURES });
+      try { expect(row(await runV1(c, s), "service.budgets").note).toBe("advisory (v1): the manifest is not a valid v2 manifest: no service is called"); } finally { cleanup(c); }
+      expect([s.resolves.length, s.dials.length]).toEqual([0, 0]);
+    });
+  });
+
+  test("the reader: a malformed status line, an informational answer, a compressed body, two content-lengths, a cut-off body each fail", async () => {
+    const raw: [string, string][] = [
+      ["HTTX/1.1 200 OK\r\n\r\n", "not an HTTP/1.1 answer"],
+      ["HTTP/1.1 103 Early Hints\r\n\r\n", "an informational 103 answer"],
+      ["HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: 2\r\n\r\n{}", "a compressed body (content-encoding gzip)"],
+      ["HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-length: 3\r\n\r\n{}", "two different content-length headers"],
+      ["HTTP/1.1 200 OK\r\ncontent-length: 50\r\n\r\n{\"a\":", "the connection closed in the middle of the body"],
+      ["HTTP/1.1 200 OK\r\nx: " + "y".repeat(17000) + "\r\n\r\n", "response headers over 16384 bytes"],
+      ["HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\nzz\r\n", "a malformed chunked body"],
+    ];
+    for (const [answer, want] of raw) {
+      await withStub((req, res) => { res.socket?.end(answer); }, async s => {
+        const c = v1Catalog("https-json");
+        try {
+          const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+          expect([want, row(r, "service.budgets").note.includes(want) || row(r, "service.error_bodies").note.includes(want)]).toEqual([want, true]);
+        } finally { cleanup(c); }
+      });
+    }
+  });
+
+  test("the request cap: at most MAX_SERVICE_REQUESTS requests in one run", async () => {
+    await withStub((req, res) => json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "x" }), async s => {
+      const c = v1Catalog("https-json", httpsJsonAcme(), files => {
+        delete files["acme.lookup/error-not-found.request.json"];
+        for (let i = 0; i < MAX_SERVICE_REQUESTS + 5; i++) { files[`acme.lookup/r${String(i).padStart(3, "0")}.json`] = files["acme.lookup/ok.json"]; files[`acme.lookup/r${String(i).padStart(3, "0")}.request.json`] = "{}"; }
+      });
+      try {
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        expect(row(r, "service.budgets").note).toContain(`over the suite's ${MAX_SERVICE_REQUESTS}-request cap`);
+      } finally { cleanup(c); }
+      expect(s.seen.length).toBe(MAX_SERVICE_REQUESTS);
+    });
+  });
+
+  test("a real process: bun <script> --service with a refused URL exits 2 with no network (the CLI entry is mainAsync)", () => {
+    withCatalog({ fixtures: GOOD_FIXTURES }, c => {
+      for (const url of ["https://127.0.0.1/", "https://localhost/mcp", "http://sandbox.acme-dev.example/"]) {
+        const p = spawnSync("bun", [SCRIPT, c.path, "--fixtures", c.fixtures, "--service", url], { cwd: c.root, encoding: "utf8", timeout: 30000 });
+        expect([url, p.status, p.stderr.includes("refused: service_url_")]).toEqual([url, 2, true]);
+      }
+      expect(parseArgs([c.path, "--service", SERVICE]).service).toBe(SERVICE);
+      for (const bad of [[c.path, "--service"], [c.path, "--service", SERVICE, "--service", SERVICE], [c.path, "--service", "--out"]]) expect(() => parseArgs(bad)).toThrow(Refusal);
+    });
+  });
+});
+
+describe("v1 fixtures: <name>.request.json", () => {
+  test("a request is strict JSON, secret-scanned, an object, beside its response, for a read op, under maxRequestBytes; it is never an error or success body", () => {
+    const ok = { ...GOOD_FIXTURES, "acme.lookup/ok.request.json": "{\"q\":\"x\"}", "acme.lookup/error-not-found.request.json": "{\"q\":\"y\"}" };
+    withCatalog({ fixtures: ok }, c => {
+      const r = run(c);
+      expect(row(r, "hygiene.fixtures")).toEqual({ check: "hygiene.fixtures", pass: true, note: "2 fixture file(s), 1 error bod(ies), 2 request(s)" });
+      expect(row(r, "hygiene.error_bodies").pass).toBe(true); // error-not-found.request.json is not an error body
+      expect(r.passed).toBe(true);
+    });
+    const bad: [Record<string, string>, string, string][] = [
+      [{ "acme.order.prepare/ok.json": "{}", "acme.order.prepare/ok.request.json": "{}" }, "hygiene.fixtures", "acme.order.prepare/ok.request.json: a request is sent only for a read operation (acme.order.prepare is prepare)"],
+      [{ "acme.lookup/lone.request.json": "{}" }, "hygiene.fixtures", "acme.lookup/lone.request.json: a request needs its response fixture lone.json beside it"],
+      [{ "acme.lookup/ok.request.json": "[1]" }, "hygiene.fixtures", "acme.lookup/ok.request.json: a request is a JSON object of the op's arguments"],
+      [{ "acme.lookup/ok.request.json": JSON.stringify({ q: "x".repeat(5000) }) }, "hygiene.fixtures", "is over acme.lookup's maxRequestBytes 4096 (the bridge refuses it)"],
+      [{ "acme.lookup/ok.request.json": "{\"q\":1,\"q\":2}" }, "hygiene.duplicate_keys", "acme.lookup/ok.request.json: duplicate key /q"],
+      [{ "acme.lookup/ok.request.json": JSON.stringify({ token: "abc" }) }, "hygiene.secrets", "acme.lookup/ok.request.json /token (secret_key_name)"],
+    ];
+    for (const [extra, check, want] of bad) {
+      withCatalog({ fixtures: { ...GOOD_FIXTURES, ...extra } }, c => {
+        const r = run(c);
+        expect([want, row(r, check).pass, row(r, check).note.includes(want)]).toEqual([want, false, true]);
+      });
+    }
+  });
+});
+
+describe("P0-5 follow-ups (review-b's fold-2 delta read on ov#422)", () => {
+  test("N-a: from a git worktree, --out into the primary checkout (any file, its .git/hooks) is refused; outside it is fine", () => {
+    const top = realpathSync(mkdtempSync(join(tmpdir(), "conformance-wt-")));
+    try {
+      const primary = join(top, "P"), worktree = join(top, "R");
+      mkdirSync(join(primary, "scripts"), { recursive: true });
+      writeFileSync(join(primary, "scripts", "keep.txt"), "x\n");
+      g(top, "init", "-q", primary);
+      g(primary, "add", "-A");
+      g(primary, "commit", "-q", "-m", "p");
+      g(primary, "worktree", "add", "-q", "-b", "w", worktree);
+      const c = catalog({ fixtures: GOOD_FIXTURES });
+      try {
+        // The catalog sits inside the worktree R.
+        const manifestDir = join(worktree, "mini-apps", "acme");
+        mkdirSync(manifestDir, { recursive: true });
+        mkdirSync(join(worktree, "skills", "acme"), { recursive: true });
+        copyFileSync(c.path, join(manifestDir, "manifest.json"));
+        copyFileSync(join(c.root, "skills", "acme", "SKILL.md"), join(worktree, "skills", "acme", "SKILL.md"));
+        const manifest = join(manifestDir, "manifest.json");
+        for (const arg of [join(primary, "scripts", "new.json"), join(primary, ".git", "hooks", "pre-push"), join(primary, "c.json"), join(worktree, "c.json")]) {
+          const warned: string[] = [];
+          expect([arg, main([manifest, "--fixtures", c.fixtures, "--out", arg], { cwd: worktree, print: () => {}, warn: s => warned.push(s) }),
+            warned.join("").includes("refused: out_inside_the_repo_or_the_tool_root"), existsSync(arg)]).toEqual([arg, 2, true, false]);
+        }
+        expect(main([manifest, "--fixtures", c.fixtures, "--out", c.out], { cwd: worktree, print: () => {}, warn: () => {} })).toBe(0);
+        expect(existsSync(c.out)).toBe(true);
+      } finally { cleanup(c); }
+    } finally { rmSync(top, { recursive: true, force: true }); }
+  });
+
+  test("N-b: an empty pre-created --out (mktemp) is accepted and replaced; a non-empty foreign file is still refused", () => {
+    withCatalog({ fixtures: GOOD_FIXTURES }, c => {
+      writeFileSync(c.out, "");
+      expect(main([c.path, "--fixtures", c.fixtures, "--out", c.out], { cwd: c.root, print: () => {}, warn: () => {} })).toBe(0);
+      expect(JSON.parse(readFileSync(c.out, "utf8")).passed).toBe(true);
+      writeFileSync(c.out, " ");
+      expect(main([c.path, "--fixtures", c.fixtures, "--out", c.out], { cwd: c.root, print: () => {}, warn: () => {} })).toBe(2);
+      expect(readFileSync(c.out, "utf8")).toBe(" ");
+    });
+  });
+
+  test("N-c: the colon form (password: hunter2..., \"password\": \"...\") is found and redacted; prose is not", () => {
+    for (const text of ["pass" + "word: hunter2", "Pass" + "word: hunter2!", "\"pass" + "word\": \"hunter 2\"", "pass" + "wd: P@ssw0rd", "pass" + "phrase: correct-horse-9", "{\"pass" + "word\":\"abcdefgh\"}"]) {
+      expect([text, secretPattern(text)]).toEqual([text, "password_colon"]);
+      expect([text, redact(`a ${text} b`).includes("hunter") || redact(`a ${text} b`).includes("ssw0") || redact(`a ${text} b`).includes("horse") || redact(`a ${text} b`).includes("abcdefgh")]).toEqual([text, false]);
+    }
+    for (const text of ["Password: reset it via the link", "Password: required", "password: 8", "Your password: must be long", "Password: \"set it later\"", "password: 'two words'"]) {
+      expect([text, secretPattern(text)]).toEqual([text, null]);
+    }
+    for (const s of ["pass" + "word:".repeat(150000), "pass" + "word: " + "a1".repeat(500000), "\"pass" + "word\":\"".repeat(80000)]) {
+      const t = Date.now();
+      secretPattern(s); redact(s);
+      expect(Date.now() - t).toBeLessThan(2000);
+    }
+  });
+
+  test("N-d: ownReport is exact: a non-hex sha256, an entry not shaped {check, pass, note}, or a file over 1 MiB is foreign (refused, left alone)", () => {
+    withCatalog({ fixtures: GOOD_FIXTURES }, c => {
+      const rel = "mini-apps/acme/manifest.json";
+      const good = { manifest: rel, sha256: "0".repeat(64), results: [{ check: "x", pass: true, note: "" }], passed: true };
+      const foreign: [string, string][] = [
+        ["sha not hex", JSON.stringify({ ...good, sha256: "z".repeat(64) })],
+        ["sha upper-case", JSON.stringify({ ...good, sha256: "A".repeat(64) })],
+        ["an entry without note", JSON.stringify({ ...good, results: [{ check: "x", pass: true }] })],
+        ["an entry with an extra key", JSON.stringify({ ...good, results: [{ check: "x", pass: true, note: "", more: 1 }] })],
+        ["over 1 MiB", JSON.stringify({ ...good, results: [{ check: "x", pass: true, note: "n".repeat(1 << 20) }] })],
+      ];
+      expect(ownReport(join(c.outDir, "none.json"), rel)).toBe(false);
+      writeFileSync(c.out, JSON.stringify(good));
+      expect(ownReport(c.out, rel)).toBe(true);
+      for (const [why, text] of foreign) {
+        writeFileSync(c.out, text);
+        expect([why, ownReport(c.out, rel)]).toEqual([why, false]);
+        expect([why, main([c.path, "--fixtures", c.fixtures, "--out", c.out], { cwd: c.root, print: () => {}, warn: () => {} }), readFileSync(c.out, "utf8") === text]).toEqual([why, 2, true]);
+      }
+    });
+  });
+});
+
+describe("fold 2 (review-b on ov#438): a hostile sandbox never crashes the run; a whole-run deadline", () => {
+  const raw = (res: ServerResponse, text: string) => { res.writeHead(200, { "content-type": "application/json", "content-length": String(Buffer.byteLength(text)) }); res.end(text); };
+  const hostile: [string, (req: Seen, res: ServerResponse) => void, string, string][] = [
+    ["initialize protocolVersion {toString:1}", mcpServer({ init: res => { raw(res, '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":{"toString":1}}}'); return true; } }),
+      "service.reachability", 'initialize answers protocol {"toString":1}, not 2025-06-18'],
+    ["tools/list required [{toString:1}]", (req, res) => {
+      const msg = JSON.parse(req.body || "{}");
+      if (msg.method === "tools/list") return raw(res, `{"jsonrpc":"2.0","id":${msg.id},"result":{"tools":[{"name":"lookup","inputSchema":{"type":"object","required":[{"toString":1}]}},{"name":"quote","inputSchema":{}},{"name":"place","inputSchema":{}}]}}`);
+      return mcpServer()(req, res);
+    }, "service.reachability", 'the tool requires {"toString":1}, the manifest does not'],
+    ["tools/list property type {toString:1}", (req, res) => {
+      const msg = JSON.parse(req.body || "{}");
+      if (msg.method === "tools/list") return raw(res, `{"jsonrpc":"2.0","id":${msg.id},"result":{"tools":[{"name":"lookup","inputSchema":{"type":"object","properties":{"q":{"type":{"toString":1}}}}},{"name":"quote","inputSchema":{}},{"name":"place","inputSchema":{}}]}}`);
+      return mcpServer()(req, res);
+    }, "service.reachability", 'q is "string" here, {"toString":1} in the tool'],
+    ["error call code {toString:1}", mcpServer({ lookup: (args, res, id) => args.q === "missing"
+      ? raw(res, `{"jsonrpc":"2.0","id":${id},"result":{"isError":true,"content":[],"structuredContent":{"code":{"toString":1},"detail":"x"}}}`)
+      : raw(res, `{"jsonrpc":"2.0","id":${id},"result":{"content":[{"type":"text","text":"Two things."}],"structuredContent":{"items":[{"name":"a","rank":1}]}}}`) }),
+      "service.error_bodies", 'code {"toString":1}, the fixture says not_found'],
+    ["toString and valueOf both null (protocolVersion)", mcpServer({ init: res => { raw(res, '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":{"toString":null,"valueOf":null}}}'); return true; } }),
+      "service.reachability", 'initialize answers protocol {"toString":null,"valueOf":null}'],
+  ];
+  for (const [name, handler, check, want] of hostile) {
+    test(`S1 ${name}: exit 0, conformance.json written, passed as without --service; the value is described, never String()-ed`, async () => {
+      await withStub(handler, async s => {
+        const c = v1Catalog("mcp");
+        try {
+          const without = run(c);
+          expect(without.passed).toBe(true);
+          const warned: string[] = [];
+          const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", SERVICE, "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: x => warned.push(x) });
+          expect([name, code, warned]).toEqual([name, 0, []]);
+          const report = JSON.parse(readFileSync(c.out, "utf8")) as Report;
+          invariants(report);
+          expect(report.passed).toBe(without.passed);
+          expect([name, row(report, check).pass, row(report, check).note.includes(want)]).toEqual([name, false, true]);
+        } finally { cleanup(c); }
+      });
+    });
+  }
+  test("S1 over https-json: an error body whose code is {toString:1} is a FAIL row, not a crash", async () => {
+    await withStub((req, res) => JSON.parse(req.body).q === "missing" ? (res.writeHead(404, { "content-type": "application/json", "content-length": "36" }), res.end('{"code":{"toString":1},"detail":"x"}')) : json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "x" }), async s => {
+      const c = v1Catalog("https-json");
+      try {
+        const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", "https://sandbox.acme-dev.example/", "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: () => {} });
+        expect(code).toBe(0);
+        const report = JSON.parse(readFileSync(c.out, "utf8")) as Report;
+        expect(row(report, "service.error_bodies").pass).toBe(false);
+        expect(row(report, "service.error_bodies").note).toContain("code (not a string) is not in the closed set for acme");
+      } finally { cleanup(c); }
+    });
+  });
+  test("S1 (a): any other throw inside the service checks is three advisory FAIL rows with a fixed note; a refusal still exits 2", async () => {
+    await withStub(mcpServer(), async s => {
+      s.deps.resolve = async () => [{ get address(): string { throw new TypeError("sandbox-chosen text " + "A1b2".repeat(8)); }, family: 4 }];
+      const c = v1Catalog("mcp");
+      try {
+        const code = await mainAsync([c.path, "--fixtures", c.fixtures, "--service", SERVICE, "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: () => {} });
+        expect(code).toBe(0);
+        const report = JSON.parse(readFileSync(c.out, "utf8")) as Report;
+        expect(report.passed).toBe(true);
+        for (const k of ADVISORY) expect([k, row(report, k)]).toEqual([k, { check: k, pass: false, note: "advisory (v1): internal error TypeError in the service checks; the other rows stand" }]);
+        expect(readFileSync(c.out, "utf8")).not.toContain("A1b2A1b2");
+        // A failing required row keeps its verdict: exit 1, not 2.
+        writeFileSync(join(c.fixtures, "acme.lookup", "ok.json"), "{\"a\":1,\"a\":2}");
+        expect(await mainAsync([c.path, "--fixtures", c.fixtures, "--service", SERVICE, "--out", c.out], { cwd: c.root, service: s.deps, print: () => {}, warn: () => {} })).toBe(1);
+      } finally { cleanup(c); }
+      expect(s.dials.length).toBe(0);
+    });
+    expect(describeValue({ toString: 1 })).toBe('{"toString":1}');
+    expect(describeValue("x")).toBe("x");
+    const cyclic: any = {}; cyclic.self = cyclic;
+    expect([describeValue(cyclic), describeValue(undefined), describeValue(10n as any), describeValue("y".repeat(300))])
+      .toEqual(["object", "undefined", "bigint", "y".repeat(300)]);
+    expect(describeValue({ k: "z".repeat(300) }).length).toBe(120);
+  });
+  test("N3: past the whole-run deadline the unfinished rows are advisory \"not run (deadline)\"; a failure the deadline did not cause stays FAIL; requests stop", async () => {
+    expect(SERVICE_DEADLINE_MS).toBe(600_000);
+    await withStub((req, res) => {
+      if (JSON.parse(req.body).q === "missing") return json(res, 500, { code: "unavailable", detail: "x" });
+      setTimeout(() => json(res, 200, { items: [{ name: "a", rank: 1 }], asOf: "x" }), 300);
+    }, async s => {
+      s.deps.deadlineMs = 700;
+      const c = v1Catalog("https-json", httpsJsonAcme(), files => {
+        for (let i = 0; i < 8; i++) { files[`acme.lookup/r${i}.json`] = files["acme.lookup/ok.json"]; files[`acme.lookup/r${i}.request.json`] = "{}"; }
+      });
+      try {
+        const started = Date.now();
+        const r = await runV1(c, s, "https://sandbox.acme-dev.example/");
+        expect(Date.now() - started).toBeLessThan(2500);
+        invariants(r);
+        expect(row(r, "service.budgets")).toEqual({ check: "service.budgets", pass: null, note: "advisory (v1): not run (deadline): the service checks stop after 700 ms in all, and this one was not finished" });
+        // error-not-found sorts first and failed fast (a 500): those failures are real, so they stay FAIL.
+        expect(row(r, "service.error_bodies").pass).toBe(false);
+        expect(row(r, "service.reachability").pass).toBe(false);
+        expect(row(r, "service.reachability").note).not.toContain("deadline");
+        expect(r.passed).toBe(true);
+      } finally { cleanup(c); }
+      expect(s.seen.length).toBeLessThanOrEqual(4);
+    });
+  });
+});
+
+// MCP error envelopes (protocol 2025-06-18): a tool error is a result with isError: true and a content
+// array; a protocol error is a JSON-RPC error {code: integer, message: string}. Both are a conforming answer
+// to a tools/call, as an error fixture and live. Reported against conformance v0 (ov#422) on MCP apps whose
+// fixtures carry the envelope the server returns; the repro below is reconstructed (no recorded CI run).
+describe("MCP error envelopes: a well-formed one conforms, a malformed one does not", () => {
+  const TOOL_TEXT = { isError: true, content: [{ type: "text", text: "Invalid arguments for lookup: q must be a string." }] };
+  const TOOL_CODED = { isError: true, content: [{ type: "text", text: "No such item." }], structuredContent: { code: "not_found", detail: "No such item." } };
+  const RPC_PARAMS = { jsonrpc: "2.0", id: 3, error: { code: -32602, message: "Invalid params: q must be a string" } };
+  test("v0: an error fixture that is a tool error (bare or in its JSON-RPC response) or a JSON-RPC error passes hygiene.error_bodies", () => {
+    const good: [string, unknown][] = [
+      ["a bare isError result, plain text", TOOL_TEXT],
+      ["a bare isError result carrying a closed {code, detail}", TOOL_CODED],
+      ["an isError result in its JSON-RPC response", { jsonrpc: "2.0", id: 3, result: TOOL_TEXT }],
+      ["a JSON-RPC error (-32602)", RPC_PARAMS],
+      ["a JSON-RPC error with data and a string id", { jsonrpc: "2.0", id: "req-3", error: { code: -32000, message: "Server error", data: { retry: false } } }],
+    ];
+    for (const [why, body] of good) {
+      withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/error-envelope.json": JSON.stringify(body) } }, c => {
+        const r = run(c);
+        expect([why, row(r, "hygiene.error_bodies").pass, row(r, "hygiene.error_bodies").note]).toEqual([why, true, expect.stringContaining("2 error bod(ies)")]);
+        expect([why, r.passed]).toEqual([why, true]);
+      });
+    }
+  });
+  test("v0: a fixture not named error* that IS an MCP error answer (a tool-refusal.json with isError) counts as an error body", () => {
+    withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/tool-refusal.json": JSON.stringify(TOOL_TEXT) } }, c => {
+      const r = run(c);
+      expect(row(r, "hygiene.fixtures").note).toBe("3 fixture file(s), 2 error bod(ies)");
+      expect(row(r, "hygiene.error_bodies").pass).toBe(true);
+    });
+    withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/tool-refusal.json": JSON.stringify({ isError: true }) } }, c => {
+      const r = row(run(c), "hygiene.error_bodies");
+      expect([r.pass, r.note]).toEqual([false, expect.stringContaining("acme.lookup/tool-refusal.json: isError without a content array")]);
+    });
+    // Not an MCP signal: a plain {"error": ...} in a success fixture still fails as before.
+    withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/ok-but.json": JSON.stringify({ error: "zzz_invalid" }) } }, c => {
+      expect(row(run(c), "hygiene.error_bodies").note).toContain("a success fixture carries \"error\"");
+    });
+  });
+  test("v0: a malformed envelope is still rejected (id, result and error, code, message, content, the closed code)", () => {
+    const bad: [string, unknown, string][] = [
+      ["no id", { jsonrpc: "2.0", error: { code: -32602, message: "x" } }, "no id"],
+      ["a null id", { jsonrpc: "2.0", id: null, error: { code: -32602, message: "x" } }, "no id"],
+      ["no jsonrpc", { id: 3, result: TOOL_TEXT }, "jsonrpc is not \"2.0\""],
+      ["result without jsonrpc or id", { result: TOOL_TEXT }, "no id"],
+      ["both result and error", { jsonrpc: "2.0", id: 3, result: TOOL_TEXT, error: { code: -32602, message: "x" } }, "both result and error"],
+      ["a fractional code", { jsonrpc: "2.0", id: 3, error: { code: -32602.5, message: "x" } }, "error.code is not an integer"],
+      ["a string code", { jsonrpc: "2.0", id: 3, error: { code: "-32602", message: "x" } }, "error.code is not an integer"],
+      ["a non-string message", { jsonrpc: "2.0", id: 3, error: { code: -32602, message: 7 } }, "error.message is not a string"],
+      ["isError without content", { isError: true }, "isError without a content array"],
+      ["isError with content not an array", { isError: true, content: { type: "text", text: "x" } }, "isError without a content array"],
+      ["a content item without a type", { isError: true, content: [{ text: "x" }] }, "content/0 has no string type"],
+      ["a text item without text", { isError: true, content: [{ type: "text" }] }, "content/0 is text without a string text"],
+      ["isError the string \"true\"", { isError: "true", content: [] }, "isError is not true"],
+      ["a result that is not an error", { jsonrpc: "2.0", id: 3, result: { content: [] } }, "isError is not true"],
+      ["a carried open code", { isError: true, content: [], structuredContent: { code: "boom", detail: "x" } }, "code boom is not in the closed set for acme"],
+    ];
+    for (const [why, body, want] of bad) {
+      withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/error-x.json": JSON.stringify(body) } }, c => {
+        const r = row(run(c), "hygiene.error_bodies");
+        expect([why, r.pass, r.note]).toEqual([why, false, expect.stringContaining(want)]);
+      });
+    }
+  });
+  test("S1 (review-b on ov#474): every content item is checked, not only the first twelve; only the notes are capped", () => {
+    const good = Array.from({ length: 13 }, (_, i) => ({ type: "text", text: `Line ${i}.` }));
+    withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/error-x.json": JSON.stringify({ isError: true, content: good }) } }, c => {
+      expect(row(run(c), "hygiene.error_bodies").pass).toBe(true);
+    });
+    for (const last of [42, { type: "text" }, { text: "no type" }]) {
+      const body = { isError: true, content: [...good.slice(0, 12), last] };
+      withCatalog({ fixtures: { ...GOOD_FIXTURES, "acme.lookup/error-x.json": JSON.stringify(body) } }, c => {
+        const r = row(run(c), "hygiene.error_bodies");
+        expect([JSON.stringify(last), r.pass, r.note]).toEqual([JSON.stringify(last), false, expect.stringContaining("content/12 ")]);
+      });
+      expect(toolErrorProblems(body).length).toBe(1);
+    }
+    // Thirty bad items: each is checked, the note lists twelve and counts the rest.
+    const many = toolErrorProblems({ isError: true, content: Array.from({ length: 30 }, () => 42) });
+    expect([many.length, many[11], many[12]]).toEqual([13, "content/11 has no string type", "and 18 more content item problem(s)"]);
+  });
+  test("v0: an https-json app gets no envelope rule: its error fixture is still exactly {code, detail}", () => {
+    withCatalog({ manifest: httpsJsonAcme(), fixtures: { ...GOOD_FIXTURES, "acme.lookup/error-x.json": JSON.stringify(TOOL_TEXT) } }, c => {
+      const r = row(run(c), "hygiene.error_bodies");
+      expect([r.pass, r.note]).toEqual([false, expect.stringContaining("keys are content, isError, not exactly code, detail")]);
+    });
+  });
+
+  /** The lookup error call answered by `packet` (its id filled in), as JSON or over an event stream. */
+  const answering = (sse: boolean, packet: (id: number) => unknown) => mcpServer({
+    lookup: (args, res, id) => {
+      const body = args.q === "missing" ? packet(id) : { jsonrpc: "2.0", id, result: { content: [], structuredContent: { items: [{ name: "a", rank: 1 }] } } };
+      if (!sse) return json(res, 200, body);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`event: message\ndata: ${JSON.stringify(body)}\n\n`);
+    },
+  });
+  const withError = (fixture: unknown) => v1Catalog("mcp", acme(), files => { files["acme.lookup/error-not-found.json"] = JSON.stringify(fixture); });
+  test("v1: a JSON-RPC error or an isError result answers an error call (JSON and event stream), matched to its fixture", async () => {
+    const good: [string, unknown, (id: number) => unknown][] = [
+      ["JSON-RPC -32602, fixture the same error", RPC_PARAMS, id => ({ ...RPC_PARAMS, id, error: { code: -32602, message: "Invalid params (live wording)" } })],
+      ["isError plain text, fixture a bare tool error", TOOL_TEXT, id => ({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "not found" }] } })],
+      ["isError plain text, fixture the wrapped tool error", { jsonrpc: "2.0", id: 9, result: TOOL_TEXT }, id => ({ jsonrpc: "2.0", id, result: TOOL_TEXT })],
+      ["isError carrying {code, detail}, fixture {code, detail}", { code: "not_found", detail: "No such item." }, id => ({ jsonrpc: "2.0", id, result: TOOL_CODED })],
+    ];
+    for (const sse of [false, true]) {
+      for (const [why, fixture, packet] of good) {
+        await withStub(answering(sse, packet), async s => {
+          const c = withError(fixture);
+          try {
+            const r = await runV1(c, s);
+            invariants(r);
+            expect([sse, why, v1Rows(r), row(r, "service.error_bodies").note]).toEqual([sse, why,
+              { "service.reachability": true, "service.budgets": true, "service.error_bodies": true, "approval.fake_cp": null }, expect.stringContaining("1 error call(s)")]);
+          } finally { cleanup(c); }
+        });
+      }
+    }
+  });
+  test("v1: a malformed or mismatched live error answer still fails service.error_bodies; a success call answered by an error still fails budgets", async () => {
+    const bad: [string, unknown, (id: number) => unknown, string][] = [
+      ["both result and error", RPC_PARAMS, id => ({ jsonrpc: "2.0", id, result: TOOL_TEXT, error: { code: -32602, message: "x" } }), "both result and error"],
+      ["a fractional code", RPC_PARAMS, id => ({ jsonrpc: "2.0", id, error: { code: 1.5, message: "x" } }), "error.code is not an integer"],
+      ["a non-string message", RPC_PARAMS, id => ({ jsonrpc: "2.0", id, error: { code: -32602, message: null } }), "error.message is not a string"],
+      ["no id", RPC_PARAMS, () => ({ jsonrpc: "2.0", error: { code: -32602, message: "x" } }), "not the JSON-RPC response to this request"],
+      ["isError without content", TOOL_TEXT, id => ({ jsonrpc: "2.0", id, result: { isError: true } }), "isError without a content array"],
+      ["another JSON-RPC code than the fixture's", RPC_PARAMS, id => ({ jsonrpc: "2.0", id, error: { code: -32601, message: "x" } }), "JSON-RPC error -32601, the fixture says -32602"],
+      ["a JSON-RPC error where the fixture is a tool error", TOOL_TEXT, id => ({ jsonrpc: "2.0", id, error: { code: -32602, message: "x" } }), "a JSON-RPC error -32602, the fixture is an isError result"],
+      ["a JSON-RPC error where the fixture is {code, detail}", { code: "not_found", detail: "x" }, id => ({ jsonrpc: "2.0", id, error: { code: -32000, message: "nope" } }), "a JSON-RPC error -32000, the fixture says code not_found"],
+      ["an isError result where the fixture is a JSON-RPC error", RPC_PARAMS, id => ({ jsonrpc: "2.0", id, result: TOOL_TEXT }), "an isError result, the fixture is JSON-RPC error -32602"],
+      ["plain text where the fixture is {code, detail}", { code: "not_found", detail: "x" }, id => ({ jsonrpc: "2.0", id, result: TOOL_TEXT }), "the isError result carries no {code, detail}"],
+      ["a success where the fixture is an error", TOOL_TEXT, id => ({ jsonrpc: "2.0", id, result: { content: [] } }), "answered a result, not isError or a JSON-RPC error, where the fixture is an error"],
+    ];
+    for (const [why, fixture, packet, want] of bad) {
+      await withStub(answering(false, packet), async s => {
+        const c = withError(fixture);
+        try {
+          const r = row(await runV1(c, s), "service.error_bodies");
+          expect([why, r.pass, r.note]).toEqual([why, false, expect.stringContaining(want)]);
+        } finally { cleanup(c); }
+      });
+    }
+    await withStub(mcpServer({ lookup: (args, res, id) => json(res, 200, { jsonrpc: "2.0", id, error: { code: -32602, message: "x" } }) }), async s => {
+      const c = v1Catalog("mcp");
+      try {
+        const r = await runV1(c, s);
+        expect([row(r, "service.budgets").pass, row(r, "service.budgets").note]).toEqual([false, expect.stringContaining("acme.lookup/ok.request.json: a JSON-RPC error, not a result")]);
+      } finally { cleanup(c); }
+    });
   });
 });

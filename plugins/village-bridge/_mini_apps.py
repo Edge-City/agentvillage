@@ -38,17 +38,124 @@ FORKICKS = {"version": "1.0.0", "skills": ["forkicks"], "operations": ["forkicks
 # zzz agent). The writes take mini-app.context.write's path (gate_verified), never a manual grant.
 ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")
 ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")
+# zzzbot 1.1.0 (Carter's ask, lead L30481): the agent retags a topic it started, or edits a post it wrote. Both are
+# writes on the same gated-write path as zzz.reply (gate_verified; no card, class or consent step of their own). The
+# app reads the post and refuses another author's before any edit; zzz.bot allows only the post's author too.
+ZZZ_EDIT_OPERATIONS = ("zzz.tag_thread", "zzz.edit_post")
+# Every zzz post write this box gates and gives a trusted turn id (the managed pair job's CRON_OPS never edits).
+ZZZ_POST_WRITES = (*ZZZ_WRITE_OPERATIONS, *ZZZ_EDIT_OPERATIONS)
+# Buildathon team rooms (zzz#32 + app#842, lead L28970): app-side feature-gated operations that, like zzz.pairs,
+# borrow an existing zzzbot install permission and are deliberately absent from the CP catalog and from ZZZBOT.
+# The read borrows zzz.list_rooms; the writes borrow zzz.create_thread and take the same gated-write path.
+# They are owner-led only: the managed pair job's CRON_OPS (and any runner) never includes them.
+# TEAM-ADD-MEMBER (lead L31271, release's TEAM-ADD-MEMBER-CONTRACT.md): zzz.add_team_members adds people to a team
+# room the owner already has, borrowing exactly as zzz.open_team_room does (no catalog, class or gate change).
+ZZZ_TEAM_READ_OPERATIONS = ("zzz.list_team_invites",)
+ZZZ_TEAM_WRITE_OPERATIONS = ("zzz.open_team_room", "zzz.respond_team_invite", "zzz.add_team_members")
+# J3 owner-set repeating posts (lead L36170 rulings 2-4, v2.2.0): zzz.schedule_posts sets (or, with every_minutes null,
+# stops) the owner's own zzz.bot new-topic pace and topic, through the app server. It borrows zzz.create_thread exactly as
+# the team writes do (installed permission and gated-write path; no catalog, class, card or gate change) and is owner-led
+# only: the managed pair job's CRON_OPS and any runner never include it.
+ZZZ_OWNER_WRITE_OPERATIONS = ("zzz.schedule_posts",)
+ZZZ_TEAM_BORROWS = {"zzz.list_team_invites": "zzz.list_rooms", "zzz.open_team_room": "zzz.create_thread",
+                    "zzz.respond_team_invite": "zzz.create_thread", "zzz.add_team_members": "zzz.create_thread",
+                    "zzz.schedule_posts": "zzz.create_thread"}
+# DreamStarter (adapted from ov#393, arrfire): public reads (the workflow catalog, the grant's rules, the local
+# businesses) and the owner's own status reads by a returned ref, plus two owner-asked WRITES that send the owner's
+# own words: dreamstarter.discover (the lines typed for that request) and dreamstarter.grant_prepare (the confirmed
+# application answers). The writes take zzz's path (gate_verified), never a card or a manual grant.
+DS_READ_OPERATIONS = ("dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_status",
+                      "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status")
+DS_WRITE_OPERATIONS = ("dreamstarter.discover", "dreamstarter.grant_prepare")
+# Kismet Part 2 (lead L29830, product's build spec): its three public reads and the owner's own summary (reads), and
+# the owner's own sign-up, new dates, meet or pass and account deletion (writes). The writes take zzz's path
+# (gate_verified), never a manual grant, a card or a new class: each happens only on the owner's own ask in this chat.
+# Kismet 1.2.0 (Deon's kismet_web_link, lead L36841): kismet.web_link mints the owner's own one-time sign-in link to
+# their Kismet account (not readOnly, not idempotent), so it is a WRITE on the same gated path, appended last.
+KISMET_READ_OPERATIONS = ("kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary")
+KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link")
+# Edge Library (Naman, adapted from ov#506): the village knowledge graph's eight reads. 1.0.0 is READS ONLY (Carter,
+# CD-44): Edge Library's three writes are not exposed, so none is in WRITE_OPERATIONS. The reads join the existing read
+# class: no new class, row, gate or card.
+LIBRARY_READ_OPERATIONS = ("library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history",
+                           "library.changes_since", "library.proposals")
+# Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops (reads), and the owner's own join,
+# yes or no, received-favor confirmation and leave (writes). The writes take zzz's path (gate_verified), never a manual
+# grant, a card or a new class: each happens only on the owner's own ask in this chat.
+FAVORLOOP_READ_OPERATIONS = ("favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.my_loops")
+FAVORLOOP_WRITE_OPERATIONS = ("favorloop.join", "favorloop.answer", "favorloop.confirm", "favorloop.leave")
+# Edge City Volunteers (Naman, ov#450; lead RULING L35456: subject + one-time link, the Favor Loop pattern): the owner's
+# own shifts, hours and plan, and ECV's propose (reads: propose checks a change and changes nothing), and the owner's
+# own confirm and link (writes). The writes take zzz's path (gate_verified), never a manual grant, a card or a new
+# class; confirm is sent only for a code a propose showed in an earlier owner message (_ecv.confirm_check).
+ECV_READ_OPERATIONS = ("eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts",
+                       "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts",
+                       "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose")
+ECV_WRITE_OPERATIONS = ("eci-volunteers.confirm", "eci-volunteers.link")
 READ_OPERATIONS = frozenset({"rolodex.search", "rolodex.person", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read",
-                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", *ZZZ_READ_OPERATIONS})
+                             "mini-app.context.read", "forkicks.menu", "forkicks.schedule", "forkicks.order.status", "slopfolio.status", "zzz.pairs", *ZZZ_READ_OPERATIONS,
+                             *ZZZ_TEAM_READ_OPERATIONS, *DS_READ_OPERATIONS, *KISMET_READ_OPERATIONS, *LIBRARY_READ_OPERATIONS,
+                             *FAVORLOOP_READ_OPERATIONS, *ECV_READ_OPERATIONS})
 WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel", "mini-app.context.write",
-                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_WRITE_OPERATIONS})
+                              "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.cancel", "slopfolio.prepare", *ZZZ_POST_WRITES,
+                              *ZZZ_TEAM_WRITE_OPERATIONS, *DS_WRITE_OPERATIONS, *KISMET_WRITE_OPERATIONS,
+                              *FAVORLOOP_WRITE_OPERATIONS, *ZZZ_OWNER_WRITE_OPERATIONS, *ECV_WRITE_OPERATIONS})
 # Only generic reviewed app operations accept an appId from the caller.
 APP_SCOPED_OPERATIONS = frozenset({"mini-app.read", "mini-app.context.read", "mini-app.context.write"})
 # The zzzbot install, by exact equality: the CP catalog entry and install/install_miniapps.ts carry the same
 # list in this order. Its operations name their app; a caller never supplies an appId for them.
-ZZZBOT = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS]}
-ZZZ_OPERATIONS = frozenset(ZZZBOT["operations"])
+# 1.1.0: the five, then zzz.tag_thread and zzz.edit_post. 1.0.0 (the five alone) is still accepted, so this overlay rolls
+# out BEFORE the CP catalog serves 1.1.0 (overlay first, then the catalog; never the reverse: an older overlay refuses a
+# 1.1.0 entry, and with it the whole projection). Under 1.0.0 the two edits stay refused (mini_app_not_installed).
+ZZZBOT = {"version": "1.1.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS, *ZZZ_EDIT_OPERATIONS]}
+ZZZBOT_PREVIOUS = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS]}
+# Every zzzbot entry this overlay accepts, each by exact equality (newest first).
+ZZZBOT_ACCEPTED = (ZZZBOT, ZZZBOT_PREVIOUS)
+# zzz.pairs is an app-side feature-gated read which borrows the existing
+# list_rooms install permission; it is deliberately absent from the CP catalog.
+ZZZ_OPERATIONS = frozenset((*ZZZBOT["operations"], "zzz.pairs", *ZZZ_TEAM_READ_OPERATIONS, *ZZZ_TEAM_WRITE_OPERATIONS,
+                            *ZZZ_OWNER_WRITE_OPERATIONS))
+# The kismet install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order). 1.2.0: the eight
+# of 1.1.0, then kismet.web_link (the manifest's order). 1.1.0 (the eight alone) and Part 1's public read alone (1.0.0,
+# ov#533) stay accepted, so this overlay rolls out BEFORE the CP serves 1.2.0 to a box (overlay first, then the catalog
+# per box; never the reverse: an older overlay refuses a 1.2.0 entry, and with it the whole projection). Under 1.1.0
+# kismet.web_link stays refused (mini_app_not_installed); under 1.0.0 every named operation does; under 1.1.0 and 1.2.0
+# mini-app.read is refused for kismet.
+KISMET_120 = {"version": "1.2.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}
+KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, "kismet.signup", "kismet.go", "kismet.decide",
+                                                                     "kismet.delete"]}
+KISMET_PUBLIC = {"version": "1.0.0", "skills": ["kismet"], "operations": ["mini-app.read"]}
+# Every kismet entry this overlay accepts, each by exact equality (newest first).
+KISMET_ACCEPTED = (KISMET_120, KISMET, KISMET_PUBLIC)
+KISMET_OPERATIONS = frozenset(KISMET_120["operations"])
 SLOPFOLIO = {"version": "1.0.0", "skills": ["slopfolio"], "operations": ["slopfolio.prepare", "slopfolio.status"]}
+# The dreamstarter install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order).
+DREAMSTARTER = {"version": "2.0.0", "skills": ["dreamstarter"], "operations": [
+    "dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare",
+    "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"]}
+DS_OPERATIONS = frozenset(DREAMSTARTER["operations"])
+# The library install, by exact equality (CP catalog entry and install/install_miniapps.ts, this order).
+LIBRARY = {"version": "1.0.0", "skills": ["library"], "operations": [*LIBRARY_READ_OPERATIONS]}
+LIBRARY_OPERATIONS = frozenset(LIBRARY["operations"])
+# The favorloop install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order). No
+# mini-app.read: the generic relay never reaches Favor Loop (installed(home, "favorloop", "mini-app.read") is False).
+FAVORLOOP = {"version": "1.0.0", "skills": ["favorloop"], "operations": [
+    "favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops",
+    "favorloop.answer", "favorloop.confirm", "favorloop.leave"]}
+FAVORLOOP_OPERATIONS = frozenset(FAVORLOOP["operations"])
+# The eci-volunteers install, by exact equality (CP catalog entry and install/install_miniapps.ts, the manifest's order).
+# No mini-app.read: the generic relay never reaches Edge City Volunteers.
+ECI_VOLUNTEERS = {"version": "1.0.0", "skills": ["eci-volunteers"], "operations": [*ECV_READ_OPERATIONS, *ECV_WRITE_OPERATIONS]}
+ECV_OPERATIONS = frozenset(ECI_VOLUNTEERS["operations"])
+# ov#441 S1 (lead RULING CLAIMS L16692, reaffirmed L16696): managed private-pair participation is gated ONLY by a
+# separate cp catalog/allowlist entry, projected in `apps` beside zzzbot and granted per tenant at activation (the
+# Mosaic restricted-entry pattern). Id `zzz-bridge`: cp and app validate app ids with ^[a-z0-9][a-z0-9-]{0,39}$,
+# so the ruling's `zzz_bridge` is spelled with a hyphen (the app half, app#500, reads the same id). It carries no
+# skill and no operation, so it grants no tool by itself; an entry of any other shape refuses the whole file.
+ZZZ_BRIDGE_ID = "zzz-bridge"
+ZZZ_BRIDGE = {"version": "1.0.0", "skills": [], "operations": []}
+ZZZ_AUTONOMY_RUNNER_ID = "zzz-autonomy-runner"
+ZZZ_AUTONOMY_RUNNER = {"version": "1.0.0", "skills": [], "operations": []}
 # NEW-03 (rc44, P-013; context's design NEW-03-APP-NAMESPACES.md section 2, CLAIMS L8997): every operations
 # list this overlay accepts for a non-Gold-Stars app, each by exact equality (newest first): the reviewed
 # public read alone, or the read plus that app's own context namespace read and write. Order fixed, no
@@ -68,15 +175,23 @@ def send_key(draft_id: str) -> str:
     return SEND_CLASS + ":" + draft_id
 
 
-# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap. One wording
-# for the daemon's "not granted yet" and the app's 403 star_approval_required (__init__.py). With the
+# Public bot chat, confirmed against production NEXT_PUBLIC_APPROVALS_BOT_NAME.
+# This is navigation only, not a pairing or approval grant link.
+APPROVALS_CHAT_URL = "https://t.me/AgentVillageApprovalsBot"
+OPEN_APPROVALS_CHAT = "Open approvals chat: " + APPROVALS_CHAT_URL
+# Appended where the instruction asks the agent to send the owner to the bot.
+APPROVALS_CHAT_LINE = " End that message with this line on its own: \"" + OPEN_APPROVALS_CHAT + "\"."
+
+# HOT-01 (B-033): what the agent tells the owner when a send waits for the owner's tap: the daemon's
+# "not granted yet" only (the app's 403 star_approval_required has its own text, __init__.py). With the
 # member row autonomous (the shipped template, B-133) the daemon answers "autonomous" and no card is
 # shown; a policy that still says manual for the member class (an older box) keeps the card and this text.
 APPROVE_IN_BOT = ("Ask the owner to approve this exact Gold Star on its card in the approvals bot, then retry "
                   "gold-stars.send with this SAME draftId. Never prepare a new preview to retry. Chat consent alone "
-                  "cannot authorize sending.")
+                  "cannot authorize sending." + APPROVALS_CHAT_LINE)
 ORDER_APPROVE_IN_BOT = ("Ask the owner to approve this exact For Kicks order on its card in the approvals bot, then retry "
-                        "forkicks.order.confirm with this SAME draftId. Never prepare another order to retry an uncertain confirm.")
+                        "forkicks.order.confirm with this SAME draftId. Never prepare another order to retry an uncertain "
+                        "confirm." + APPROVALS_CHAT_LINE)
 # FK-ON-GRANT (CLAIMS L17710/L17711/L17726): the daemon's "not granted yet" when this box will place the order
 # itself on the resident's tap (_forkicks_grant.py) and tell them in this chat. Product owns the quoted words.
 # FK-CARD-AT-PREPARE (CLAIMS L19913/L19916): the prepare answer carries it, since the bridge raises the card right
@@ -85,10 +200,10 @@ ORDER_APPROVE_IN_BOT = ("Ask the owner to approve this exact For Kicks order on 
 ORDER_PLACED_ON_APPROVAL = ("The approval card for this exact For Kicks order was handed to the owner's approvals bot (its "
                             "delivery is not confirmed). Show the preview, then tell the owner: \"I've sent your approval card "
                             "to your approvals bot; tap Approve there and I'll place it. If no card arrives within a minute, "
-                            "tell me and I'll check.\" When they approve, it is placed automatically and they get one message "
-                            "in this chat; do not announce it again. Never ask for a yes in chat, and never say it was placed "
-                            "before a receipt. To check, call forkicks.order.confirm with this SAME draftId (it never sends a "
-                            "second card); never prepare another order.")
+                            "tell me and I'll check.\"" + APPROVALS_CHAT_LINE + " When they approve, it is placed "
+                            "automatically and they get one message in this chat; do not announce it again. Never ask for a "
+                            "yes in chat, and never say it was placed before a receipt. To check, call forkicks.order.confirm "
+                            "with this SAME draftId (it never sends a second card); never prepare another order.")
 # FK-CARD-AT-PREPARE: the card could not be raised at prepare (refused, unavailable, or an error): the preview is
 # still returned, and the agent says plainly that nothing was ordered.
 ORDER_CARD_NOT_RAISED = ("The approval card for this order could not be raised, so nothing was ordered. Show the preview, "
@@ -148,7 +263,10 @@ def _card_entry_ok(app) -> bool:
 # skipped and logged once (its id only), and every other app of the file stays installed, as the installer's checkApp
 # refuses per app (ov#455). What stays WHOLE-FILE is the structure: the doc shape, version 1, an app that is not an
 # object or has no string id, a duplicate id, and a reviewed id failing its exact equality (the tamper signal).
-REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": (ZZZBOT,), "slopfolio": (SLOPFOLIO,)}
+REVIEWED_ENTRIES = {"forkicks": (FORKICKS,), "zzzbot": ZZZBOT_ACCEPTED, ZZZ_BRIDGE_ID: (ZZZ_BRIDGE,),
+                    ZZZ_AUTONOMY_RUNNER_ID: (ZZZ_AUTONOMY_RUNNER,), "slopfolio": (SLOPFOLIO,),
+                    "dreamstarter": (DREAMSTARTER,), "kismet": KISMET_ACCEPTED,
+                    "library": (LIBRARY,), "favorloop": (FAVORLOOP,), "eci-volunteers": (ECI_VOLUNTEERS,)}
 LOGGED_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 LOG = logging.getLogger("village_bridge")
 _REFUSED_LOGGED = set()
@@ -223,6 +341,13 @@ def projection(home: Path):
 def installed(home: Path, app_id: str, operation: str) -> bool:
     apps = projection(home)
     return apps is not None and any(app["id"] == app_id and operation in app["operations"] for app in apps)
+
+
+def zzz_participation(home: Path) -> bool:
+    """Managed participation needs both exact reviewed entries in the current projection."""
+    apps = projection(home)
+    return (apps is not None and any(app["id"] == "zzzbot" for app in apps)
+            and any(app["id"] == ZZZ_BRIDGE_ID for app in apps))
 
 
 def gate_verified() -> None:

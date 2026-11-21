@@ -6,6 +6,7 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
+ *   - `AV_PROFILE=odin` installs `workspace/odin/{SOUL,AGENTS}.md` instead (`profile.ts`, docs/odin-profile.md)
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
  *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
@@ -65,10 +66,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
+import { installProfileIdentity, resolveProfile, RESIDENT_ONLY_PLUGINS } from "./profile";
 import { installIndex } from "./install_index";
 import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
+import { safeConfigureAvElicit } from "./av_elicit"; // GC-ELICIT
 import { safeConfigureVillageMemory } from "./village_memory";
 import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, resolveHermesPython, runApprovalStep, stagePlugins } from "./install_approval";
 import {
@@ -98,7 +101,9 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay, configureVillageMenu } from "./av_display";
+import { configureAvGodconst } from "./av_godconst";
 import { configureAvVote } from "./av_vote";
+import { configureAvRate } from "./av_rate";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -148,12 +153,14 @@ function removeRetiredFiles(): void {
 }
 
 function copySoulFile(): void {
-  const sourceSoul = join(SOURCE_WORKSPACE, "SOUL.md");
-  const targetSoul = join(hermesHome(), "SOUL.md");
-  if (!existsSync(sourceSoul)) return;
-  if (process.argv.includes("--preserve-context") && existsSync(targetSoul)) return;
-  copyFileSync(sourceSoul, targetSoul);
-  console.log(`→ wrote SOUL.md to ${targetSoul}`);
+  const profile = resolveProfile();
+  const written = installProfileIdentity(
+    SOURCE_WORKSPACE,
+    hermesHome(),
+    profile,
+    process.argv.includes("--preserve-context"),
+  );
+  for (const name of written) console.log(`→ wrote ${name} to ${join(hermesHome(), name)} (profile ${profile})`);
 }
 
 function copyWorkspaceFiles(wipeUser: boolean): void {
@@ -166,6 +173,8 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
   let preservedUserNotes = false;
   for (const entry of readdirSync(SOURCE_WORKSPACE)) {
     if (entry === "SOUL.md") continue;
+    // ODIN's AGENTS.md is written by copySoulFile; the resident AGENTS.md and USER.md are not his.
+    if (resolveProfile() === "odin" && (entry === "AGENTS.md" || entry === "USER.md")) continue;
 
     const sourcePath = join(SOURCE_WORKSPACE, entry);
     const targetPath = join(TARGET_HOME, entry);
@@ -263,6 +272,7 @@ function copySkillFiles(): void {
  * install: it is recorded in the status file and returned for the one stdout line.
  */
 function installIndexHermesPlugin(): IndexPluginFailure | null {
+  if (resolveProfile() !== "resident") return null; // ODIN has no Index plugin
   let failed: IndexPluginFailure | null;
   let note: IndexPluginNote | undefined;
   try {
@@ -331,6 +341,7 @@ function main(): void {
   console.log("===================");
   console.log("");
 
+  const resident = resolveProfile() === "resident";
   removeLegacyWorkspaceEdge();
   removeRetiredFiles();
   copySoulFile();
@@ -360,15 +371,24 @@ function main(): void {
   configureDashboardAuth();
   configureAvEvents();
   configureAvApproval();
-  configureVillageBridge();
+  // ODIN-PROFILE: the village bridge, av-vote, the Index plugin, its crons and EdgeOS are the resident's.
+  if (resident) configureVillageBridge();
+  else for (const name of unlistPlugins(RESIDENT_ONLY_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (profile odin)`);
   for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
-  configureIndexLinks();
+  if (resident) configureIndexLinks();
   configureAvDisplay();
-  configureAvVote();
+  if (resident) configureAvVote();
   // rc44 (RESIDENT-UX): av-display's /village in Telegram's command menu (past the 60-slot cap otherwise).
   configureVillageMenu();
+  // Suggestion rating cards (plugins/av-rate): enabled, and allowed to hand the recorded rating to the agent.
+  configureAvRate();
+  // GC-TELEGRAM-BALLOT (plugins/av-godconst): residents only; dark until the control plane writes its flag and key.
+  if (resident) configureAvGodconst();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
+  // GC-ELICIT (av_elicit.ts): opt-in on AV_ELICIT_ENABLED, set per tenant by the control plane; unset changes nothing;
+  // never fatal. Resident only: an ODIN box is no voter (av-elicit is in RESIDENT_ONLY_PLUGINS, unlisted above).
+  if (resident) safeConfigureAvElicit();
   // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
   safeConfigureVillageMemory();
 
@@ -377,7 +397,9 @@ function main(): void {
   // steps (B1-fix2 R1). They are recorded in the status file, written on
   // every run, and reported in one line at the end.
   let cronFailures: string[] = [];
-  if (process.argv.includes("--skip-index")) {
+  if (!resident) {
+    console.log("→ index network: not installed (profile odin)");
+  } else if (process.argv.includes("--skip-index")) {
     console.log("→ index network: unconfigured (--skip-index); bundled skills remain installed");
   } else {
     cronFailures = installIndex();
@@ -397,7 +419,7 @@ function main(): void {
   } catch {
     console.warn("  warning: could not record the model_allow step in av-events/install-status.json");
   }
-  installEdgeos();
+  if (resident) installEdgeos();
   restoreWelcomeState(welcomeState);
 
   // Opt-in (DATA-43), and the one step that is not fail-open: with

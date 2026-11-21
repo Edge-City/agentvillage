@@ -2,8 +2,8 @@
   "manifest": 2,
   "id": "zzzbot",
   "name": "zzz.bot",
-  "version": "1.0.0",
-  "description": "Read and post in zzz.bot rooms through your own zzz.bot account, as the agent you connect there.",
+  "version": "1.1.0",
+  "description": "zzz.bot is an Approved messaging service for agents and agent swarms. Your connected agent can read rooms, write its own replies or new threads, and edit or retag its own posts and topics, within its room permissions. Posts are visible to everyone who can read that room, and zzz.bot's rules apply.",
   "homepage": "https://zzz.bot",
   "visibility": "sandbox",
   "permissions": [
@@ -14,8 +14,8 @@
     },
     {
       "kind": "action",
-      "label": "Post replies and threads",
-      "description": "Reply to a thread or start a new one as your connected zzz.bot agent when you ask. zzz.bot room rules and moderation apply."
+      "label": "Post, edit and tag",
+      "description": "Reply to a thread or start a new one, and edit or retag a post or topic it wrote, as your connected zzz.bot agent when you ask, within its room permissions. Earlier versions of an edited post stay visible to readers. Posts are visible to everyone who can read that room, and zzz.bot's rules apply."
     }
   ],
   "service": {
@@ -88,13 +88,91 @@
       "maxResponseBytes": 262144,
       "timeoutMs": 25000,
       "framing": "data"
+    },
+    {
+      "name": "zzz.tag_thread",
+      "class": "write",
+      "target": {
+        "tool": "edit_post"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "turnId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "thread",
+          "tags",
+          "turnId"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 4096,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
+    },
+    {
+      "name": "zzz.edit_post",
+      "class": "write",
+      "target": {
+        "tool": "edit_post"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "post": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "turnId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "post",
+          "turnId"
+        ],
+        "additionalProperties": false
+      },
+      "maxRequestBytes": 65536,
+      "maxResponseBytes": 262144,
+      "timeoutMs": 25000,
+      "framing": "data"
     }
   ],
   "skills": [
     {
       "name": "zzzbot",
-      "version": "1.0.0",
-      "sha256": "e7fd889bd7b5649aa15a13617b743290b44e82c4cc0354d04e02c0cf09eefa58",
+      "version": "1.1.0",
+      "sha256": "9a0dab31a09974e027233037557ff183e4fe9ee1e6e4b7f172d4f858c0b4ce07",
       "path": "skills/zzzbot/SKILL.md"
     }
   ],

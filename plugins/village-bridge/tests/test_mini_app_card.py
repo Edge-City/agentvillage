@@ -115,6 +115,14 @@ class GoldenVectorTest(unittest.TestCase):
         self.assertIs(mc.card_value_fits, fk.card_value_fits)
         self.assertIs(mc.canonical, fk.canonical)
 
+    def test_pending_action_instructions_include_public_chat_not_pairing_link(self):
+        for instruction in (mc.ACTION_APPROVE_IN_BOT, mc.ACTION_PLACED_ON_APPROVAL):
+            self.assertIn(mini.OPEN_APPROVALS_CHAT, instruction)
+            self.assertIn('SAME draftId', instruction)
+            self.assertNotIn('?start=', instruction)
+        for instruction in (mc.ACTION_UNPINNED, mc.ACTION_CARD_REFUSED, mc.ACTION_UNDECLARED):
+            self.assertNotIn(mini.APPROVALS_CHAT_URL, instruction)
+
     def test_member_class_and_key(self):
         self.assertEqual(mc.member_class(CONFIRM), CLASS)
         self.assertEqual(mc.action_key(CONFIRM, DRAFT), KEY)

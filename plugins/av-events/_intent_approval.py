@@ -817,7 +817,10 @@ def withdraw_local(intention_id: str) -> Optional[str]:
         return "approval_publishing"
     if previous == "requested" and isinstance(task, str):
         try:
-            _approval.withdraw(task, "the agent withdrew the intention")
+            # Core withdraws by action key and takes a closed reason (timeout | cancelled | superseded):
+            # without both, the call was a usage error and the card stayed tappable.
+            done = _approval.withdraw(task, "cancelled", ap.get("key"))
+            logger.info("av-events: approval withdraw=%s", "withdrawn" if done.ok else "refused")
         except _approval.ApprovalUnavailable as exc:
             logger.info("av-events: approval withdraw_unsent=%s", exc.code)
         except Exception as exc:  # noqa: BLE001

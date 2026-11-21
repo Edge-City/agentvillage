@@ -1,0 +1,4 @@
+{
+  "code": "rate_limited",
+  "detail": "Too many calls in a short time; try again in a minute."
+}

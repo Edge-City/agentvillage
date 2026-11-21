@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Too many sign-up attempts. Try again in an hour."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"rate_limited\",\"message\":\"Too many sign-up attempts. Try again in an hour.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "rate_limited",
+    "message": "Too many sign-up attempts. Try again in an hour."
+  },
+  "isError": true
+}

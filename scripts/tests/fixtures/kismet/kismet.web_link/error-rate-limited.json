@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Too many web links this hour. Try again later."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"rate_limited\",\"message\":\"Too many web links this hour. Try again later.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "rate_limited",
+    "message": "Too many web links this hour. Try again later."
+  },
+  "isError": true
+}

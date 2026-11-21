@@ -1,0 +1,11 @@
+name: av-rate
+version: 0.1.0
+description: "Suggestion rating cards (data docs/design/suggestion-rating.md): on the first evening after an Index connection is accepted, the resident's own bot sends a Telegram card asking how good a match the suggestion was (five emoji buttons for 1..5, labels in the body: Not a fit / Weak fit / OK fit / Good fit / Great fit, scale match_fit_5_v1, with a privacy line), after the first tap, whatever the rating, a second card asking whether they could imagine collaborating with this person (Yes / No / Not sure yet, scale collab_interest_v1). The evening trigger (skills/index-network/scripts/rating-cards.ts) stages the subjects as files; this plugin sends the cards from them (AV_RATE_CARDS on), registers one Telegram CallbackQueryHandler scoped to callback_data that starts with avr: (ctx.register_platform_handler, block=False), accepts taps from the box's own resident in their own DM only (av-vote's rule), inside a 24 h window, re-taps as revisions, marks the chosen button, hands the events (opportunity.rating_asked, opportunity.rated, opportunity.collab_interest; opportunity.pre_planned for a planned card from an older release) to av-events through hand-off files it reads on its flusher's cadence, and injects one [Rating recorded] line into the resident's DM session through ctx.inject_message (plugins.entries.av-rate.allow_gateway_injection). Logs codes and counts only. Fail-open: no tools, no hooks, never raises into the gateway."
+author: Edge City
+kind: backend
+optional_env:
+  - AV_RATE_CARDS
+  - AV_RATE_SESSION_KEY
+  - TELEGRAM_HOME_CHANNEL
+  - AV_TENANT_ID
+  - TENANT_ID

@@ -332,11 +332,10 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     }
   });
 
-  test("the evening outcome question stays the whole reply: the manage line is never added to it", () => {
+  test("the evening prompt carries no text question any more (the suggestion rating cards ask by button); the closeout keeps the manage line", () => {
     const evening = readFileSync(join(PROMPTS_DIR, "ask-questions.md"), "utf8");
-    // The sentence the av-events matcher arms on (is_the_question fullmatches the normalised reply).
-    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else.");
-    expect(evening).toContain("Never add it to the `outcomeQuestion`: that question stays the whole reply, alone.");
+    expect(evening).not.toContain("outcomeQuestion");
+    expect(evening).not.toMatch(/reply met|not useful|missed/i);
     expect(evening).toContain("With `closeoutQuestion`: deliver it word for word, followed only by the last line below.");
   });
 });

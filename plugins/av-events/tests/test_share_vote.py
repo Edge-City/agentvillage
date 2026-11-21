@@ -209,6 +209,10 @@ class FakeServe:
 
     def _withdraw(self, pos, flags):
         t = self.tasks.get(pos[0])
+        # As core (gate.ts commandWithdraw, state.ts WITHDRAW_REASONS): no `--action`, another
+        # request's key or a free-text reason is a usage error (exit 2) that changes nothing.
+        if t is not None and (flags.get("--action") != t["key"] or flags.get("--reason") not in ("timeout", "cancelled", "superseded")):
+            return 2, {"ok": False, "error": "usage"}, None
         if t is None or t["state"] != "requested":
             return self._error("not-pending")
         t["state"] = "withdrawn"
@@ -517,6 +521,7 @@ def test_without_approval_the_tools_refuse_and_nothing_is_proposed(tctx, serve, 
 def test_a_share_proposes_exactly_the_contract_object_and_no_text_in_the_summary(tctx, serve, mods, av, plugin):
     out = share(tctx, scope="service:coordination", expires_in_hours=48)
     assert out["success"] is True and out["state"] == "requested"
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
     digest_id = out["digest_id"]
     assert re.fullmatch(CONTRACT["patterns"]["digest_id"], digest_id)
     assert instant(out["expires_at"]) == pytest.approx(NOW + 48 * 3600, abs=0.001)
@@ -805,10 +810,21 @@ def test_a_map_expiry_moved_past_seven_days_is_refused(tctx, serve, mods, av, pl
     ("", "text_required"), (None, "text_required"), ("x" * 501, "text_too_long"), ("a\u202eb", "text_invalid"),
     ("?!", "text_no_letter_or_digit"), ("use Bearer abcdefghijklmnop to log in", "text_sanitized"),
     ("key sk-or-v1-abcdefghijklmnopqrstuvwxyz", "text_sanitized"),
+    # ov#599 N1: a Kismet one-time sign-in link, in any spelling the shared matcher (_kismet_link.py) folds.
+    ("my Kismet: https://kismet-village.vercel.app/u/av-test-0000?next=chat", "text_sanitized"),
+    ("kismet-village.vercel.app%252Fu%252Fav-test-0000", "text_sanitized"),
+    ("\uff4b\uff49\uff53\uff4d\uff45\uff54\uff0d\uff56\uff49\uff4c\uff4c\uff41\uff47\uff45\uff0e\uff56\uff45\uff52\uff43\uff45\uff4c\uff0e\uff41\uff50\uff50\uff0f\uff55\uff0f\uff58", "text_sanitized"),
+    ("kismet-village.vercel.app\\u\\av-test-0000", "text_sanitized"),
+    ("kismet-village.vercel.app/\tu/x and kismet-village.vercel.app/a/../u/y", "text_sanitized"),
 ])
 def test_text_the_door_or_the_sanitiser_would_change_is_refused(tctx, serve, text, code):
     assert call(tctx, "share_digest", {"action": "share", "text": text})["error"] == code
     assert serve.calls == []
+
+
+def test_a_digest_naming_kismet_but_no_sign_in_link_is_proposed(tctx, serve):
+    out = call(tctx, "share_digest", {"action": "share", "text": "Kismet matched me today: https://kismet-village.vercel.app/join"})
+    assert out.get("error") is None and out["state"] == "requested" and len(serve.proposals()) == 1
 
 
 @pytest.mark.parametrize("scope", ["Village", "service:", "service:Odin", "everyone", "service:a b"])
@@ -819,7 +835,9 @@ def test_a_scope_outside_the_contract_is_refused(tctx, serve, scope):
 def test_open_share_proposals_are_capped(tctx, serve):
     for _ in range(5):
         assert share(tctx)["state"] == "requested"
-    assert share(tctx)["error"] == "too_many_pending" and len(serve.proposals()) == 5
+    out = share(tctx)
+    assert out["error"] == "too_many_pending" and len(serve.proposals()) == 5
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
 
 
 # ---- Revocation ---------------------------------------------------------------
@@ -918,6 +936,7 @@ def test_the_question_is_read_through_the_provider(tctx):
 def test_a_vote_proposes_question_and_answer_only_and_the_grant_emits_vote_cast(tctx, serve, mods, av, plugin):
     out = vote(tctx, rationale="They said at dinner they sleep early")
     assert out["success"] is True and out["state"] == "requested"
+    assert out["message"].splitlines()[-1] == "Open approvals chat: https://t.me/AgentVillageApprovalsBot"
     key = f"village.vote:{QUESTION_ID}:{TENANT}"
     [p] = serve.proposals()
     assert p["flags"]["--class"] == VOTE and p["flags"]["--key"] == key

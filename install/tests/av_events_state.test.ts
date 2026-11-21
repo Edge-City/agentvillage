@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 
 import { DIGEST_CRON_SPECS } from "../install_index";
+import { ZZZ_JOB_NAME } from "../zzz_job_registry";
 import { removeWipeUserState, resetSteps } from "../reset";
 
 const SEED = join(import.meta.dir, "..", "..", "plugins", "av-events", "cron_job_names.json");
@@ -13,12 +14,13 @@ test("the av-events cron job-name seed is exactly the installer's cron names", (
   // cron.run reports a job's name only if it is in this seed; a drift either
   // way loses a name or lets through one the installer never creates.
   const seed = JSON.parse(readFileSync(SEED, "utf8")) as { version: string; names: string[] };
-  expect(seed.version).toBe("cron_job_names_v3");
-  expect([...seed.names].sort()).toEqual(DIGEST_CRON_SPECS.map((spec) => spec.name).sort());
+  expect(seed.version).toBe("cron_job_names_v4");
+  expect([...seed.names].sort()).toEqual([...DIGEST_CRON_SPECS.map((spec) => spec.name), ZZZ_JOB_NAME].sort());
   // K1: the knowledge sync is named (seed v2), so its cron.run rows count as installer jobs.
   expect(seed.names).toContain("Edge — knowledge sync");
   // DATA-430: the hourly pending alert is named (seed v3).
   expect(seed.names).toContain("Edge — pending opportunity");
+  expect(seed.names).toContain(ZZZ_JOB_NAME);
 });
 
 test("reset --wipe-user removes av-events state (snapshot state included) and the memory tool's files", () => {

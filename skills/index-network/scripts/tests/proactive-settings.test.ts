@@ -25,7 +25,7 @@ const MORNING = new Date("2026-10-12T02:30:00Z");
 const AFTERNOON = new Date("2026-10-12T09:30:00Z");
 
 let home: string;
-const ENV_KEYS = ["AV_TEAM_TENANT", "AV_PORTAL_URL", "AV_CONNECTIONS_URL", "AV_EVENTS_TOKEN", "AV_EVENTS_ENABLED", "AV_HOOKS_DISABLED"];
+const ENV_KEYS = ["AV_TEAM_TENANT", "AV_PORTAL_URL", "AV_CONNECTIONS_URL", "AV_EVENTS_TOKEN", "AV_EVENTS_ENABLED", "AV_HOOKS_DISABLED", "AV_OUTCOME_TEXT_ASK", "AV_RATE_CARDS"];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 beforeEach(() => {
@@ -335,6 +335,8 @@ describe("the preview: team tenants only, nothing written that the real run read
   test("the evening preview with an outcome ask due stages nothing and records no attempt", async () => {
     process.env.AV_TEAM_TENANT = "1";
     process.env.AV_EVENTS_TOKEN = "test-token";
+    // The text ask (superseded by the suggestion rating cards) runs only with this on.
+    process.env.AV_OUTCOME_TEXT_ASK = "1";
     const OPP = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
     writeFileSync(stateFile(), JSON.stringify({ negotiationSummary: { reportedCompletedIds: [OPP], announcedOn: { [OPP]: "2026-10-09" } } }));
     const before = readFileSync(stateFile(), "utf8");
