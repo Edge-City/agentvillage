@@ -952,7 +952,10 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
     () => {
       const run = fixture("flip", ["0.4.5", [STAY, PRE_FIX]], ["0.4.6", [STAY, PRE_FIX]]);
       expect(run.status).toBe(1);
-      expect(run.md).toMatch(/^CLASS-DIFF FAIL 3 BLOCKING: core 0\.4\.5 .*blocking by column: hermes-home 1, home 1, workspace 1/);
+      // Since approval.md's report says every reason (412365ad): the pre-#427 curl is also an unlisted
+      // human-only recipe in the neutral check and an unlisted box deny, two other findings.
+      expect(run.md).toMatch(/^CLASS-DIFF FAIL 3 BLOCKING, 2 OTHER: core 0\.4\.5 .*blocking by column: hermes-home 1, home 1, workspace 1/);
+      expect(run.md).toContain("## Other findings (each fails the run): 2");
     },
     LONG,
   );
@@ -962,7 +965,9 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
     () => {
       const run = fixture("home", ["0.4.5", [STAY, FIXED]], ["0.4.6", [STAY, FIXED]]);
       expect(run.status).toBe(1);
-      expect(run.md).toMatch(/^CLASS-DIFF FAIL 1 BLOCKING: .*blocking by column: hermes-home 1$/m);
+      // The --url curl denied from the Hermes home is also an unlisted box deny: one other finding.
+      expect(run.md).toMatch(/^CLASS-DIFF FAIL 1 BLOCKING, 1 OTHER: .*blocking by column: hermes-home 1$/m);
+      expect(run.md).toContain("## Other findings (each fails the run): 1");
     },
     LONG,
   );
