@@ -170,17 +170,39 @@ describe("the class-diff job and script (static)", () => {
     expect(readFileSync(SCRIPT, "utf8")).toContain('pending=${AV_NEW_CALLS_PENDING_ACCEPTANCE:-fail}');
   });
 
-  test("B-167N: every expected.json entry names a recipe this tree ships or a manifest operation, and a limiting one names human:carter", () => {
+  test("B-167N: every expected.json entry names a recipe this tree ships, a manifest operation or a propose site; a named acceptor is only human:carter", () => {
     type Layer = { class: string; decision: string; card_style?: string; matrix: Record<string, string> };
     const doc = JSON.parse(readFileSync(EXPECTED, "utf8")) as {
-      entries: (Layer & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; reason: string; owner: string; template: string; accepted_by?: string; accepted_at?: string; propose?: Layer & { key: string } })[];
+      entries: (Partial<Layer> & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; reason: string; owner: string; template: string; accepted_by?: string; accepted_at?: string; propose?: Layer & { key: string; source?: string; accepts?: unknown } })[];
     };
+    const CELLS = ["ask", "autonomous", "manual", "supervised-live", "supervised-retro"];
     const keys = new Set<string>();
     for (const e of doc.entries) {
       expect(e.template).toBe("village default");
       expect(e.reason.trim().length).toBeGreaterThan(12);
-      expect(Object.keys(e.matrix).sort()).toEqual(["ask", "autonomous", "manual", "supervised-live", "supervised-retro"]);
-      if (e.file !== undefined) {
+      // Review S1 (approval.md 412365ad): a propose-only entry is a daemon propose behind no hooked
+      // call. It holds `propose` alone: no file, command, tool or input, and no top-level class,
+      // decision, card style or matrix. Its propose names one source line of a file this tree ships,
+      // and that line holds a propose; the gate's extractor reads the class and answers there on every
+      // run and fails on any mismatch, so this static test checks the shape and the site only.
+      const proposeOnly = e.file === undefined && e.tool === undefined;
+      if (proposeOnly) {
+        for (const k of ["command", "input", "class", "decision", "card_style", "matrix"] as const) expect([k, e[k]]).toEqual([k, undefined]);
+        const p = e.propose!;
+        expect(typeof p.class).toBe("string");
+        expect(Object.keys(p.matrix).sort()).toEqual(CELLS);
+        expect(Array.isArray(p.accepts) && (p.accepts as unknown[]).every((a) => typeof a === "string")).toBe(true);
+        const at = String(p.source).match(/^([^:]+):(\d+)$/);
+        expect([p.source, at !== null]).toEqual([p.source, true]);
+        const lines = readFileSync(join(REPO, at![1]!), "utf8").split("\n");
+        expect([p.source, /propose/.test(lines[Number(at![2]) - 1] ?? "")]).toEqual([p.source, true]);
+        keys.add(`propose#${String(p.source)}#${p.class}`);
+      } else {
+        expect(Object.keys(e.matrix!).sort()).toEqual(CELLS);
+      }
+      if (proposeOnly) {
+        // checked above
+      } else if (e.file !== undefined) {
         expect(flat(readFileSync(join(REPO, e.file), "utf8"))).toContain(flat(e.command!));
         keys.add(`${e.file}\u0000${flat(e.command!).trim()}`);
       } else {
@@ -201,11 +223,23 @@ describe("the class-diff job and script (static)", () => {
         expect([op, named || inEnum]).toEqual([op, true]);
         keys.add(`${op}:${appId ?? ""}.${String(e.input?.tool ?? "")}`);
       }
-      const limiting = [e, ...(e.propose ? [e.propose] : [])].some((l) => l.decision !== "auto" || l.class === "marketplace.app.action");
+      // A propose-only entry's only layer is its propose.
+      const layers = proposeOnly ? [e.propose!] : [e, ...(e.propose ? [e.propose] : [])];
+      const limiting = layers.some((l) => l.decision !== "auto" || l.class === "marketplace.app.action");
+      // A limiting entry is accepted by the owner by name. The gate itself fails it on every event
+      // until accepted_by and a real accepted_at are there ("awaiting acceptance", never waived for an
+      // empty accepted_by), so this test does not ask an author to write the acceptor's name. It keeps
+      // the rest: no acceptor but human:carter can be written here, and no date without an acceptor.
       if (limiting) {
-        expect(e.accepted_by).toBe("human:carter");
-        // Carter fills the date; until then the gate fails closed on it (B-167N P1).
-        expect(e.accepted_at).toMatch(/^(\d{4}-\d{2}-\d{2}|YYYY-MM-DD)$/);
+        if (e.accepted_by !== undefined && e.accepted_by !== "") {
+          expect(e.accepted_by).toBe("human:carter");
+          // Carter fills the date; until then the gate fails closed on it (B-167N P1).
+          expect(e.accepted_at).toMatch(/^(\d{4}-\d{2}-\d{2}|YYYY-MM-DD)$/);
+        } else {
+          expect([e.accepted_at ?? ""]).toEqual([""]);
+        }
+      } else {
+        expect([e.accepted_by ?? "", e.accepted_at ?? ""]).toEqual(["", ""]);
       }
     }
     expect(keys.size).toBe(doc.entries.length);
@@ -220,6 +254,18 @@ describe("the class-diff job and script (static)", () => {
     const rsvp = doc.entries.filter((e) => e.file === "skills/edgeos/SKILL.md" && /edgeos\.ts rsvp/.test(e.command ?? ""));
     expect(rsvp.length).toBe(2);
     for (const e of rsvp) expect([e.decision, e.card_style]).toEqual(["auto", undefined]);
+    // Review S1: the four av-events propose sites, each declared once per class its held entries carry.
+    const sites = doc.entries.filter((e) => e.file === undefined && e.tool === undefined).map((e) => `${String(e.propose?.source).replace(/^plugins\/av-events\//, "")} ${String(e.propose?.class)}`).sort();
+    expect(sites).toEqual([
+      "_intent_approval.py:401 intent.publish.inferred.index",
+      "_intent_approval.py:401 intent.publish.stated.index",
+      "_intent_approval.py:424 intent.publish.inferred.index",
+      "_intent_approval.py:424 intent.publish.stated.index",
+      "_share_vote.py:1077 digest.share",
+      "_share_vote.py:1077 village.vote",
+      "_share_vote.py:1119 digest.share",
+      "_share_vote.py:1119 village.vote",
+    ]);
   });
 });
 
@@ -243,6 +289,26 @@ describe("B-167N P7: the live decision lines compare with expected.json mechanic
     expect(compare(entries, `marketplace.app.action | card | technical | ${CORE} | marketplace.app.action:forkicks.order.confirm:d`, CORE)[0]?.ok).toBe(false);
     expect(compare(entries, `network.call | auto | none | ${CORE} | curl https://example.com/`, CORE)[0]?.why.join(";")).toContain("no expected.json entry");
     expect(compare(entries, "marketplace.app.read auto", CORE)[0]?.ok).toBe(false);
+  });
+
+  test("review S1: a propose-only entry's live line is its action key, `<class>:<id>`, and meets one of that class's declared sites", () => {
+    // The digest share: first propose cards (minimal); the re-check before the start is refused at the
+    // default. The key does not say which site, so either declared outcome matches, nothing else does.
+    const card = compare(entries, `digest.share | card | minimal | ${CORE} | digest.share:5b0c1f2e-live-1`, CORE)[0];
+    expect([card?.ok, card?.why]).toEqual([true, []]);
+    expect(compare(entries, `digest.share | refused | none | ${CORE} | digest.share:5b0c1f2e-live-1`, CORE)[0]?.ok).toBe(true);
+    // The share ran on its own: no declared site says auto at the default.
+    const loose = compare(entries, `digest.share | auto | none | ${CORE} | digest.share:5b0c1f2e-live-1`, CORE)[0];
+    expect(loose?.ok).toBe(false);
+    expect(loose?.why.join(";")).toContain("meets no declared propose of digest.share");
+    // A vote's key has two parts after the class; a technical card blocks; the stated intent runs on its own.
+    expect(compare(entries, `village.vote | card | minimal | ${CORE} | village.vote:weekly-2026-11-29:6c1d2e3f-live`, CORE)[0]?.ok).toBe(true);
+    expect(compare(entries, `village.vote | card | technical | ${CORE} | village.vote:weekly-2026-11-29:6c1d2e3f-live`, CORE)[0]?.ok).toBe(false);
+    expect(compare(entries, `intent.publish.stated.index | auto | none | ${CORE} | intent.publish.stated.index:0193a6c0-live`, CORE)[0]?.ok).toBe(true);
+    // The class in the line must be the key's class.
+    expect(compare(entries, `intent.publish.stated.index | auto | none | ${CORE} | intent.publish.inferred.index:0193a6c0-live`, CORE)[0]?.ok).toBe(false);
+    // A bare class with no id keys nothing.
+    expect(compare(entries, `digest.share | card | minimal | ${CORE} | digest.share:`, CORE)[0]?.why.join(";")).toContain("no expected.json entry");
   });
 });
 
@@ -732,6 +798,14 @@ describe("B-167N fold 1 N4: live-compare keys calls by approval.md's closed-set 
     // A recipe row is covered by its command.
     const rsvp = "bun skills/edgeos/scripts/edgeos.ts rsvp {event_id}";
     expect(live(`exec.local | auto | none | 0.4.7 | ${rsvp}\n`, "--report", report([{ key: `skills/edgeos/SKILL.md\u0000${rsvp}`, kind: "recipe", status: "new", entry: true }])).status).toBe(0);
+    // Review S1: a NEW or CHANGED propose-only row (key propose#<file:line>#<class>) is covered by a live
+    // line of that class's action key, never by the row key itself (no canary line carries it).
+    const site = [{ key: "propose#plugins/av-events/_share_vote.py:1119#digest.share", kind: "propose", status: "new", entry: true }];
+    const share = "digest.share | card | minimal | 0.4.7 | digest.share:5b0c1f2e-live-1\n";
+    expect(live(share, "--report", report(site)).status).toBe(0);
+    expect(live("village.vote | card | minimal | 0.4.7 | village.vote:weekly-2026-11-29:x\n", "--report", report(site)).status).toBe(1);
+    // An unchanged propose-only row needs no live line.
+    expect(live(share, "--report", report([{ ...site[0], status: "unchanged" }, { key: SEARCH, kind: "envelope", status: "unchanged", entry: true }]), "--require", "digest.share:5b0c1f2e-live-1").status).toBe(0);
   });
 });
 

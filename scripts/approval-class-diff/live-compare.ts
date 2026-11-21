@@ -33,7 +33,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 type Layer = { class: string; decision: string; card_style?: string | null };
-type Entry = Layer & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; propose?: Layer & { key: string } };
+type Entry = Partial<Layer> & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; propose?: Layer & { key: string; source?: string } };
+
+/**
+ * Review S1 (approval.md 412365ad): a propose-only entry is a daemon propose behind no hooked call
+ * (no file, command, tool or input). Its live line's key is the propose's action key, `<class>:<id>`
+ * (`digest.share:<digest id>`, `village.vote:<question>:<resident>`); the id is the live one. One
+ * class can be proposed at more than one site with other declared outcomes (the first propose
+ * cards, the re-check before the start is refused unless already cleared), and the key does not
+ * say which site it came from. So a live line of that class is matched against every propose-only
+ * entry of the class and passes when it meets one of them; a line of a class no entry declares is
+ * an undeclared call, as before.
+ */
+const isProposeOnly = (e: Entry): boolean => e.file === undefined && e.command === undefined && e.tool === undefined && e.propose !== undefined;
+const proposeOnlyClassOf = (key: string, entries: Entry[]): string | undefined =>
+  entries.filter(isProposeOnly).map((e) => e.propose!.class).find((cls) => key.startsWith(`${cls}:`) && key.length > cls.length + 1);
 
 const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
 
@@ -85,6 +99,15 @@ export function compare(entries: Entry[], text: string, core: string): LineResul
     const [cls, decision, style, version, key] = parts as [string, string, string, string, string];
     const why: string[] = [];
     if (version !== core) why.push(`core ${version}, not the candidate's ${core} (the canary must run the candidate tag)`);
+    const onlyClass = proposeOnlyClassOf(key, entries);
+    if (onlyClass !== undefined) {
+      const candidates = entries.filter((e) => isProposeOnly(e) && e.propose!.class === onlyClass).map((e) => e.propose!);
+      const judged = candidates.map((layer) => judgeLine(layer, cls, decision, style));
+      const hit = judged.find((w) => w.length === 0);
+      const sites = candidates.map((l) => `${String(l.source)} ${l.decision}`).join(", ");
+      out.push({ line, key, ok: why.length === 0 && hit !== undefined, why: hit !== undefined ? why : [...why, `meets no declared propose of ${onlyClass} (${sites})`] });
+      continue;
+    }
     let layer: Layer | undefined;
     for (const e of entries) {
       if (e.command !== undefined && norm(e.command) === norm(key)) layer = e;
@@ -96,15 +119,22 @@ export function compare(entries: Entry[], text: string, core: string): LineResul
       out.push({ line, key, ok: false, why: [...why, "no expected.json entry has this key (an undeclared call is a block)"] });
       continue;
     }
-    if (cls !== layer.class) why.push(`class ${cls}, declared ${layer.class}`);
-    const deny = layer.decision === "deny" && (decision === "human-only" || decision === "refused");
-    if (decision !== layer.decision && !deny) why.push(`decision ${decision}, declared ${layer.decision}`);
-    const carded = decision === "card" || decision === "sampled";
-    if (carded && style !== "minimal") why.push(`card ${style}, not minimal`);
-    if (!carded && style !== "none") why.push(`card_style ${style} on a call that showed no card`);
+    why.push(...judgeLine(layer as Layer, cls, decision, style));
     out.push({ line, key, ok: why.length === 0, why });
   }
   return out;
+}
+
+/** One live line's class, decision and card style against one declared layer: the reasons it differs. */
+function judgeLine(layer: Layer, cls: string, decision: string, style: string): string[] {
+  const why: string[] = [];
+  if (cls !== layer.class) why.push(`class ${cls}, declared ${layer.class}`);
+  const deny = layer.decision === "deny" && (decision === "human-only" || decision === "refused");
+  if (decision !== layer.decision && !deny) why.push(`decision ${decision}, declared ${layer.decision}`);
+  const carded = decision === "card" || decision === "sampled";
+  if (carded && style !== "minimal") why.push(`card ${style}, not minimal`);
+  if (!carded && style !== "none") why.push(`card_style ${style} on a call that showed no card`);
+  return why;
 }
 
 /** A call the canary must have run: a label, and the test a live line's key must pass. */
@@ -127,6 +157,14 @@ export function requiredFromReport(entries: Entry[], report: unknown): Required[
     if (r.kind === "recipe") {
       const command = key.slice(key.indexOf("\u0000") + 1);
       out.push({ label: command, covers: (k) => norm(k) === norm(command) });
+      continue;
+    }
+    // Review S1: a propose-only row's key is `propose#<file:line>#<class>`; the canary's line for it
+    // carries the propose's live action key, `<class>:<id>`.
+    if (r.kind === "propose") {
+      const cls = key.slice(key.lastIndexOf("#") + 1);
+      if (!key.startsWith("propose#") || cls === "") throw new Error(`a propose row with an unreadable key: ${key}`);
+      out.push({ label: `${cls}:<id> (${key.slice("propose#".length, key.lastIndexOf("#"))})`, covers: (k) => k.startsWith(`${cls}:`) && k.length > cls.length + 1 });
       continue;
     }
     out.push({ label: key, covers: (k) => k === key });
