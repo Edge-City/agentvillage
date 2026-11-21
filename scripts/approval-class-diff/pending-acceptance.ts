@@ -27,6 +27,11 @@
  * of that class going on with the same accepted answers, and the row's own line is one of them. Without
  * both corpora, or with any difference, a propose-only row is no waiver (fail closed).
  *
+ * Review S1b (approval.md dc37d7c3): which class a held entry gets is decided by its class writers, the
+ * corpus's `class_writers` (file, function, class; line only reported). The site is unchanged only if
+ * the writers of its class are too: the same file and function filing that class in both corpora, and
+ * no writer of the site's plugin unread in either. A corpus with no class_writers list is no waiver.
+ *
  * Usage: bun scripts/approval-class-diff/pending-acceptance.ts --json <class-diff.json> --stderr <the check's stderr>
  *          [--head-corpus <this tree's corpus.json> --tag-corpus <the previous release's corpus.json>]
  * Exit: 0 waived (prints ::warning:: lines), 1 not waivable, 2 usage.
@@ -45,13 +50,18 @@ const PENDING = /^LIMITING \([^()]*\): awaiting acceptance: accepted_at (?:"[^"\
 const NEW_CALLS_LINE = /^\d+ new-calls finding\(s\) \(B-167N\)/u;
 
 type Row = { key?: unknown; kind?: unknown; status?: unknown; entry?: unknown; blocks?: unknown };
-type Site = { file?: unknown; line?: unknown; class?: unknown; classes?: unknown; accepts?: unknown };
+type Site = { plugin?: unknown; file?: unknown; line?: unknown; class?: unknown; classes?: unknown; accepts?: unknown };
+type Writer = { plugin?: unknown; file?: unknown; function?: unknown; class?: unknown };
 /** The two corpora (each extractor output's `proposes`), for a propose-only row. */
 export type Corpora = { head: unknown; tag: unknown } | null;
 
 const sitesOf = (corpus: unknown): Site[] | null => {
   const p = (corpus as { proposes?: unknown } | null)?.proposes;
   return Array.isArray(p) ? (p as Site[]) : null;
+};
+const writersOf = (corpus: unknown): Writer[] | null => {
+  const w = (corpus as { class_writers?: unknown } | null)?.class_writers;
+  return Array.isArray(w) ? (w as Writer[]) : null;
 };
 const carries = (s: Site, cls: string): boolean => s.class === cls || (Array.isArray(s.classes) && (s.classes as unknown[]).includes(cls));
 const answers = (s: Site): string | null => (Array.isArray(s.accepts) && (s.accepts as unknown[]).every((a) => typeof a === "string") ? JSON.stringify([...(s.accepts as string[])].sort()) : null);
@@ -76,6 +86,18 @@ export function proposeSiteChanged(key: string, corpora: Corpora): string | null
   const like = (sites: Site[]) => sites.filter((s) => s.file === file && carries(s, cls) && answers(s) === want).length;
   if (like(tag) === 0 || like(tag) !== like(head)) {
     return `${file} has ${String(like(head))} propose site(s) of ${cls} going on with ${want} now and ${String(like(tag))} at the previous release: the site changed (file, class or accepted answers)`;
+  }
+  const headWriters = writersOf(corpora.head);
+  const tagWriters = writersOf(corpora.tag);
+  if (headWriters === null || tagWriters === null) return "a corpus without its class_writers list, so the class this site's entries get cannot be judged unchanged (fail closed)";
+  const plugin = own[0]!.plugin;
+  const unread = (ws: Writer[]) => ws.some((w) => w.plugin === plugin && typeof w.class !== "string");
+  if (unread(headWriters) || unread(tagWriters)) return `a class writer of plugin ${String(plugin)} cannot be read in ${unread(headWriters) ? "this tree" : "the previous release"} (fail closed)`;
+  const filing = (ws: Writer[]) => [...new Set(ws.filter((w) => w.class === cls).map((w) => `${String(w.file)} ${String(w.function)}`))].sort();
+  const now = filing(headWriters);
+  const then = filing(tagWriters);
+  if (JSON.stringify(now) !== JSON.stringify(then)) {
+    return `the class writers of ${cls} changed since the previous release (now ${now.join(", ") || "none"}; then ${then.join(", ") || "none"})`;
   }
   return null;
 }

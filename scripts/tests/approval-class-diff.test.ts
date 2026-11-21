@@ -173,7 +173,7 @@ describe("the class-diff job and script (static)", () => {
   test("B-167N: every expected.json entry names a recipe this tree ships, a manifest operation or a propose site; a named acceptor is only human:carter", () => {
     type Layer = { class: string; decision: string; card_style?: string; matrix: Record<string, string> };
     const doc = JSON.parse(readFileSync(EXPECTED, "utf8")) as {
-      entries: (Partial<Layer> & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; reason: string; owner: string; template: string; accepted_by?: string; accepted_at?: string; propose?: Layer & { key: string; source?: string; accepts?: unknown } })[];
+      entries: (Partial<Layer> & { file?: string; command?: string; tool?: string; input?: Record<string, unknown>; reason: string; owner: string; template: string; accepted_by?: string; accepted_at?: string; propose?: Layer & { key: string; source?: string; accepts?: unknown; writers?: unknown } })[];
     };
     const CELLS = ["ask", "autonomous", "manual", "supervised-live", "supervised-retro"];
     const keys = new Set<string>();
@@ -223,6 +223,26 @@ describe("the class-diff job and script (static)", () => {
         expect([op, named || inEnum]).toEqual([op, true]);
         keys.add(`${op}:${appId ?? ""}.${String(e.input?.tool ?? "")}`);
       }
+      // Review S1b (approval.md dc37d7c3): propose.writers names the functions that file the class a held
+      // entry gets, each `{ file, function, class }` and nothing else, every one of the propose's class.
+      // The gate's extractor reads the writers and judges them against these on every run; here each
+      // listed writer must be code this tree has: its file exists and holds that function (a dotted name,
+      // `Store.go`, is each part a def or class in the file), so a writer cannot be declared for code that
+      // is not there.
+      if (e.propose?.writers !== undefined) {
+        const writers = e.propose.writers;
+        expect(Array.isArray(writers) && (writers as unknown[]).length > 0).toBe(true);
+        for (const w of writers as Record<string, unknown>[]) {
+          expect(Object.keys(w).sort()).toEqual(["class", "file", "function"]);
+          expect(w.class).toBe(e.propose.class);
+          const file = String(w.file);
+          expect([file, existsSync(join(REPO, file))]).toEqual([file, true]);
+          const src = readFileSync(join(REPO, file), "utf8");
+          for (const part of String(w.function).split(".")) {
+            expect([file, part, new RegExp(`^\\s*(?:async\\s+)?(?:def|class)\\s+${part.replace(/[^A-Za-z0-9_]/g, "")}\\b`, "m").test(src)]).toEqual([file, part, true]);
+          }
+        }
+      }
       // A propose-only entry's only layer is its propose.
       const layers = proposeOnly ? [e.propose!] : [e, ...(e.propose ? [e.propose] : [])];
       const limiting = layers.some((l) => l.decision !== "auto" || l.class === "marketplace.app.action");
@@ -265,6 +285,14 @@ describe("the class-diff job and script (static)", () => {
       "_share_vote.py:1077 village.vote",
       "_share_vote.py:1119 digest.share",
       "_share_vote.py:1119 village.vote",
+    ]);
+    // Review S1b: each class's writer is declared once, on its first-propose entry.
+    const writers = doc.entries.flatMap((e) => ((e.propose?.writers ?? []) as { file: string; function: string; class: string }[]).map((w) => `${String(e.propose?.source).replace(/^plugins\/av-events\//, "")} ${w.class} ${w.file.replace(/^plugins\/av-events\//, "")} ${w.function}`)).sort();
+    expect(writers).toEqual([
+      "_intent_approval.py:424 intent.publish.inferred.index _record_intention.py _held_through_approval",
+      "_intent_approval.py:424 intent.publish.stated.index _record_intention.py _stated_through_approval",
+      "_share_vote.py:1119 digest.share _share_vote.py _share",
+      "_share_vote.py:1119 village.vote _share_vote.py _vote",
     ]);
   });
 });
@@ -762,7 +790,9 @@ describe("B-167N fold 1 S2: a pending accepted_at on an UNCHANGED call is the on
     const prow = (over: Entry = {}): Entry => ({ key: PKEY, kind: "propose", status: "unchanged", entry: true, blocks: [MSG], ...over });
     const site = (line: number, accepts: string[] | null, classes = ["digest.share", "village.vote"]): Entry => ({ plugin: "av-events", file: "plugins/av-events/_share_vote.py", line, class: null, classes, accepts });
     const ALL = ["autonomous", "requested", "supervised"];
-    const corpora = (head: Entry[], tag: Entry[]): Corpora => ({ head: { proposes: head }, tag: { proposes: tag } });
+    const writer = (fn: string, cls = "digest.share", file = "plugins/av-events/_share_vote.py"): Entry => ({ plugin: "av-events", file, function: fn, line: 1835, class: cls });
+    const W = [writer("_share"), writer("_vote", "village.vote")];
+    const corpora = (head: Entry[], tag: Entry[], hw: Entry[] | null = W, tw: Entry[] | null = W): Corpora => ({ head: { proposes: head, ...(hw === null ? {} : { class_writers: hw }) }, tag: { proposes: tag, ...(tw === null ? {} : { class_writers: tw }) } });
     const d = doc([prow()], [finding(MSG, PKEY)]);
     // The site moved down the file since the release (other lines changed); its class and answers did not: waived.
     const same = pendingOnly(d, NEWCALLS_ERR, corpora([site(1077, ["autonomous", "supervised"]), site(1119, ALL)], [site(1001, ["autonomous", "supervised"]), site(1040, ALL)]));
@@ -781,6 +811,21 @@ describe("B-167N fold 1 S2: a pending accepted_at on an UNCHANGED call is the on
     // The row's own line holds no such site, or its answers cannot be read: no waiver.
     expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1120, ALL)], [site(1040, ALL)])).ok).toBe(false);
     expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, null)], [site(1040, null)])).ok).toBe(false);
+    // Review S1b: the writers of the site's class must be unchanged too. A writer that moved within its
+    // function (another line) is the same writer: waived.
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], W, [{ ...writer("_share"), line: 1700 }, writer("_vote", "village.vote")])).ok).toBe(true);
+    // A corpus with no class_writers list: no waiver.
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], W, null)).ok).toBe(false);
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], null, W)).ok).toBe(false);
+    // A new function files the class, or the old one now files another: no waiver.
+    const added = pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], [...W, writer("_share_again")], W));
+    expect(added.ok).toBe(false);
+    expect(added.why.join(";")).toContain("the class writers of digest.share changed");
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], [writer("_share", "village.vote"), writer("_vote", "village.vote")], W)).ok).toBe(false);
+    // An unread writer in the plugin, in either corpus: no waiver.
+    const unreadW = { plugin: "av-events", file: "plugins/av-events/_x.py", function: "f", line: 3, class: null, why: "a computed class" };
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], [...W, unreadW], W)).ok).toBe(false);
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)], W, [...W, unreadW])).ok).toBe(false);
     // An empty accepted_by on a propose-only entry is never waived, unchanged site or not.
     const by = 'LIMITING (propose decision card): awaiting acceptance: accepted_by must be "human:carter" (it is null)';
     expect(pendingOnly(doc([prow({ blocks: [by] })], [finding(by, PKEY)]), NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)])).ok).toBe(false);
@@ -1118,6 +1163,11 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
           "    else:",
           "        return None",
           "    return x",
+          // The class writers (review S1b): the functions that file each class into a held entry.
+          "def hold_inferred(entry):",
+          '    entry["class"] = INFERRED',
+          "def hold_stated(entry):",
+          '    entry["class"] = STATED',
           "",
         ].join("\n");
       const FILE = "plugins/av-events/_held.py";
@@ -1127,8 +1177,8 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
       // inferred is manual, a minimal card; stated is autonomous). The inferred one is limiting, so it carries a
       // fixture acceptance, as the other limiting fixtures here do.
       const entries: Entry[] = [
-        { template: "village default", reason: "fixture: an inferred intention cards first", owner: "fixture", accepted_by: "human:carter", accepted_at: "2026-10-21", propose: { class: "intent.publish.inferred.index", key: "intent.publish.inferred.index:fixture-1", summary: "Publish an inferred fixture intention.", payload, ...site, decision: "card", card_style: "minimal" } },
-        { template: "village default", reason: "fixture: a stated intention publishes on its own", owner: "fixture", propose: { class: "intent.publish.stated.index", key: "intent.publish.stated.index:fixture-2", summary: "Publish a stated fixture intention.", payload, ...site, decision: "auto" } },
+        { template: "village default", reason: "fixture: an inferred intention cards first", owner: "fixture", accepted_by: "human:carter", accepted_at: "2026-10-21", propose: { class: "intent.publish.inferred.index", key: "intent.publish.inferred.index:fixture-1", summary: "Publish an inferred fixture intention.", payload, ...site, writers: [{ file: FILE, function: "hold_inferred", class: "intent.publish.inferred.index" }], decision: "card", card_style: "minimal" } },
+        { template: "village default", reason: "fixture: a stated intention publishes on its own", owner: "fixture", propose: { class: "intent.publish.stated.index", key: "intent.publish.stated.index:fixture-2", summary: "Publish a stated fixture intention.", payload, ...site, writers: [{ file: FILE, function: "hold_stated", class: "intent.publish.stated.index" }], decision: "auto" } },
       ];
       const good = { [FILE]: held("intent.publish.inferred.index") };
       const control = fixture("s2-control", ["0.4.8", [STAY]], ["0.4.8", [STAY], entries], { baseFiles: good, headFiles: good });
@@ -1139,6 +1189,8 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
       expect(plant.status).toBe(1);
       expect(plant.md).toMatch(/^NEW-CALLS FAIL \d+ BLOCKING/m);
       expect(plant.md).toContain(`propose.class intent.publish.inferred.index, but ${FILE}:9 proposes one of intent.publish.stated.index`);
+      // With approval.md's class writers (review S1b), the writer that filed the inferred class now files the stated one.
+      expect(plant.md).toMatch(/the class writer hold_inferred \(plugins\/av-events\/_held\.py:\d+[^)]*\) files class intent\.publish\.stated\.index, declared intent\.publish\.inferred\.index/);
     },
     LONG,
   );
