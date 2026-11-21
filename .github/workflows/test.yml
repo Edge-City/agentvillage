@@ -227,13 +227,13 @@ jobs:
   #
   # One source of truth: the extractor and the check are approval.md's own
   # scripts, checked out at the pinned commit below (approval-md/approval.md is
-  # public, so no token). Until a release carries them the ref names the head
-  # commit of the approval.md B-167N PR (#668, stacked on the B-167 PR, #665).
-  # B-167N fold 1 M4 + fold 2 S-D1: the job fails unless that commit is on
-  # approval.md main's first-parent line (a state main held, never a merge-queue
-  # branch commit) at or above the floor in tool-ref-on-main.sh, so this job stays
-  # red until #668 merges and the ref (and the floor) move to the commit that
-  # merges it.
+  # public, so no token). The ref is the one line marked APPROVAL_MD_TOOL_REF
+  # below. Until the approval.md NEW-CALLS PR (B-167N, stacked on the B-167 gate
+  # PR, #678) merges, it names that PR's head commit. B-167N fold 1 M4 + fold 2
+  # S-D1: the job fails unless that commit is on approval.md main's first-parent
+  # line (a state main held, never a merge-queue branch commit) at or above the
+  # floor in tool-ref-on-main.sh, so this job stays red until that PR merges and
+  # the ref (and the floor) move to the commit that merges it.
   #
   # B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): the tool is
   # a fresh clone in the runner's temp dir, outside this checkout, so no file of
@@ -259,7 +259,7 @@ jobs:
     timeout-minutes: 25
     env:
       # APPROVAL_MD_TOOL_REF, see the comment above: the one place the ref is named.
-      AV_APPROVAL_MD_TOOL_REF: ce36c9d9cd195543e78440acdef35e2a99ab3f69
+      AV_APPROVAL_MD_TOOL_REF: cd5b41284a248931bd972def49e191d33d646027 # APPROVAL_MD_TOOL_REF: head of the approval.md NEW-CALLS PR (stacked on #678); moves to that PR's merge commit on approval.md main when it merges, with floor_default in tool-ref-on-main.sh
     steps:
       # Full history, every branch and tag: every event measures against the
       # previous release (the overlay the boxes run), not HEAD^1 (B-167 fold 1 S-2;
