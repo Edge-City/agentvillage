@@ -40,6 +40,7 @@
 /install/env.ts                              @soycarts
 /install/hermes_cli.ts                       @soycarts
 /install/paths.ts                            @soycarts
+/install/zzz_job_registry.ts                @soycarts
 /skills/index-network/scripts/hermes-cli.ts  @soycarts
 /skills/index-network/scripts/job-settings.ts @soycarts
 /skills/index-network/scripts/message-labels.ts @soycarts
