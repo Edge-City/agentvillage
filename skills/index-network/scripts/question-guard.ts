@@ -79,7 +79,7 @@ export const QUESTION_MAX = 160;
  * when either file names a tool this list misses.
  */
 export const TOOL_NAMES: readonly string[] = `
-  accept-opportunity add-contact archive-intent browser-back browser-cdp browser-click browser-console browser-dialog browser-exec
+  accept-opportunity add-contact archive-intent ask-odin ask-village browser-back browser-cdp browser-click browser-console browser-dialog browser-exec
   browser-get-images browser-navigate browser-press browser-scroll browser-snapshot browser-type browser-vision cancel-discovery-run
   cancel-enrichment-run clarify complete-onboarding confirm-opportunity-delivery confirm-user-context consent-status create-intent
   create-intent-index create-network create-network-membership create-premise create-user-context cronjob delegate-task delete-agent
@@ -88,10 +88,10 @@ export const TOOL_NAMES: readonly string[] = `
   image-generate import-contacts import-gmail-contacts index-add-intent-to-network index-agent-me index-create-intent index-create-network
   index-join-network index-list-intent-networks index-list-opportunities index-read-docs index-read-intents index-read-network-memberships
   index-read-networks index-research-profile index-update-intent index-update-network index-update-opportunity list-agents list-contacts
-  list-conversations list-intents list-negotiations list-opportunities memory opportunity-outcome patch pause-intent preview-user-context
-  process read-docs read-file read-intent-indexes read-intents read-network-memberships read-networks read-pending-questions read-premises
+  list-conversations list-intents list-negotiations list-opportunities memory opportunity-outcome patch pause-intent pray preview-user-context
+  process query-village read-docs read-file read-intent-indexes read-intents read-network-memberships read-networks read-pending-questions read-premises
   read-user-contexts recall record-intention record-onboarding-privacy-consent register-agent reject-opportunity remove-contact resume-intent
-  retract-premise revoke-agent-permission scrape-url search-contacts search-files search-intents send-message session-search skill-manage
+  retract-premise revoke-agent-permission scrape-url search-contacts search-files search-intents search-village send-message session-search skill-manage
   skill-view skills-list terminal text-to-speech todo update-agent update-intent update-my-profile update-network update-opportunity
   update-premise update-user-context video-analyze vision-analyze web-extract web-search write-file x-search
   welcome-already-sent refused-seeds
