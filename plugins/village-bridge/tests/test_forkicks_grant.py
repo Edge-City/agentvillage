@@ -9,7 +9,7 @@ import sys
 import time
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 fixture = sys.modules.get('village_bridge_test_fixture')
 if fixture is None:
@@ -132,11 +132,15 @@ class ForKicksOnGrantTest(unittest.TestCase):
             result['preview'] = preview
         return result, order
 
-    def ask(self, expires='2099-01-01T00:00:00+05:30', shape='legacy'):
-        """Prepare in one turn, confirm in the next: the card is sent and not tapped yet."""
+    def ask(self, expires='2099-01-01T00:00:00+05:30', shape='legacy', confirm=True):
+        """Prepare in one turn, confirm in the next: the card is sent and not tapped yet. Without `confirm`, only the
+        prepare (which raises and tracks the card): the pass reaches the draft before any confirm of the agent."""
         self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('9')
         self.prepared, order = self.preview(expires=expires, shape=shape)
         self.assertIn('data', self.call({'operation': 'forkicks.order.prepare', **order}))
+        if not confirm:
+            self.daemon.wait.reset_mock()
+            return None
         self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('10')
         self.transport.reset_mock()
         response = self.call({'operation': 'forkicks.order.confirm', 'draftId': DRAFT})
@@ -157,7 +161,7 @@ class ForKicksOnGrantTest(unittest.TestCase):
     def test_untapped_card_is_tracked_and_the_agent_says_it_places_it_on_approval(self):
         response = self.ask()
         self.assertEqual(response, {'error': 'approval_required', 'instruction': mini.ORDER_PLACED_ON_APPROVAL})
-        self.assertIn("I'll place it as soon as you approve.", response['instruction'])
+        self.assertIn("I've sent your approval card to your approvals bot; tap Approve there and I'll place it.", response['instruction'])
         marker = json.loads(self.marker().read_text())
         self.assertEqual((marker['task'], marker['phase']), (TASK, 'awaiting'))
         self.assertEqual(self.marker().stat().st_mode & 0o777, 0o600)
@@ -176,7 +180,10 @@ class ForKicksOnGrantTest(unittest.TestCase):
         ap.configured = lambda: True
         ap.process_env = lambda name: os.environ.get(name, '').strip()
         ap.register_pass, ap.ensure_poller = Mock(), Mock(return_value=True)
-        with patch.dict(sys.modules, {'hermes_plugins.av_events._approval': ap}), patch.object(bridge, '_ensure_forkicks_pass', ENSURE):
+        # The tracked card below would start the real forkicks-fast-poll thread on this stub (no poller_alive): 2 s
+        # later it raised into whichever test was running (test_zzz_autonomy_runner_model_route's sys.modules churn).
+        with patch.dict(sys.modules, {'hermes_plugins.av_events._approval': ap}), patch.object(bridge, '_ensure_forkicks_pass', ENSURE), \
+                patch.object(bridge, '_ensure_forkicks_ticker'):
             for off in ('0', 'false', 'No', ' off '):
                 with self.subTest(off=off), patch.dict(os.environ, {'AV_APPROVAL_POLLER': off}):
                     self.assertFalse(bridge._ensure_forkicks_pass())
@@ -273,10 +280,12 @@ class ForKicksOnGrantTest(unittest.TestCase):
         self.transport.assert_not_called()
 
     def test_flat_card_record_with_an_expired_quote_is_told_expired_never_started(self):
-        self.ask(expires='2020-01-01T00:00:00+05:30', shape='flat')
+        self.ask(expires='2020-01-01T00:00:00+05:30', shape='flat', confirm=False)
         self.daemon.state = 'granted'
         self.run_pass()
-        self.daemon.wait.assert_not_called()
+        # ov#465 N1: read first (not spent: the expired line); approval L20892: read again inside the close's lock
+        # hold before `expired` is written. Same outcome: no start, no confirm, the expired line once.
+        self.assertEqual(self.daemon.wait.call_args_list, [call(TASK)] * 2)
         self.daemon.start.assert_not_called()
         self.assertEqual(self.confirms(), [])
         self.assertEqual(self.sent, [('42', "Your For Kicks order wasn't placed: the approval or the price quote expired.")])
@@ -409,10 +418,12 @@ class ForKicksOnGrantTest(unittest.TestCase):
     # ---- only this box's drafts; never past the quote ---------------------------------------------
 
     def test_expired_quote_is_the_failure_line_never_a_start_or_requote(self):
-        self.ask(expires='2020-01-01T00:00:00+05:30')
+        self.ask(expires='2020-01-01T00:00:00+05:30', confirm=False)
         self.daemon.state = 'granted'
         self.run_pass()
-        self.daemon.wait.assert_not_called()
+        # ov#465 N1: read first (not spent: the expired line); approval L20892: read again inside the close's lock
+        # hold before `expired` is written. Same outcome: no start, no confirm, the expired line once.
+        self.assertEqual(self.daemon.wait.call_args_list, [call(TASK)] * 2)
         self.daemon.start.assert_not_called()
         self.assertEqual(self.daemon.propose.call_count, 1)
         self.assertEqual(self.confirms(), [])
@@ -455,7 +466,8 @@ class ForKicksOnGrantTest(unittest.TestCase):
         for draft in drafts[3:]:
             os.unlink(self.home / 'forkicks-drafts' / (draft + '.await'))
         self.run_pass()
-        self.daemon.wait.assert_not_called()
+        # ov#465 N1: each awaiting marker's wait is read first; approval L20892: and again inside the close's lock hold.
+        self.assertEqual(self.daemon.wait.call_count, 4)
         self.assertEqual(sorted(e['code'] for e in self.events), ['ttl', 'ttl', 'uncertain_ttl'])
         # Each unanswered card is told once; the lost-confirm one is not told (its order may exist).
         self.assertEqual(len(self.sent), 2)

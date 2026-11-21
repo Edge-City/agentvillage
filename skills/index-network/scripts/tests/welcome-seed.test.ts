@@ -677,8 +677,55 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     process.env.INDEX_MCP_URL = index.fake.url;
     await welcomeRun(["--home", home], { fetch: index.fake.fetch, timeoutMs: 200, now });
     const raw = readFileSync(join(home, WELCOME_SEED_FILE), "utf8");
-    expect(raw).toBe(`${JSON.stringify({ seededAt: now.toISOString(), selected: 3, created: 3, failed: 0, done: true })}\n`);
+    // The ids of the three lines this run created (Index's answers), ids only, after the counts.
+    expect(raw).toBe(`${JSON.stringify({ seededAt: now.toISOString(), selected: 3, created: 3, failed: 0, done: true, ids: [idFor(0x101), idFor(0x102), idFor(0x103)] })}\n`);
     expect(statSync(join(home, WELCOME_SEED_FILE)).mode & 0o777).toBe(0o600);
+  });
+
+  describe("the marker's ids: the Index ids of the lines this run created, ids only", () => {
+    const now = new Date("2026-10-11T04:30:00.000Z");
+    async function seedWith(index: ReturnType<typeof fakeIndex>) {
+      process.env.INDEX_API_KEY = FAKE_API_KEY;
+      process.env.INDEX_MCP_URL = index.fake.url;
+      await welcomeRun(["--home", home], { fetch: index.fake.fetch, timeoutMs: 200, now });
+      return readFileSync(join(home, WELCOME_SEED_FILE), "utf8");
+    }
+    const counts = (selected: number, created: number, failed: number) => ({ seededAt: now.toISOString(), selected, created, failed, done: true });
+
+    test("a failed line adds no id; the created lines' ids in line order, no noId; 0600; no text of the lines", async () => {
+      writeUserMd(profileText(draftWith(3)));
+      const raw = await seedWith(fakeIndex({ create: (n) => (n === 2 ? createError(500) : undefined) }));
+      expect(raw).toBe(`${JSON.stringify({ ...counts(3, 2, 1), ids: [idFor(0x101), idFor(0x103)] })}\n`);
+      expect(statSync(join(home, WELCOME_SEED_FILE)).mode & 0o777).toBe(0o600);
+      for (const k of KEPT.slice(0, 3)) expect(raw).not.toContain(k.text);
+    });
+
+    test("noId: a create that landed with no id named (seen active in the second list) is counted, never guessed from the list", async () => {
+      writeUserMd(profileText(draftWith(2)));
+      const index = fakeIndex({
+        create: (n, description, id) => {
+          index.rows.push({ id, summary: description, status: "active" });
+          return n === 1 ? { status: 200, body: { networkIds: [], sourceType: "agentvillage", sourceId: null } } : createdReply(id);
+        },
+      });
+      const raw = await seedWith(index);
+      // The second list names the first line's id too: it is still not recorded (matched by text, not Index's answer).
+      expect(index.rows.map((r) => r.id)).toContain(idFor(0x101));
+      expect(raw).toBe(`${JSON.stringify({ ...counts(2, 2, 0), ids: [idFor(0x102)], noId: 1 })}\n`);
+    });
+
+    test("nothing created: the marker is today's bytes, neither ids nor noId", async () => {
+      writeUserMd(profileText(draftWith(3)));
+      const raw = await seedWith(fakeIndex({ create: () => createError(500) }));
+      expect(raw).toBe(`${JSON.stringify(counts(3, 0, 3))}\n`);
+    });
+
+    test("paused mode: only the lines created and paused; a create whose pause failed is a failed line, its id not recorded", async () => {
+      writeUserMd(profileText(draftWith(3)));
+      process.env.AV_WELCOME_SEED_MODE = "paused";
+      const raw = await seedWith(fakeIndex({ pause: (id) => (id === idFor(0x102) ? toolError("cannot pause") : undefined) }));
+      expect(raw).toBe(`${JSON.stringify({ ...counts(3, 2, 1), ids: [idFor(0x101), idFor(0x103)] })}\n`);
+    });
   });
 
   for (const [label, content] of [
@@ -847,7 +894,9 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     expect([...listedLines(late.text)].sort()).toEqual(KEPT.slice(0, 3).map((k) => k.text).sort());
     // One claim (the first run's, never rewritten by the second) and three creates in all.
     expect(creates(index.fake.calls)).toHaveLength(3);
-    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(`${JSON.stringify({ seededAt: firstNow.toISOString(), selected: 3, created: 3, failed: 0, done: true })}\n`);
+    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(
+      `${JSON.stringify({ seededAt: firstNow.toISOString(), selected: 3, created: 3, failed: 0, done: true, ids: [idFor(0x101), idFor(0x102), idFor(0x103)] })}\n`,
+    );
   });
 
   test(
@@ -1761,7 +1810,11 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
     const edgeos = JSON.parse(readFileSync(join(repo, "plugins", "av-events", "edgeos_tool_allowlist.json"), "utf8")) as { carrier_tools: string[] };
     const source = readFileSync(join(import.meta.dir, "..", "welcome.ts"), "utf8");
     const called = [...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1]);
-    const names = [...Object.keys(categories.builtin), ...Object.values(categories.mcp).flatMap((tools) => Object.keys(tools)), ...edgeos.carrier_tools, ...called];
+    // `village` (tool_categories_v4, HOT-RASOOL F1) is listed for telemetry only: the village-bridge tool
+    // was never in the guard's list, and the word is the village's own name in ordinary questions, so
+    // the guard keeps letting it through (unchanged behaviour).
+    const NOT_GUARDED = new Set(["village"]);
+    const names = [...Object.keys(categories.builtin), ...Object.values(categories.mcp).flatMap((tools) => Object.keys(tools)), ...edgeos.carrier_tools, ...called].filter((name) => !NOT_GUARDED.has(name));
     expect(names.length).toBeGreaterThan(100);
     const camel = (name: string) => name.replace(/_(\w)/g, (_m, c: string) => c.toUpperCase());
     for (const name of names) {

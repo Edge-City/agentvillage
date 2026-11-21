@@ -147,10 +147,11 @@ class ForKicksTest(unittest.TestCase):
         self.transport.assert_called_once_with(self.config, request)
         self.assertFalse(Path(self.tmp.name, 'forkicks-drafts').exists())
 
-    def test_confirm_needs_later_owner_turn_and_refuses_model_proof(self):
+    def test_confirm_refuses_model_proof(self):
+        # FK-CARD-AT-PREPARE (lead L19916 (1)): no same-turn refusal any more (test_forkicks_card_at_prepare pins
+        # that a same-turn confirm never places without the human grant); a model-supplied proof is still refused.
         result = self.prepare()
         with patch.object(bridge, 'authorize_order') as authorize:
-            self.assertEqual(self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})['error'], 'forkicks_confirmation_required')
             self.next_turn()
             self.assertEqual(self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId'], 'approval': {'approved': True}})['error'], 'invalid_arguments')
             authorize.assert_not_called()
@@ -226,7 +227,11 @@ class ForKicksTest(unittest.TestCase):
             ap = self.daemon(); ap.wait.return_value = answer(status=status)
             with patch.object(fk, 'approval_modules', return_value=ap):
                 output = self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})
-            self.assertEqual(output['error'], 'approval_required'); self.assertIn('SAME draftId', output['instruction']); ap.start.assert_not_called()
+            if status == 'requested':
+                self.assertEqual(output['error'], 'approval_required'); self.assertIn('SAME draftId', output['instruction'])
+            else:  # S2: a closed card is never "approve on its card"; nothing was ordered, a new preview is needed
+                self.assertEqual(output, {'error': 'approval_card_closed', 'instruction': mini.ORDER_CARD_CLOSED})
+            ap.start.assert_not_called()
         ap = self.daemon(); ap.start.return_value = answer(ok=True, authorization='policy')
         with patch.object(fk, 'approval_modules', return_value=ap):
             self.assertEqual(self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})['error'], 'approval_not_started')
@@ -240,11 +245,15 @@ class ForKicksTest(unittest.TestCase):
             self.assertEqual(self.call(request)['error'], 'village_unavailable')
         original = self.transport.call_args.args[1]
         self.transport.side_effect = None
+        # The retry reads the same task (one card per draft: no second propose); core answers the spent grant
+        # nothing-to-wait-for with this draft's action granted, and the same proof is sent again, never a new start.
         ap = self.daemon(state='executed')
+        key = 'marketplace.app.action:forkicks.order.confirm:' + result['draftId']
+        ap.wait.return_value = answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'granted'}])
         with patch.object(fk, 'approval_modules', return_value=ap):
             self.assertIn('data', self.call(request))
         self.assertEqual(self.transport.call_args.args[1], original)
-        ap.wait.assert_not_called(); ap.start.assert_not_called()
+        ap.propose.assert_not_called(); ap.start.assert_not_called()
 
     def test_uninstall_during_approval_refuses_effect(self):
         result = self.prepare(); self.next_turn(); ap = self.daemon()

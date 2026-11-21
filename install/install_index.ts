@@ -98,6 +98,7 @@ import { HERMES_JOB_ID_RE, installedJobsPath, missedSlot, rawSchedule, storedJob
 import { type HoldsRead, readHolds } from "../skills/index-network/scripts/pause-job";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
 import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
+import { isExactZzzManagedJob, readJobRegistry, writeJobRegistry } from "./zzz_job_registry";
 
 // Shared with the skill scripts that run on a box without install/ (DATA-376): one definition each.
 export { hermesAvailable, installedJobsPath, storedJobEnabled };
@@ -227,6 +228,7 @@ export interface StoredCronJob {
   name: string;
   prompt?: string;
   script?: string;
+  enabled_toolsets?: string[];
   schedule?: { expr?: string } | string;
   schedule_display?: string;
   no_agent?: boolean;
@@ -245,8 +247,8 @@ export function storedSchedule(job: StoredCronJob): string {
   return (job.schedule?.expr ?? job.schedule_display ?? "").trim();
 }
 
-export function readCronJobs(): StoredCronJob[] {
-  const jobsPath = join(hermesHome(), "cron", "jobs.json");
+export function readCronJobs(home: string = hermesHome()): StoredCronJob[] {
+  const jobsPath = join(home, "cron", "jobs.json");
   if (!existsSync(jobsPath)) return [];
   try {
     const parsed = JSON.parse(readFileSync(jobsPath, "utf8")) as { jobs?: StoredCronJob[] };
@@ -930,15 +932,17 @@ export function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, pr
 // (`$HERMES_HOME/av-events/installed_jobs.json`, DATA-92) live beside the
 // skill scripts (hermes-cli.ts, message-labels.ts) and are re-exported above.
 
-/** Replace the record, by temp file and rename. Best effort, like `restore.json`. */
+/** Replace Index IDs while preserving only a previously confirmed, still exact ZZZ job. */
 export function writeInstalledJobIds(home: string, ids: string[]): void {
   try {
-    const dir = join(home, "av-events");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const path = installedJobsPath(home);
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify({ ids: [...new Set(ids)].sort() })}\n`, { mode: 0o600 });
-    renameSync(tmp, path);
+    const previous = readJobRegistry(home);
+    const zzzJobId = previous.zzzJobId;
+    const matches = readCronJobs(home).filter((job) => job.name === "Edge — zzz pairs");
+    const verified = zzzJobId && matches.length === 1
+      && isExactZzzManagedJob(matches[0]) && matches[0].id === zzzJobId;
+    const indexIds = ids.filter((id) => id !== zzzJobId);
+    writeJobRegistry(home, { ids: verified ? [...indexIds, zzzJobId] : indexIds,
+      ...(verified ? { zzzJobId } : {}) });
   } catch {
     console.warn("  warning: could not record the installed cron job ids; cron.run will carry no job names");
   }
@@ -1029,6 +1033,9 @@ export function reconcileDigestCronJobs(
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
 
   for (const job of existing) {
+    // The mini-app projection helper owns this Hermes job's install/removal.
+    // A routine Index reconcile must not retire an enabled zzzbot poller.
+    if (isExactZzzManagedJob(job)) continue;
     if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name) || templateNames.has(job.name)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });

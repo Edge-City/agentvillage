@@ -23,18 +23,21 @@ from typing import Any, Callable, Optional
 
 from . import _approval, _approvals_reminder, _edgeos, _edgeos_guard, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._ask_village import register_ask_village_tool
+from ._ask_odin import register_ask_odin_tool
 from ._search_village import register_search_village_tool
 from ._query_village import register_query_village_tool
-from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._clock import with_clock_line
 from . import _miniapp_epoch
+from . import _skill_change_note
 from . import _prompt_refresh
+from . import _user_md_gate
 from . import _village_visible
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
 from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
 from ._core import (
+    env_flag_on,
     PLUGIN_VERSION,
     hash_obj,
     hash_text,
@@ -56,8 +59,11 @@ from . import _gate_events
 from . import _code_run
 # MM-INFER-VIS, on its own line for the same reason.
 from . import _negotiator_llm
+# HOT-RASOOL-2, on its own line so it merges beside other lanes' imports.
+from . import _heal_reasoning
 # B-169b, on its own line for the same reason.
 from . import _skill_label
+from . import _llm_errors
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -231,6 +237,10 @@ OUTCOME_ASK_SWITCH = "outcome_ask"
 
 def _outcome_guarded(collector: Collector, kwargs: dict, hook: str, fn, *args: Any) -> None:
     if not collector.config.active or OUTCOME_ASK_SWITCH in collector.config.disabled_hooks:
+        return
+    # Superseded by the suggestion rating cards (plugins/av-rate, `_rating_cards`): the text ask
+    # arms and parses only with AV_OUTCOME_TEXT_ASK on, for one release, then goes.
+    if not env_flag_on(_outcome_ask.TEXT_ASK_SWITCH):
         return
     try:
         fn(*args)
@@ -437,8 +447,20 @@ def _hook_post_api_request(collector: Collector, **kwargs: Any) -> None:
         payload["assistant_content_chars"] = kwargs.get("assistant_content_chars")
         payload["assistant_tool_call_count"] = kwargs.get("assistant_tool_call_count")
         payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
+    if _after_failed_call_on_another_model(state, kwargs):
+        payload["error_code"] = _llm_errors.FALLBACK_ACTIVATED
+    state.llm_failed = None
 
     _emit_llm_call(collector, payload, stashed, kwargs)
+
+
+def _after_failed_call_on_another_model(state: Any, kwargs: dict) -> bool:
+    """This call is in the turn of the last failed call, on a different model:
+    Hermes's fallback chain took the turn (HOT-RASOOL F1)."""
+    failed = state.llm_failed
+    turn_id = kwargs.get("turn_id")
+    model = kwargs.get("model")
+    return bool(failed and turn_id and model and failed[0] == str(turn_id) and failed[1] != str(model))
 
 
 def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
@@ -469,6 +491,15 @@ def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
         # possibly carrying an unredacted provider dump, which can include the
         # prompt that caused the failure.
         "error_type": str(error.get("type") or kwargs.get("error_type") or "") or None,
+        # HOT-RASOOL F1: a token from `_llm_errors.FAILURE_CODES`. The message
+        # is read only for OpenRouter's fixed mixed-provider wording; no text
+        # of it is stored.
+        "error_code": _llm_errors.failure_code(
+            reason=kwargs.get("reason"),
+            status_code=kwargs.get("status_code"),
+            error_type=error.get("type") or kwargs.get("error_type"),
+            message=error.get("message"),
+        ),
         "status_code": kwargs.get("status_code"),
         "retryable": kwargs.get("retryable"),
         "tools_hash": stashed.get("tools_hash"),
@@ -481,6 +512,8 @@ def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
     if collector.config.capture != "metadata":
         payload["system_prompt_length"] = stashed.get("system_prompt_length")
         payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
+    turn_id, model = kwargs.get("turn_id"), kwargs.get("model")
+    state.llm_failed = (str(turn_id), str(model)) if turn_id and model else None
 
     _emit_llm_call(collector, payload, stashed, kwargs)
 
@@ -1069,6 +1102,9 @@ HOOK_BODIES = {
     "post_api_request": _hook_post_api_request,
     "api_request_error": _hook_api_request_error,
     "pre_tool_call": _hook_pre_tool_call,
+    # USER.md GATE (review-b #558 S2): registered as it is, outside `guarded` (build_hooks): privacy, not
+    # telemetry, so no kill switch turns it off; it never raises.
+    "transform_tool_result": _user_md_gate.transform_memory_result,
     "post_tool_call": _hook_post_tool_call,
     "on_session_end": _hook_on_session_end,
     "on_session_finalize": _hook_on_session_finalize,
@@ -1197,6 +1233,19 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return guard
+        # USER.md GATE (review-b #558 S2 fold, ov#563 S1-d, ov#565 N1-r3): outside a private session the memory
+        # tool may add to USER.md but not change or remove it (target and action only, never the content);
+        # MEMORY.md is unchanged; an allowed write's whole texts that hold a fingerprinted line are recorded as
+        # self-written (S1-r3, S1-r4 (b)).
+        # A block beats anything but the EdgeOS guard.
+        memory_block = _user_md_gate.memory_write_directive(kwargs.get("tool_name"), kwargs.get("args"),
+                                                           kwargs.get("session_id"))
+        if memory_block is not None:
+            try:
+                logger.info("av-events: user_md_gate refused a memory write outside a private session")
+            except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
+                pass
+            return memory_block
         if result is not None:
             return result
         fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
@@ -1288,6 +1337,38 @@ def with_approvals_reminder(telemetry: Callable, collector_ref=_collector) -> Ca
     return pre_llm_call
 
 
+def with_skill_change_note(inner: Callable) -> Callable:
+    """`pre_llm_call` = the inner chain, then SKILL-CHANGE-NOTE's one note (`_skill_change_note.py`),
+    staged only by this turn's MINIAPP-PICKUP rebuild of this session's prompt, and given only in a
+    private chat (a group, channel or thread chat drops it). Appended after
+    whatever the chain returns (`_approvals_reminder.compose`). Outside `guarded` like the reminder:
+    it is not telemetry. Never raises into the turn; one info line, with the session and apps left out."""
+
+    def pre_llm_call(*args: Any, **kwargs: Any) -> Any:
+        result = inner(*args, **kwargs)
+        try:
+            note = _skill_change_note.take(kwargs.get("session_id"))
+            # Only an owner's private chat (or one whose type Hermes does not say); taken either way.
+            if note and not _skill_change_note.gives_note(_session_chat_type()):
+                note = None
+        except BaseException:  # noqa: BLE001 - a note never costs the turn
+            note = None
+        if not note:
+            return result
+        try:
+            composed = _approvals_reminder.compose(result, note)
+        except BaseException:  # noqa: BLE001
+            return result
+        try:
+            logger.info("av-events: skill_change_note given")
+        except BaseException:  # noqa: BLE001 - a log line must not cost the note
+            pass
+        return composed
+
+    pre_llm_call.av_hook_name = getattr(inner, "av_hook_name", "pre_llm_call")  # type: ignore[attr-defined]
+    return pre_llm_call
+
+
 def build_hooks(collector_ref=_collector) -> dict:
     """Wrap every hook body in the fail-open guard. One decorator, no exceptions.
 
@@ -1299,6 +1380,9 @@ def build_hooks(collector_ref=_collector) -> dict:
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
+        if body is _user_md_gate.transform_memory_result:
+            hooks[name] = body  # the USER.md gate's memory-result filter: not telemetry, never guarded
+            continue
         wrapped = guarded(name, collector_ref, quiet=name in QUIET_HOOKS)(body)
         # Hermes decides what to pass by inspecting the callback signature, and
         # `inspect.signature` follows `__wrapped__` through `functools.wraps`.
@@ -1316,7 +1400,9 @@ def build_hooks(collector_ref=_collector) -> dict:
         elif name == "pre_llm_call":
             # CLOCK-1 (`_clock.py`): the Now line on every turn, cron and subagents included,
             # between the telemetry return and the DATA-444 reminder; outside `guarded`.
-            wrapped = with_approvals_reminder(with_clock_line(wrapped, collector_ref), collector_ref)
+            # SKILL-CHANGE-NOTE (`_skill_change_note.py`): after them, on a mini-app change's rebuild turn only.
+            wrapped = with_skill_change_note(
+                with_approvals_reminder(with_clock_line(wrapped, collector_ref), collector_ref))
         hooks[name] = wrapped
     return hooks
 
@@ -1372,11 +1458,11 @@ def register(ctx) -> None:
     when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
     on — `record_intention` (`_record_intention.py`, DATA-212); and, behind
     `AV_DIGEST_SHARE` / `AV_VILLAGE_VOTE`, `share_digest` and `village_vote`
-    (`_share_vote.py`, lane O3); and, behind `AV_PRAY`, `pray` (`_pray.py`,
-    PRAYER P3), and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
+    (`_share_vote.py`, lane O3); and behind `AV_ASK_VILLAGE`, `ask_village` (`_ask_village.py`), and behind
     `AV_SEARCH_VILLAGE`, `search_village` (`_search_village.py`) and `query_village`
     (`_query_village.py`). Those and village-bridge's `village` are kept out of Hermes's
-    `tool_search` bridge (`_village_visible.py`, R-DEON).
+    `tool_search` bridge (`_village_visible.py`, R-DEON). Behind `AV_ASK_ODIN`, `ask_odin`
+    (`_ask_odin.py`, ODIN-ASK), kept out of the bridge the same way (ODIN-ASK-VISIBLE).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -1421,16 +1507,17 @@ def register(ctx) -> None:
         _share_vote.register_share_vote_tools(ctx, emit=_emit_share_vote, ready=_share_vote_emitter_ready)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
-    # PRAYER P3: `pray`, one request to the control plane for an admin to review,
-    # behind `AV_PRAY` (unset: not registered). Not routed through the approval gate.
-    try:
-        register_pray_tool(ctx)
-    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
-        pass
     # ASK-VILLAGE (D): `ask_village`, one question about the main group to the control plane,
     # behind `AV_ASK_VILLAGE` (unset: not registered). Not routed through the approval gate.
     try:
         register_ask_village_tool(ctx)
+    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # ODIN-ASK (phase 1b): `ask_odin`, one question to ODIN, the village's constitution agent, through the
+    # control plane, beside `ask_village` on its wire, behind `AV_ASK_ODIN` (unset: not registered). Not
+    # routed through the approval gate.
+    try:
+        register_ask_odin_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
     # VILLAGE SEARCH: `search_village`, scrubbed group messages matching words, next to `ask_village`,
@@ -1445,6 +1532,15 @@ def register(ctx) -> None:
         register_query_village_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
+    # USER.md GATE (review-b #558 S1, S2): the same idempotent gate village-memory installs, so the
+    # built-in USER.md never carries the Private entries outside a private session even when the provider
+    # never loads; and the memory tool's results leave them out there too (`_user_md_gate.py`).
+    try:
+        _user_md_gate.install_user_md_gate()
+    except Exception as exc:  # noqa: BLE001 - the gate fails closed inside; never cost the hooks
+        # review-b ov#563 N7-d: never silent. One WARNING per exception class, the class name only.
+        _user_md_gate._gate_log_once(f"user_gate:install_{type(exc).__name__}",
+                                     "av-events: USER.md gate install failed (%s)", type(exc).__name__)
     # F1 PROMPT REFRESH: wrap Hermes's build_turn_context (one module attribute, as av-display wraps
     # a display method) so a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md.
     # Behind AV_PROMPT_REFRESH (default: team tenants only); a missing seam is one log line.
@@ -1459,8 +1555,9 @@ def register(ctx) -> None:
         _miniapp_epoch.register_section(ctx)
     except Exception:  # noqa: BLE001 - optional; the hooks are not
         pass
-    # R-DEON: the village tools (ask_village, search_village, query_village, village) stay in the
-    # model's tool list when Hermes's tool_search defers plugin tools (`_village_visible.py`).
+    # R-DEON: the village tools (ask_village, search_village, query_village, village) and
+    # av-elicit's elicitation_record (GC-ELICIT) stay in the model's tool list when Hermes's
+    # tool_search defers plugin tools (`_village_visible.py`).
     # Behind AV_VILLAGE_TOOLS_VISIBLE (default on); a missing seam is one log line.
     try:
         _village_visible.install()
@@ -1474,6 +1571,13 @@ def register(ctx) -> None:
     try:
         _negotiator_llm.start(_collector, __name__, _quiet)
     except Exception:  # noqa: BLE001 - the observer is optional; the hooks are not
+        pass
+    # HOT-RASOOL-2: heal a history that mixes two providers' encrypted reasoning (an llm_request
+    # middleware, a classification hook and a pre_gateway_dispatch hook), behind
+    # AV_HEAL_REASONING_HISTORY (default off: nothing registered). `_heal_reasoning.py`.
+    try:
+        _heal_reasoning.register(ctx)
+    except Exception:  # noqa: BLE001 - the heal is optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.

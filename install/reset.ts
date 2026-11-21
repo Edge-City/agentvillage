@@ -29,6 +29,8 @@ import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 
 const TARGET_HOME = targetWorkspace();
 
+// Same files for both AV_PROFILE values (resident and odin install SOUL.md and AGENTS.md).
+// constitution.md is the operator's file and is never removed here.
 const PROJECT_FILES = ["AGENTS.md", "SCHEDULE.md"];
 
 function ensureHermesAvailable(): void {
@@ -102,7 +104,7 @@ function removeIndexMcpEntry(): void {
   console.log("→ removed mcp_servers.index from config.yaml");
 }
 
-function removeSoulFile(): void {
+export function removeSoulFile(): void {
   const soulPath = join(hermesHome(), "SOUL.md");
   if (!existsSync(soulPath)) return;
   rmSync(soulPath, { force: true });
@@ -125,7 +127,7 @@ function removeEdgeSkills(): void {
   }
 }
 
-function removeProjectFiles(wipeUser: boolean): void {
+export function removeProjectFiles(wipeUser: boolean): void {
   const toRemove = wipeUser ? [...PROJECT_FILES, "USER.md", "MEMORY.md"] : PROJECT_FILES;
   let removed = 0;
 

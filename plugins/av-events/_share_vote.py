@@ -167,6 +167,7 @@ except ImportError:  # pragma: no cover - Windows
 from . import _approval
 from . import _village_question as vq
 from ._core import DIR_MODE, FILE_MODE, derived_uuid7, epoch_from_iso, hermes_home, iso_from_epoch, sanitize, uuid7
+from ._kismet_link import names_kismet_signin_link
 
 logger = logging.getLogger("av-events")
 
@@ -1012,11 +1013,15 @@ def _content_problem(entry: dict) -> Optional[str]:
 
 
 def _withdraw_task(entry: dict, reason: str) -> None:
+    """`reason` is core's closed set: `timeout` (the share expired, the question
+    closed: the answer can no longer be used) or `cancelled`. Core withdraws by
+    the entry's action key; without it the call changed nothing."""
     task = entry.get("task")
     if not isinstance(task, str) or entry.get("state") != "requested":
         return
     try:
-        _approval.withdraw(task, reason)
+        done = _approval.withdraw(task, reason, entry.get("key"))
+        logger.info("av-events: share_vote withdraw=%s", "withdrawn" if done.ok else "refused")
     except _approval.ApprovalUnavailable as exc:
         logger.info("av-events: share_vote withdraw_unsent=%s", exc.code)
     except Exception as exc:  # noqa: BLE001
@@ -1027,7 +1032,7 @@ def _end_out_of_bounds(entry_id: str, entry: dict, state: str, code: str, expect
     """A proposal past its share's expiry or its question's close: ended, and
     a pending question withdrawn on the daemon (best effort)."""
     if _set(entry_id, expect, state, code=code) is not None:
-        _withdraw_task(entry, "the share expired" if entry.get("class") == SHARE_CLASS else "the question closed")
+        _withdraw_task(entry, "timeout")  # the share expired or the question closed
     return Outcome(state, code=code, task=entry.get("task"))
 
 
@@ -1263,7 +1268,7 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
     problem = _content_problem(entry)
     if problem is not None:
         _set(entry_id, {back}, "refused", code=problem)
-        _withdraw_task(entry, "the proposal can no longer be sent")
+        _withdraw_task(entry, "cancelled")  # the proposal can no longer be sent
         return Outcome("refused", code=problem)
     if not _ready():
         # Nothing could carry the event: the grant waits (until it lapses).
@@ -1581,6 +1586,7 @@ REFUSALS: dict[str, str] = {
     "too_many_pending": (
         "Nothing was proposed: five digests are already waiting for the resident. Wait for their answers, "
         "or revoke one, before proposing another."
+        + _approval.APPROVALS_CHAT_LINE
     ),
     "digest_id_required": "Nothing was changed: this action needs the digest_id a share returned.",
     "digest_unknown": "Nothing was changed: this agent holds no digest with that digest_id.",
@@ -1645,7 +1651,7 @@ REFUSALS: dict[str, str] = {
 #: What each final or live state means, for the agent.
 STATE_MESSAGES: dict[str, str] = {
     "unfiled": "The approval service could not be reached; the request will be filed when it can. " + _NOT_APPROVAL,
-    "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL,
+    "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL + _approval.APPROVALS_CHAT_LINE,
     "cleared": "The resident's policy clears this; it is being done.",
     "starting": "It is being done now.",
     "emitting": "The resident approved it; it is being handed over now.",
@@ -1810,6 +1816,9 @@ def _share(args: dict) -> dict:
         return _refuse(problem)
     if sanitize(text) != text:
         return _refuse("text_sanitized")
+    if names_kismet_signin_link(text):
+        # ov#599 N1: the owner's one-time Kismet sign-in link is a credential; it never goes into a shared digest.
+        return _refuse("text_sanitized")
     scope = args.get("scope")
     scope = "village" if scope is None or (isinstance(scope, str) and not scope.strip()) else scope
     if not isinstance(scope, str) or not SCOPE.fullmatch(scope.strip()):
@@ -1865,7 +1874,7 @@ def _revoke(args: dict) -> dict:
         after = _set(entry_id, {"unfiled", "requested", "cleared", "refused"}, "withdrawn", code="resident_revoked")
         if after is None:
             return _refuse("share_in_flight", digest_id=digest_id)
-        _withdraw_task(entry, "the resident revoked the digest")
+        _withdraw_task(entry, "cancelled")  # the resident revoked the digest
         return _state_answer(Outcome("withdrawn", code="resident_revoked"), digest_id=digest_id, shared=False)
     if state == "emitted":
         now = float(_clock())
@@ -2023,7 +2032,7 @@ def _vote_withdraw(args: dict) -> dict:
     if state in ("unfiled", "requested", "cleared", "refused"):
         if _set(key, {"unfiled", "requested", "cleared", "refused"}, "withdrawn", code="agent_withdrew") is None:
             return _refuse("vote_in_flight")
-        _withdraw_task(entry, "the agent withdrew the answer")
+        _withdraw_task(entry, "cancelled")  # the agent withdrew the answer
         state = "withdrawn"
     return _state_answer(Outcome(state or "unknown"), question_id=entry.get("question_id"))
 

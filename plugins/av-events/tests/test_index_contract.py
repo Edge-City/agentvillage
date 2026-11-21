@@ -328,9 +328,9 @@ def test_the_observer_watches_every_index_write_and_nothing_else(plugin, av):
 
 
 def test_the_seed_lists_the_plugins_tools(plugin, av):
-    """tool_categories_v3's `index_*` names are the plugin's tools, but the one it leaves out."""
+    """The seed (v3, kept in v4)'s `index_*` names are the plugin's tools, but the one it leaves out."""
     seed = json.loads((PLUGIN / "tool_categories.json").read_text(encoding="utf-8"))
-    assert seed["version"] == "tool_categories_v3"
+    assert seed["version"] == "tool_categories_v4"
     seeded = {name for name in seed["builtin"] if name.startswith("index_")}
     assert len(PLUGIN_TOOLS) == len(set(PLUGIN_TOOLS)) == 16
     assert set(PLUGIN_TOOLS) == seeded | {"index_open_app"}

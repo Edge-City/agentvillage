@@ -4,7 +4,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { PREVIOUS_REVIEWED_MINI_APPS, reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection } from "../install_miniapps";
+import * as installMiniApps from "../install_miniapps";
+import { PREVIOUS_REVIEWED_MINI_APPS, reconcileMiniApps, REVIEWED_MINI_APPS, SHIPPED_SKILLS, validateProjection, ZZZ_BRIDGE_ID, zzzParticipation } from "../install_miniapps";
+import * as zzzManagedJob from "../zzz_managed_job";
+import { AUTONOMY_FILES, AUTONOMY_GATE } from "../zzz_autonomy_job";
 import { EDGE_SKILL_NAMES } from "../paths";
 import { createRequire } from "node:module";
 
@@ -58,10 +61,25 @@ test("reviewed skills are optional, disk-only staging has deterministic receipts
   expect(receipt).toEqual(reconcileMiniApps(all, root));
   expect(receipt).toEqual(reconcileMiniApps(all, root, undefined, true));
   expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(all)).digest("hex"));
-  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md"]);
+  expect(receipt.files.map(x => x.path)).toEqual(["skills/gold-stars/SKILL.md", "skills/dizko/SKILL.md", "skills/forkicks/SKILL.md", "skills/zzzbot/SKILL.md", "skills/slopfolio/SKILL.md", "skills/mosaic/SKILL.md", "skills/dreamstarter/SKILL.md", "skills/kismet/SKILL.md", "skills/library/SKILL.md", "skills/favorloop/SKILL.md", "skills/eci-volunteers/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md"]);
   expect(receipt).not.toHaveProperty("active");
   writeFileSync(join(root, "skills", "gold-stars", "SKILL.md"), "tampered");
   expect(() => reconcileMiniApps(all, root, undefined, true)).toThrow("mini_apps_skill_mismatch");
+});
+
+// cp#467 (runner SEV1 28 Oct 2026): the control plane holds these receipt paths by hand and fails EVERY mini-app on a
+// box whose receipt differs. A change here lands in cp control-plane/src/mini-apps-skills.js ZZZ_STAGE_FILE_LISTS /
+// ZZZ_AUTONOMY_FILE_LISTS FIRST (as a new list, the old one kept for the roll), deployed before the tag that ships it.
+test("zzz managed receipt files are the cp's mirrored lists (change the cp first: mini-apps-skills.js ZZZ_*_FILE_LISTS)", () => {
+  const root = installedBox();
+  const projection = { version: 1, apps: REVIEWED_MINI_APPS.filter(app => ["zzzbot", ZZZ_BRIDGE_ID, AUTONOMY_GATE].includes(app.id)) };
+  expect(projection.apps.map(app => app.id).sort()).toEqual([AUTONOMY_GATE, ZZZ_BRIDGE_ID, "zzzbot"].sort());
+  const managed = reconcileMiniApps(projection, root).files.map(file => file.path).filter(path => path !== "skills/zzzbot/SKILL.md");
+  expect(managed).toEqual([
+    "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md", // cp ZZZ_STAGE_FILE_LISTS[0]
+    "skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md", // cp ZZZ_AUTONOMY_FILE_LISTS[0]
+  ]);
+  expect(AUTONOMY_FILES).toEqual(["scripts/zzz_autonomy_runner.py", "prompts/autonomy.md"]);
 });
 
 test("uninstall revokes the projection and removes only exact managed files, never a shipped skill", () => {
@@ -85,6 +103,9 @@ test("uninstall revokes the projection and removes only exact managed files, nev
   expect(existsSync(join(root, "skills", "zzzbot", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "slopfolio", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "mosaic", "SKILL.md"))).toBe(false);
+  expect(existsSync(join(root, "skills", "dreamstarter", "SKILL.md"))).toBe(false);
+  expect(existsSync(join(root, "skills", "kismet", "SKILL.md"))).toBe(false);
+  expect(existsSync(join(root, "skills", "library", "SKILL.md"))).toBe(false);
   expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(true);
   expect(reconcileMiniApps({ version: 1, apps: [] }, root, undefined, true).apps).toEqual([]);
 });
@@ -93,7 +114,7 @@ test("the helper never removes an installer-shipped skill, for any desired set",
   // The reviewed ids the installer also ships (today: gold-stars) are exactly the protected ones.
   expect(REVIEWED_MINI_APPS.filter((a) => SHIPPED_SKILLS.has(a.id)).map((a) => a.id)).toEqual(["gold-stars"]);
   expect([...SHIPPED_SKILLS].sort()).toEqual([...EDGE_SKILL_NAMES].sort());
-  const sets = [[], [REVIEWED_MINI_APPS[0]], [REVIEWED_MINI_APPS[1]], [REVIEWED_MINI_APPS[2]], [REVIEWED_MINI_APPS[3]], [REVIEWED_MINI_APPS[4]], [REVIEWED_MINI_APPS[5]], [...REVIEWED_MINI_APPS]];
+  const sets = [[], ...REVIEWED_MINI_APPS.map(app => [app]), [...REVIEWED_MINI_APPS]];
   for (const first of sets) for (const second of sets) {
     const root = installedBox();
     const shipped = () => Object.fromEntries(EDGE_SKILL_NAMES.map((n) => [n, readFileSync(join(root, "skills", n, "SKILL.md"), "base64")]));
@@ -108,6 +129,9 @@ test("the helper never removes an installer-shipped skill, for any desired set",
     expect(existsSync(join(root, "skills", "zzzbot", "SKILL.md"))).toBe(second.some((a) => a.id === "zzzbot"));
     expect(existsSync(join(root, "skills", "slopfolio", "SKILL.md"))).toBe(second.some((a) => a.id === "slopfolio"));
     expect(existsSync(join(root, "skills", "mosaic", "SKILL.md"))).toBe(second.some((a) => a.id === "mosaic"));
+    expect(existsSync(join(root, "skills", "dreamstarter", "SKILL.md"))).toBe(second.some((a) => a.id === "dreamstarter"));
+    expect(existsSync(join(root, "skills", "kismet", "SKILL.md"))).toBe(second.some((a) => a.id === "kismet"));
+    expect(existsSync(join(root, "skills", "library", "SKILL.md"))).toBe(second.some((a) => a.id === "library"));
   }
 });
 
@@ -151,8 +175,9 @@ test("ROLODEX.PERSON: gold-stars carries rolodex.person last; the 8-op and 6-op 
   expect(gold.operations).toEqual(["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"]);
   expect(gold.operations.slice(0, 8)).toEqual([...restored.operations]);
   expect(gold.operations.slice(0, 6)).toEqual([...previous.operations]);
-  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's (each asserted in its own test below).
-  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(4);
+  // NEW-03: the third previous entry is dizko's public read alone, the fourth mosaic's, the fifth zzzbot's five (1.0.0), the sixth kismet's eight
+  // (1.1.0), the seventh kismet's Part 1 read (each asserted in its own test below).
+  expect(PREVIOUS_REVIEWED_MINI_APPS.length).toBe(7);
   expect(PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "gold-stars").length).toBe(2);
   for (const entry of [gold, restored, previous]) expect([entry.id, entry.version, [...entry.skills]]).toEqual(["gold-stars", "1.1.0", ["gold-stars"]]);
   // Parity: the plugin's reviewed lists and the reviewed manifest carry exactly the same operations, in order.
@@ -238,11 +263,27 @@ test("verify is read-only and refuses an absent or removed projection", () => {
   expect(existsSync(join(root, "skills", "gold-stars", "SKILL.md"))).toBe(true);
 });
 
-test("zzz.bot manifest and native allowlist pin exactly its five named operations and stage the author skill", () => {
+test("zzz.bot manifest and native allowlist pin exactly its named operations (1.1.0: seven; 1.0.0: five) and stage the author skill", () => {
   const app = REVIEWED_MINI_APPS.find(app => app.id === "zzzbot")!;
-  const ops = ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"];
+  const five = ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"];
+  const ops = [...five, "zzz.tag_thread", "zzz.edit_post"];
   const manifest = reviewedManifest("zzzbot");
-  expect(app).toEqual({ id: "zzzbot", version: "1.0.0", operations: ops, skills: ["zzzbot"] });
+  expect(app).toEqual({ id: "zzzbot", version: "1.1.0", operations: ops, skills: ["zzzbot"] });
+  // 1.0.0 (the five alone) stays stageable, so this overlay rolls out before the CP catalog serves 1.1.0.
+  const previous = PREVIOUS_REVIEWED_MINI_APPS.find(app => app.id === "zzzbot")!;
+  expect(previous).toEqual({ id: "zzzbot", version: "1.0.0", operations: five, skills: ["zzzbot"] });
+  for (const entry of [app, previous]) {
+    const staged = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    expect(validateProjection(staged)).toEqual(staged);
+    const box = installedBox();
+    const receipt = reconcileMiniApps(staged, box);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(staged)).digest("hex"));
+    expect(receipt.files.map(file => file.path)).toEqual(["skills/zzzbot/SKILL.md"]);
+  }
+  // Neither version with the other's list, and no edit alone, is reviewed.
+  for (const changed of [{ ...app, version: "1.0.0" }, { ...previous, version: "1.1.0" }, { ...app, operations: [...five, "zzz.edit_post"] },
+    { ...app, operations: [...five, "zzz.edit_post", "zzz.tag_thread"] }])
+    expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
   expect(manifest).toMatchObject({ ...app, homepage: "https://zzz.bot" });
   expect(Object.keys(manifest).sort()).toEqual(["auth", "description", "homepage", "id", "name", "operations", "permissions", "provenance", "restricted", "skills", "version"]);
   expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read", "action"]);
@@ -261,17 +302,215 @@ test("zzz.bot manifest and native allowlist pin exactly its five named operation
   const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
   expect(plugin).toContain('ZZZ_READ_OPERATIONS = ("zzz.list_rooms", "zzz.read_thread", "zzz.changes")');
   expect(plugin).toContain('ZZZ_WRITE_OPERATIONS = ("zzz.reply", "zzz.create_thread")');
+  expect(plugin).toContain('ZZZ_EDIT_OPERATIONS = ("zzz.tag_thread", "zzz.edit_post")');
+  expect(plugin).toContain('ZZZBOT = {"version": "1.1.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS, *ZZZ_EDIT_OPERATIONS]}');
+  expect(plugin).toContain('ZZZBOT_PREVIOUS = {"version": "1.0.0", "skills": ["zzzbot"], "operations": [*ZZZ_READ_OPERATIONS, *ZZZ_WRITE_OPERATIONS]}');
+  expect(plugin).toContain('ZZZBOT_ACCEPTED = (ZZZBOT, ZZZBOT_PREVIOUS)');
   const root = installedBox();
   const receipt = reconcileMiniApps(projection, root);
   expect(receipt.files.map(file => file.path)).toEqual(["skills/zzzbot/SKILL.md"]);
+  expect(existsSync(join(root, "skills", "zzzbot", "scripts", "agentvillage_zzz_pairs.sh"))).toBe(false);
+  const bridge = REVIEWED_MINI_APPS.find(app => app.id === "zzz-bridge")!;
+  const enabled = { version: 1, apps: [app, bridge] };
+  const enabledReceipt = reconcileMiniApps(enabled, root);
+  expect(enabledReceipt.files.map(file => file.path)).toEqual(["skills/zzzbot/SKILL.md", "skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md"]);
   expect(readFileSync(join(root, "skills", "zzzbot", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "zzzbot", "SKILL.md")));
   expect(statSync(join(root, "skills", "zzzbot", "SKILL.md")).mode & 0o777).toBe(0o600);
-  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  expect(reconcileMiniApps(enabled, root, undefined, true)).toEqual(enabledReceipt);
   // The skill asks the agent to fetch no third-party prompt or instruction file (ov#382 owner read M2).
   const skill = readFileSync(join(REPO, "skills", "zzzbot", "SKILL.md"), "utf8");
   expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget/);
+  reconcileMiniApps(projection, root);
+  expect(existsSync(join(root, "skills", "zzzbot", "prompts", "participate.md"))).toBe(false);
   reconcileMiniApps({ version: 1, apps: [] }, root);
   expect(existsSync(join(root, "skills", "zzzbot", "SKILL.md"))).toBe(false);
+});
+
+test("Edge Library 1.0.0 manifest and native allowlist pin exactly its eight reads (no write) and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "library")!;
+  const reads = ["library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history", "library.changes_since", "library.proposals"];
+  const manifest = reviewedManifest("library");
+  expect(app).toEqual({ id: "library", version: "1.0.0", operations: reads, skills: ["library"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://library.positivesumexperiments.com/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["credit", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest.credit.role).toBe("product");
+  expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["read"]);
+  // Lead L31582 (Q5/Q6): the app's private per-app subject, never a Telegram id or username; a read creates no entry.
+  expect(manifest.permissions[0].description).toContain("by a private, stable reference, never your Telegram id or username");
+  expect(manifest.permissions[0].description).toContain("Reading does not create a member entry");
+  expect(manifest.permissions[0].description).not.toMatch(/Telegram user id|creates your member entry/);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "library", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://library.positivesumexperiments.com/api/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_LIBRARY_KEY" } });
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual(reads.map(() => "read"));
+  expect(v2.operations.map((op: { target: { tool: string } }) => op.target.tool)).toEqual(reads.map(name => name.replace(".", "_")));
+  expect(JSON.stringify(v2)).not.toMatch(/library_(submit_source|write|propose|jobs_|queries)/);
+  expect(EDGE_SKILL_NAMES).not.toContain("library");
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "library.jobs_claim"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: [...reads, "library.submit_source", "library.write", "library.propose"] },
+    { ...app, operations: reads.slice(1) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.0.1" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  expect(plugin).not.toContain("LIBRARY_WRITE_OPERATIONS");
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/library/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "library", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "library", "SKILL.md")));
+  expect(statSync(join(root, "skills", "library", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  // The skill fetches nothing remote and never asks for a token.
+  const skill = readFileSync(join(REPO, "skills", "library", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/api\/mcp|curl|wget/);
+  expect(skill).toMatch(/^name: library$/m);
+  expect(skill).not.toMatch(/library\.(submit_source|write|propose)\b/);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "library", "SKILL.md"))).toBe(false);
+});
+
+test("Favor Loop 1.0.0 (ov#556): the manifest and native allowlist pin exactly its eight operations (no relay read) and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "favorloop")!;
+  const ops = ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"];
+  const manifest = reviewedManifest("favorloop");
+  expect(app).toEqual({ id: "favorloop", version: "1.0.0", operations: ops, skills: ["favorloop"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://favorloop.fly.dev/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  // Builder credit (role "app"), the cp's bytes (cp#521); display only, the installer never reads it.
+  expect(Object.keys(manifest).sort()).toEqual(["credit", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest.credit.role).toBe("app");
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "favorloop", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://favorloop.fly.dev/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_FAVORLOOP_KEY" } });
+  expect(v2.operations.map((op: { name: string }) => op.name)).toEqual(ops);
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual(["read", "read", "read", "write", "read", "write", "write", "write"]);
+  expect(v2.operations.map((op: { target: { tool: string } }) => op.target.tool)).toEqual(ops.map(name => name.replace("favorloop.", "")));
+  expect(EDGE_SKILL_NAMES).not.toContain("favorloop");
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "mini-app.read"] },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ops.slice(1) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.0.1" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/favorloop/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "favorloop", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "favorloop", "SKILL.md")));
+  expect(statSync(join(root, "skills", "favorloop", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  const skill = readFileSync(join(REPO, "skills", "favorloop", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget/);
+  expect(skill).toMatch(/^name: favorloop$/m);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "favorloop", "SKILL.md"))).toBe(false);
+});
+
+test("Edge City Volunteers 1.0.0 (ov#450, lead RULING L35456): the manifest and native allowlist pin exactly its twelve operations (no relay read), subject only, and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "eci-volunteers")!;
+  const ops = ["eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose", "eci-volunteers.confirm", "eci-volunteers.link"];
+  const manifest = reviewedManifest("eci-volunteers");
+  expect(app).toEqual({ id: "eci-volunteers", version: "1.0.0", operations: ops, skills: ["eci-volunteers"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://edge-city-volunteers.vercel.app/" });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "eci-volunteers", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://edge-city-volunteers.vercel.app/api/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_ECI_VOLUNTEERS_TOKEN" } });
+  expect(v2.operations.map((op: { name: string }) => op.name)).toEqual(ops);
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual([...Array(10).fill("read"), "write", "write"]);
+  // The install card never says ECV receives a Telegram id (subject only).
+  expect(JSON.stringify(v2.permissions)).not.toMatch(/receives your Telegram/);
+  expect(EDGE_SKILL_NAMES).not.toContain("eci-volunteers");
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "mini-app.read"] },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ops.slice(0, -1) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.0.1" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/eci-volunteers/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "eci-volunteers", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "eci-volunteers", "SKILL.md")));
+  expect(statSync(join(root, "skills", "eci-volunteers", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  const skill = readFileSync(join(REPO, "skills", "eci-volunteers", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget/);
+  expect(skill).toMatch(/^name: eci-volunteers$/m);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "eci-volunteers", "SKILL.md"))).toBe(false);
+});
+
+test("ov#441 S1: managed ZZZ participation is the cp projection's zzzbot + zzz-bridge pair and nothing else", () => {
+  const zzzbot = REVIEWED_MINI_APPS.find(app => app.id === "zzzbot")!;
+  const bridge = REVIEWED_MINI_APPS.find(app => app.id === ZZZ_BRIDGE_ID)!;
+  // The cp entry, exactly (cp/app ids match ^[a-z0-9][a-z0-9-]{0,39}$: a hyphen, never the underscore spelling).
+  expect(ZZZ_BRIDGE_ID).toBe("zzz-bridge");
+  expect(bridge).toEqual({ id: "zzz-bridge", version: "1.0.0", operations: [], skills: [] });
+  expect(REVIEWED_MINI_APPS.some(app => app.id === "zzz_bridge")).toBe(false);
+  const both = { version: 1, apps: [zzzbot, bridge] };
+  expect(validateProjection(both)).toEqual(both);
+  // (c) Any other shape of the entry (the underscore id included) refuses the whole projection.
+  for (const changed of [{ ...bridge, id: "zzz_bridge" }, { ...bridge, operations: ["zzz.pairs"] }, { ...bridge, skills: ["zzz-bridge"] },
+    { ...bridge, version: "1.0.1" }, { ...bridge, extra: true }]) {
+    expect(() => validateProjection({ version: 1, apps: [zzzbot, changed] })).toThrow();
+  }
+  expect(() => validateProjection({ version: 1, apps: [zzzbot, bridge, bridge] })).toThrow("mini_apps_unreviewed_bundle");
+  // (a)/(b) On only for the pair.
+  expect(zzzParticipation(validateProjection(both))).toBe(true);
+  expect(zzzParticipation(validateProjection({ version: 1, apps: [bridge, zzzbot] }))).toBe(true);
+  expect(zzzParticipation(validateProjection({ version: 1, apps: [zzzbot] }))).toBe(false);
+  expect(zzzParticipation(validateProjection({ version: 1, apps: [bridge] }))).toBe(false);
+  expect(zzzParticipation(validateProjection({ version: 1, apps: [] }))).toBe(false);
+  expect(zzzParticipation(validateProjection(all))).toBe(true);
+  // The gate itself, before validation: only the exact id counts (validateProjection also refuses the rest).
+  for (const id of ["zzz_bridge", "ZZZ-BRIDGE", "zzz-bridge ", "zzz-bridge-v2", "zzzbridge"])
+    expect([id, zzzParticipation({ apps: [zzzbot, { id }] })]).toEqual([id, false]);
+  expect(zzzParticipation({ apps: [{ id: "zzzbot" }, { id: "zzz-bridge" }] })).toBe(true);
+  // zzz-bridge alone stages nothing (no skill, no served bytes, no managed files).
+  const root = installedBox();
+  const offer = "a".repeat(64);
+  const bundle = JSON.stringify({ version: 1, skills: [] });
+  const receipt = reconcileMiniApps({ version: 1, apps: [bridge] }, root, undefined, false, { offer, skills: bundle });
+  expect(receipt.files).toEqual([]);
+  expect(receipt.apps).toEqual([{ id: "zzz-bridge", version: "1.0.0" }]);
+  expect(existsSync(join(root, "skills", "zzzbot"))).toBe(false);
+  expect(existsSync(join(root, "skills", "zzz-bridge"))).toBe(false);
+  // (d) No overlay constant or environment variable can turn it on: zzzbot alone with every would-be switch set.
+  const keys = ["ZZZ_BRIDGE", "AV_PAIR_ENABLED", "ZZZ_MANAGED_PARTICIPATION", "ZZZ_BRIDGE_ENABLED"];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = "1";
+    const zzzOnly = reconcileMiniApps({ version: 1, apps: [zzzbot] }, root);
+    expect(zzzOnly.files.map(file => file.path)).toEqual(["skills/zzzbot/SKILL.md"]);
+    expect(existsSync(join(root, "skills", "zzzbot", "scripts", "agentvillage_zzz_pairs.sh"))).toBe(false);
+    expect(existsSync(join(root, "skills", "zzzbot", "prompts", "participate.md"))).toBe(false);
+  } finally {
+    for (const key of keys) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+  }
+  // Neither module exports a boolean switch, and the gate reads only the projection it is given.
+  for (const module of [installMiniApps, zzzManagedJob]) {
+    expect(Object.entries(module).filter(([, value]) => typeof value === "boolean")).toEqual([]);
+  }
+  expect(zzzParticipation.toString()).not.toMatch(/process\.env|Bun\.env|import\.meta\.env/);
+  const source = readFileSync(join(REPO, "install", "install_miniapps.ts"), "utf8");
+  expect(source.match(/const zzzManaged = .*;/g)).toEqual(["const zzzManaged = zzzParticipation(projection);"]);
 });
 
 test("Slopfolio manifest and native allowlist pin only private draft operations and stage the author skill", () => {
@@ -355,9 +594,11 @@ test("MOSAIC (app#486): Dizko's shape, its context read/write after mini-app.rea
   expect(EDGE_SKILL_NAMES).not.toContain("mosaic");
   expect(SHIPPED_SKILLS.has("mosaic")).toBe(false);
   const skill = readFileSync(join(REPO, "skills", "mosaic", "SKILL.md"), "utf8");
-  expect(skill).toMatch(/^---\nname: mosaic\n[\s\S]*\nversion: 1\.0\.0\n/);
+  expect(skill).toMatch(/^---\nname: mosaic\n[\s\S]*\nversion: 1\.0\.1\n/);
   expect(skill).toContain('{"operation":"mini-app.context.read","appId":"mosaic","arguments":{}}');
   expect(skill).not.toMatch(/prompt\.txt|\.well-known|\/mcp\b|curl|wget|https?:\/\//);
+  // review-b ov#551 S1: not_open is the gate that makes /mosaic a 404 for them, so no link then (app#914 drops `home` there too).
+  expect(skill).toContain("`not_open` means Mosaic is not\n  open for them yet: say so plainly, without the link");
   for (const entry of [mosaic, previous]) {
     const projection = { version: 1, apps: [REVIEWED_MINI_APPS[0], { id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
     const root = installedBox();
@@ -389,4 +630,166 @@ test("MOSAIC (app#486): Dizko's shape, its context read/write after mini-app.rea
     [read, ctxWrite, ctxRead], [read, read], [read, ctxRead], [read, ctxWrite], [ctxRead, ctxWrite], [],
   ];
   for (const operations of planted) expect(() => validateProjection({ version: 1, apps: [{ ...mosaic, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+});
+
+test("DreamStarter (adapted from ov#393): the manifest and native allowlist pin its nine named operations, two of them writes, and stage the skill", () => {
+  const app = REVIEWED_MINI_APPS.find(app => app.id === "dreamstarter")!;
+  const ops = ["dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare",
+    "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"];
+  const writes = ["dreamstarter.discover", "dreamstarter.grant_prepare"];
+  const manifest = reviewedManifest("dreamstarter");
+  expect(app).toEqual({ id: "dreamstarter", version: "2.0.0", operations: ops, skills: ["dreamstarter"] });
+  expect(manifest).toMatchObject({ ...app, homepage: "https://dreamstarter.xyz", restricted: true });
+  // app-token: no per-resident OAuth (`auth`), no relay (`mcp`, never served as mini-app.read); sandbox, so restricted.
+  expect(Object.keys(manifest).sort()).toEqual(["credit", "description", "homepage", "id", "name", "operations", "permissions", "restricted", "skills", "version"]);
+  expect(manifest.credit.role).toBe("product");
+  expect(manifest.permissions.map((permission: { kind: string }) => permission.kind)).toEqual(["action", "action", "read", "read", "read"]);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "dreamstarter", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://mcp.dreamstarter.xyz/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_DREAMSTARTER_KEY" } });
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual(ops.map(op => writes.includes(op) ? "write" : "read"));
+  expect(EDGE_SKILL_NAMES).not.toContain("dreamstarter");
+  expect(SHIPPED_SKILLS.has("dreamstarter")).toBe(false);
+  const projection = { version: 1, apps: [app] };
+  expect(validateProjection(projection)).toEqual(projection);
+  for (const changed of [
+    { ...app, operations: [...app.operations, "dreamstarter.claim"] },
+    { ...app, operations: [...app.operations].reverse() },
+    { ...app, operations: ["mini-app.read"] },
+    { ...app, operations: ops.filter(op => !writes.includes(op)) },
+    { ...app, skills: ["other"] },
+    { ...app, version: "1.1.0" },
+  ]) expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  expect(plugin).toContain('DS_WRITE_OPERATIONS = ("dreamstarter.discover", "dreamstarter.grant_prepare")');
+  const root = installedBox();
+  const receipt = reconcileMiniApps(projection, root);
+  expect(receipt.files.map(file => file.path)).toEqual(["skills/dreamstarter/SKILL.md"]);
+  expect(readFileSync(join(root, "skills", "dreamstarter", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "dreamstarter", "SKILL.md")));
+  expect(statSync(join(root, "skills", "dreamstarter", "SKILL.md")).mode & 0o777).toBe(0o600);
+  expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  // The skill fetches nothing remote and never names the endpoint or a credential.
+  const skill = readFileSync(join(REPO, "skills", "dreamstarter", "SKILL.md"), "utf8");
+  expect(skill).not.toMatch(/mcp\.dreamstarter\.xyz|\.well-known|curl|wget|Authorization:/);
+  expect(skill).toMatch(/^name: dreamstarter$/m);
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "dreamstarter", "SKILL.md"))).toBe(false);
+});
+
+test("kismet 1.2.0: the nine named operations (Part 2 + kismet.web_link), with 1.1.0's eight and Part 1's public read alone, staged and removed", () => {
+  const kismet = REVIEWED_MINI_APPS.find((x) => x.id === "kismet")!;
+  const earlier = PREVIOUS_REVIEWED_MINI_APPS.filter((x) => x.id === "kismet");
+  const eight = earlier.find((x) => x.version === "1.1.0")!;
+  const previous = earlier.find((x) => x.version === "1.0.0")!;
+  const reads = ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary"];
+  const writes = ["kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link"];
+  expect(earlier.length).toBe(2);
+  expect([kismet.id, kismet.version, [...kismet.skills], [...kismet.operations]]).toEqual(["kismet", "1.2.0", ["kismet"], [...reads, ...writes]]);
+  // 1.1.0 stays stageable byte for byte (the cp serves it to every box below the v2.2.1 floor): the nine minus web_link.
+  expect([eight.id, eight.version, [...eight.skills], [...eight.operations]]).toEqual(["kismet", "1.1.0", ["kismet"], [...reads, ...writes.slice(0, 4)]]);
+  expect([previous.id, previous.version, [...previous.skills], [...previous.operations]]).toEqual(["kismet", "1.0.0", ["kismet"], ["mini-app.read"]]);
+  expect(EDGE_SKILL_NAMES).not.toContain("kismet");
+  // The rename leaves no alias: the old id is neither reviewed nor stageable. Not being reviewed, it is a generic
+  // candidate, and with no cp offer for it the installer refuses it alone (offer_missing) and stages nothing.
+  expect(REVIEWED_MINI_APPS.some((x) => (x.id as string) === "agent-dates")).toBe(false);
+  const oldId = { version: 1, apps: [{ ...previous, id: "agent-dates", skills: ["agent-dates"] }] };
+  expect(() => validateProjection(oldId)).toThrow("offer_missing");
+  const oldBox = installedBox();
+  const oldReceipt = reconcileMiniApps(oldId, oldBox);
+  expect([oldReceipt.refused, oldReceipt.apps, oldReceipt.files]).toEqual([[{ id: "agent-dates", code: "offer_missing" }], [], []]);
+  expect(existsSync(join(oldBox, "skills", "agent-dates"))).toBe(false);
+  expect(existsSync(join(REPO, "skills", "agent-dates"))).toBe(false);
+  expect(existsSync(join(REPO, "mini-apps", "agent-dates"))).toBe(false);
+  // The manifest and skill agree with the entry. App-token: no per-resident OAuth (`auth`) and no relay (`mcp`): the
+  // app server holds the key and calls Kismet; the box names operations only.
+  const manifest = reviewedManifest("kismet");
+  expect([manifest.id, manifest.name, manifest.version, manifest.skills, manifest.operations]).toEqual([kismet.id, "Kismet", kismet.version, [...kismet.skills], [...kismet.operations]]);
+  expect(manifest.permissions.map((p: { kind: string }) => p.kind)).toEqual(["read", "read", "action"]);
+  expect(manifest).not.toHaveProperty("mcp");
+  expect(manifest).not.toHaveProperty("auth");
+  const v2 = JSON.parse(readFileSync(join(REPO, "mini-apps", "kismet", "manifest.json"), "utf8"));
+  expect(v2.service).toEqual({ kind: "mcp", baseUrl: "https://kismet-village.vercel.app/mcp", auth: { mode: "app-token", secretRef: "MINI_APP_KISMET_KEY" } });
+  expect(v2.operations.map((op: { class: string }) => op.class)).toEqual([...reads.map(() => "read"), ...writes.map(() => "write")]);
+  const plugin = readFileSync(join(REPO, "plugins", "village-bridge", "_mini_apps.py"), "utf8");
+  expect(plugin).toContain('KISMET_READ_OPERATIONS = ("kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary")');
+  expect(plugin).toContain('KISMET_WRITE_OPERATIONS = ("kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link")');
+  expect(plugin).toContain('KISMET_120 = {"version": "1.2.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, *KISMET_WRITE_OPERATIONS]}');
+  expect(plugin).toContain('KISMET = {"version": "1.1.0", "skills": ["kismet"], "operations": [*KISMET_READ_OPERATIONS, "kismet.signup", "kismet.go", "kismet.decide",');
+  expect(/^KISMET_ACCEPTED = \(KISMET_120, KISMET, KISMET_PUBLIC\)$/m.test(plugin)).toBe(true);
+  // kismet.web_link: Deon's kismet_web_link, a closed {} input, a write (not readOnly, not idempotent), the manifest's last op.
+  expect(v2.operations.at(-1)).toEqual({ name: "kismet.web_link", class: "write", target: { tool: "kismet_web_link" },
+    input: { type: "object", properties: {}, additionalProperties: false }, maxRequestBytes: 4096, maxResponseBytes: 32768, timeoutMs: 25000, framing: "data" });
+  const skill = readFileSync(join(REPO, "skills", "kismet", "SKILL.md"), "utf8");
+  expect(skill).toMatch(/^---\r?\nname: kismet\r?\n[\s\S]*\r?\nversion: 1\.2\.0\r?\n/);
+  expect(skill).not.toContain(v2.service.baseUrl); // the endpoint lives in the reviewed manifest only
+  expect(skill).not.toContain("/api/"); // no service API: the app server owns every call
+  expect(skill).not.toContain("MINI_APP_KISMET_KEY"); // the key is named only in the manifest, never valued anywhere
+  for (const op of [...reads, ...writes]) expect(skill).toContain("`" + op + "`"); // the skill names each operation
+  const root = installedBox();
+  for (const entry of [kismet, eight, previous]) {
+    const projection = { version: 1, apps: [{ id: entry.id, version: entry.version, operations: [...entry.operations], skills: [...entry.skills] }] };
+    expect(validateProjection(projection)).toEqual(projection);
+    const receipt = reconcileMiniApps(projection, root);
+    expect(receipt.projectionSha256).toBe(createHash("sha256").update(JSON.stringify(projection)).digest("hex"));
+    expect(receipt.files.map((x) => x.path)).toEqual(["skills/kismet/SKILL.md"]);
+    expect(readFileSync(join(root, "skills", "kismet", "SKILL.md"))).toEqual(readFileSync(join(REPO, "skills", "kismet", "SKILL.md")));
+    expect(reconcileMiniApps(projection, root, undefined, true)).toEqual(receipt);
+  }
+  // Any other list is refused: a planted or unknown op, a reorder, a duplicate, a subset or none.
+  const all9 = [...kismet.operations], all8 = [...eight.operations];
+  // kismet.notes (live on Kismet's /mcp, not reviewed for Part 2, lead L29967) is refused like any unreviewed op.
+  for (const operations of [[...all9, "kismet.status"], [...all9, "kismet.notes"], [...all8, "kismet.status"], [...all8, "kismet.notes"], ["mini-app.read", "kismet.notes"],
+    [...all9, "mini-app.context.write"], [...all9, "mini-app.read"], [...all9].reverse(), [...all8].reverse(),
+    [...all9, "kismet.web_link"], [...all9, "kismet.delete"], all9.slice(0, 7), reads, writes, ["mini-app.read", "kismet.signup"], ["mini-app.read", "mini-app.context.read"],
+    ["mini-app.read", "mini-app.read"], ["kismet.decide"], ["kismet.web_link"], [...reads, "kismet.web_link"], [...all8.slice(0, 7), "kismet.web_link", "kismet.delete"],
+    ["kismet.web_link", ...all8], []]) {
+    expect(() => validateProjection({ version: 1, apps: [{ ...kismet, operations }] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+  // Each version only with its own list: 1.2.0 never with the eight, 1.1.0 never with the nine.
+  for (const changed of [{ ...kismet, version: "1.0.0" }, { ...kismet, version: "1.1.0" }, { ...eight, version: "1.2.0" }, { ...eight, version: "1.0.0" },
+    { ...previous, version: "1.1.0" }, { ...previous, version: "1.2.0" }, { ...kismet, version: "1.2.1" }, { ...kismet, version: "1.1.1" }, { ...kismet, skills: ["other"] }]) {
+    expect(() => validateProjection({ version: 1, apps: [changed] })).toThrow("mini_apps_unreviewed_bundle");
+  }
+  reconcileMiniApps({ version: 1, apps: [] }, root);
+  expect(existsSync(join(root, "skills", "kismet", "SKILL.md"))).toBe(false);
+});
+
+test("ov#441 S1 (d): every projection this installer writes is accepted WHOLE by the plugin's strict reader", () => {
+  // The regression class nonav flagged (L17033): the WIP wrote `zzz_bridge`, which the plugin's reader refused,
+  // and its whole-projection refusal silently took Gold Stars and zzzbot down with it. The reader's refusal is
+  // pinned (plugins/village-bridge/tests/test_zzz_managed.py); this pins the other half: the installer never
+  // writes a file that reader refuses, for every reviewed entry and every earlier entry it still stages.
+  const zzzbot = REVIEWED_MINI_APPS.find(app => app.id === "zzzbot")!;
+  const bridge = REVIEWED_MINI_APPS.find(app => app.id === ZZZ_BRIDGE_ID)!;
+  const projections: { version: 1; apps: readonly { id: string }[] }[] = [
+    all, { version: 1, apps: [zzzbot, bridge] }, { version: 1, apps: [bridge, zzzbot] }, { version: 1, apps: [zzzbot] }, { version: 1, apps: [bridge] },
+    ...PREVIOUS_REVIEWED_MINI_APPS.map(previous => ({ version: 1 as const, apps: REVIEWED_MINI_APPS.map(app => app.id === previous.id ? previous : app) })),
+  ];
+  const homes = projections.map(projection => {
+    const root = installedBox();
+    reconcileMiniApps(projection, root);
+    return root;
+  });
+  const which = Bun.which("python3");
+  expect(which).not.toBeNull();
+  const python = spawnSync(which!, ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+  const probe = home();
+  writeFileSync(join(probe, "probe.py"), [
+    "import importlib.util, json, sys",
+    "from pathlib import Path",
+    'spec = importlib.util.spec_from_file_location("mini_apps_probe", sys.argv[1])',
+    "mini = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(mini)",
+    "out = []",
+    "for home in sys.argv[2:]:",
+    "    apps = mini.projection(Path(home))",
+    "    out.append([None if apps is None else [app['id'] for app in apps], mini.zzz_participation(Path(home))])",
+    "print(json.dumps(out))",
+    "",
+  ].join("\n"));
+  const run = spawnSync(python, ["-I", join(probe, "probe.py"), join(REPO, "plugins", "village-bridge", "_mini_apps.py"), ...homes],
+    { cwd: probe, env: { PATH: "/usr/bin:/bin" }, encoding: "utf8" });
+  expect(run.status).toBe(0);
+  expect(JSON.parse(run.stdout)).toEqual(projections.map(projection => [projection.apps.map(app => app.id), zzzParticipation(projection)]));
 });

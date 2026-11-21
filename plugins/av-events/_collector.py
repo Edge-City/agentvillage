@@ -24,6 +24,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from ._core import (
+    env_flag_on,
     AUTH_BACKOFF_S,
     BACKOFF_BASE_S,
     BACKOFF_MAX_S,
@@ -60,7 +61,7 @@ from ._core import (
     uuid7,
 )
 from ._core import _LOCK_HELD, fcntl
-from . import _backup, _headline_flagged, _inference_run, _outcome_ask
+from . import _backup, _headline_flagged, _inference_run, _outcome_ask, _rating_cards
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
@@ -389,6 +390,7 @@ class SessionState:
         "input_tokens",
         "output_tokens",
         "pending_llm",
+        "llm_failed",
         "ended",
         "failure_count",
         "failures_by_hook",
@@ -413,6 +415,9 @@ class SessionState:
         self.output_tokens = 0
         #: Hashes and request stamps left by pre_api_request for post to use.
         self.pending_llm: dict[str, dict] = {}
+        #: (turn_id, model) of the last failed `llm.call`, so the next call in
+        #: that turn on another model is marked `fallback_activated` (HOT-RASOOL F1).
+        self.llm_failed: Optional[tuple[str, str]] = None
         self.ended = False
         self.failure_count = 0
         self.failures_by_hook: dict[str, int] = {}
@@ -515,6 +520,7 @@ class Collector:
         self.inference_errors = 0
         #: Headline-flag passes that raised (DATA-487), likewise outside `guarded`.
         self.headline_errors = 0
+        self.rating_errors = 0
         #: The tenant's HMAC key (`hash_key`), loaded on first use.
         self._hash_key: Optional[bytes] = None
         #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
@@ -1360,6 +1366,10 @@ class Collector:
         the log line carries those codes and counts only."""
         if self.plugin_disabled or not self.config.active or "outcome_ask" in self.config.disabled_hooks:
             return {}
+        # Superseded by the suggestion rating cards (`_rating_cards`): the text ask's pass runs only
+        # with AV_OUTCOME_TEXT_ASK on, for one release, then goes.
+        if not env_flag_on(_outcome_ask.TEXT_ASK_SWITCH):
+            return {}
         try:
             codes = _outcome_ask.tick(self.config.state_dir, self.config.home, self.emit, time.time() if now is None else now)
         except Exception:  # noqa: BLE001 - the tick must never take the flusher down
@@ -1388,6 +1398,25 @@ class Collector:
             for code, count in codes.items():
                 if code.startswith(_headline_flagged.DROPPED):
                     self.count(f"headline_{code}", count)
+        return codes
+
+    def rating_tick(self, now: Optional[float] = None) -> dict:
+        """The suggestion rating cards' events (`_rating_cards.tick`), from the av-rate plugin's
+        hand-off files: one event per record, ids, codes, a value and times only. Flusher thread
+        only, on the cron tail's cadence. Off with `rating_cards` in `AV_HOOKS_DISABLED`. Returns
+        code -> count; the log line carries those codes and counts only."""
+        if self.plugin_disabled or not self.config.active or _rating_cards.SWITCH in self.config.disabled_hooks:
+            return {}
+        try:
+            codes = _rating_cards.tick(self.config.state_dir, self.emit, time.time() if now is None else now)
+        except Exception:  # noqa: BLE001 - the pass must never take the flusher down
+            self.rating_errors += 1
+            return {}
+        if codes:
+            logger.info("av-events: rating_cards_tick %s", " ".join(f"{code}={count}" for code, count in sorted(codes.items())))
+            for code, count in codes.items():
+                if code.startswith(_rating_cards.DROPPED):
+                    self.count(f"rating_{code}", count)
         return codes
 
     def _cron_event_id(self, payload: dict) -> str:
@@ -1666,6 +1695,7 @@ class Collector:
                 self.cron_tick()
                 self.outcome_tick()
                 self.headline_tick()
+                self.rating_tick()
 
     def tick(self) -> None:
         """One flush pass. Runs on the flusher thread; tests call it directly."""

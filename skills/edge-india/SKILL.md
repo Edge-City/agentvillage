@@ -30,6 +30,7 @@ Village already has the live skills.
 | Who to meet, intros, matching | **`index-network`**, through its own rules and approvals. It cannot look up a named person. |
 | Who is X, tell me about a person | In order: `village` `rolodex.search`, the **`edgeos`** directory, `ask_village` (what they said in the main group), then this skill's website copy. |
 | Rolodex cards, We met or Undo met; Gold Stars; Skylight characters and islands | **`rolodex`**, **`gold-stars`** or **`skylight`**. These skills give the right website links and current capability boundaries. |
+| Mosaic, "Mosaic link", matching profile, pair pages | Give https://agents.edgecity.live/mosaic (Agent Village's page to build your profile and match with your people; `?start=1` replays the intro). Their own matches: **`mosaic`** when installed. People directory: https://agents.edgecity.live/rolodex. |
 | Edge Esmeralda (the previous popup, Healdsburg CA) | `edge-esmeralda`, only when the person asks about it by name. Never use Esmeralda material for India. |
 
 A programming preview or weekly theme in this guide is background, not a

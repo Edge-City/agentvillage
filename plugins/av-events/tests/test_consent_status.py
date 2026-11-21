@@ -632,15 +632,15 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
         plugin.register(ctx)
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     lines = [r.getMessage() for r in caplog.records if r.name == "av-events"]
-    # DATA-212: `record_intention` logs its own one line (switch off by default); so do `pray` (PRAYER P3)
-    # and `ask_village` (ASK-VILLAGE) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh
+    # DATA-212: `record_intention` logs its own one line (switch off by default); so do
+    # `ask_village` (ASK-VILLAGE) and `ask_odin` (ODIN-ASK) and `search_village` / `query_village` (VILLAGE SEARCH), and F1's prompt refresh
     # and R-DEON's village_visible (no Hermes here to wrap), and MINIAPP-PICKUP's stamp section (no plugin
     # prompt sections on this ctx).
     assert lines == [
         "av-events: consent_status skipped=no_register_tool",
         "av-events: record_intention skipped=switch_off",
-        "av-events: pray skipped=switch_off",
         "av-events: ask_village skipped=switch_off",
+        "av-events: ask_odin skipped=switch_off",
         "av-events: search_village skipped=switch_off",
         "av-events: query_village skipped=switch_off",
         "av-events: prompt_refresh: agent.conversation_loop not importable; left as is",
@@ -696,13 +696,13 @@ def test_the_handler_takes_hermes_dispatch_arguments(plugin, consent, monkeypatc
 
 
 def test_a_consent_status_call_is_not_an_intention_and_is_named_meta_in_tool_call(plugin):
-    """Listed since `tool_categories_v2` (v3 too): `tool.call` carries it by name with category `meta`."""
+    """Listed since `tool_categories_v2` (v3 and v4 too): `tool.call` carries it by name with category `meta`."""
     intentions = sys.modules[f"{plugin.__name__}._intentions"]
     tools = sys.modules[f"{plugin.__name__}._tools"]
     assert intentions.classify_tool("consent_status") is None
-    assert tools.TOOL_CATEGORY_VERSION == "tool_categories_v3"
+    assert tools.TOOL_CATEGORY_VERSION == "tool_categories_v4"
     assert tools.TOOL_CATEGORIES["consent_status"] == "meta"
     payload = tools.tool_call_payload("consent_status", {}, "text", "ok", 12, None, "sanitized", lambda s: "h")
     assert payload["tool_name"] == "consent_status"
     assert payload["tool_category"] == "meta"
-    assert payload["category_version"] == "tool_categories_v3"
+    assert payload["category_version"] == "tool_categories_v4"

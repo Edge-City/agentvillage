@@ -33,6 +33,11 @@ This is available only in the paired owner's private conversation.
   a specific city and dates; ask instead of assuming the owner's location.
 - `get_event`: required `id` from a returned event.
 
+Search by public topic only (a city, dates, a genre, a public artist or venue):
+never put the owner's name, another resident's name or anything private from
+this conversation into `query` or any other argument, because it is sent to
+Dizko's own external host.
+
 For example, after the owner asks for jazz events in a named city:
 
 ```json
