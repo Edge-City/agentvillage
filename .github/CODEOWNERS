@@ -8,7 +8,7 @@
 /scripts/approval-class-diff.sh              @soycarts
 /.github/workflows/test.yml                  @soycarts
 /.github/CODEOWNERS                          @soycarts
-# B-167N fold 1 N7 (review-b's refute): the gated-tool list the extractor reads, the
+# B-167N fold 1 N7 (the review's refute): the gated-tool list the extractor reads, the
 # release enforcement point (Tag release tags only on a green test.yml), the manifest
 # the release rule reads (previous-release.sh, S3), and the gate's own tests.
 /install/install_approval.ts                 @soycarts
@@ -16,7 +16,7 @@
 /scripts/tag-release.ts                      @soycarts
 /scripts/tests/approval-class-diff.test.ts   @soycarts
 /release/RC-MANIFEST.md                      @soycarts
-# B-167N fold 2 M-D1 (review-b's DELTA L18777; lead RULING L18781): every path that can
+# B-167N fold 2 M-D1 (the review's delta and its ruling): every path that can
 # run code, or choose the code that runs, in the class-diff job before or during the
 # check. The root files bun and npm read (lifecycle scripts, the lockfile, preload and
 # registry config, tsconfig paths, .env)...
