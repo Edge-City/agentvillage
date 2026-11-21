@@ -196,3 +196,113 @@ jobs:
         run: python -m pytest -q
         env:
           AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
+
+  # CLASS-DIFF release gate (B-167; lead ruling CLAIMS L15681 (1); EDGEOS-BLOCK).
+  #
+  # Core 0.4.6 reached the boxes on 19 Oct and every EdgeOS recipe this overlay
+  # ships moved from auto (network.call) to a human-only deny (policy.core):
+  # nothing had run the fleet's own recipes through the new core. This job runs
+  # them on every pull request, every push to main and every Tag release call
+  # (so a tag is only cut from a commit where it passed): the overlay's whole
+  # shipped corpus (every skills/ and workspace/ recipe, the inline cron
+  # prompts, and the template's tools: lines for the box harness calls) at the
+  # approval.md core the base pins and at the core this tree pins
+  # (APPROVAL_MD_PINNED in scripts/tests/fetch-url-shape.test.ts, the control
+  # plane's APPROVAL_MD_VERSION), each call in two working directories: a
+  # neutral one and a box-like Hermes home (core's credential pass decides a
+  # `$` word by where the command starts). A pull request that moves the pin shows every
+  # call whose class, decision or card style moves, and fails when an existing
+  # call moves from auto, sampled or card to human-only or refused, unless
+  # scripts/approval-class-diff/allowlist.json names it with a reason. At an
+  # unchanged pin it is approval.md's corpus check for this tree.
+  #
+  # Fold 1 (review-b's refute): every call runs through each core's REAL
+  # `approval hook hermes` in a box layout (HOME/.hermes with a dummy .env, the
+  # skills and workspace, APPROVAL_HERMES_HOME set): recipes as terminal calls
+  # at $HERMES_HOME, $HOME, workspace and unset, harness calls as Hermes tool
+  # envelopes. Any shipped recipe the hook denies there (human-only or refused)
+  # fails unless allowlisted with Carter's acceptance, so a recipe EDITED into a
+  # denied shape fails at an unchanged pin (ov#427 replayed); an existing call
+  # that loses autonomy fails; a newly shadowed tools line fails.
+  #
+  # One source of truth: the extractor and the check are approval.md's own
+  # scripts, checked out at the pinned commit below (approval-md/approval.md is
+  # public, so no token). Move the ref to the v0.4.7 tag once that release
+  # carries them; until then it names the head commit of the approval.md B-167 PR.
+  #
+  # The report (first line: the GATE line) is the job summary and the
+  # `class-diff` artifact (markdown + JSON).
+  class-diff:
+    name: approval class-diff (shipped corpus at the pinned core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # Full history and tags: a push to main and a Tag release call measure
+      # against the previous release tag (the overlay the boxes run), not HEAD^1
+      # (B-167 fold 1 S-2), so a pin bump merged red stays red on every later
+      # commit until a release carries it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: class-diff base (the PR's base, or the previous release tag)
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            base=$(git rev-parse HEAD^1)
+            echo "pull request: measured against its base ${base:0:12}"
+          elif tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-rc*' HEAD^ 2>/dev/null); then
+            base=$(git rev-parse "$tag^{commit}")
+            echo "$EVENT: measured against the previous release $tag (${base:0:12})"
+          else
+            echo "::error::no previous release tag (v*, not -rc) below HEAD; the class-diff has nothing the boxes run to measure against"
+            exit 1
+          fi
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+      - name: check out approval.md's extractor and check at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: approval-md/approval.md
+          ref: fb998ecc3d01fc6e2aba623085f6b99703ae2120 # APPROVAL_MD_TOOL_REF, see the comment above
+          path: .test-deps/approval-md-tool
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: class-diff, base pin -> this pin
+        env:
+          AV_APPROVAL_MD_TOOL_DIR: ${{ github.workspace }}/.test-deps/approval-md-tool
+          AV_CLASS_DIFF_OUT: ${{ github.workspace }}/class-diff
+          AV_CLASS_DIFF_BOX_CONCURRENCY: "4"
+          BASE_REF: ${{ steps.base.outputs.ref }}
+        run: |
+          set +e
+          bash scripts/approval-class-diff.sh "$BASE_REF"
+          status=$?
+          if [ -f class-diff/class-diff.md ]; then cat class-diff/class-diff.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit $status
+      # The gate's own fixtures (flip fails, stay passes, new is reported) through the same script and tool.
+      - name: class-diff fixtures
+        if: always()
+        env:
+          AV_APPROVAL_MD_TOOL_DIR: ${{ github.workspace }}/.test-deps/approval-md-tool
+        # A block, not a one-line `run: bun test`: Tag release reads test.yml's one such line as the suite
+        # list (tag-release.ts suiteDirs), and this file already sits in that list's scripts/tests.
+        run: |
+          bun test scripts/tests/approval-class-diff.test.ts
+      - name: upload the class-diff report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: class-diff
+          path: class-diff/
+          if-no-files-found: warn
