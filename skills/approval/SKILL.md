@@ -1,6 +1,6 @@
 ---
 name: approval
-description: Installed only for residents who opted in to approval.md. Your tool calls (terminal, write_file, patch, read_file, search_files, and a few more) are checked and recorded by the resident's approval gate before they run. A few never run for you (edits to the gate itself, the approval log, the resident's credentials), and a kind of action the resident chose to approve waits for their tap. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
+description: Installed for every resident. Your tool calls (terminal, write_file, patch, read_file, search_files, and a few more) are checked and recorded by the resident's approval gate before they run. A few never run for you (edits to the gate itself, the approval log, the resident's credentials), and a kind of action the resident chose to approve waits for their tap. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
 ---
 
 # Approval gate
@@ -48,6 +48,9 @@ When a refusal names its repair, make that repair and call again once.
 
 ## When a call is waiting for the resident
 
+Whenever you tell the resident a call is waiting for their tap, include:
+`Open approvals chat: https://t.me/AgentVillageApprovalsBot`
+
 On the starting policy no tool call waits. If the resident has made a kind of
 call need their approval, that call holds for about four minutes while the
 resident is asked. Then:
@@ -59,6 +62,7 @@ resident is asked. Then:
   `hook-timeout` or that the request expired). Tell the resident what you were
   about to do and that it needs their approval in the approval bot; do it only
   if they ask again and approve.
+  Include: `Open approvals chat: https://t.me/AgentVillageApprovalsBot`
 - **Gate unreachable** (`approval facade unreachable`) or **unverified**
   (`av-approval: gate unverified (<code>)`): nothing that needs the gate can
   run right now. Tell the resident, with the code; do not look for a way
@@ -75,8 +79,9 @@ resident is asked. Then:
   never try to change the approval policy. Those are the resident's controls;
   the gate refuses such calls.
 - Never bind or listen on the approval service's port or socket.
-- Never send the resident a link to approve something. Approvals arrive in
-  their approval bot by themselves.
+- Never send a grant- or request-specific link to approve something. Approvals
+  arrive in their approval bot by themselves. The static bot chat link is
+  allowed: `Open approvals chat: https://t.me/AgentVillageApprovalsBot`
 
 ## Sharing a digest, and the weekly village question
 
@@ -91,6 +96,9 @@ approval bot; otherwise ignore this section.
 - `village_vote`: read the open question with `action=question`, then propose
   the answer you believe the resident would give with `action=vote`. It is
   cast only when they approve it there. A question takes one answer.
+
+When telling the resident either action awaits their approval, include:
+`Open approvals chat: https://t.me/AgentVillageApprovalsBot`
 
 A yes you read in chat is not an approval. Never share a digest or cast a
 vote any other way.

@@ -88,14 +88,18 @@ jobs:
           git -C tool fetch --no-tags --no-recurse-submodules --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
           git -C tool cat-file -e "${HEAD_SHA}^{commit}"
           git -C tool fetch --no-tags --no-recurse-submodules --quiet origin "+refs/heads/${BASE_REF}:refs/remotes/base/tip"
+      # --pr and --base-ref (ov#477 fold 1): the JSON names the pull request and the base it judged; base_sha in
+      # it is --base, the same event sha the tool tree is checked out at (the checkout step above).
       - name: Review
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           bun --config=/dev/null --no-env-file --no-install --tsconfig-override=/dev/null ./tool/scripts/mini-apps-review.ts --repo tool \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --base-tip refs/remotes/base/tip --author "$PR_AUTHOR" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --base-tip refs/remotes/base/tip --author "$PR_AUTHOR" --pr "$PR_NUMBER" --base-ref "$BASE_REF" \
             --out "$RUNNER_TEMP/mini-apps-review.json" --summary "$RUNNER_TEMP/mini-apps-review.md" \
             --conformance-dir "$RUNNER_TEMP/mini-apps-conformance"
       - name: Job summary

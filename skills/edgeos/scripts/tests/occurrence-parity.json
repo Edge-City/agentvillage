@@ -1,0 +1,235 @@
+{
+  "about": "EDGEOS-OCCURRENCE parity table: every --occurrence input and the occurrence_start the EdgeOS script sends for it (null = refused, nothing sent). skills/edgeos/scripts/tests/edgeos.test.ts runs it through edgeos.ts occurrenceInstant/parseArgs; plugins/av-events/tests/test_edgeos_occurrence_parity.py runs it through the av-events observer's script_occurrence/http_call. Both must agree on every row.",
+  "cases": [
+    {
+      "name": "EdgeOS's own start_time form, sent byte for byte",
+      "input": "2026-10-21T02:30:00Z",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "Z without seconds, unchanged",
+      "input": "2026-10-21T02:30Z",
+      "sends": "2026-10-21T02:30Z"
+    },
+    {
+      "name": "Z with a microsecond fraction, unchanged",
+      "input": "2026-10-21T02:30:00.123456Z",
+      "sends": "2026-10-21T02:30:00.123456Z"
+    },
+    {
+      "name": "year 0001, Z",
+      "input": "0001-01-01T00:00:00Z",
+      "sends": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "IST offset",
+      "input": "2026-10-21T08:00:00+05:30",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "IST offset, no seconds",
+      "input": "2026-10-21T08:00+05:30",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "IST offset, fraction kept",
+      "input": "2026-10-21T08:00:00.5+05:30",
+      "sends": "2026-10-21T02:30:00.5Z"
+    },
+    {
+      "name": "IST offset, six-digit fraction kept",
+      "input": "2026-10-21T08:00:00.123456+05:30",
+      "sends": "2026-10-21T02:30:00.123456Z"
+    },
+    {
+      "name": "+00:00",
+      "input": "2026-10-21T02:30:00+00:00",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "-00:00",
+      "input": "2026-10-21T02:30:00-00:00",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "negative offset",
+      "input": "2026-10-20T21:30:00-05:00",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "offset across midnight",
+      "input": "2026-10-21T01:00:00+05:30",
+      "sends": "2026-10-20T19:30:00Z"
+    },
+    {
+      "name": "+23:59, the largest offset",
+      "input": "2026-10-21T00:00:00+23:59",
+      "sends": "2026-10-20T00:01:00Z"
+    },
+    {
+      "name": "portal ?occ= of a Z start (encodeURIComponent)",
+      "input": "2026-10-21T02%3A30%3A00Z",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "portal ?occ= of an offset start",
+      "input": "2026-10-21T08%3A00%3A00%2B05%3A30",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "lower-case escapes",
+      "input": "2026-10-21T02%3a30%3a00Z",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "an escaped plain character",
+      "input": "2026-10-21T02%3A30%3A0%30Z",
+      "sends": "2026-10-21T02:30:00Z"
+    },
+    {
+      "name": "doubly encoded: decoded once only",
+      "input": "2026-10-21T02%253A30%253A00Z",
+      "sends": null
+    },
+    {
+      "name": "encoded, no zone",
+      "input": "2026-10-21T02%3A30%3A00",
+      "sends": null
+    },
+    {
+      "name": "encoded, a NUL after it",
+      "input": "2026-10-21T02%3A30%3A00Z%00",
+      "sends": null
+    },
+    {
+      "name": "a % that starts no escape",
+      "input": "2026-10-21T10%ZZ00Z",
+      "sends": null
+    },
+    {
+      "name": "a % at the end",
+      "input": "2026-10-21T02:30:00Z%",
+      "sends": null
+    },
+    {
+      "name": "a truncated UTF-8 escape",
+      "input": "%E0%A4%A",
+      "sends": null
+    },
+    {
+      "name": "an invalid UTF-8 escape",
+      "input": "2026-10-21T02:30:00Z%C3%28",
+      "sends": null
+    },
+    {
+      "name": "an encoded surrogate",
+      "input": "2026-10-21T02:30:00Z%ED%A0%80",
+      "sends": null
+    },
+    {
+      "name": "encoded non-ASCII digit",
+      "input": "2026-10-2%D9%A0T10:00:00Z",
+      "sends": null
+    },
+    {
+      "name": "the whole query part",
+      "input": "?occ=2026-10-21T02%3A30%3A00Z",
+      "sends": null
+    },
+    {
+      "name": "occ= prefix",
+      "input": "occ=2026-10-21T02%3A30%3A00Z",
+      "sends": null
+    },
+    {
+      "name": "no zone",
+      "input": "2026-10-21T02:30:00",
+      "sends": null
+    },
+    {
+      "name": "a date only",
+      "input": "2026-10-21",
+      "sends": null
+    },
+    {
+      "name": "offset without a colon",
+      "input": "2026-10-21T08:00:00+0530",
+      "sends": null
+    },
+    {
+      "name": "offset hours out of range",
+      "input": "2026-10-21T08:00:00+25:00",
+      "sends": null
+    },
+    {
+      "name": "offset minutes out of range",
+      "input": "2026-10-21T08:00:00+05:60",
+      "sends": null
+    },
+    {
+      "name": "offset minutes 60 (Python's fromisoformat would read +06:00)",
+      "input": "2026-10-21T08:00:00+05:60",
+      "sends": null
+    },
+    {
+      "name": "February 30",
+      "input": "2026-02-30T10:00:00Z",
+      "sends": null
+    },
+    {
+      "name": "24:00",
+      "input": "2026-10-20T24:00:00Z",
+      "sends": null
+    },
+    {
+      "name": "leap second",
+      "input": "2026-10-20T23:59:60Z",
+      "sends": null
+    },
+    {
+      "name": "seven-digit fraction",
+      "input": "2026-10-21T02:30:00.1234567Z",
+      "sends": null
+    },
+    {
+      "name": "year 0000",
+      "input": "0000-01-01T00:00:00Z",
+      "sends": null
+    },
+    {
+      "name": "an offset that leaves year 0001",
+      "input": "0001-01-01T00:00:00+05:30",
+      "sends": null
+    },
+    {
+      "name": "an offset that passes year 9999",
+      "input": "9999-12-31T23:00:00-05:00",
+      "sends": null
+    },
+    {
+      "name": "a space for the + (form decoding)",
+      "input": "2026-10-21T08:00:00 05:30",
+      "sends": null
+    },
+    {
+      "name": "non-ASCII digit",
+      "input": "2026-10-2\u0660T10:00:00Z",
+      "sends": null
+    },
+    {
+      "name": "full-width digit",
+      "input": "\uff12026-10-21T02:30:00Z",
+      "sends": null
+    },
+    {
+      "name": "lower-case t",
+      "input": "2026-10-21t02:30:00Z",
+      "sends": null
+    },
+    {
+      "name": "lower-case z",
+      "input": "2026-10-21T02:30:00z",
+      "sends": null
+    }
+  ]
+}

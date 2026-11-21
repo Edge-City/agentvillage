@@ -38,7 +38,7 @@ from pathlib import Path
 
 from ._forkicks import (CARD_VALUE_MAX, SUMMARY_HTML_MAX_BYTES, SUMMARY_MAX_BYTES, canonical, card_name_fakes_line,
                         card_value_fits)
-from ._mini_apps import approval_modules, projection
+from ._mini_apps import APPROVALS_CHAT_LINE, approval_modules, projection
 
 PARENT_CLASS = "marketplace.app.action"
 SHOWN = ("item", "total", "when", "shared")
@@ -64,7 +64,7 @@ DRAFT_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 TASK = re.compile(r"propose:[a-f0-9]{32}")
 HASH = re.compile(r"[0-9a-f]{64}")
 #: Apps with their own reviewed path in this overlay: never routed through the generic card (they flip in a later PR).
-REVIEWED_APPS = frozenset({"gold-stars", "forkicks", "zzzbot", "slopfolio", "mini-app"})
+REVIEWED_APPS = frozenset({"gold-stars", "forkicks", "zzzbot", "slopfolio", "dreamstarter", "kismet", "library", "favorloop", "eci-volunteers", "mini-app"})
 MAX_PAYLOAD_BYTES = 60000
 RECORD_MAX_BYTES = 131072
 
@@ -82,12 +82,13 @@ REASONS = {
     "failed": "the app couldn't take it",
 }
 ACTION_APPROVE_IN_BOT = ("Ask the owner to approve this exact action on its card in the approvals bot, then retry the same "
-                         "operation with this SAME draftId. Never prepare another draft to retry an uncertain confirm.")
+                         "operation with this SAME draftId. Never prepare another draft to retry an uncertain confirm."
+                         + APPROVALS_CHAT_LINE)
 ACTION_PLACED_ON_APPROVAL = ("The approval card for this exact action is in the owner's approvals bot. Tell the owner: "
-                             "\"I'll do it as soon as you approve.\" When they approve, it runs automatically and they get a "
-                             "message in this chat; never ask them to approve or confirm here, and never claim it was done "
-                             "before a receipt. If they ask later, retry the same operation with this SAME draftId; never "
-                             "prepare another draft.")
+                             "\"I'll do it as soon as you approve.\"" + APPROVALS_CHAT_LINE + " When they approve, it runs "
+                             "automatically and they get a message in this chat; never ask them to approve or confirm here, "
+                             "and never claim it was done before a receipt. If they ask later, retry the same operation with "
+                             "this SAME draftId; never prepare another draft.")
 ACTION_UNPINNED = ("This action has no approval card set up yet, so it cannot run. Nothing was done. Tell the owner the app "
                    "is not ready for this yet; never retry it or work around it.")
 ACTION_CARD_REFUSED = ("This draft cannot be shown whole on a plain approval card, so it cannot be confirmed. Nothing was "

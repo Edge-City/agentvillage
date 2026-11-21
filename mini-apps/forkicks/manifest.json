@@ -81,8 +81,8 @@
   "skills": [
     {
       "name": "forkicks",
-      "version": "1.0.6",
-      "sha256": "4a3f850b4285542b84b73c4b8270e4f072d7169efd9908a0b0681e7ac5759dea",
+      "version": "1.0.8",
+      "sha256": "53c96661f16435e47b73bca2405d064e9e04a391b63d6a2c6d9bd34360f56920",
       "path": "skills/forkicks/SKILL.md"
     }
   ]

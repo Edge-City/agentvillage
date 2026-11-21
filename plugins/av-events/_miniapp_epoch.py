@@ -43,11 +43,13 @@ this runs for every resident. Standard library only; no content is ever logged.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import os
 import re
 import stat
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -188,6 +190,39 @@ def fingerprint(home: Optional[Path] = None) -> Optional[str]:
 
 
 def _fingerprint(home: Optional[Path]) -> Optional[str]:
+    surface = _surface(home)
+    if surface is None:
+        return None
+    if not surface:
+        return ""
+    return _hash12(surface)
+
+
+def _hash12(value: Any) -> Optional[str]:
+    """12 hex of the canonical JSON of `value`; None when it does not serialise."""
+    try:
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()[:12]
+
+
+def legacy_fingerprint(home: Optional[Path] = None) -> Optional[str]:
+    """The fingerprint without the `village` fold (what the overlay before SKILL-CHANGE-NOTE stamped)."""
+    try:
+        surface = _surface(home, fold=False)
+    except Exception:  # noqa: BLE001 - no verdict
+        return None
+    if surface is None:
+        return None
+    return _hash12(surface) if surface else ""
+
+
+def _surface(home: Optional[Path], *, fold: bool = True) -> Optional[list]:
+    """The installed apps sorted by id, each `{"app": <entry>, "skill_files": [[skill, digest], ...]}`
+    (plus `village_ops` under Hermes); `[]` when none is installed or the file is absent; None when
+    the file cannot be read, or Hermes's `village` tool cannot be read (review-b N-b: no verdict, never
+    a stamp change because the bridge did not register this restart)."""
     home = Path(home) if home is not None else Path(hermes_home())
     path = home / PROJECTION
     try:
@@ -205,23 +240,283 @@ def _fingerprint(home: Optional[Path]) -> Optional[str]:
     apps = doc.get("apps") if isinstance(doc, dict) else None
     if not isinstance(apps, list) or not all(isinstance(app, dict) and isinstance(app.get("id"), str) for app in apps):
         return None
-    if not apps:
-        return ""
     surface = []
+    village = _village_operations() if apps and fold else None
+    if village is UNREADABLE:
+        return None
     for app in sorted(apps, key=lambda entry: entry["id"]):
         skills = app.get("skills") if isinstance(app.get("skills"), list) else []
-        surface.append({"app": app, "skill_files": [[str(name), _skill_digest(home, name)] for name in skills]})
+        item = {"app": app, "skill_files": [[str(name), _skill_digest(home, name)] for name in skills]}
+        if village is not None:
+            # SKILL-CHANGE-NOTE (review-b M1): the `village` operations this app's operation families name
+            # (zzzbot's `zzz.*`), so a bridge-only change (ov#531 added zzz.open_team_room) moves the app.
+            families = {op.split(".", 1)[0] for op in app.get("operations") or [] if isinstance(op, str)}
+            item["village_ops"] = [op for op in village if op.split(".", 1)[0] in families]
+        surface.append(item)
+    return surface
+
+
+#: `_village_operations` under Hermes when its `village` tool cannot be read: no verdict.
+UNREADABLE = object()
+
+
+def hermes_tool_definitions(tools: Any, toolsets: list) -> list:
+    """`model_tools.get_tool_definitions` for these toolsets as Hermes builds them (quiet, memoised, no
+    tool-search assembly), leaving no trace: every call also rebinds the process-global
+    `model_tools._last_resolved_tool_names` (`execute_code`'s fallback tool list), so it is put back
+    as it was, the way Hermes guards it around a child build (`tools/delegate_tool_results.py:300-311`;
+    review-b N-e)."""
+    had = hasattr(tools, "_last_resolved_tool_names")
+    saved = getattr(tools, "_last_resolved_tool_names", None)
     try:
-        canonical = json.dumps(surface, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    except (TypeError, ValueError):
+        return tools.get_tool_definitions(enabled_toolsets=list(toolsets), quiet_mode=True,
+                                          skip_tool_search_assembly=True)
+    finally:
+        if had:
+            tools._last_resolved_tool_names = saved
+
+
+#: The fold's last read and the Hermes tool-table generation it was read at (review-b N-e: once per
+#: registration change, not several times per turn).
+_FOLD_MEMO: dict = {"key": None, "value": None}
+
+
+def _generation() -> Optional[tuple]:
+    """Hermes's tool-table generation and scope (`toolsets._registry_generation`, `_registry_call`), the
+    key `model_tools` memoises on; None when this Hermes has no such helpers (then no memo)."""
+    try:
+        toolsets = importlib.import_module("toolsets")
+        return (tuple(toolsets._registry_generation()), toolsets._registry_call("current_scope_key", ""))
+    except Exception:  # noqa: BLE001
         return None
-    return hashlib.sha256(canonical.encode("ascii")).hexdigest()[:12]
+
+
+def _village_operations() -> Any:
+    """The `operation` enum of the `village` tool as Hermes builds it now (`model_tools`
+    `get_toolset_for_tool` + `get_tool_definitions`, the public read the gated-tools scan accepts),
+    sorted, memoised per tool-table generation. None when not under Hermes (no `model_tools`: the
+    fingerprint is the unfolded one); `UNREADABLE` under Hermes when the tool is not registered or has
+    another shape."""
+    try:
+        tools = importlib.import_module("model_tools")
+    except Exception:  # noqa: BLE001 - not under Hermes
+        return None
+    key = _generation()
+    with _LOCK:
+        if key is not None and _FOLD_MEMO["key"] == key:
+            return _FOLD_MEMO["value"]
+    value = _read_village_operations(tools)
+    if key is not None:
+        with _LOCK:
+            _FOLD_MEMO["key"], _FOLD_MEMO["value"] = key, value
+    return value
+
+
+def _read_village_operations(tools: Any) -> Any:
+    try:
+        toolset = tools.get_toolset_for_tool("village")
+        if not toolset:
+            return UNREADABLE
+        defs = hermes_tool_definitions(tools, [toolset])
+        village = [d for d in defs if (d.get("function") or {}).get("name") == "village"]
+        enum = village[0]["function"]["parameters"]["properties"]["operation"]["enum"]
+    except Exception:  # noqa: BLE001 - no tool, another shape: no verdict
+        return UNREADABLE
+    if not isinstance(enum, list):
+        return UNREADABLE
+    return sorted({op for op in enum if isinstance(op, str)})
 
 
 def digest() -> str:
     """The pre-filter's value: the fingerprint, `-` for none installed, `?` for unreadable."""
     current = fingerprint()
     return "?" if current is None else (current or "-")
+
+
+# ---- what each stamp meant (SKILL-CHANGE-NOTE) -----------------------------------------------------
+#
+# A stamp is a hash, so it cannot say which app changed. Each fingerprint a prompt is stamped with is
+# recorded once with, per app, its digest (the same surface, one app each) and the key of its SKILL.md
+# `update_note` (so a note already given for an older stamp is not given again). Catalog data only, no
+# resident data. Bounded by count and by size (the oldest go first); an unreadable or foreign file is
+# read as empty and replaced at the next new fingerprint.
+
+#: Relative to `$HERMES_HOME`, beside av-events' other state.
+EPOCHS_FILE = os.path.join("av-events", "miniapp-epochs.json")
+MAX_EPOCHS = 64
+#: A full projection (16 KiB) yields far less per epoch than this; trimmed oldest first to fit (review-b N3).
+MAX_EPOCHS_BYTES = 1 << 20
+#: Fingerprints this process has recorded (or found recorded); a write happens once per new one.
+_KNOWN: set = set()
+
+_FENCE_END = re.compile(r"\n---[ \t\r]*\n")
+_FIELD = re.compile(r"([A-Za-z0-9_-]+):[ \t]*(.*?)[ \t\r]*$")
+
+
+def front_matter(text: str) -> tuple:
+    """(plain top-level `key: value` fields, body), the block Hermes finds (`agent/skill_utils.py`
+    `parse_frontmatter`: BOM stripped, a leading `---`, closed by the next `---` line). Only plain
+    one-line values are read (a block scalar, flow value, anchor, alias or tag is left out); a repeated
+    key keeps its last value, as YAML does."""
+    text = text[1:] if text.startswith("\ufeff") else text
+    if not text.startswith("---"):
+        return {}, text
+    end = _FENCE_END.search(text, 3)
+    if end is None:
+        return {}, text
+    fields: dict = {}
+    for line in text[3:end.start()].split("\n"):
+        found = _FIELD.fullmatch(line)
+        if not found:
+            continue
+        key, value = found.groups()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        elif not value or value[0] in "|>&*!{[\"'":
+            fields.pop(key, None)
+            continue
+        fields[key] = value
+    return fields, text[end.end():]
+
+
+def skill_text(home: Path, name: Any) -> Optional[str]:
+    """`skills/<name>/SKILL.md` as text, read with the fingerprint's guards (no symlink below home,
+    `O_NOFOLLOW`, a regular file under the cap); None when absent or refused."""
+    if not isinstance(name, str) or not SKILL_NAME.fullmatch(name):
+        return None
+    path = home / "skills" / name / "SKILL.md"
+    try:
+        if not _no_symlink_below(home, path):
+            return None
+        raw = _read_nofollow(path, MAX_SKILL_BYTES)
+    except OSError:
+        return None
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def note_key(home: Path, skills: list, version: Any) -> str:
+    """12 hex of the first readable SKILL.md's `update_note` while its `update_note_for` is the app's
+    projection `version`; `""` when it has none, or one bound to another version."""
+    for name in skills:
+        text = skill_text(home, name)
+        if text is None:
+            continue
+        fields, _ = front_matter(text)
+        note = fields.get("update_note")
+        if not note or not isinstance(version, str) or fields.get("update_note_for") != version:
+            return ""
+        return _hash12([version, note]) or ""
+    return ""
+
+
+def current_apps(home: Optional[Path] = None) -> Optional[tuple]:
+    """(fingerprint, {app id: {"digest", "skills", "version", "note"}}) for the apps on disk now, the
+    fingerprint recorded with its per-app digests and note keys (`remember`). None when the projection
+    cannot be read. Never raises."""
+    try:
+        root = Path(home) if home is not None else Path(hermes_home())
+        surface = _surface(root)
+        if surface is None:
+            return None
+        current = _hash12(surface) if surface else ""
+        if current is None:
+            return None
+        apps = {}
+        for item in surface:
+            app_digest = _hash12(item)
+            if app_digest is None:
+                return None
+            skills = [name for name, _ in item["skill_files"]]
+            version = item["app"].get("version")
+            apps[item["app"]["id"]] = {"digest": app_digest, "skills": skills, "version": version,
+                                       "note": note_key(root, skills, version)}
+        if current:
+            remember(current, {app_id: {"d": info["digest"], "n": info["note"]} for app_id, info in apps.items()},
+                     root)
+        return current, apps
+    except Exception:  # noqa: BLE001 - no verdict
+        return None
+
+
+def _epochs_path(home: Optional[Path]) -> Path:
+    return (Path(home) if home is not None else Path(hermes_home())) / EPOCHS_FILE
+
+
+def _record_ok(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(v, dict) and isinstance(v.get("d"), str) and isinstance(v.get("n"), str) for v in value.values())
+
+
+def _load_epochs(home: Optional[Path]) -> list:
+    """[[fingerprint, {app id: {"d": digest, "n": note key}}], ...] oldest first; [] when absent or not ours.
+    Read with `O_NOFOLLOW`: a symlink there reads as empty (and is replaced by the next write)."""
+    try:
+        raw = _read_nofollow(_epochs_path(home), MAX_EPOCHS_BYTES)
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (OSError, ValueError, RecursionError):
+        return []
+    epochs = doc.get("epochs") if isinstance(doc, dict) else None
+    if not isinstance(epochs, list):
+        return []
+    return [item for item in epochs if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str)
+            and _record_ok(item[1])]
+
+
+def _encode(epochs: list) -> bytes:
+    return json.dumps({"v": 1, "epochs": epochs}, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def remember(current: str, apps: dict, home: Optional[Path] = None) -> None:
+    """Record `current` with its per-app records unless this process already has. At most `MAX_EPOCHS`,
+    trimmed oldest first to stay under `MAX_EPOCHS_BYTES`. Temp file + rename, 0600; a failure only
+    costs a later note its precision (`remembered` then returns None)."""
+    with _LOCK:
+        if current in _KNOWN:
+            return
+    epochs = _load_epochs(home)
+    if not any(item[0] == current for item in epochs):
+        epochs = (epochs + [[current, dict(apps)]])[-MAX_EPOCHS:]
+        data = _encode(epochs)
+        while len(data) > MAX_EPOCHS_BYTES and len(epochs) > 1:
+            epochs = epochs[1:]
+            data = _encode(epochs)
+        if len(data) > MAX_EPOCHS_BYTES:
+            return
+        path = _epochs_path(home)
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".miniapp-epochs.", dir=str(path.parent))
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except OSError:
+            return
+    with _LOCK:
+        _KNOWN.add(current)
+
+
+def remembered(stamp: str, home: Optional[Path] = None) -> Optional[dict]:
+    """{app id: {"d": digest, "n": note key}} recorded for `stamp`; `{}` for no stamp (no app installed);
+    None when unknown (a stamp from before this record existed, or one that fell off the end)."""
+    if not stamp:
+        return {}
+    for item in reversed(_load_epochs(home)):
+        if item[0] == stamp:
+            return dict(item[1])
+    return None
 
 
 # ---- the stamp -----------------------------------------------------------------------------------
@@ -232,7 +527,14 @@ def section_text(_session_info: Any = None) -> str:
     try:
         if not enabled(None):
             return ""
-        current = fingerprint()
+        # SKILL-CHANGE-NOTE: the stamp is recorded with its per-app digests as it is rendered.
+        found = current_apps()
+        current = found[0] if found is not None else None
+        if current is None:
+            # review-b N-g: the `village` fold unreadable (the bridge did not register this restart) but
+            # the projection readable: the unfolded stamp, so the chat is not later read as stampless
+            # ("every app is new") once the bridge is back.
+            current = legacy_fingerprint()
     except Exception:  # noqa: BLE001 - an empty section is today's prompt
         return ""
     return f"{STAMP_PREFIX}{current}" if current else ""
@@ -323,6 +625,8 @@ def reset() -> None:
         _STATE["registered"] = False
         _STATE["broken"] = False
         _LATCHED.clear()
+        _KNOWN.clear()
+        _FOLD_MEMO["key"] = _FOLD_MEMO["value"] = None
 
 
 __all__ = [
@@ -331,12 +635,19 @@ __all__ = [
     "SWITCH",
     "active",
     "confirm_rebuilt",
+    "current_apps",
     "digest",
     "enabled",
     "fingerprint",
+    "front_matter",
+    "legacy_fingerprint",
+    "note_key",
     "register_section",
+    "remember",
+    "remembered",
     "reset",
     "section_text",
+    "skill_text",
     "stale",
     "stamp_in",
     "unregister",

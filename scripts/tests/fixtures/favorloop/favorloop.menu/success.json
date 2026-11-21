@@ -1,0 +1,80 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Favor Loop's menu has 12 free favors of about 15 minutes each, in a public place or online; use these ids to join.\",\"favors\":[{\"id\":\"code_review\",\"label\":\"Code review\"},{\"id\":\"portrait_photo\",\"label\":\"Portrait photo\"},{\"id\":\"stretch_session\",\"label\":\"Yoga or stretching session\"},{\"id\":\"pitch_feedback\",\"label\":\"Pitch or deck feedback\"},{\"id\":\"cv_review\",\"label\":\"CV or LinkedIn review\"},{\"id\":\"design_feedback\",\"label\":\"Design feedback (UI, logo, poster)\"},{\"id\":\"ai_tool_setup\",\"label\":\"Help setting up an AI tool\"},{\"id\":\"wallet_setup\",\"label\":\"Crypto wallet setup help\"},{\"id\":\"language_basics\",\"label\":\"Language basics (Hindi, Konkani or another)\"},{\"id\":\"music_lesson\",\"label\":\"Short music lesson\"},{\"id\":\"proofreading\",\"label\":\"Proofread a short text\"},{\"id\":\"goa_tips\",\"label\":\"Goa local tips (food, places, getting around)\"}],\"availability\":[{\"id\":\"thu_evening\",\"label\":\"Thursday evening\"},{\"id\":\"fri_morning\",\"label\":\"Friday morning\"},{\"id\":\"fri_afternoon\",\"label\":\"Friday afternoon\"},{\"id\":\"sat\",\"label\":\"Saturday\"}],\"minutesEach\":15}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Favor Loop's menu has 12 free favors of about 15 minutes each, in a public place or online; use these ids to join.",
+    "favors": [
+      {
+        "id": "code_review",
+        "label": "Code review"
+      },
+      {
+        "id": "portrait_photo",
+        "label": "Portrait photo"
+      },
+      {
+        "id": "stretch_session",
+        "label": "Yoga or stretching session"
+      },
+      {
+        "id": "pitch_feedback",
+        "label": "Pitch or deck feedback"
+      },
+      {
+        "id": "cv_review",
+        "label": "CV or LinkedIn review"
+      },
+      {
+        "id": "design_feedback",
+        "label": "Design feedback (UI, logo, poster)"
+      },
+      {
+        "id": "ai_tool_setup",
+        "label": "Help setting up an AI tool"
+      },
+      {
+        "id": "wallet_setup",
+        "label": "Crypto wallet setup help"
+      },
+      {
+        "id": "language_basics",
+        "label": "Language basics (Hindi, Konkani or another)"
+      },
+      {
+        "id": "music_lesson",
+        "label": "Short music lesson"
+      },
+      {
+        "id": "proofreading",
+        "label": "Proofread a short text"
+      },
+      {
+        "id": "goa_tips",
+        "label": "Goa local tips (food, places, getting around)"
+      }
+    ],
+    "availability": [
+      {
+        "id": "thu_evening",
+        "label": "Thursday evening"
+      },
+      {
+        "id": "fri_morning",
+        "label": "Friday morning"
+      },
+      {
+        "id": "fri_afternoon",
+        "label": "Friday afternoon"
+      },
+      {
+        "id": "sat",
+        "label": "Saturday"
+      }
+    ],
+    "minutesEach": 15
+  }
+}

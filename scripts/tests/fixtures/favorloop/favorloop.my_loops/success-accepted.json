@@ -1,0 +1,77 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"text\":\"Everyone said yes: you give Portrait photo to @fixture_alice and another resident gives Yoga or stretching session to you, Saturday at The Circle, or online.\",\"joined\":true,\"member\":{\"offers\":[\"portrait_photo\"],\"wants\":[\"stretch_session\"],\"giftOnly\":false,\"contactHandle\":\"@fixture_bob\",\"availability\":[\"sat\"],\"paused\":false},\"loops\":[{\"loopId\":\"0f0f0f0f-0000-4000-8000-000000000001\",\"shape\":\"loop3\",\"status\":\"accepted\",\"window\":\"Saturday\",\"place\":\"The Circle, or online\",\"youGive\":{\"favor\":\"portrait_photo\",\"label\":\"Portrait photo\",\"to\":\"@fixture_alice\"},\"youReceive\":{\"favor\":\"stretch_session\",\"label\":\"Yoga or stretching session\",\"from\":\"another resident\"},\"steps\":[{\"from\":\"you\",\"to\":\"@fixture_alice\",\"favor\":\"portrait_photo\"},{\"from\":\"@fixture_alice\",\"to\":\"another resident\",\"favor\":\"code_review\"},{\"from\":\"another resident\",\"to\":\"you\",\"favor\":\"stretch_session\"}],\"yourAnswer\":\"yes\",\"waitingFor\":0,\"contacts\":[{\"role\":\"you give to\",\"handle\":\"@fixture_alice\"},{\"role\":\"you receive from\",\"handle\":null}],\"youReceived\":false,\"favorsConfirmed\":0,\"favorsTotal\":3}]}\nSource: https://favorloop.fly.dev/board"
+    }
+  ],
+  "structuredContent": {
+    "text": "Everyone said yes: you give Portrait photo to @fixture_alice and another resident gives Yoga or stretching session to you, Saturday at The Circle, or online.",
+    "joined": true,
+    "member": {
+      "offers": [
+        "portrait_photo"
+      ],
+      "wants": [
+        "stretch_session"
+      ],
+      "giftOnly": false,
+      "contactHandle": "@fixture_bob",
+      "availability": [
+        "sat"
+      ],
+      "paused": false
+    },
+    "loops": [
+      {
+        "loopId": "0f0f0f0f-0000-4000-8000-000000000001",
+        "shape": "loop3",
+        "status": "accepted",
+        "window": "Saturday",
+        "place": "The Circle, or online",
+        "youGive": {
+          "favor": "portrait_photo",
+          "label": "Portrait photo",
+          "to": "@fixture_alice"
+        },
+        "youReceive": {
+          "favor": "stretch_session",
+          "label": "Yoga or stretching session",
+          "from": "another resident"
+        },
+        "steps": [
+          {
+            "from": "you",
+            "to": "@fixture_alice",
+            "favor": "portrait_photo"
+          },
+          {
+            "from": "@fixture_alice",
+            "to": "another resident",
+            "favor": "code_review"
+          },
+          {
+            "from": "another resident",
+            "to": "you",
+            "favor": "stretch_session"
+          }
+        ],
+        "yourAnswer": "yes",
+        "waitingFor": 0,
+        "contacts": [
+          {
+            "role": "you give to",
+            "handle": "@fixture_alice"
+          },
+          {
+            "role": "you receive from",
+            "handle": null
+          }
+        ],
+        "youReceived": false,
+        "favorsConfirmed": 0,
+        "favorsTotal": 3
+      }
+    ]
+  }
+}

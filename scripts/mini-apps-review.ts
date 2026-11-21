@@ -5,7 +5,10 @@
  * (§6.2) reads this JSON and posts the PR comment later; this script posts nothing.
  *
  *   bun scripts/mini-apps-review.ts --base <rev> --head <rev> [--base-tip <rev>] [--author <login>]
- *       [--repo <dir>] [--out <file.json>] [--summary <file.md>] [--conformance-dir <dir>]
+ *       [--repo <dir>] [--out <file.json>] [--summary <file.md>] [--conformance-dir <dir>] [--pr <n>] [--base-ref <branch>]
+ *
+ * The JSON names what it judged: head, and (ov#477 fold 1) pr, base_ref and base_sha (--base as a commit), so the
+ * mini-apps automerge Action can bind a verdict to one pull request into main.
  *
  * It reads `git diff --raw --no-renames base...head` (the --name-status list plus the file modes), the
  * files at the merge base and at head, and judges the pull request. The base branch's current tip
@@ -14,7 +17,8 @@
  *   lane     changed files ⊆ mini-apps/<id>/** ∪ skills/<id>/** for exactly one id that has a manifest at
  *            head is a manifest lane, and the lane is that manifest's visibility (sandbox | admins |
  *            everyone; v1's `restricted` is sandbox or admins, as v1Entry serves them). Anything else is
- *            `core`. So is a pull request that turns a needs-card op into a read or write.
+ *            `core`. So is a pull request that turns a needs-card op into a read or write, and one that
+ *            touches a first-party package (FIRST_PARTY_PACKAGES: skills/zzzbot/scripts/, prompts/).
  *   checks   paths, author, schema (the ONE validator, scripts/mini-apps-manifests.cjs, loaded only when
  *            its bytes and the schema's hash to mini-apps/manifests.pins.json), hashes, version_bump
  *            (reported as N, not enforced, until S2 is settled), secrets, data_context, approval_classes,
@@ -96,7 +100,19 @@ export const HUMAN_CODES = Object.freeze(new Set(["core_path", "baseline_skill",
   "path_status_unknown", "path_mode_unusual", "binary_unscanned", "base_manifest_missing", "base_manifest_unexpected", "base_unparseable",
   "base_invalid", "catalog_unreadable", "catalog_unlisted", "check_not_run", "needs_card_downgrade", "needs_card_removed",
   "needs_card_replaced", "needs_card_review", "cross_app_target", "cross_app_host", "oauth_review", "context_ceiling_above_private", "events_review",
-  "events_entering_everyone", "visibility_raise_multi_step", "visibility_raise_with_major", "author_not_owner"]));
+  "events_entering_everyone", "visibility_raise_multi_step", "visibility_raise_with_major", "author_not_owner", "first_party_package"]));
+/**
+ * First-party packages (lead ASK CLAIMS L21092, ov#441): a CLOSED allow-list of app ids whose runtime package
+ * under skills/<id>/<dir>/ is overlay code written and reviewed here, so a change there is core, the human
+ * review (first_party_package), never path_unknown_file. Only the listed ids and the listed top-level dirs:
+ * any other id that adds a scripts/ or prompts/ directory still fails path_unknown_file, and any other file of
+ * a listed id (skills/<id>/references/..., mini-apps/<id>/scripts/...) is judged as before. The list lives in
+ * this gate file, so changing it is itself a gate change. An id here is never a baseline skill and is always a
+ * reviewed mini-app (install/install_miniapps.ts REVIEWED_MINI_APPS; the tests hold both).
+ */
+export const FIRST_PARTY_PACKAGES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  zzzbot: Object.freeze(["scripts", "prompts"]),
+});
 /**
  * The files a manifest lane may hold: P0-1's closed mini-apps/ tree. No conformance.json: anyone can hand-write
  * one, so the bot generates it itself (release's owner read of P0-5, CLAIMS L14465) and a committed one fails.
@@ -107,6 +123,8 @@ const LANE_FILES: Readonly<Record<string, readonly string[]>> = Object.freeze({
 const APP_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REV = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._\/^~-]{0,199}$/;
+const PR_NUMBER = /^[1-9][0-9]{0,9}$/;
+const BRANCH = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
 const MAX_PER_CODE = 10;
 /** The version-bump rule is reported, not enforced, in Phase 0 (release, L14465 (c); S2 open). */
 export const BUMP_SEVERITY: "M" | "S" | "N" = "N";
@@ -116,7 +134,15 @@ export type Finding = { code: string; severity: Severity; file?: string; line?: 
 export type Lane = "sandbox" | "admins" | "everyone" | "core";
 export type Verdict = "PASS" | "FAIL" | "NEEDS_HUMAN";
 export type Report = {
-  bot: string; version: string; manifest: string | null; head: string; verdict: Verdict; lane: Lane;
+  bot: string; version: string; manifest: string | null; head: string;
+  /**
+   * ov#477 fold 1 (review-b M1): the pull request and the base this verdict judged, so a reader can bind it to
+   * one pull request into one base. Set by the CLI (main): pr from --pr, base_ref from --base-ref, base_sha =
+   * --base resolved to its commit (in CI the event's pull_request.base.sha, the commit the tool tree is checked
+   * out at). Null when not given; an error report carries nulls.
+   */
+  pr?: number | null; base_ref?: string | null; base_sha?: string | null;
+  verdict: Verdict; lane: Lane;
   findings: Finding[]; checked: string[]; not_run: { check: string; reason: string }[];
 };
 export type Change = { status: string; path: string; oldMode: string; newMode: string };
@@ -352,12 +378,21 @@ export function gitSource(repo: string, base: string, head: string, author: stri
 
 // ---- Paths: the lane classifier --------------------------------------------------------------------
 const LANE_PATH = /^(mini-apps|skills)\/([^/]+)\/(.+)$/;
-/** The one app id the pull request stays inside, or null (core) with why. A baseline skill's id is core. */
+/** skills/<id>/<dir>/<file> for an id and dir on FIRST_PARTY_PACKAGES (own keys only, matched whole). */
+export function isFirstPartyPackagePath(path: string): boolean {
+  const m = /^skills\/([^/]+)\/([^/]+)\/.+$/.exec(path);
+  if (!m || !Object.prototype.hasOwnProperty.call(FIRST_PARTY_PACKAGES, m[1])) return false;
+  return FIRST_PARTY_PACKAGES[m[1]].includes(m[2]);
+}
+/**
+ * The one app id the pull request stays inside, or null (core) with why. A baseline skill's id is core; so is
+ * a first-party package file (FIRST_PARTY_PACKAGES).
+ */
 export function classify(files: Change[]): { id: string | null; core: string[] } {
   const ids = new Set<string>(), core: string[] = [];
   for (const f of files) {
     const m = LANE_PATH.exec(f.path);
-    if (!m || !APP_ID.test(m[2]) || BASELINE_SKILLS.has(m[2])) core.push(f.path);
+    if (!m || !APP_ID.test(m[2]) || BASELINE_SKILLS.has(m[2]) || isFirstPartyPackagePath(f.path)) core.push(f.path);
     else ids.add(m[2]);
   }
   if (files.length === 0) return { id: null, core: ["(no changed files)"] };
@@ -627,6 +662,7 @@ export function evaluate(src: Source, validator: Validator): Report {
     if (path === "(no changed files)") add({ code: "empty_diff", severity: "S", text: "the pull request changes no file: nothing to judge, so core (never a PASS on nothing)" });
     else if (/ app ids: /.test(path)) add({ code: "multiple_apps", severity: "S", text: `${path}: a manifest lane is exactly one app id, so core` });
     else if (BASELINE_SKILLS.has(LANE_PATH.exec(path)?.[2] ?? "")) add({ code: "baseline_skill", severity: "S", file: path, text: `${LANE_PATH.exec(path)![2]} is a baseline skill (install/paths.ts EDGE_SKILL_NAMES): its skill ships to every box whatever the manifest says, so core` });
+    else if (isFirstPartyPackagePath(path)) add({ code: "first_party_package", severity: "S", file: path, text: `${path} is first-party package code (FIRST_PARTY_PACKAGES ${path.split("/")[1]}: ${FIRST_PARTY_PACKAGES[path.split("/")[1]].map(d => `${d}/`).join(", ")}): core: human review` });
     else add({ code: "core_path", severity: "S", file: path, text: `${path} is outside one app's mini-apps/<id>/ and skills/<id>/: core, the human gate` });
   }
   for (const f of src.files) {
@@ -640,7 +676,8 @@ export function evaluate(src: Source, validator: Validator): Report {
     // skills/<id>/ holds only SKILL.md for an app (an id with a manifest at the base or head); a baseline
     // skill (skills/edge-india/references/...) or another skill directory is core, never a false FAIL.
     const appSkill = m?.[1] === "skills" ? !BASELINE_SKILLS.has(m[2]) && !!(src.head(`mini-apps/${m[2]}/manifest.json`) || src.base(`mini-apps/${m[2]}/manifest.json`)) : true;
-    if (m && f.status !== "D" && appSkill && !(LANE_FILES[m[1]] ?? []).includes(m[3])) {
+    // A first-party package file (FIRST_PARTY_PACKAGES) is core (first_party_package above), not an unknown lane file.
+    if (m && f.status !== "D" && appSkill && !isFirstPartyPackagePath(f.path) && !(LANE_FILES[m[1]] ?? []).includes(m[3])) {
       add({ code: "path_unknown_file", severity: "M", file: f.path, text: m[1] === "mini-apps" && m[3] === "conformance.json"
         ? "a committed conformance.json is never trusted: the bot runs the suite itself; remove it"
         : `only ${LANE_FILES[m[1]].join(", ")} may sit in ${m[1]}/<id>/ (no code, no other files)` });
@@ -959,11 +996,17 @@ export function review(opts: { repo: string; base: string; head: string; baseTip
 
 /** The fail-closed report: the bot could not judge, so it never says PASS. */
 export function errorReport(message: string, head = ""): Report {
-  return {
+  return bindReport({
     bot: BOT, version: BOT_VERSION, manifest: null, head, verdict: "FAIL", lane: "core",
     findings: [{ code: "bot_error", severity: "M", text: message.slice(0, 500) }], checked: [],
     not_run: CHECKED.map(check => ({ check, reason: "the bot could not run" })),
-  };
+  }, { pr: null, base_ref: null, base_sha: null });
+}
+
+/** The report with pr, base_ref and base_sha set, right after head (ov#477 fold 1). */
+export function bindReport(r: Report, b: { pr: number | null; base_ref: string | null; base_sha: string | null }): Report {
+  const { bot, version, manifest, head, pr: _p, base_ref: _r, base_sha: _s, ...rest } = r;
+  return { bot, version, manifest, head, pr: b.pr, base_ref: b.base_ref, base_sha: b.base_sha, ...rest };
 }
 
 const cell = (s: unknown) => String(s ?? "").replace(/[|`\n\r]/g, " ").slice(0, 300);
@@ -983,14 +1026,16 @@ export function summary(r: Report): string {
 }
 
 function parseArgs(argv: string[]): Record<string, string> {
-  const known = new Set(["--base", "--head", "--base-tip", "--author", "--repo", "--out", "--summary", "--conformance-dir"]);
+  const known = new Set(["--base", "--head", "--base-tip", "--author", "--repo", "--out", "--summary", "--conformance-dir", "--pr", "--base-ref"]);
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (!known.has(argv[i]) || argv[i + 1] === undefined) throw new BotError(`usage: unknown or empty option ${JSON.stringify(argv[i]).slice(0, 40)}`);
     out[argv[i].slice(2)] = argv[i + 1];
   }
-  if (!out.base || !out.head) throw new BotError("usage: --base <rev> --head <rev> [--base-tip <rev>] [--author <login>] [--repo <dir>] [--out <file>] [--summary <file>] [--conformance-dir <dir>]");
+  if (!out.base || !out.head) throw new BotError("usage: --base <rev> --head <rev> [--base-tip <rev>] [--author <login>] [--repo <dir>] [--out <file>] [--summary <file>] [--conformance-dir <dir>] [--pr <n>] [--base-ref <branch>]");
   if (out.author && !LOGIN.test(out.author) && !/^[A-Za-z0-9-]{1,39}\[bot\]$/.test(out.author)) throw new BotError("usage: --author is not a GitHub login");
+  if (out.pr !== undefined && !PR_NUMBER.test(out.pr)) throw new BotError("usage: --pr is not a pull request number");
+  if (out["base-ref"] !== undefined && !BRANCH.test(out["base-ref"])) throw new BotError("usage: --base-ref is not a branch name");
   return out;
 }
 
@@ -1002,7 +1047,11 @@ export function main(argv: string[], io: { stdout?: (s: string) => void; stderr?
   let report: Report, code = 0;
   try {
     args = parseArgs(argv);
-    report = review({ repo: args.repo ?? process.cwd(), base: args.base, head: args.head, baseTip: args["base-tip"], author: args.author ?? "", validatorRoot: io.validatorRoot, validator: io.validator, conformanceDir: args["conformance-dir"] });
+    const repo = args.repo ?? process.cwd();
+    report = review({ repo, base: args.base, head: args.head, baseTip: args["base-tip"], author: args.author ?? "", validatorRoot: io.validatorRoot, validator: io.validator, conformanceDir: args["conformance-dir"] });
+    // ov#477 fold 1: what this verdict is FOR. base_sha is --base as a commit (review() already resolved it).
+    const baseSha = git(repo, ["rev-parse", "--verify", `${args.base}^{commit}`])!.toString("utf8").trim();
+    report = bindReport(report, { pr: args.pr !== undefined ? Number(args.pr) : null, base_ref: args["base-ref"] ?? null, base_sha: baseSha });
   } catch (e) {
     const message = e instanceof BotError ? e.message : `bot_crashed: ${(e as Error)?.stack ?? String(e)}`;
     report = errorReport(message);

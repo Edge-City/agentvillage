@@ -1,0 +1,84 @@
+# Mini-apps automerge (RULINGS RM-08 as changed 23 Oct, option (b): our Action merges a mini-app pull
+# request when the bot and CI are green; there is no branch protection). SHIPS DARK: it does nothing until
+# the repository variable MINI_APPS_AUTOMERGE is exactly 1 (Settings > Secrets and variables > Actions >
+# Variables). Unset, the job prints "disabled" and exits 0 before checkout, before any API call.
+#
+# What merges: an open, non-draft pull request into main (from this repository or a fork) carrying the
+# label mini-app:automerge, when at ONE pinned head commit, read twice: the bot's newest run of
+# mini-apps-review.yml succeeded and its JSON artifact says PASS in a manifest lane (never NEEDS_HUMAN, FAIL,
+# core, gate_changed or first_party_package); test.yml's newest run succeeded with both of its checks; every
+# changed file sits in mini-apps/<id>/ or skills/<id>/ and none under .github/, the India references or the
+# bot's gate files; and the label's last "labeled" event is by a write, maintain or admin user, later than
+# the last push. Squash, through the REST merge call pinned to that commit: never --admin, never force.
+# The full condition list, and why each holds, is the header of scripts/mini-apps-automerge.ts; its tests
+# are scripts/tests/mini-apps-automerge.test.ts.
+#
+# Trust: this workflow never runs the pull request. Its triggers run main's copy of this file (workflow_run,
+# schedule, and a dispatch from main only); the one checkout is this workflow's own main commit, with no
+# credentials kept; bun runs main's script by explicit path with no bunfig, .env, install or tsconfig. The
+# script reads the pull request through the API only, and ignores the triggering event's payload: each run
+# sweeps every open pull request with the label.
+#
+# Triggers: the end of a bot or test run (only runs started by pull requests), every 30 minutes (a label
+# added after the checks finished), and "Run workflow" on main for an immediate sweep.
+# A merge made with this run's GITHUB_TOKEN starts no push workflow on main, so main gets no push run of
+# test.yml for it; Tag release then runs the suites itself at that commit (tag-release.yml).
+name: mini-apps automerge
+
+on:
+  workflow_run:
+    workflows: ["mini-apps review", "test"]
+    types: [completed]
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mini-apps-automerge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: mini-apps automerge
+    if: github.repository == 'Edge-City/agentvillage' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      issues: read
+    steps:
+      # The kill switch, first, before anything else runs or is read.
+      - name: Kill switch (repository variable MINI_APPS_AUTOMERGE)
+        id: gate
+        env:
+          SWITCH: ${{ vars.MINI_APPS_AUTOMERGE }}
+        run: |
+          if [ "${SWITCH-}" = "1" ]; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+            echo "mini-apps automerge: enabled (MINI_APPS_AUTOMERGE is 1)"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "mini-apps automerge: disabled (repository variable MINI_APPS_AUTOMERGE is not 1): no checkout, nothing read, nothing merged"
+          fi
+      # main's own commit (the default for these triggers), never the pull request.
+      - if: steps.gate.outputs.on == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - if: steps.gate.outputs.on == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+      - name: Sweep and merge
+        if: steps.gate.outputs.on == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINI_APPS_AUTOMERGE: ${{ vars.MINI_APPS_AUTOMERGE }}
+          REPO: ${{ github.repository }}
+        run: |
+          bun --config=/dev/null --no-env-file --no-install --tsconfig-override=/dev/null ./scripts/mini-apps-automerge.ts --repo "$REPO"

@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "decision must be meet or pass."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"invalid_request\",\"message\":\"decision must be meet or pass.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "invalid_request",
+    "message": "decision must be meet or pass."
+  },
+  "isError": true
+}

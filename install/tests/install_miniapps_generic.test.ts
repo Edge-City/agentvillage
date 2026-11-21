@@ -63,7 +63,8 @@ function pluginInstalled(root: string, checks: [string, string][]): boolean[] {
 }
 /**
  * The receipt invariants the cp checks (context L19498): apps == projection minus refused ids, in projection order;
- * files == the skill paths of apps only; refused ids a subset of the projection's, no duplicates, no overlap with
+ * files == the skill paths of accepted apps plus the managed ZZZ files only when both ZZZ entries are projected;
+ * refused ids a subset of the projection's, no duplicates, no overlap with
  * apps; never a reviewed id; codes from the closed set; `refused` omitted when empty; mini-apps.json and
  * projectionSha256 are the accepted subset; verify with the same delivery recomputes the same receipt.
  */
@@ -81,7 +82,14 @@ function staged(projection: { version: number; apps: { id: string }[] }, root: s
   for (const r of receipt.refused ?? []) expect(REFUSAL_CODES).toContain(r.code as typeof REFUSAL_CODES[number]);
   const accepted = projection.apps.filter(a => !refusedIds.includes(a.id));
   expect(receipt.apps.map(a => a.id)).toEqual(accepted.map(a => a.id));
-  expect(receipt.files.map(f => f.path)).toEqual(accepted.map(a => `skills/${a.id}/SKILL.md`));
+  const expectedFiles = accepted.filter(a => a.skills.length > 0).map(a => `skills/${a.id}/SKILL.md`);
+  if (accepted.some(a => a.id === "zzzbot") && accepted.some(a => a.id === "zzz-bridge")) {
+    expectedFiles.push("skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md");
+  }
+  if (accepted.some(a => a.id === "zzzbot") && accepted.some(a => a.id === "zzz-autonomy-runner")) {
+    expectedFiles.push("skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md");
+  }
+  expect(receipt.files.map(f => f.path)).toEqual(expectedFiles);
   const subset = JSON.stringify({ version: 1, apps: accepted });
   expect(receipt.projectionSha256).toBe(sha(subset));
   if (accepted.length || existsSync(join(root, "mini-apps.json"))) expect(onDisk(root)).toBe(subset);

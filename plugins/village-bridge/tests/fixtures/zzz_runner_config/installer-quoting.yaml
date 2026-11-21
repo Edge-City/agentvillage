@@ -1,0 +1,12 @@
+model:
+  default: anthropic/claude-haiku-4.5
+  provider: openrouter
+  base_url: ""
+  api_mode: ""
+  api_key: "0o755"
+memory:
+  provider: village-memory
+  user_char_limit: 24000
+approvals:
+  mode: "on"
+  note: "yes"

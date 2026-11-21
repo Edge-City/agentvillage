@@ -88,6 +88,12 @@ from ._core import DIR_MODE, FILE_MODE, hermes_home, register_literal_secret
 
 logger = logging.getLogger("av-events")
 
+#: APPROVALS-CHAT-LINK (jmill 26 Oct): the approvals bot's chat, the one shared bot every resident pairs (the prod
+#: relay's Telegram getMe username; the same link as village-bridge's `_mini_apps.APPROVALS_CHAT_URL`). Appended to
+#: the answers that say the resident was asked, so the agent's message gives them the card one tap away.
+APPROVALS_CHAT_URL = "https://t.me/AgentVillageApprovalsBot"
+APPROVALS_CHAT_LINE = "\nOpen approvals chat: " + APPROVALS_CHAT_URL
+
 TRUTHY = frozenset({"1", "true", "yes", "on"})
 ENABLED_ENV = "AV_APPROVAL_ENABLED"
 URL_ENV = "AV_APPROVAL_URL"
