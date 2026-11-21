@@ -831,6 +831,13 @@
           "requested",
           "supervised"
         ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_record_intention.py",
+            "function": "_held_through_approval",
+            "class": "intent.publish.inferred.index"
+          }
+        ],
         "decision": "card",
         "card_style": "minimal",
         "matrix": {
@@ -858,6 +865,13 @@
           "autonomous",
           "requested",
           "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_record_intention.py",
+            "function": "_stated_through_approval",
+            "class": "intent.publish.stated.index"
+          }
         ],
         "decision": "auto",
         "matrix": {
@@ -945,6 +959,13 @@
           "requested",
           "supervised"
         ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_share_vote.py",
+            "function": "_share",
+            "class": "digest.share"
+          }
+        ],
         "decision": "card",
         "card_style": "minimal",
         "matrix": {
@@ -973,6 +994,13 @@
           "autonomous",
           "requested",
           "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_share_vote.py",
+            "function": "_vote",
+            "class": "village.vote"
+          }
         ],
         "decision": "card",
         "card_style": "minimal",
