@@ -563,7 +563,8 @@ def test_tool_call_telemetry_keeps_no_question_or_answer(tctx, cp, plugin, av, m
               error_type=None, error_message=None)
     events = av.read_buffer(plugin._COLLECTOR)
     calls = [e for e in events if e["event_type"] == "tool.call"]
-    assert len(calls) == 1 and calls[0]["payload"]["tool_name"] is None
+    # v4 (CLAIMS L28710): the call leaves by name under `village`; never its arguments or result.
+    assert len(calls) == 1 and calls[0]["payload"]["tool_name"] == "ask_village" and calls[0]["payload"]["tool_category"] == "village"
     blob = json.dumps(events, ensure_ascii=False)
     assert QUESTION not in blob and ANSWER["answer"] not in blob and KEY not in blob
 
