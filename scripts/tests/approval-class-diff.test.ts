@@ -782,7 +782,7 @@ describe("B-167N fold 1 S2: a pending accepted_at on an UNCHANGED call is the on
     expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1120, ALL)], [site(1040, ALL)])).ok).toBe(false);
     expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, null)], [site(1040, null)])).ok).toBe(false);
     // An empty accepted_by on a propose-only entry is never waived, unchanged site or not.
-    const by = "LIMITING (propose decision card): awaiting acceptance: accepted_by is empty (Carter accepts by name)";
+    const by = 'LIMITING (propose decision card): awaiting acceptance: accepted_by must be "human:carter" (it is null)';
     expect(pendingOnly(doc([prow({ blocks: [by] })], [finding(by, PKEY)]), NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)])).ok).toBe(false);
   });
 });
@@ -880,7 +880,7 @@ const declare = (command: string, over: Entry = {}): Entry => ({
   ...over,
 });
 
-function tree(dir: string, pin: string, recipes: string[], expected: Entry[] = [], allowlist: Entry[] = []): void {
+function tree(dir: string, pin: string, recipes: string[], expected: Entry[] = [], allowlist: Entry[] = [], extra: Record<string, string> = {}): void {
   put(dir, "scripts/tests/fetch-url-shape.test.ts", `export const APPROVAL_MD_PINNED = "${pin}";\n`);
   put(dir, "skills/approval/templates/APPROVAL.md", TEMPLATE);
   put(dir, "skills/edgeos/SKILL.md", `# EdgeOS\n\n\`\`\`bash\n${recipes.join("\n")}\n\`\`\`\n`);
@@ -890,6 +890,7 @@ function tree(dir: string, pin: string, recipes: string[], expected: Entry[] = [
   put(dir, "scripts/approval-class-diff/allowlist.json", `${JSON.stringify({ entries: allowlist }, null, 2)}\n`);
   put(dir, "scripts/approval-class-diff/expected.json", `${JSON.stringify({ entries: expected }, null, 2)}\n`);
   put(dir, "install/install_approval.ts", 'export const APPROVAL_GATED_TOOLS = ["terminal"] as const;\n');
+  for (const [path, text] of Object.entries(extra)) put(dir, path, text);
 }
 
 /** A throwaway overlay repo: a base commit and a head commit, each with a pin and a recipe list. */
@@ -897,15 +898,15 @@ function fixture(
   name: string,
   base: [string, string[]],
   head: [string, string[], Entry[]?],
-  opts: { allowlist?: Entry[]; env?: Record<string, string> } = {},
+  opts: { allowlist?: Entry[]; env?: Record<string, string>; baseFiles?: Record<string, string>; headFiles?: Record<string, string> } = {},
 ): { status: number | null; md: string; err: string; out: string } {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   git(dir, "init", "-q");
-  tree(dir, base[0], base[1]);
+  tree(dir, base[0], base[1], [], [], opts.baseFiles ?? {});
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "base");
-  tree(dir, head[0], head[1], head[2] ?? [], opts.allowlist ?? []);
+  tree(dir, head[0], head[1], head[2] ?? [], opts.allowlist ?? [], opts.headFiles ?? {});
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "head");
   const out = join(dir, "report");
@@ -1081,6 +1082,58 @@ describe.skipIf(TOOL === undefined)("fixture overlays through the real script an
       // Control: Carter's date filled, the same tree passes in fail mode.
       const filled = fixture("pending-filled", ["0.4.6", [STAY, OPAQUE]], ["0.4.6", [STAY, OPAQUE], [{ ...pending, accepted_at: "2026-10-21" }]], { allowlist, env: { AV_NEW_CALLS_PENDING_ACCEPTANCE: "fail" } });
       expect(filled.status).toBe(0);
+    },
+    LONG,
+  );
+
+  test(
+    "review S2: a held entry's class constant moved from the inferred class to the stated one turns NEW-CALLS red (a propose-only site, hermetic)",
+    () => {
+      // The av-events shape: the propose's class is the held entry's field, and the module's own guards
+      // name the classes it may carry. The propose is line 9.
+      const held = (inferred: string) =>
+        [
+          `INFERRED = "${inferred}"`,
+          'STATED = "intent.publish.stated.index"',
+          "def valid(entry):",
+          '    cls = entry.get("class")',
+          "    if cls == INFERRED:",
+          "        return True",
+          "    return cls == STATED",
+          "def first(ap, entry):",
+          '    answer = ap.propose(entry["class"], entry["key"], "s", entry["payload"])',
+          "    doc = answer.doc",
+          '    decision, state = doc.get("decision"), doc.get("state")',
+          '    if state == "executed":',
+          "        x = 1",
+          '    elif decision == "requested":',
+          "        x = 2",
+          '    elif decision in ("autonomous", "supervised") and state is None:',
+          "        x = 3",
+          "    else:",
+          "        return None",
+          "    return x",
+          "",
+        ].join("\n");
+      const FILE = "plugins/av-events/_held.py";
+      const site = { source: `${FILE}:9`, accepts: ["autonomous", "requested", "supervised"], matrix: { ask: "card", autonomous: "auto", "supervised-retro": "auto", "supervised-live": "sampled", manual: "card" } };
+      const payload = { text: "a fixture intention" };
+      // The two declared outcomes at that site, as approval.md declares the real intent site (village default:
+      // inferred is manual, a minimal card; stated is autonomous). The inferred one is limiting, so it carries a
+      // fixture acceptance, as the other limiting fixtures here do.
+      const entries: Entry[] = [
+        { template: "village default", reason: "fixture: an inferred intention cards first", owner: "fixture", accepted_by: "human:carter", accepted_at: "2026-10-21", propose: { class: "intent.publish.inferred.index", key: "intent.publish.inferred.index:fixture-1", summary: "Publish an inferred fixture intention.", payload, ...site, decision: "card", card_style: "minimal" } },
+        { template: "village default", reason: "fixture: a stated intention publishes on its own", owner: "fixture", propose: { class: "intent.publish.stated.index", key: "intent.publish.stated.index:fixture-2", summary: "Publish a stated fixture intention.", payload, ...site, decision: "auto" } },
+      ];
+      const good = { [FILE]: held("intent.publish.inferred.index") };
+      const control = fixture("s2-control", ["0.4.8", [STAY]], ["0.4.8", [STAY], entries], { baseFiles: good, headFiles: good });
+      expect([control.status, control.md.match(/^NEW-CALLS .*$/m)?.[0]]).toEqual([0, expect.stringMatching(/^NEW-CALLS PASS: /)]);
+      // The reviewer's plant: the inferred constant now names the stated class, so the site's held entries
+      // carry only the stated class and an inferred intention would publish with no card.
+      const plant = fixture("s2-plant", ["0.4.8", [STAY]], ["0.4.8", [STAY], entries], { baseFiles: good, headFiles: { [FILE]: held("intent.publish.stated.index") } });
+      expect(plant.status).toBe(1);
+      expect(plant.md).toMatch(/^NEW-CALLS FAIL \d+ BLOCKING/m);
+      expect(plant.md).toContain(`propose.class intent.publish.inferred.index, but ${FILE}:9 proposes one of intent.publish.stated.index`);
     },
     LONG,
   );
