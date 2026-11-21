@@ -65,6 +65,16 @@ test("odin profile installs ODIN's SOUL.md and AGENTS.md, not the resident ones"
   expect(read("AGENTS.md")).toBe(readFileSync(join(WORKSPACE, "odin/AGENTS.md"), "utf8"));
 });
 
+test("ODIN's SOUL.md names what ODIN reads in the overlay's own section, the digest as aggregates only (ODIN-DATA-2)", () => {
+  installProfileIdentity(WORKSPACE, home, "odin");
+  // "How you speak" is the overlay's section; the template-v1 fixed sections stay byte for byte (the sha test below).
+  const speak = read("SOUL.md").split("## How you speak")[1]!.split("\n## ")[0]!;
+  expect(speak).toContain("comes from the week's village brief, the daily village digest (floored numbers and themes, no names) and your data tool, which gives live counts and the group chat's own messages");
+  expect(speak).toContain("you may quote the group chat, but never say who wrote a message");
+  expect(speak).toContain("never present a line of it as one person's view, never say who said, wants or offers something");
+  expect(speak).toContain('keep "fewer than 5" as written');
+});
+
 test("constitution absent: the section holds the single placeholder line", () => {
   installProfileIdentity(WORKSPACE, home, "odin");
   const soul = read("SOUL.md");

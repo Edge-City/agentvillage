@@ -1,0 +1,21 @@
+model:
+  default: anthropic/claude-haiku-4.5
+  provider: openrouter
+  context_length: 90000
+fallback_providers:
+  - provider: openrouter
+    model: x-ai/grok-4
+agent:
+  reasoning_effort: "off"
+  reasoning_overrides:
+    anthropic/claude-haiku-4.5: false
+toolsets:
+  - hermes-cli
+  - village
+display:
+  busy_input_mode: queue
+  streaming: true
+plugins:
+  enabled:
+    - av-approval
+    - village-bridge

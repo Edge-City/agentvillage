@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "The sign-up was too long. Shorten your agent profile."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"too_large\",\"message\":\"The sign-up was too long. Shorten your agent profile.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "too_large",
+    "message": "The sign-up was too long. Shorten your agent profile."
+  },
+  "isError": true
+}

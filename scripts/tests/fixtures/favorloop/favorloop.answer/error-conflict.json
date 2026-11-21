@@ -1,0 +1,4 @@
+{
+  "code": "conflict",
+  "detail": "That loop is no longer waiting for answers (it is accepted)."
+}

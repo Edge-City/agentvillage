@@ -1,0 +1,23 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "It's a match! You can reach Another Tester on Telegram at @av_test_match."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":true,\"decision\":\"meet\",\"match\":true,\"matchWith\":{\"name\":\"Another Tester\",\"telegram\":\"@av_test_match\"},\"plan\":\"Coffee near the main hall, Thursday 11:00.\",\"text\":\"It's a match! You can reach Another Tester on Telegram at @av_test_match.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "decision": "meet",
+    "match": true,
+    "matchWith": {
+      "name": "Another Tester",
+      "telegram": "@av_test_match"
+    },
+    "plan": "Coffee near the main hall, Thursday 11:00.",
+    "text": "It's a match! You can reach Another Tester on Telegram at @av_test_match."
+  }
+}

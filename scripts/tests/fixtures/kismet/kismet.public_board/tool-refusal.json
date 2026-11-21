@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Invalid arguments for public_board: limit must be an integer from 1 to 20."
+    }
+  ],
+  "isError": true
+}

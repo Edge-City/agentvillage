@@ -237,11 +237,11 @@ def test_switch_turned_off_after_registration(tctx, cp, monkeypatch):
     assert cp.requests == []
 
 
-def test_both_tools_on_together(plugin, av_mod, cp, on, monkeypatch):
-    monkeypatch.setenv("AV_PRAY", "1")
+def test_the_retired_pray_switch_registers_nothing_beside_it(plugin, av_mod, cp, on, monkeypatch):
+    monkeypatch.setenv("AV_PRAY", "1")  # PRAY-RETIRED: nothing reads it
     ctx = ToolFireCtx()
     plugin.register(ctx)
-    assert {"ask_village", "pray"} <= set(ctx.tools)
+    assert "ask_village" in ctx.tools and "pray" not in ctx.tools
     assert call(ctx, ARGS)["answer"] == EXPECTED["answer"]
 
 
@@ -873,3 +873,10 @@ def test_b120_withheld_logs_the_code_only(tctx, cp, caplog):
     assert "Dinners" not in caplog.text and "Beach" not in caplog.text and "Surf" not in caplog.text
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("av-events: ask_village result=")]
     assert lines == ["av-events: ask_village result=answer_withheld window=default session=dm http=422 attempts=1"]
+
+
+def test_description_shares_only_lines_tagged_edge_city_india_2026(av_mod):
+    """Audit #3: the question carries only what the resident shares (cp#487 tags in _profile.md); ov#602: the rule
+    is conditional on a tagged profile (copy describes live only) and short (the findable tests rank by BM25)."""
+    assert ("once their profile tags its lines share only lines tagged Edge City India 2026, never a Private or "
+            "untagged line, their setup profile or their Context page files") in av_mod.TOOL_DESCRIPTION
