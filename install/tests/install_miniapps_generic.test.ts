@@ -82,9 +82,12 @@ function staged(projection: { version: number; apps: { id: string }[] }, root: s
   for (const r of receipt.refused ?? []) expect(REFUSAL_CODES).toContain(r.code as typeof REFUSAL_CODES[number]);
   const accepted = projection.apps.filter(a => !refusedIds.includes(a.id));
   expect(receipt.apps.map(a => a.id)).toEqual(accepted.map(a => a.id));
-  const expectedFiles = accepted.filter(a => a.id !== "zzz-bridge").map(a => `skills/${a.id}/SKILL.md`);
+  const expectedFiles = accepted.filter(a => a.skills.length > 0).map(a => `skills/${a.id}/SKILL.md`);
   if (accepted.some(a => a.id === "zzzbot") && accepted.some(a => a.id === "zzz-bridge")) {
     expectedFiles.push("skills/zzzbot/scripts/zzz_managed_runner.py", "skills/zzzbot/prompts/participate.md");
+  }
+  if (accepted.some(a => a.id === "zzzbot") && accepted.some(a => a.id === "zzz-autonomy-runner")) {
+    expectedFiles.push("skills/zzzbot/scripts/zzz_autonomy_runner.py", "skills/zzzbot/prompts/autonomy.md");
   }
   expect(receipt.files.map(f => f.path)).toEqual(expectedFiles);
   const subset = JSON.stringify({ version: 1, apps: accepted });

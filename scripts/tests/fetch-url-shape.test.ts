@@ -38,11 +38,12 @@ import { DIGEST_CRON_SPECS } from "../../install/install_index";
 const REPO = join(import.meta.dir, "..", "..");
 
 /**
- * The approval.md core version the boxes run (control plane APPROVAL_MD_VERSION,
- * set 19 Oct) and the one this file's rule and classifier run were checked
- * against. Moving the pin means re-running part 2 against that core first.
+ * The approval.md core version the boxes run (control plane APPROVAL_MD_VERSION:
+ * 0.4.6 from 19 Oct, 0.4.8 from the fleet roll that follows its publish) and the
+ * one this file's rule and classifier run were checked against. Moving the pin
+ * means re-running part 2 against that core first.
  */
-export const APPROVAL_MD_PINNED = "0.4.6";
+export const APPROVAL_MD_PINNED = "0.4.8";
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

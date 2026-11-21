@@ -26,8 +26,141 @@ plugins/village-memory/
   of 200,000 or more, the whole profile, at most 80,000 code points. On a smaller or unknown window,
   only the sections before `## Shared on the Context page`, within 8% of the window at 3.5 chars per
   token (25,200 on a 90K box). Both tools.
-- **Shared chat or cron run**: the reduced block (no Context page files), no tools. A tool called
-  there answers `unavailable in group sessions`.
+- **Shared chat, room or cron run** (audit #3): only the profile's lines tagged Edge City India 2026, in
+  cp#487's three forms (`- t (marker; Edge City India 2026)`, an app line `- t (Edge City India 2026)`,
+  `Summary (Edge City India 2026): t`; the tag is the line's last parenthesis), under their section and
+  card headings, read only from the claim sections (Context tags, From the village group, the mini-app
+  `## From <app> (saved by your agent with <app>; ...)` sections). Never a raw section (Setup profile,
+  Shared on the Context page), an untagged line, a Private line or an unknown section. Classified on the
+  raw decoded text, whole lines: a line holding an invisible code point, a control character (`\r`
+  included) or a fence tag never opens a section or counts as shared. cp's order is enforced: a claim
+  heading after a raw heading, or an app heading (exactly cp's, one name twice) before Shared on the
+  Context page, stops the read there. **Fail closed:** a
+  file without cp#487's `(Private: ...)` line under both raw headings, or with no shared line, gives no
+  block. Capped like the reduced block (8% of the window). The note says "Share only lines tagged Edge
+  City India 2026". No tools; a tool called there answers `unavailable in group sessions`. A provider
+  not yet initialised gets this block too.
+- **The share rule in a private session:** when the file tags its lines (`profile_tagged`), the block's note
+  says that whatever leaves the chat (a zzz.bot room, a group, ODIN, the village, Index, another agent) uses
+  only lines tagged Edge City India 2026; an untagged file gets no rule.
+- **The built-in USER.md** (review-b L32588, ov#558 S1/S2, the context seat on N3): Hermes core puts
+  `memories/USER.md` into every session's prompt. Two of its entries are Private (`PRIVATE_ENTRY_MARKS`, cp
+  memory-entry.js CP_ENTRY_MARKS): the app's raw setup profile `[Edge City profile, written at setup]`
+  (L31622) and the control plane's `[God Constitution conversation, kept by the Agent Village control plane]`
+  note. The `[Village vote, ...]` note is village data and stays. The gate is ONE block of code, byte-identical
+  here and in `av-events/_user_md_gate.py` (a test holds them together), installed by both plugins'
+  `register()`, so it never depends on this provider loading:
+  - **The seam:** it wraps `agent.system_prompt._memory_parts` once per process. A session that is not
+    private gets the USER.md block without the Private entries (the header and the other entries stay; a
+    block left with nothing is dropped; a block holding a mark in a shape it does not know is dropped
+    whole). A private session gets it byte for byte. The provider decides only once `initialize` bound the
+    session (`session_known()`); an agent with no initialised provider is judged on Hermes's own init facts.
+  - **Fail closed:** a Hermes without that seam gets the store gate instead: `MemoryStore.format_for_system_prompt`
+    leaves the Private entries out of the USER.md block for EVERY session (the DM still has the setup text
+    under `_profile.md` "## Setup profile"). One WARNING.
+  - **The app's tags entry** (lead L32765 R1, `[Context tags, kept in the Agent Village app]`): outside a
+    private session it is rebuilt from an ALLOWLIST of line shapes (`tags_entry_shared`), the opposite of
+    closed ov#560's denylist. Lines are split as the Index readers split them (`\r\n`, `\r` folded) and
+    matched whole:
+    - **Shape S**, kept: the mark, the app's header and either sections note (render.ts, byte for byte), a
+      card heading or `Removed by you:` (any case, as Index compares it), a blank line.
+    - **Shape I**, the only item a marked entry keeps: `- <words> (<setup|you|telegram>[, intros chat
+      <12 hex>], <public|village|agentvillage/edgecityindia2026>)`, the tail lower case as the writers
+      print it. Words, here and in Shape U: any character but a parenthesis, a line break, a control
+      character or U+FEFF (Index judges visibility on the tail alone, which is printable ASCII).
+    - **Unmarked mode** (Index's B3: an entry with no mark reads as before): when EVERY line is Shape S,
+      Shape U (`- <words>` with an optional `(<setup|you|telegram|guess|chat>[, intros chat <hex>][,
+      guess])`), a gift line (`- <words> (gift <hex>)`), a group post (`- <words> (group <12 hex>)`) under
+      `From the village group:` (and that heading), or a `Summary:` line (any words, no line break) or the
+      "Summary removed by you" line, and no line is a sections note, the entry keeps its `setup`, `you`
+      and `telegram` items with no `, guess`, and its gift lines under `Can offer:` (Index takes those there
+      as stated items). Summary and group lines are never kept. Any other line anywhere, a tail that is not
+      one of those exact parentheses included, makes the entry marked (no third mode, no "mark attempt"
+      test).
+    - An item stays only under a card heading, never beside its own removal ("Removed by you" lines go:
+      Index never takes them); after a line that is not printable
+      ASCII and not an item line, nothing is kept until the next heading (a reader may read a heading
+      there that the gate does not). A heading stays only over a kept item; an entry left with no item
+      keeps its mark, header and note. So nothing kept is wider than Index's `statedItems` on the same
+      entry (a property test over the app's and the cp's goldens and generated lines, which also counts
+      the read loss: 7 of the goldens' 1,121 stated lines).
+    - What the entry keeps depends on its own lines alone, never on the fingerprint set (what other
+      sessions saw marked), so no shared prompt tells whether a line is Private elsewhere (security review
+      of 00a03e01).
+    - Every dropped line of 24 characters or more is fingerprinted, at load too, so a memory result or an
+      agent note quoting one is judged as one quoting a Private entry; a memory-tool result's tags entry
+      that the allowlist would change is left out whole (a shorter dropped line has no fingerprint). A
+      failing gate leaves the tags entry out, as it does the Private entries. A private session never
+      runs any of it.
+  - **The memory tool** (av-events hooks), outside a private session only. The write check is keyed on
+    the call's target and action and on the Private marks (public constants), never on a fingerprint
+    (review-b ov#563 S1-d): `pre_tool_call` refuses a USER.md change or removal (a replace, a remove, a
+    batch on USER.md or with an op naming it that holds anything but adds) with one message, "Your
+    human's profile notes (USER.md) can only be changed or removed in your private chat with them. You
+    can still add a new note here."; a USER.md add and every MEMORY.md write go through (ov#565 N1-r3: a
+    group, a cron run and Hermes's background review after a group turn can add a note about the human
+    again), unless the text it writes (`content` or `new_text`, of the call or a batch op) holds a Private
+    mark: then "That text carries a private-entry mark; only your private chat can write it." The mark is
+    a constant the session itself supplied, so the refusal answers nothing about the Private text; it
+    stops a forged setup entry and a whole reproduced one (Hermes would answer "Entry already exists").
+    The same refusal meets a USER.md add whose text has a line that opens (after Python's and
+    JavaScript's whitespace) with the app's tags mark or the setup mark (`opens_app_entry`, R2): Hermes
+    would append it, and the Index readers take the LAST entry starting with the mark (as the app and the
+    cp keep it), so the appended one would stand as the app's tags entry. A note naming the mark inside a line, and every MEMORY.md write, go through as before.
+    `transform_tool_result`
+    leaves Private entries out of every result (`current_entries`, `matches`, `replaced_entry`,
+    `removed_entry`, `replaced_entries`, ...), USER.md and MEMORY.md alike, by marks and fingerprints,
+    except a self-written entry (below), and makes an add's reply the same whether or not Hermes found
+    the text already stored (ov#565 S1-r4 (a)): "Entry already exists (no duplicate added)." reads
+    "Entry added.", and `usage`, `entry_count` and the current char count in Hermes's text are left out
+    of every result, so no later result shows by the store's size whether an add was deduped (dropped,
+    not set to a constant: no figure is better than a wrong one; only Hermes's ACP display shows them,
+    and only when present). A call whose target is unknown counts as USER.md. A DM keeps
+    Hermes's own tool. "Private" needs positive evidence: a direct chat type or an explicit local surface
+    from Hermes's session context, else Hermes's own session row for the session id; empty or unknown
+    (`thread`, `forum`, `supergroup`, anything else) is not private, and cron never is.
+  - **Fingerprints:** an entry this process has seen marked (load_from_disk, the prompt gate) is still
+    Private after its mark is gone, for the prompt gate and every memory-tool result (not the write
+    check): each line of 24 characters or more, by sha256, in memory only. One set per process, on
+    Hermes's `MemoryStore` class (`village_private_line_digests`), read by both copies of the gate
+    (ov#563 N4-d).
+  - **Self-written entries** (review-b ov#565 S1-r3, S1-r4 (b)): when a session that is not private
+    writes a text (an allowed call's `content` or `new_text`, in the call or a batch op) that holds a
+    fingerprinted line, the write check records the digest of that WHOLE text, stripped as Hermes stores
+    an entry, with the store Hermes writes it to (`village_self_written_digests`, on the same class, at
+    most 65,536, oldest dropped; only texts holding a Private line are recorded, so a chatty group's
+    other notes never take a place). An entry that holds a fingerprint is left out unless its whole
+    stripped text is such a recorded text of the same store, or a text the call itself carries
+    (`content`, `new_text`, `old_text`); never line by line. Hermes's own text in a result (an error that
+    echoes `old_text`) is judged with the call's texts cut out. So a group's own note (USER.md or
+    MEMORY.md) reads back the same whether or not it holds a Private line (no guess-confirm oracle); an
+    identical DM-made copy is the same text, so it shows only what the group itself typed; and a DM-made
+    entry that holds a Private line beside other text stays out of every non-private session's results
+    and prompt, whatever a group writes. The USER.md prompt header outside a private session counts only
+    the entries it shows.
+  - **Residuals:**
+    - Restart (review-b ov#565 N1-r4): the record is in memory only, so after a restart a text a group
+      wrote earlier that holds a Private line is hidden again, from its results and its next prompt (one
+      bit per restart, and only for a text that group already wrote).
+    - MEMORY.md substring edits (N2-r4, round-1 S4, owned by data, since v2.1.23): a group's MEMORY.md
+      replace or remove whose `old_text` is part of a DM-made MEMORY.md entry succeeds (and changes that
+      entry) where a wrong guess finds no match. The entry itself stays out of the result.
+    - Capacity: an add of a text already stored never fails for room, a new one can; so a group that
+      first fills USER.md to the brim with its own notes can tell a deduped add from a new one. It
+      needs USER.md filled with junk the human sees in a private chat.
+    - The record's bound: a group that knows a right guess can push its own older text out with 65,536
+      distinct writes holding that line (dozens of tool calls, each carrying thousands of batch ops),
+      after which that text is hidden again, as after a restart: one bit per flood.
+  - **Release canary:** `scripts/check-user-md-gate.py` (run with Hermes's interpreter and source against
+    the box's HERMES_HOME) prints `user_md_gate provider=<seam|snapshot|none> av-events=<...>`; exit 0 only
+    when both are `seam`.
+  - `AV_VILLAGE_MEMORY` does not turn any of it off. F1 renders USER.md through the same gate
+    (`village_user_gate`), and for a filtered session reads the prompt as stale while a Private mark is in or
+    after its USER.md block, or another entry follows the gated block.
+  - **Limits:** a group prompt stored before the roll keeps the entries until it is rebuilt (its next turn
+    where F1 is on, team tenants; elsewhere its next compaction or `/new`: review-b #558 S3, a roll decision).
+    Fingerprints do not survive a restart, so a mark stripped in a DM and a restart later leave that text
+    unknown to the gate. The agent's own notes are not filtered for marks.
 - A file over 400,000 bytes, a symlink, a hard link, a non-regular file, or one that is not UTF-8
   gives an empty block. Nothing ever raises into Hermes.
 - Every output loses Hermes's `INVISIBLE_CHARS`, C0/C1 controls (not tab or newline) and
@@ -52,5 +185,8 @@ plugins/village-memory/
 - Tools: schemas read before and after `initialize` (`memory_manager.py:363-405, 112-158`), dispatched
   by the manager (`agent/tool_executor.py:1634-1641`), never deferred by `tool_search`
   (`tools/tool_search.py:149-162`).
+- USER.md reaches the prompt only through `agent/system_prompt.py` `_memory_parts` (:515-525), called by
+  bare name at :776; the block is `MemoryStore._render_block` (`tools/memory_tool_store.py:20-23`):
+  separator, `USER PROFILE (who the user is) [usage]`, separator, entries joined by `\n§\n`.
 - Hermes executes every top-level `*.py` of the directory (`plugins/plugin_loader.py:117-125`): keep
   the runtime in `__init__.py`.

@@ -71,6 +71,7 @@ import { installIndex } from "./install_index";
 import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
+import { safeConfigureAvElicit } from "./av_elicit"; // GC-ELICIT
 import { safeConfigureVillageMemory } from "./village_memory";
 import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, resolveHermesPython, runApprovalStep, stagePlugins } from "./install_approval";
 import {
@@ -100,7 +101,9 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay, configureVillageMenu } from "./av_display";
+import { configureAvGodconst } from "./av_godconst";
 import { configureAvVote } from "./av_vote";
+import { configureAvRate } from "./av_rate";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -377,8 +380,15 @@ function main(): void {
   if (resident) configureAvVote();
   // rc44 (RESIDENT-UX): av-display's /village in Telegram's command menu (past the 60-slot cap otherwise).
   configureVillageMenu();
+  // Suggestion rating cards (plugins/av-rate): enabled, and allowed to hand the recorded rating to the agent.
+  configureAvRate();
+  // GC-TELEGRAM-BALLOT (plugins/av-godconst): residents only; dark until the control plane writes its flag and key.
+  if (resident) configureAvGodconst();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
+  // GC-ELICIT (av_elicit.ts): opt-in on AV_ELICIT_ENABLED, set per tenant by the control plane; unset changes nothing;
+  // never fatal. Resident only: an ODIN box is no voter (av-elicit is in RESIDENT_ONLY_PLUGINS, unlisted above).
+  if (resident) safeConfigureAvElicit();
   // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
   safeConfigureVillageMemory();
 

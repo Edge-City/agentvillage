@@ -17,7 +17,7 @@ import { dotenvFileValue } from "./config";
 export type Profile = "resident" | "odin";
 
 /** Plugins only the resident's agent runs; an ODIN box does not list them in `plugins.enabled`. */
-export const RESIDENT_ONLY_PLUGINS = ["village-bridge", "av-vote", "index-links", "index-network"];
+export const RESIDENT_ONLY_PLUGINS = ["village-bridge", "av-vote", "av-godconst", "index-links", "index-network", "av-elicit"];
 
 export const CONSTITUTION_FILE = "constitution.md";
 export const CONSTITUTION_PLACEHOLDER = "{{CONSTITUTION}}";

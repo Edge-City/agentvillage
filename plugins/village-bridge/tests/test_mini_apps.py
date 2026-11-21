@@ -164,6 +164,18 @@ class ApprovalTest(unittest.TestCase):
         self.assertIn("approvals bot", mini.APPROVE_IN_BOT)
         self.assertIn("SAME draftId", mini.APPROVE_IN_BOT)
 
+    def test_pending_instructions_include_public_approvals_chat(self):
+        self.assertEqual(mini.APPROVALS_CHAT_URL, "https://t.me/AgentVillageApprovalsBot")
+        for instruction in (mini.APPROVE_IN_BOT, mini.ORDER_APPROVE_IN_BOT, mini.ORDER_PLACED_ON_APPROVAL):
+            with self.subTest(instruction=instruction):
+                self.assertIn('Open approvals chat: ' + mini.APPROVALS_CHAT_URL, instruction)
+                self.assertIn('SAME draftId', instruction)
+                self.assertNotIn('?start=', instruction)
+                self.assertNotIn('t.me/c/', instruction)
+        for instruction in (mini.ORDER_CARD_NOT_RAISED, mini.ORDER_APPROVAL_REFUSED,
+                            mini.ORDER_APPROVAL_UNAVAILABLE, mini.ORDER_CARD_CLOSED):
+            self.assertNotIn(mini.APPROVALS_CHAT_URL, instruction)
+
     def test_changed_payload_hash_refused(self):
         self.ap.propose.side_effect = lambda *args: answer(dict(ok=True, task="propose:" + "a" * 32, decision="requested", payload_hash="wrong"))
         self.assertIsNone(mini.authorize_send(self.preview, self.draft)[0])

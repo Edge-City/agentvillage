@@ -1,0 +1,24 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Here is your private Kismet sign-in link. It works once, within 15 minutes. Open it in your browser to see your Kismet account."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":true,\"text\":\"Here is your private Kismet sign-in link. It works once, within 15 minutes. Open it in your browser to see your Kismet account.\",\"webLink\":\"https://kismet-village.vercel.app/u/av-test-0000?next=chat\",\"webLinkExpiresAt\":\"2026-10-31T10:15:00.000Z\",\"webSignIns\":[{\"email\":\"ca…@example.com\",\"joinedAt\":\"2026-10-30T08:00:00.000Z\"}]}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "text": "Here is your private Kismet sign-in link. It works once, within 15 minutes. Open it in your browser to see your Kismet account.",
+    "webLink": "https://kismet-village.vercel.app/u/av-test-0000?next=chat",
+    "webLinkExpiresAt": "2026-10-31T10:15:00.000Z",
+    "webSignIns": [
+      {
+        "email": "ca…@example.com",
+        "joinedAt": "2026-10-30T08:00:00.000Z"
+      }
+    ]
+  }
+}

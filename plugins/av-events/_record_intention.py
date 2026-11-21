@@ -239,6 +239,7 @@ from ._core import (
     uuid7,
 )
 from . import _inference_run
+from ._approval import APPROVALS_CHAT_LINE
 from ._cron import cron_job_id_from
 from ._intentions import (
     CHAT_CONFIRMATIONS,
@@ -439,6 +440,7 @@ REFUSALS: dict[str, str] = {
     "approval_pending": (
         "Not updated: the resident has been asked to approve this intention as it was worded, and "
         "that question is still open. Withdraw it and capture the new wording instead; nothing was changed."
+        + APPROVALS_CHAT_LINE
     ),
     "approval_publishing": (
         "Not withdrawn: this intention is being published to Index right now. Try the withdrawal again "
@@ -464,6 +466,7 @@ REFUSALS: dict[str, str] = {
     "awaiting_resident": (
         "Not published: the resident has not approved this intention in their approval channel yet. You "
         "cannot confirm it for them, and a yes you read in chat is not an approval. Do not publish it another way."
+        + APPROVALS_CHAT_LINE
     ),
     "publish_failed": (
         "Not published: the resident approved it, but it could not be published and it is not retried. "
@@ -1725,6 +1728,7 @@ def _held_through_approval(result: dict, intention_id: str, text: str, norm: str
         result["message"] = (
             f"{held} The resident has been asked in their approval channel whether to publish it, and it is "
             f"published once they approve. A yes you read in chat is not an approval. {_NO_OTHER_WAY}"
+            f"{APPROVALS_CHAT_LINE}"
         )
     elif outcome.state == "refused":
         result["message"] = (
@@ -1775,6 +1779,7 @@ def _stated_through_approval(result: dict, text: str, source: str) -> dict:
         message = (
             "The resident's approval policy asks them before a stated intention is published, and they have "
             "been asked in their approval channel; it is published once they approve. Do not retry it."
+            + APPROVALS_CHAT_LINE
         )
     elif outcome.state == "refused":
         refused = "approval_refused"

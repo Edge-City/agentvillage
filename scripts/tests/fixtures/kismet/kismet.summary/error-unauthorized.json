@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Kismet did not accept this village's key."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"unauthorized\",\"message\":\"Kismet did not accept this village's key.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "unauthorized",
+    "message": "Kismet did not accept this village's key."
+  },
+  "isError": true
+}

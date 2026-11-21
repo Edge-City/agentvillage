@@ -122,6 +122,12 @@ to stop. Never ask twice; a yes after you recorded them records nothing new.
 If they later object, withdraw it; if they say the want in their own words,
 withdraw it and capture their words with `source=message`.
 
+## Approval chat navigation
+
+Whenever your reply says an intention is waiting on the resident's approval
+card (including a still-pending confirm), append a separate line:
+`Open approvals chat: https://t.me/AgentVillageApprovalsBot`
+
 ## Ambient intentions are held
 
 An ambient intention is never published on your word. It is recorded locally
