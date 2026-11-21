@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, parse } from "node:path";
 import { EDGE_SKILL_NAMES, hermesHome, RETIRED_SKILL_DIRS } from "./paths";
-import { reconcileZzzManagedJob, verifyZzzManagedJob, zzzShippedFile, type ZzzShippedKind } from "./zzz_managed_job";
+import { OWNED_FILE_MAX_BYTES, reconcileZzzManagedJob, verifyZzzManagedJob, zzzShippedFile, type ZzzShippedKind } from "./zzz_managed_job";
+import { AUTONOMY_FILES, AUTONOMY_GATE, autonomyMarkers, reconcileAutonomyJob, verifyAutonomyJob,
+  removeAutonomyFiles, removeAutonomyState, removeAutonomyShim } from "./zzz_autonomy_job";
 
 /**
  * ROLODEX.PERSON (rc42, CLAIMS 7799): the gold-stars entry also carries `rolodex.person` (a read of
@@ -22,17 +24,36 @@ export const REVIEWED_MINI_APPS = [
   { id: "gold-stars", version: "1.1.0", operations: ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status", "rolodex.person"], skills: ["gold-stars"] },
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["dizko"] },
   { id: "forkicks", version: "1.0.0", operations: ["forkicks.menu", "forkicks.schedule", "forkicks.order.prepare", "forkicks.order.confirm", "forkicks.order.status", "forkicks.order.cancel"], skills: ["forkicks"] },
-  // P-6 ZZZ-MINIAPP: restricted zzz.bot, five named operations (plugins/village-bridge/_mini_apps.py ZZZBOT, exact).
-  { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
+  // P-6 ZZZ-MINIAPP: restricted zzz.bot, its named operations (plugins/village-bridge/_mini_apps.py ZZZBOT, exact). 1.1.0
+  // (lead L30481): the five, then the agent's own retag and edit (gated writes). The five alone (1.0.0) is below.
+  { id: "zzzbot", version: "1.1.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread", "zzz.tag_thread", "zzz.edit_post"], skills: ["zzzbot"] },
   // ov#441 S1 (lead RULING CLAIMS L16692/L16696): the ONLY gate for managed private-pair participation, a separate
   // cp catalog/allowlist entry granted per tenant at activation (the Mosaic restricted-entry pattern). Spelled
   // `zzz-bridge`: cp and app ids match ^[a-z0-9][a-z0-9-]{0,39}$ (no underscore; app#500 reads the same id).
   // Empty operations/skills: it grants no ordinary tool and stages no skill (_mini_apps.py ZZZ_BRIDGE, exact).
   { id: "zzz-bridge", version: "1.0.0", operations: [], skills: [] },
+  // Internal rollout gate for the separate event autonomy no-agent job. Absent by default.
+  { id: "zzz-autonomy-runner", version: "1.0.0", operations: [], skills: [] },
   { id: "slopfolio", version: "1.0.0", operations: ["slopfolio.prepare", "slopfolio.status"], skills: ["slopfolio"] },
   // MOSAIC (app#486, rides v2.1.9): restricted in the CP catalog (MINI_APPS_TENANT_ALLOWLIST key `mosaic`).
   // Dizko's shape: the public read first, then its own context namespace read and write, served per box.
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read", "mini-app.context.read", "mini-app.context.write"], skills: ["mosaic"] },
+  // DreamStarter (adapted from ov#393, arrfire): seven reads and two owner-asked writes, discover and grant_prepare
+  // (_mini_apps.py DREAMSTARTER, exact; the manifest's order).
+  { id: "dreamstarter", version: "2.0.0", operations: ["dreamstarter.discover", "dreamstarter.dream_status", "dreamstarter.workflows", "dreamstarter.grant_requirements", "dreamstarter.grant_prepare", "dreamstarter.grant_status", "dreamstarter.businesses", "dreamstarter.business_brief", "dreamstarter.business_status"], skills: ["dreamstarter"] },
+  // Kismet Part 2 (lead L29830): its three public reads and the owner's own summary, then the owner's own sign-up, new
+  // dates, meet or pass and deletion (gated writes). 1.2.0 (lead L36841): then kismet.web_link, the owner's own one-time
+  // web sign-in link (a gated write); _mini_apps.py KISMET_120, exact. 1.1.0 (the eight) and Part 1's read are below.
+  { id: "kismet", version: "1.2.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete", "kismet.web_link"], skills: ["kismet"] },
+  // Edge Library (Naman, adapted from ov#506): READS ONLY in 1.0.0 (CD-44), the village knowledge graph's eight reads;
+  // its writes are not exposed (_mini_apps.py LIBRARY, exact).
+  { id: "library", version: "1.0.0", operations: ["library.initialize", "library.search", "library.get", "library.source", "library.schema", "library.history", "library.changes_since", "library.proposals"], skills: ["library"] },
+  // Favor Loop (Bilgin Kocak, ov#556): its three public reads and the owner's own loops, and the owner's own join, yes or
+  // no, confirmation and leave (gated writes); _mini_apps.py FAVORLOOP, exact (the manifest's order). No mini-app.read.
+  { id: "favorloop", version: "1.0.0", operations: ["favorloop.how_it_works", "favorloop.menu", "favorloop.board", "favorloop.join", "favorloop.my_loops", "favorloop.answer", "favorloop.confirm", "favorloop.leave"], skills: ["favorloop"] },
+  // Edge City Volunteers (Naman, ov#450; lead RULING L35456): the owner's own reads, ECV's propose (a read) and two gated
+  // writes, confirm and the one-time link (_mini_apps.py ECI_VOLUNTEERS, exact). ECV knows the owner only by X-Village-Subject.
+  { id: "eci-volunteers", version: "1.0.0", operations: ["eci-volunteers.initialize", "eci-volunteers.guide", "eci-volunteers.my_hours", "eci-volunteers.my_shifts", "eci-volunteers.get_shift", "eci-volunteers.plan_view", "eci-volunteers.open_shifts", "eci-volunteers.my_requests", "eci-volunteers.move_targets", "eci-volunteers.propose", "eci-volunteers.confirm", "eci-volunteers.link"], skills: ["eci-volunteers"] },
 ] as const;
 /**
  * Earlier gold-stars entries, still staged byte for byte so this overlay can roll out BEFORE the CP
@@ -40,7 +61,9 @@ export const REVIEWED_MINI_APPS = [
  * eight-op entry (ov#350, _mini_apps.py GOLD_STARS_RESTORED; the CP's current entry, rolodex.person
  * refused under it) and the six-op entry before the restore (ov#343, GOLD_STARS_PREVIOUS; no meeting,
  * Skylight or person operation), and dizko's public read alone (NEW-03: the CP's entry until it
- * projects the context operations), and mosaic's the same way. Remove each after the CP catalog serves a newer
+ * projects the context operations), and mosaic's the same way, and zzzbot's five (1.0.0, _mini_apps.py ZZZBOT_PREVIOUS: the
+ * CP's entry until its catalog serves 1.1.0; the two edits refused under it), and kismet's eight (1.1.0, _mini_apps.py KISMET: the CP's entry for a box
+ * until it serves that box 1.2.0; kismet.web_link refused under it) and its Part 1 read (ov#533). Remove each after the CP catalog serves a newer
  * list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [
@@ -49,6 +72,13 @@ export const PREVIOUS_REVIEWED_MINI_APPS = [
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
   // MOSAIC: its read alone, the CP's entry for a box that does not take the context entry (as dizko's).
   { id: "mosaic", version: "1.0.0", operations: ["mini-app.read"], skills: ["mosaic"] },
+  // ZZZBOT: the five named operations alone (v2.1.3 to v2.1.19), the CP's entry until its catalog serves 1.1.0.
+  { id: "zzzbot", version: "1.0.0", operations: ["zzz.list_rooms", "zzz.read_thread", "zzz.changes", "zzz.reply", "zzz.create_thread"], skills: ["zzzbot"] },
+  // KISMET: the eight of 1.1.0 (_mini_apps.py KISMET), the CP's entry for a box until it serves that box 1.2.0 (per box, from
+  // the v2.2.1 floor tag); kismet.web_link is refused under it.
+  { id: "kismet", version: "1.1.0", operations: ["kismet.how_it_works", "kismet.village_stats", "kismet.public_board", "kismet.summary", "kismet.signup", "kismet.go", "kismet.decide", "kismet.delete"], skills: ["kismet"] },
+  // KISMET: Part 1's public relay read alone (ov#533), the CP's entry until its catalog serves 1.1.0 (_mini_apps.py KISMET_PUBLIC).
+  { id: "kismet", version: "1.0.0", operations: ["mini-app.read"], skills: ["kismet"] },
 ] as const;
 type ReviewedApp = typeof REVIEWED_MINI_APPS[number] | typeof PREVIOUS_REVIEWED_MINI_APPS[number];
 /**
@@ -64,6 +94,7 @@ const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).dige
 export const ZZZ_BRIDGE_ID = "zzz-bridge";
 const ZZZ_SHIM = "zzz_managed_runner.py";
 const ZZZ_LEGACY_SHIM = "agentvillage_zzz_pairs.sh";
+// cp#467: the control plane mirrors the receipt paths these give (mini-apps-skills.js ZZZ_STAGE_FILE_LISTS); change it first.
 const ZZZ_MANAGED_FILES = [`scripts/${ZZZ_LEGACY_SHIM}`, `scripts/${ZZZ_SHIM}`, "prompts/participate.md"] as const;
 const ZZZ_STAGE_FILES = ZZZ_MANAGED_FILES.filter(relative => relative !== `scripts/${ZZZ_LEGACY_SHIM}`);
 /**
@@ -73,6 +104,9 @@ const ZZZ_STAGE_FILES = ZZZ_MANAGED_FILES.filter(relative => relative !== `scrip
  */
 export function zzzParticipation(projection: { apps: readonly { id: string }[] }): boolean {
   return projection.apps.some(app => app.id === "zzzbot") && projection.apps.some(app => app.id === ZZZ_BRIDGE_ID);
+}
+export function zzzAutonomyParticipation(projection: { apps: readonly { id: string }[] }): boolean {
+  return projection.apps.some(app => app.id === "zzzbot") && projection.apps.some(app => app.id === AUTONOMY_GATE);
 }
 /**
  * ov#441 S4-r (lead RULING CLAIMS L17296): what marks a box this installer ever turned managed ZZZ on for. A stage
@@ -182,7 +216,8 @@ function regular(path: string): void {
  *   4. operations must be EXACTLY one of GENERIC_OPERATIONS_ACCEPTED (the bridge's APP_OPERATIONS_ACCEPTED, the
  *      same lists in the same order; the cp has no other operations gate before this one):
  *      `operations_not_generic`. A card app's entry (cp#352, context L19898) carries `approval` (cardKey below):
- *      its operations are then [one accepted list or none, prepare, card], and a malformed key is the same code;
+ *      its operations are then [one accepted list or none, prepare, card] with no op twice (the cp's rule, ov#466 S1),
+ *      and a malformed key is the same code;
  *   5. keys exactly id, operations, skills, version (and an optional `approval`); skills exactly [id]; a plain x.y.z
  *      version (the bridge's rule): `bundle_invalid` for that app alone (a pre-release such as 1.0.0-beta.1 included);
  *   6. its SKILL.md comes ONLY from the cp's offer (MINI_APPS_SKILLS + a well-formed MINI_APPS_SKILLS_OFFER),
@@ -426,10 +461,12 @@ function checkApp(app: Record<string, unknown> & { id: string }, served: ReturnT
     return { app: reviewed };
   }
   if (shadows(app.id)) return { code: "shadows_reviewed" };
-  // cp#352: a card app's ops are [an accepted list or none, prepare, card] (the bridge's `[*ops, prepare, card]`).
+  // cp#352: a card app's ops are [an accepted list or none, prepare, card] (the bridge's `[*ops, prepare, card]`), with
+  // prepare and card ONCE each (the cp's boxRefusal, mini-apps-catalog.js:403-404; ov#466 S1): a list that would repeat
+  // an op (only app id `mini-app` can name a platform generic op as its card op) is no accepted list, as the cp refuses it.
   const card = Object.hasOwn(app, "approval") ? cardKey(app.approval, app.id) : undefined;
   if (card === null) return { code: "operations_not_generic" };
-  const lists = card ? [...GENERIC_OPERATIONS_ACCEPTED, []].map(ops => [...ops, card.prepare, card.card]) : GENERIC_OPERATIONS_ACCEPTED;
+  const lists = card ? [...GENERIC_OPERATIONS_ACCEPTED, []].map(ops => [...ops, card.prepare, card.card]).filter(ops => new Set(ops).size === ops.length) : GENERIC_OPERATIONS_ACCEPTED;
   const operations = lists.find(ops => same(app.operations, ops));
   if (!operations) return { code: "operations_not_generic" };
   // Rule 5 refuses this app alone (context L19825 / RA36 M2: a cp-valid pre-release version must never fail Gold Stars).
@@ -522,6 +559,28 @@ export function failClosedZzz(home: string): void {
   }
   try { removeZzzManagedState(home); } catch { /* refused path: left for the operator */ }
 }
+/** A failed stage cannot leave the event job running after its authority was withdrawn. */
+export function failClosedAutonomy(home: string): void {
+  // Withdraw only this internal gate first. An already running script rechecks it
+  // before inference and completion, even when Hermes job removal is unavailable.
+  const target=join(home,"mini-apps.json");
+  try {
+    regular(target);
+    if (exists(target)) {
+      const doc=JSON.parse(readFileSync(target,"utf8")) as {version?:unknown;apps?:unknown};
+      if (doc.version===1 && Array.isArray(doc.apps) && doc.apps.some((app:unknown)=>
+          !!app && typeof app==="object" && (app as {id?:unknown}).id===AUTONOMY_GATE))
+        atomic(target,JSON.stringify({version:1,apps:doc.apps.filter((app:unknown)=>
+          !app || typeof app!=="object" || (app as {id?:unknown}).id!==AUTONOMY_GATE)}));
+    }
+  } catch { /* unreadable authority is already refused by the runner */ }
+  if (!autonomyMarkers(home)) return;
+  // The gate is already withdrawn above, so a remaining job is inert (the runner self-gates on the projection).
+  // Files are removed only once the job is gone: while it remains, the markers stay and the next stage retries.
+  try { reconcileAutonomyJob(home, false); } catch { return; }
+  try { removeAutonomyShim(home); } catch { /* next stage retries */ }
+  try { removeAutonomyFiles(home); removeAutonomyState(home); } catch { /* next stage retries */ }
+}
 /**
  * MINIAPPS v2 Phase 2, skill delivery (lanes-context/MINIAPPS-V2-SKILL-DELIVERY-design.md): the cp may
  * hand this installer each app's reviewed SKILL.md bytes BESIDE the projection, in two environment
@@ -575,6 +634,15 @@ export function parseSkillDelivery(delivery: SkillDelivery = {}): { offer: strin
   }
   return { offer, entries };
 }
+/**
+ * An installer-owned ZZZ file's shipped bytes. One over OWNED_FILE_MAX_BYTES would read as "not_ours" once written (never
+ * upgraded, verified or torn down), so the stage refuses it here, before anything is written, and fails closed.
+ */
+function ownedSource(path: string): Buffer {
+  const content = readFileSync(path);
+  if (content.length > OWNED_FILE_MAX_BYTES) throw new Error("mini_apps_owned_file_oversize");
+  return content;
+}
 export function reconcileMiniApps(value: unknown, home = hermesHome(), source = resolve(import.meta.dir, "../skills"), verify = false, delivery: SkillDelivery = {}) {
   const served = parseSkillDelivery(delivery);
   const target = join(home, "mini-apps.json");
@@ -599,7 +667,8 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   for (const { app, generic } of staged) if (generic) regular(join(home, "skills", app.id, "SKILL.md"));
   // No desired apps and no mini-app state on the box (every non-cohort box): write nothing at all.
   const stateless = () => !exists(target) && !exists(credential) && !exists(state) &&
-    REVIEWED_MINI_APPS.every(app => !hasSkill(app) || !owned(app.id) || !exists(join(home, "skills", app.id, "SKILL.md")));
+    REVIEWED_MINI_APPS.every(app => !hasSkill(app) || !owned(app.id) || !exists(join(home, "skills", app.id, "SKILL.md"))) &&
+    !autonomyMarkers(home);
   const desired = staged.filter(({ app }) => hasSkill(app)).map(({ app, generic }) => {
     const entry = served.entries.get(app.id);
     let content: Buffer;
@@ -628,6 +697,8 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
     return { app, content };
   });
   const zzzManaged = zzzParticipation(projection);
+  const autonomyManaged = zzzAutonomyParticipation(projection);
+  const autonomyTeardown = !autonomyManaged && autonomyMarkers(home);
   // S4-r: gate off and no marker on disk is the early return. Every ZZZ step below runs only for zzzManaged (install)
   // or zzzTeardown (a box that was on: remove the job, shim, files and state, loudly when that cannot be confirmed).
   const zzzTeardown = !zzzManaged && zzzMarkerOnDisk(home);
@@ -638,24 +709,39 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
   const zzzFiles = zzzManaged ? ZZZ_STAGE_FILES.map(relative => {
     const sourcePath = join(source, "zzzbot", relative);
     regular(sourcePath);
-    const content = readFileSync(sourcePath);
+    const content = ownedSource(sourcePath);
     const path = `skills/zzzbot/${relative}`;
     files.push({ path, sha256: hash(content) });
     return { path: join(home, path), content };
+  }) : [];
+  if (autonomyManaged) for (const relative of AUTONOMY_FILES) regular(join(home, "skills", "zzzbot", relative));
+  const autonomyFiles = autonomyManaged ? AUTONOMY_FILES.map(relative => {
+    const sourcePath = join(source, "zzzbot", relative);
+    regular(sourcePath);
+    const content = ownedSource(sourcePath);
+    const path = `skills/zzzbot/${relative}`;
+    files.push({path, sha256:hash(content)});
+    return {path:join(home,path),content};
   }) : [];
   if (verify) {
     if (!(projection.apps.length === 0 && stateless()) && (!exists(target) || readFileSync(target, "utf8") !== bytes)) throw new Error("mini_apps_projection_mismatch");
     if (intentEmpty && exists(credential)) throw new Error("mini_apps_credential_removal_pending");
     for (const { app, content } of desired) if (!readFileSync(join(home, "skills", app.id, "SKILL.md")).equals(content)) throw new Error("mini_apps_skill_mismatch");
     for (const { path, content } of zzzFiles) if (!readFileSync(path).equals(content)) throw new Error("mini_apps_skill_mismatch");
+    for (const { path, content } of autonomyFiles) if (!readFileSync(path).equals(content)) throw new Error("mini_apps_skill_mismatch");
     for (const app of REVIEWED_MINI_APPS) if (hasSkill(app) && owned(app.id) && !projection.apps.some(x => x.id === app.id) && exists(join(home, "skills", app.id, "SKILL.md"))) throw new Error("mini_apps_removal_pending");
     if (zzzTeardown && zzzManagedFiles.some(relative => zzzManagedAt(home, relative) === "ours")) throw new Error("mini_apps_removal_pending");
     if (zzzTeardown && hasZzzManagedState(home)) throw new Error("mini_apps_removal_pending");
+    if (autonomyTeardown && autonomyMarkers(home)) throw new Error("mini_apps_removal_pending");
     // review-b N3: the job record too (read-only, no Hermes call): exactly the installer's job while the pair is
     // projected, none once it is not. As every job step, only from the CLI (in-process callers never own a job).
     if (import.meta.main && (zzzManaged || zzzTeardown)) {
       const script = zzzFiles.find(({ path }) => path.endsWith(`/scripts/${ZZZ_SHIM}`))?.content ?? null;
       try { verifyZzzManagedJob(home, zzzManaged, script); } catch { throw new Error(zzzManaged ? "mini_apps_job_mismatch" : "mini_apps_removal_pending"); }
+    }
+    if (import.meta.main && (autonomyManaged || autonomyTeardown)) {
+      const script = autonomyFiles.find(({path}) => path.endsWith("/scripts/zzz_autonomy_runner.py"))?.content ?? null;
+      try { verifyAutonomyJob(home,autonomyManaged,script); } catch { throw new Error("mini_apps_autonomy_job_mismatch"); }
     }
     for (const id of leaving) if (ours(id) !== null) throw new Error("mini_apps_removal_pending");
   } else if (!(projection.apps.length === 0 && stateless())) {
@@ -682,6 +768,7 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
     }
     for (const { app, content } of desired) atomic(join(home, "skills", app.id, "SKILL.md"), content);
     for (const { path, content } of zzzFiles) atomic(path, content);
+    for (const { path, content } of autonomyFiles) atomic(path, content);
     // Publish desired authority, THEN install the job (review-b S3). A failed job install fails the stage and the CLI
     // tears down only the zzz-managed job, shim, files and state (failClosedZzz), so every other app (Gold Stars, For
     // Kicks, ...) keeps the authority just published. A projected pair with no exact job record runs nothing: every
@@ -693,11 +780,19 @@ export function reconcileMiniApps(value: unknown, home = hermesHome(), source = 
       const legacy = `scripts/${ZZZ_LEGACY_SHIM}` as const;
       if (zzzManagedAt(home, legacy) === "ours") unlinkSync(join(home, "skills", "zzzbot", legacy));
     }
+    // v2.2.0 item 4: with no village-bridge.json yet this defers the job (none, no throw), so the stage and the apps
+    // above still settle; the next stage after the credential lands installs it (zzz_autonomy_job.ts autonomyBridgeAbsent).
+    if (import.meta.main && autonomyManaged) reconcileAutonomyJob(home,true);
     // On removal authority disappears before the job teardown; the managed files and state (markers) go only after it.
     if (zzzTeardown) {
       if (import.meta.main) reconcileZzzManagedJob(home, false);
       removeZzzManagedFiles(home);
       removeZzzManagedState(home);
+    }
+    if (autonomyTeardown) {
+      if (import.meta.main) reconcileAutonomyJob(home,false);
+      removeAutonomyFiles(home);
+      removeAutonomyState(home);
     }
     // The result: exactly the generic files this stage wrote (a leaving id's ownership ends with its file).
     if (before.size || recorded.size || dropped) record(new Map(staged.filter(x => x.generic).map(({ app, generic }) => [app.id, [hash(generic!)]])));
@@ -721,7 +816,7 @@ if (import.meta.main) {
     console.log(JSON.stringify(reconcileMiniApps(JSON.parse(input), hermesHome(), undefined, verify, delivery)));
   } catch {
     // S1: an unreadable or malformed projection (or any failed stage) is OFF for managed ZZZ participation.
-    if (!verify) failClosedZzz(hermesHome());
+    if (!verify) { failClosedZzz(hermesHome()); failClosedAutonomy(hermesHome()); }
     console.error(JSON.stringify({ error: "mini_apps_reconcile_failed" }));
     process.exitCode = 1;
   }

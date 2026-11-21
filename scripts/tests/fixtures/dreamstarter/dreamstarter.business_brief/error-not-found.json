@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"error\":\"not_found\",\"message\":\"No business with slug \\\"av-test-none\\\". Call list_businesses for the slugs.\"}"
+    }
+  ],
+  "isError": true
+}

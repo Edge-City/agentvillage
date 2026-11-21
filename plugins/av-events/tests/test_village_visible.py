@@ -1,5 +1,5 @@
-"""R-DEON: the village tools, and av-elicit's `elicitation_record` (GC-ELICIT), stay in the model's
-tool list when Hermes's `tool_search` is on.
+"""R-DEON: the village tools, av-elicit's `elicitation_record` (GC-ELICIT) and av-events' `ask_odin`
+(ODIN-ASK-VISIBLE) stay in the model's tool list when Hermes's `tool_search` is on.
 
 `_village_visible.py` rebinds `tools.tool_search._core_tool_names`. Most tests here use a small
 stand-in of that module (Hermes is not installed in CI) whose `is_deferrable_tool_name` reads
@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 VILLAGE = {"ask_village": "av-events", "search_village": "av-events", "query_village": "av-events", "village": "village",
-           "elicitation_record": "av-elicit"}
+           "elicitation_record": "av-elicit", "ask_odin": "av-events"}
 
 _FAKE_SOURCE = '''
 REGISTRY = {}
@@ -65,7 +65,7 @@ def vv(plugin):
 
 
 ALL = ["terminal", "memory", "todo_list", "ask_village", "search_village", "query_village", "village",
-       "elicitation_record", "some_plugin_tool"]
+       "elicitation_record", "ask_odin", "some_plugin_tool"]
 
 
 def test_the_list_is_the_village_toolset_by_exact_registered_name(plugin):
@@ -73,7 +73,7 @@ def test_the_list_is_the_village_toolset_by_exact_registered_name(plugin):
     # Each name and toolset is the one its plugin registers with.
     events = Path(__file__).resolve().parents[1]
     for module, name in (("_ask_village", "ask_village"), ("_search_village", "search_village"),
-                         ("_query_village", "query_village")):
+                         ("_query_village", "query_village"), ("_ask_odin", "ask_odin")):
         mod = sys.modules[f"{plugin.__name__}.{module}"]
         assert (mod.TOOL_NAME, mod.TOOLSET) == (name, "av-events")
     bridge = (events.parent / "village-bridge" / "__init__.py").read_text(encoding="utf-8")
@@ -93,7 +93,7 @@ def test_register_keeps_the_village_tools_visible_and_nothing_else(fake_tool_sea
     plugin.register(ctx)
     visible, deferred = fake_tool_search.classify(ALL)
     assert visible == ["terminal", "memory", "ask_village", "search_village", "query_village", "village",
-                       "elicitation_record"]
+                       "elicitation_record", "ask_odin"]
     # Every other plugin tool still defers, and Hermes's own defer list still wins.
     assert deferred == ["todo_list", "some_plugin_tool"]
     # Hermes's own set is not mutated.
@@ -184,6 +184,73 @@ def test_av_elicit_register_record_tool_lands_where_the_list_looks(fake_tool_sea
     assert elicit.register_record_tool(Ctx()) is True
     assert fake_tool_search.REGISTRY["elicitation_record"] == "av-elicit"
     assert "elicitation_record" in fake_tool_search._core_tool_names()
+
+
+# ---- ODIN-ASK-VISIBLE: av-events' ask_odin ------------------------------------------------------
+# Behind the bridge and named nowhere in AGENTS.md, a Haiku agent asked to put a question to ODIN
+# answered that it had no line to it. `ask_odin` is registered only behind AV_ASK_ODIN.
+
+
+def test_ask_odin_registered_under_av_events_is_core(fake_tool_search, av):
+    plugin = av.load_plugin()
+    assert vv(plugin).install() is True
+    assert "ask_odin" in fake_tool_search._core_tool_names()
+    assert fake_tool_search.is_deferrable_tool_name("ask_odin") is False
+    visible, _ = fake_tool_search.classify(ALL)
+    assert "ask_odin" in visible
+
+
+def test_ask_odin_unregistered_switch_off_is_not_core(fake_tool_search, av):
+    # AV_ASK_ODIN off: register_ask_odin_tool registers nothing, so there is nothing to keep visible
+    # (a tool_call naming it keeps Hermes's "unknown name" answer).
+    del fake_tool_search.REGISTRY["ask_odin"]
+    plugin = av.load_plugin()
+    assert vv(plugin).install() is True
+    core = fake_tool_search._core_tool_names()
+    assert "ask_odin" not in core
+    assert {"ask_village", "village"} <= core
+
+
+def test_ask_odin_under_another_toolset_is_not_core(fake_tool_search, av):
+    fake_tool_search.REGISTRY["ask_odin"] = "someone-else"
+    plugin = av.load_plugin()
+    vv(plugin).install()
+    assert "ask_odin" not in fake_tool_search._core_tool_names()
+    assert fake_tool_search.is_deferrable_tool_name("ask_odin") is True
+
+
+def test_ask_odin_switch_on_and_off_through_the_real_registration(fake_tool_search, av, monkeypatch):
+    # The real register_ask_odin_tool, through a ctx that writes Hermes's registry stand-in.
+    del fake_tool_search.REGISTRY["ask_odin"]
+    plugin = av.load_plugin()
+    vv(plugin).install()
+    odin = sys.modules[f"{plugin.__name__}._ask_odin"]
+
+    class Ctx:
+        def register_tool(self, name, toolset, schema, handler, **kwargs):
+            fake_tool_search.REGISTRY[name] = toolset
+
+        def register_hook(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(odin, "switch_on", lambda: False)
+    assert odin.register_ask_odin_tool(Ctx()) is False
+    assert "ask_odin" not in fake_tool_search.REGISTRY
+    assert "ask_odin" not in fake_tool_search._core_tool_names()
+    monkeypatch.setattr(odin, "switch_on", lambda: True)
+    monkeypatch.setattr(odin._pray, "register_lineage", lambda ctx: None)
+    assert odin.register_ask_odin_tool(Ctx()) is True
+    assert fake_tool_search.REGISTRY["ask_odin"] == "av-events"
+    assert "ask_odin" in fake_tool_search._core_tool_names()
+
+
+def test_agents_md_names_ask_odin_with_the_tool_search_fallback():
+    agents = (Path(__file__).resolve().parents[3] / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+    lines = [line for line in agents.split("\n") if line.startswith("**ODIN:**")]
+    assert len(lines) == 1
+    assert "call `ask_odin`" in lines[0] and '`tool_search` ("ask_odin")' in lines[0]
+    # Next to the group-chat routing line.
+    assert agents.index("**Group chat:**") < agents.index("**ODIN:**") < agents.index("\n## Red lines\n")
 
 
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", " OFF "])
@@ -295,11 +362,11 @@ def handler(args, **kwargs):
 
 for name, toolset in (("ask_village", "av-events"), ("search_village", "av-events"),
                       ("query_village", "av-events"), ("village", "village"),
-                      ("some_plugin_tool", "other-plugin")):
+                      ("ask_odin", "av-events"), ("some_plugin_tool", "other-plugin")):
     registry.register(name=name, toolset=toolset, schema=schema(name), handler=handler)
 
-names = ["terminal", "memory", "ask_village", "search_village", "query_village", "village", "some_plugin_tool",
-         "elicitation_record"]
+names = ["terminal", "memory", "ask_village", "search_village", "query_village", "village", "ask_odin",
+         "some_plugin_tool", "elicitation_record"]
 defs = [{"type": "function", "function": schema(n)} for n in names]
 config = ts.ToolSearchConfig.from_raw({"enabled": "auto"})
 
@@ -350,7 +417,7 @@ def test_real_hermes_assembly_keeps_village_tools_visible(tmp_path):
     bridge = {"tool_search", "tool_describe", "tool_call"}
     # Hermes as shipped: every plugin tool behind the bridge.
     before = report["before"]
-    assert before["activated"] and before["deferred"] == 5
+    assert before["activated"] and before["deferred"] == 6
     assert not set(VILLAGE) & set(before["tools"]) and bridge <= set(before["tools"])
     # With av-events loaded: the village tools are listed, the unrelated plugin tool still defers.
     assert report["installed"] is True
@@ -364,5 +431,5 @@ def test_real_hermes_assembly_keeps_village_tools_visible(tmp_path):
     assert report["after_other_call"] == ""
     # Unload: Hermes's behaviour again (now with elicitation_record deferred as well).
     restored = report["restored"]
-    assert restored["activated"] and restored["deferred"] == 6
+    assert restored["activated"] and restored["deferred"] == 7
     assert not set(VILLAGE) & set(restored["tools"]) and bridge <= set(restored["tools"])

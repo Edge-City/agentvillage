@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "That date isn't one of yours."
+    },
+    {
+      "type": "text",
+      "text": "{\"ok\":false,\"error\":\"date_not_found\",\"message\":\"That date isn't one of yours.\"}"
+    }
+  ],
+  "structuredContent": {
+    "ok": false,
+    "error": "date_not_found",
+    "message": "That date isn't one of yours."
+  },
+  "isError": true
+}

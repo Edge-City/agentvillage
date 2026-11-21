@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"error\":\"not_found\",\"message\":\"No application with that ref. Ask for the ref exactly as grant_prepare returned it; drafts are deleted 14 days after their last edit.\"}"
+    }
+  ],
+  "isError": true
+}

@@ -1,7 +1,7 @@
 ---
 name: gold-stars
-description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Optional curated mini-app; its install also carries the owner's meeting marks (see `rolodex`) and Skylight status (see `skylight`). Personal received-star history stays on the website.
-version: 1.1.1
+description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude when the owner asks, after resolving the exact recipient; an approval card only when the owner's own settings ask first. Optional curated mini-app; its install also carries the owner's meeting marks (see `rolodex`) and Skylight status (see `skylight`). Personal received-star history stays on the website.
+version: 1.1.2
 author: Edge City
 ---
 
@@ -53,40 +53,43 @@ does not create another schedule, change message preferences, or read private
 account data from cron. Scheduled messages use their own script output and
 prompt; this live conversation begins with the owner's reply.
 
-## Send only after the exact preview is confirmed
+## Send when the owner asks
 
 1. Call `village` with `operation: "rolodex.search"` to resolve the intended recipient.
-   Ask when ambiguous. Never substitute an Index id or choose the first match.
-2. Ask for a note only if useful; an empty note is fine. Use their words, or
-   show any proposed wording for review. Use `named` by default for the
-   preview, or `anonymous` when requested. The preview must make this clear.
+   Ask only when ambiguous. Never substitute an Index id or choose the first match.
+2. Use the owner's words for the note; an empty note is fine. Use `named` by
+   default, or `anonymous` when requested.
 3. Call `gold-stars.prepare` with `attendeeId`, exact `note` and `visibility`.
-   It returns a saved `draftId`; no star is spent. Show the returned recipient,
-   exact note (or “no note”), visibility and disclosure. For example: “One
-   star to Naman. Note: ‘Thanks for the conversation.’ Both names and this
-   note will be shared in the village Gold Stars topic. Send it?”
-4. End the turn and wait for a new owner reply confirming the exact preview.
-   Then call `gold-stars.send` with its `draftId`. The native tool fetches the
-   immutable backend preview and asks the approval gate. When the owner's
-   settings ask first, that is **a card in the approvals bot**: show
-   `approval_required` (or `star_approval_required`) honestly, ask the owner to
-   approve the card there, then retry the SAME draftId; never prepare a new
-   preview to retry. A chat reply, model boolean or changed turn is not authority.
-   In that approval-waiting message, include a separate line:
+   It returns a saved `draftId`; no star is spent.
+4. When the owner asked to send (“send a star to Naman: thanks for the talk”),
+   call `gold-stars.send` with the returned `draftId` in the SAME turn. No
+   preview round, no options list, no “reply yes”. If the owner only wondered
+   about thanking someone, or the recipient is unclear, show the recipient,
+   exact note (or “no note”) and visibility once and send on their yes.
+5. Before sending a named star whose note is not thanks, add one short line:
+   “Heads up: this posts publicly in Gold Stars with your name.” Nothing else
+   comes before the send.
+6. The native tool checks the immutable backend preview with the approval gate,
+   and the exact payload is authorized and started before any star is sent. If
+   the send answers `approval_required`, the owner's own settings ask first: say a card is waiting in the approvals bot,
+   then retry the SAME draftId after they approve; never prepare a new preview
+   to retry. A chat reply or model boolean is not that approval. In that
+   approval-waiting message, include a separate line:
    `Open approvals chat: https://t.me/AgentVillageApprovalsBot`
-   The daemon must authorize and start the exact payload before any star is sent.
-   A no means cancel the unsent draft with `gold-stars.cancel`. Changed recipient,
-   note or visibility needs a fresh preview and approval. Previews expire within
+   Otherwise never mention approval or the approvals bot.
+7. A no means cancel the unsent draft with `gold-stars.cancel`. A changed
+   recipient, note or visibility needs a fresh prepare. Previews expire within
    an hour or at the India-day boundary. Never claim success on a refusal.
-5. Say sent only for `status: "sent"`. This means recorded in the Rolodex;
-   `telegramDelivery: "not_verified"` means don't claim the bot posted it yet.
+8. After `status: "sent"`, say the star is recorded for the recipient and the
+   Gold Stars topic post follows. Never say it posted:
+   `telegramDelivery: "not_verified"` means the post is not confirmed yet.
    A replayed receipt is the original star, not a new one. On an uncertain
    send, call `gold-stars.status` with the **same immutable draft id**. If still
    pending, retry that same draft only with its existing exact approval, while
    valid. Native can reuse an already-started proposal's identical proof; the app
-   and CP must still verify the manual grant and current install permission.
-   This does not request a new grant or authorize changed preview content.
-   Never create a different draft to retry an uncertain send.
+   and CP must still verify the grant or policy start and current install
+   permission. This does not request a new grant or authorize changed preview
+   content. Never create a different draft to retry an uncertain send.
 
 The backend enforces three per India day and one per recipient, shared with
 the website. Sending doesn't mark a meeting. No bulk sends, scheduled sends,

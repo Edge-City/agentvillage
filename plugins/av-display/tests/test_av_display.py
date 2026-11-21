@@ -221,13 +221,14 @@ def test_a_mutable_set_is_extended_in_kind(plugin, fake_display):
     assert "terminal" in fake_display._TOOL_VERBS_NO_PREVIEW
 
 
-def test_the_manifest_names_the_plugin_and_registers_nothing(plugin):
+def test_the_manifest_names_the_plugin_and_only_the_output_hook(plugin):
     import yaml
     from pathlib import Path
 
     manifest = yaml.safe_load((Path(plugin.__file__).parent / "plugin.yaml").read_text())
     assert manifest["name"] == "av-display"
-    assert "provides_tools" not in manifest and "provides_hooks" not in manifest
+    assert "provides_tools" not in manifest
+    assert manifest["provides_hooks"] == ["transform_llm_output"]
 
 
 def test_the_index_names_match_index_links(plugin):
@@ -764,3 +765,171 @@ def test_the_command_and_the_note_match_hermes_pinned_source(plugin):
     assert '"Briefly introduce yourself and mention that /help shows available commands. "' in run_turn
     onboarding = (HERMES_REF / "agent" / "onboarding.py").read_text(encoding="utf-8")
     assert re.search(r'\(mention /help "\n\s+"shows commands\)', onboarding)
+
+
+# ── HOT-RASOOL (28 Oct): the model-fallback notice, in words a resident can act on ──────────────────
+
+NOTICE = ("⚠️ Model fallback: anthropic/claude-haiku-4.5 via openrouter unavailable (bad request); "
+          "using openai/gpt-6-luna via openrouter.")
+
+
+class DiagnosticText(str):
+    """As gateway/warning_notifications.py:6 at v2026.9.24."""
+
+
+@pytest.fixture
+def fake_status_output(monkeypatch):
+    """agent.status_output with StatusOutputMixin's two delivery paths as at v2026.9.24 (status_output.py:94-229)."""
+    module = types.ModuleType("agent.status_output")
+
+    class StatusOutputMixin:
+        def __init__(self):
+            self.sent = []
+            self._pending_fallback_notice = None
+            self._retry_status_buffer = []
+
+        def _emit_status(self, message):
+            self.sent.append(message)
+
+        def _emit_diagnostic_status(self, message):
+            self._emit_status(DiagnosticText(message))
+
+        def _emit_pending_fallback_notice(self):
+            notice, self._pending_fallback_notice = self._pending_fallback_notice, None
+            for item in notice or []:
+                self._emit_diagnostic_status(item)
+
+        def _flush_status_buffer(self):
+            messages, self._retry_status_buffer = self._retry_status_buffer, []
+            for kind, msg in messages:
+                self._emit_status(msg)
+
+    module.StatusOutputMixin = StatusOutputMixin
+    monkeypatch.setitem(sys.modules, "agent.status_output", module)
+    return module
+
+
+def test_the_fallback_notice_reads_plainly_on_both_paths(plugin, fake_display, fake_runner, fake_status_output):
+    plugin.register(None)
+    agent = fake_status_output.StatusOutputMixin()
+    agent._pending_fallback_notice = [NOTICE + " Primary retry eligible in ~30 s; recovery is not guaranteed."]
+    agent._emit_pending_fallback_notice()
+    agent._retry_status_buffer = [("status", DiagnosticText(NOTICE))]
+    agent._flush_status_buffer()
+    assert agent.sent == [plugin.FALLBACK_TEXT, plugin.FALLBACK_TEXT]
+    assert all(type(m) is DiagnosticText for m in agent.sent)
+    for text in agent.sent:
+        assert "/new" in text and "luna" not in text and "openrouter" not in text and "via" not in text
+
+
+def test_every_other_status_goes_through_as_given(plugin, fake_display, fake_runner, fake_status_output):
+    plugin.register(None)
+    agent = fake_status_output.StatusOutputMixin()
+    for message in ("⚠️ Rate limited; retrying in 5 s", "Model fallback: no emoji", " ⚠️ Model fallback: x",
+                    DiagnosticText("🔄 Primary model restored"), None, 42):
+        agent._emit_status(message)
+    assert agent.sent == ["⚠️ Rate limited; retrying in 5 s", "Model fallback: no emoji", " ⚠️ Model fallback: x",
+                          "🔄 Primary model restored", None, 42]
+
+
+def test_the_fallback_wrap_is_idempotent_and_fails_open(plugin, fake_display, fake_runner, fake_status_output, monkeypatch):
+    plugin.register(None)
+    wrapped = fake_status_output.StatusOutputMixin._emit_status
+    plugin.register(None)
+    assert fake_status_output.StatusOutputMixin._emit_status is wrapped
+    assert wrapped.__wrapped__.__name__ == "_emit_status"
+    monkeypatch.setattr(plugin, "resident_status", lambda message: 1 / 0)
+    agent = fake_status_output.StatusOutputMixin()
+    agent._emit_status(NOTICE)
+    assert agent.sent == [NOTICE]
+
+
+def test_a_status_output_without_the_method_is_left_alone(plugin, fake_display, fake_runner, monkeypatch):
+    module = types.ModuleType("agent.status_output")
+
+    class StatusOutputMixin:
+        pass
+
+    module.StatusOutputMixin = StatusOutputMixin
+    monkeypatch.setitem(sys.modules, "agent.status_output", module)
+    plugin.register(None)
+    assert not hasattr(StatusOutputMixin, "_emit_status")
+    assert "terminal" in fake_display._TOOL_VERBS_NO_PREVIEW
+
+
+@pytest.mark.skipif(not (HERMES_REF / "agent" / "status_output.py").is_file(), reason="Hermes source not available")
+def test_the_fallback_notice_matches_hermes_pinned_source(plugin):
+    """The notice opens with FALLBACK_NOTICE_PREFIX; it is buffered for both paths; both paths emit through
+    _emit_status, which stays a plain method."""
+    helpers = (HERMES_REF / "agent" / "chat_completion_helpers.py").read_text(encoding="utf-8")
+    assert 'f"⚠️ Model fallback: {old_model} via {old_provider} unavailable "' in helpers
+    assert plugin.FALLBACK_NOTICE_PREFIX == "⚠️ Model fallback:"
+    assert "    agent._buffer_diagnostic_status(notice)\n" in helpers
+    status = (HERMES_REF / "agent" / "status_output.py").read_text(encoding="utf-8")
+    assert "    def _emit_status(self, message: str) -> None:\n" in status
+    assert "        self._emit_status(DiagnosticText(message))\n" in status
+    assert 'replay = {"status": self._emit_status, "warn": self._emit_warning}' in status
+    assert "                self._emit_diagnostic_status(item)\n" in status
+    assert '        self._buffer_retry_message("status", message)\n' in status
+
+
+# ── ODIN tag leak (lead L28908) ───────────────────────────────────────────────────────────────────────
+
+
+class HookCtx(FakeCtx):
+    """FakeCtx plus Hermes's PluginContext.register_hook (hermes_cli/plugins.py:912-914)."""
+
+    def __init__(self):
+        super().__init__()
+        self.hooks = []
+
+    def register_hook(self, hook_name, callback):
+        self.hooks.append((hook_name, callback))
+
+
+def test_register_adds_the_one_output_hook(plugin, fake_display, fake_runner, fake_run_turn):
+    ctx = HookCtx()
+    plugin.register(ctx)
+    assert [name for name, _ in ctx.hooks] == ["transform_llm_output"]
+    assert ctx.hooks[0][1] is plugin.transform_llm_output
+    assert list(ctx.commands) == ["village"]
+
+
+def test_a_reply_line_that_is_only_an_odin_tag_is_dropped(plugin):
+    reply = "<odin_answer>\nODIN says:\nQuiet hours are a fair ask.\n\nRule one bears on it.\n  </odin_answer>  \nHope that helps."
+    out = plugin.transform_llm_output(response_text=reply, session_id="s", model="m", platform="telegram", turn_id="t")
+    assert out == "ODIN says:\nQuiet hours are a fair ask.\n\nRule one bears on it.\nHope that helps."
+    assert plugin.drop_odin_tag_lines("ODIN says:\r\n</odin_answer>\r\nOk.") == "ODIN says:\r\nOk."
+
+
+def test_only_those_two_exact_lines_are_dropped(plugin):
+    # None means Hermes keeps the reply as written (apply_llm_output_transform: first string wins).
+    for reply in (
+        "ODIN says:\nRule one.",                               # no tag
+        "ODIN says: <odin_answer>Rule one.</odin_answer>",     # a tag inside a line of text
+        "<odin_answer> ODIN says:\nRule one.",                 # a tag starting a line of text
+        "<ODIN_ANSWER>\nRule one.",                            # another spelling
+        "<odin-answer>\nRule one.",
+        "<odin_answer>\n</odin_answer>",                       # nothing would be left
+        "", None, 42,
+    ):
+        assert plugin.transform_llm_output(response_text=reply) is None, reply
+    assert plugin.ODIN_TAG_LINES == frozenset({"<odin_answer>", "</odin_answer>"})
+
+
+def test_the_tag_lines_match_ask_odin_and_the_hook_fails_open(plugin, monkeypatch):
+    odin = (Path(plugin.__file__).parents[1] / "av-events" / "_ask_odin.py").read_text(encoding="utf-8")
+    assert 'OPEN_TAG = "<odin_answer>"' in odin and 'CLOSE_TAG = "</odin_answer>"' in odin
+    monkeypatch.setattr(plugin, "drop_odin_tag_lines", lambda text: 1 / 0)
+    assert plugin.transform_llm_output(response_text="<odin_answer>\nx") is None
+    assert plugin.register_odin_tag_hook(types.SimpleNamespace()) is False
+
+
+@pytest.mark.skipif(not (HERMES_REF / "agent" / "turn_finalizer.py").is_file(), reason="Hermes source not available")
+def test_the_output_hook_matches_hermes_pinned_source():
+    """transform_llm_output is a valid hook, called with response_text, and the first non-empty string wins."""
+    plugins_py = (HERMES_REF / "hermes_cli" / "plugins.py").read_text(encoding="utf-8")
+    assert '"transform_llm_output", "pre_llm_call", "post_llm_call",' in plugins_py
+    finalizer = (HERMES_REF / "agent" / "turn_finalizer.py").read_text(encoding="utf-8")
+    assert '        "transform_llm_output", logger,\n        response_text=final_response,\n' in finalizer
+    assert "        if isinstance(_hook_result, str) and _hook_result:\n" in finalizer
