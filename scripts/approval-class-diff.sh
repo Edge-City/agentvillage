@@ -186,7 +186,8 @@ set -e
 # call unchanged since the previous release warns instead of halting every release; any
 # other finding, or a pending acceptance on a NEW or CHANGED call, still fails.
 if [ "$status" = 1 ] && [ "$pending" = warn ]; then
-  if tbun "$here/approval-class-diff/pending-acceptance.ts" --json "$out/class-diff.json" --stderr "$work/check.err" >"$work/pending.txt"; then
+  if tbun "$here/approval-class-diff/pending-acceptance.ts" --json "$out/class-diff.json" --stderr "$work/check.err" \
+    --head-corpus "$work/corpus-head.json" --tag-corpus "$work/corpus-tag.json" >"$work/pending.txt"; then
     cat "$work/pending.txt"
     { echo; sed 's/^::warning:://' "$work/pending.txt"; } >>"$out/class-diff.md"
     status=0

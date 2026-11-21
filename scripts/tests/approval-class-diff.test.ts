@@ -753,6 +753,38 @@ describe("B-167N fold 1 S2: a pending accepted_at on an UNCHANGED call is the on
     // A finding naming a key no row carries: no waiver.
     expect(pendingOnly(doc([row()], [finding(PENDING_MSG, "village#forkicks.menu")]), NEWCALLS_ERR).ok).toBe(false);
   });
+
+  test("review S1: a propose-only row is waived only when its site's file, class and accepted answers are unchanged since the previous release", async () => {
+    type Corpora = { head: unknown; tag: unknown } | null;
+    const { pendingOnly } = (await import("../approval-class-diff/pending-acceptance")) as { pendingOnly: (d: unknown, err: string, c?: Corpora) => { ok: boolean; waived: string[]; why: string[] } };
+    const PKEY = "propose#plugins/av-events/_share_vote.py:1119#digest.share";
+    const MSG = 'LIMITING (propose decision card): awaiting acceptance: accepted_at "YYYY-MM-DD" is not a YYYY-MM-DD date (Carter fills it)';
+    const prow = (over: Entry = {}): Entry => ({ key: PKEY, kind: "propose", status: "unchanged", entry: true, blocks: [MSG], ...over });
+    const site = (line: number, accepts: string[] | null, classes = ["digest.share", "village.vote"]): Entry => ({ plugin: "av-events", file: "plugins/av-events/_share_vote.py", line, class: null, classes, accepts });
+    const ALL = ["autonomous", "requested", "supervised"];
+    const corpora = (head: Entry[], tag: Entry[]): Corpora => ({ head: { proposes: head }, tag: { proposes: tag } });
+    const d = doc([prow()], [finding(MSG, PKEY)]);
+    // The site moved down the file since the release (other lines changed); its class and answers did not: waived.
+    const same = pendingOnly(d, NEWCALLS_ERR, corpora([site(1077, ["autonomous", "supervised"]), site(1119, ALL)], [site(1001, ["autonomous", "supervised"]), site(1040, ALL)]));
+    expect([same.ok, same.waived]).toEqual([true, [PKEY]]);
+    // Without the corpora a propose-only row is never waived (fail closed).
+    expect(pendingOnly(d, NEWCALLS_ERR).ok).toBe(false);
+    expect(pendingOnly(d, NEWCALLS_ERR, { head: {}, tag: {} }).ok).toBe(false);
+    // The code after the propose now goes on with an answer it did not at the release: no waiver.
+    const wider = pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ["autonomous", "supervised"])]));
+    expect(wider.ok).toBe(false);
+    expect(wider.why.join(";")).toContain("the site changed");
+    // The class is new at this file (the release's sites carried another class): no waiver.
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL, ["village.vote"])])).ok).toBe(false);
+    // A second site with the same class and answers appeared since the release: no waiver.
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, ALL), site(1200, ALL)], [site(1040, ALL)])).ok).toBe(false);
+    // The row's own line holds no such site, or its answers cannot be read: no waiver.
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1120, ALL)], [site(1040, ALL)])).ok).toBe(false);
+    expect(pendingOnly(d, NEWCALLS_ERR, corpora([site(1119, null)], [site(1040, null)])).ok).toBe(false);
+    // An empty accepted_by on a propose-only entry is never waived, unchanged site or not.
+    const by = "LIMITING (propose decision card): awaiting acceptance: accepted_by is empty (Carter accepts by name)";
+    expect(pendingOnly(doc([prow({ blocks: [by] })], [finding(by, PKEY)]), NEWCALLS_ERR, corpora([site(1119, ALL)], [site(1040, ALL)])).ok).toBe(false);
+  });
 });
 
 describe("B-167N fold 1 N4: live-compare keys calls by approval.md's closed-set rule and never passes an empty run", () => {

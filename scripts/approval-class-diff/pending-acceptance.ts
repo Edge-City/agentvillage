@@ -19,7 +19,16 @@
  *   alone, the class-diff blocked nothing, and no tools line is newly shadowed.
  * Anything this cannot read is no waiver (fail closed).
  *
+ * Review S1 (approval.md 412365ad): a propose-only entry declares a daemon propose behind no hooked
+ * call; its row key is `propose#<file>:<line>#<class>`. The check calls such a row unchanged when a
+ * site in that file with that class existed at the previous release, and does not compare the answers
+ * the code goes on with. So for these rows the waiver asks the same question of the site itself: in
+ * this tree's corpus and in the previous release's, the file holds the same number of propose sites
+ * of that class going on with the same accepted answers, and the row's own line is one of them. Without
+ * both corpora, or with any difference, a propose-only row is no waiver (fail closed).
+ *
  * Usage: bun scripts/approval-class-diff/pending-acceptance.ts --json <class-diff.json> --stderr <the check's stderr>
+ *          [--head-corpus <this tree's corpus.json> --tag-corpus <the previous release's corpus.json>]
  * Exit: 0 waived (prints ::warning:: lines), 1 not waivable, 2 usage.
  */
 import { readFileSync } from "node:fs";
@@ -35,13 +44,47 @@ import { readFileSync } from "node:fs";
 const PENDING = /^LIMITING \([^()]*\): awaiting acceptance: accepted_at (?:"[^"\\]*"|null) is not a YYYY-MM-DD date \(Carter fills it\)$/u;
 const NEW_CALLS_LINE = /^\d+ new-calls finding\(s\) \(B-167N\)/u;
 
-type Row = { key?: unknown; status?: unknown; entry?: unknown; blocks?: unknown };
+type Row = { key?: unknown; kind?: unknown; status?: unknown; entry?: unknown; blocks?: unknown };
+type Site = { file?: unknown; line?: unknown; class?: unknown; classes?: unknown; accepts?: unknown };
+/** The two corpora (each extractor output's `proposes`), for a propose-only row. */
+export type Corpora = { head: unknown; tag: unknown } | null;
+
+const sitesOf = (corpus: unknown): Site[] | null => {
+  const p = (corpus as { proposes?: unknown } | null)?.proposes;
+  return Array.isArray(p) ? (p as Site[]) : null;
+};
+const carries = (s: Site, cls: string): boolean => s.class === cls || (Array.isArray(s.classes) && (s.classes as unknown[]).includes(cls));
+const answers = (s: Site): string | null => (Array.isArray(s.accepts) && (s.accepts as unknown[]).every((a) => typeof a === "string") ? JSON.stringify([...(s.accepts as string[])].sort()) : null);
+
+/**
+ * A propose-only row's site is unchanged since the previous release: its own line holds a propose of
+ * its class whose answers can be read, and the file holds as many sites of that class with those
+ * answers at the release as now. Returns the reason it is not, or null.
+ */
+export function proposeSiteChanged(key: string, corpora: Corpora): string | null {
+  const m = key.match(/^propose#(.+):(\d+)#([^#]+)$/u);
+  if (m === null) return `a propose row key not of the form propose#<file>:<line>#<class>: ${key}`;
+  const [, file, line, cls] = m as unknown as [string, string, string, string];
+  if (corpora === null) return "a propose-only row is judged unchanged only against both corpora, and none was given (fail closed)";
+  const head = sitesOf(corpora.head);
+  const tag = sitesOf(corpora.tag);
+  if (head === null || tag === null) return "a corpus without its proposes list (fail closed)";
+  const own = head.filter((s) => s.file === file && Number(s.line) === Number(line) && carries(s, cls));
+  if (own.length !== 1) return `${file}:${line} holds ${String(own.length)} propose site(s) of ${cls} in this tree's corpus, not one`;
+  const want = answers(own[0]!);
+  if (want === null) return `the answers the code goes on with after ${file}:${line} cannot be read (fail closed)`;
+  const like = (sites: Site[]) => sites.filter((s) => s.file === file && carries(s, cls) && answers(s) === want).length;
+  if (like(tag) === 0 || like(tag) !== like(head)) {
+    return `${file} has ${String(like(head))} propose site(s) of ${cls} going on with ${want} now and ${String(like(tag))} at the previous release: the site changed (file, class or accepted answers)`;
+  }
+  return null;
+}
 type Finding = { key?: unknown; message?: unknown };
 
 /** approval.md's keyLabel: a recipe key's NUL separator shown as ": ". */
 const label = (key: unknown): string => String(key).replace("\u0000", ": ");
 
-export function pendingOnly(doc: unknown, stderr: string): { ok: boolean; waived: string[]; why: string[] } {
+export function pendingOnly(doc: unknown, stderr: string, corpora: Corpora = null): { ok: boolean; waived: string[]; why: string[] } {
   const why: string[] = [];
   const d = (doc ?? {}) as { summary?: { blocking?: unknown }; shadowed?: unknown; newCalls?: { rows?: unknown; findings?: unknown } };
   const rows = Array.isArray(d.newCalls?.rows) ? (d.newCalls.rows as Row[]) : null;
@@ -69,6 +112,13 @@ export function pendingOnly(doc: unknown, stderr: string): { ok: boolean; waived
       why.push(`${key}: the call is ${String(row.status)} since the previous release; a new limitation never ships unaccepted`);
       continue;
     }
+    if (row.kind === "propose" || key.startsWith("propose#")) {
+      const changed = proposeSiteChanged(key, corpora);
+      if (changed !== null) {
+        why.push(`${key}: ${changed}`);
+        continue;
+      }
+    }
     const blocks = Array.isArray(row.blocks) ? row.blocks.map(String) : [];
     if (!blocks.includes(message) || blocks.some((b) => !PENDING.test(b))) {
       why.push(`${key}: the row carries other blocks`);
@@ -87,20 +137,24 @@ function main(): void {
   };
   const jsonPath = val("--json");
   const errPath = val("--stderr");
+  const headCorpus = val("--head-corpus");
+  const tagCorpus = val("--tag-corpus");
   if (jsonPath === undefined || errPath === undefined) {
     process.stderr.write("usage: bun scripts/approval-class-diff/pending-acceptance.ts --json <class-diff.json> --stderr <the check's stderr>\n");
     process.exit(2);
   }
   let doc: unknown;
   let err: string;
+  let corpora: Corpora = null;
   try {
     doc = JSON.parse(readFileSync(jsonPath, "utf8"));
     err = readFileSync(errPath, "utf8");
+    if (headCorpus !== undefined && tagCorpus !== undefined) corpora = { head: JSON.parse(readFileSync(headCorpus, "utf8")), tag: JSON.parse(readFileSync(tagCorpus, "utf8")) };
   } catch (error) {
     process.stdout.write(`pending-acceptance: not waivable, an input could not be read: ${String(error)}\n`);
     process.exit(1);
   }
-  const r = pendingOnly(doc, err);
+  const r = pendingOnly(doc, err, corpora);
   if (!r.ok) {
     process.stdout.write(`pending-acceptance: not waivable: ${r.why.join("; ")}\n`);
     process.exit(1);
