@@ -269,9 +269,11 @@ describe("the class-diff job and script (static)", () => {
     expect(order?.propose?.decision).toBe("card");
     expect(order?.propose?.card_style).toBe("minimal");
     expect(order?.propose?.key).toBe("marketplace.app.action:forkicks.order.confirm:" + String(order?.input?.draftId));
-    // Carter's INTERIM acceptance (22 Nov 2026, approval.md#679) adds its terms after the rule;
-    // the rule stays first, and the card build removes them with the acceptance.
-    expect(order?.reason).toMatch(/^a purchase always asks(\. INTERIM \(Carter, \d{1,2} [A-Z][a-z]{2} \d{4}\): .+)?$/);
+    // The card build (overlay#629 proposes with --irreversible, approval.md#681 floors the key): a card in
+    // every cell, and Carter's INTERIM terms (22 Nov 2026, approval.md#679) gone with the outcome they accepted.
+    expect((order?.propose as Record<string, unknown> | undefined)?.irreversible).toBe(true);
+    expect(order?.propose?.matrix).toEqual({ ask: "card", autonomous: "card", "supervised-retro": "card", "supervised-live": "card", manual: "card" });
+    expect(order?.reason).toBe("a purchase always asks");
     // B-172 cancelled: EdgeOS RSVP runs on its own, no card, today.
     const rsvp = doc.entries.filter((e) => e.file === "skills/edgeos/SKILL.md" && /edgeos\.ts rsvp/.test(e.command ?? ""));
     expect(rsvp.length).toBe(2);
