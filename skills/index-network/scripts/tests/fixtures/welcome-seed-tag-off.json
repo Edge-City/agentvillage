@@ -1,0 +1,1004 @@
+{
+ "_comment": "F-28: what each welcome-seed-tag-scenarios.ts scenario leaves (requests, files under memory/, stdout, stderr) as origin/main 581056b7 printed them, before the seed tag existed (made by running the scenarios against that commit's welcome.ts). welcome-seed-tag.test.ts holds the switch off to these bytes. Made-up lines and ids only.",
+ "base": "581056b7cf35dc352fee5ec037f15aa04b4ed736",
+ "scenarios": {
+  "seedThree": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Hiring a founding engineer who loves Rust\n- Want advice on raising a seed round in India\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":3,\"intents_seeded\":3,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Want advice on raising a seed round in India\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":4,\"created\":3,\"failed\":0,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000101\",\"dddddddd-0000-4000-8000-000000000102\",\"dddddddd-0000-4000-8000-000000000103\"]}\n"
+   }
+  },
+  "seedOneDefaultMode": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, this intent is active:\n\n- Looking for people building agent memory\n\nI'll use this to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":1,\"created\":1,\"failed\":0,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000101\"]}\n",
+    "memory/welcome-state.json": "{\"welcomeSent\":true,\"sentAt\":\"2026-11-22T06:00:00.000Z\"}\n"
+   }
+  },
+  "seedPaused": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are paused:\n\n- Looking for people building agent memory\n- Hiring a founding engineer who loves Rust\n\nThese intents will stay paused until you tell me to publish them.\n\nTell me when you'd like to publish, change, or drop one, or add a new intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":2,\"intents_seeded\":2,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "pause_intent",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"pause_intent\",\"arguments\":{\"intentId\":\"dddddddd-0000-4000-8000-000000000101\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "pause_intent",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"pause_intent\",\"arguments\":{\"intentId\":\"dddddddd-0000-4000-8000-000000000102\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":2,\"failed\":0,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000101\",\"dddddddd-0000-4000-8000-000000000102\"]}\n"
+   }
+  },
+  "refusedLine": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Want advice on raising a seed round in India\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":2,\"intents_seeded\":2,\"seed_failed\":1}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Want advice on raising a seed round in India\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":3,\"created\":2,\"failed\":1,\"done\":true,\"refused\":[{\"line\":\"Hiring a founding engineer who loves Rust\",\"feedback\":\"Say who you want to meet.\",\"code\":\"intent_needs_revision\",\"at\":\"2026-11-22T06:00:00.000Z\",\"keys\":[\"success\",\"code\",\"error\",\"feedback\",\"recovery\"]}],\"ids\":[\"dddddddd-0000-4000-8000-000000000101\",\"dddddddd-0000-4000-8000-000000000103\"]}\n"
+   }
+  },
+  "allRefused": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nI've read what you shared at signup, but you don't have an active intent yet. Tell me what you'd like me to look for first.\n\nI'll turn it into an intent for you to confirm, then look for people and events that fit.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"context\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":2}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":0,\"failed\":2,\"done\":true,\"refused\":[{\"line\":\"Looking for people building agent memory\",\"feedback\":\"Say who you want to meet.\",\"code\":\"intent_needs_revision\",\"at\":\"2026-11-22T06:00:00.000Z\",\"keys\":[\"success\",\"code\",\"error\",\"feedback\",\"recovery\"]},{\"line\":\"Hiring a founding engineer who loves Rust\",\"feedback\":\"Say who you want to meet.\",\"code\":\"intent_needs_revision\",\"at\":\"2026-11-22T06:00:00.000Z\",\"keys\":[\"success\",\"code\",\"error\",\"feedback\",\"recovery\"]}]}\n"
+   }
+  },
+  "noIdLanded": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Hiring a founding engineer who loves Rust\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":2,\"intents_seeded\":2,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":2,\"failed\":0,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000102\"],\"noId\":1}\n"
+   }
+  },
+  "noIdNotLanded": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nI've read what you shared at signup, but you don't have an active intent yet. Tell me what you'd like me to look for first.\n\nI'll turn it into an intent for you to confirm, then look for people and events that fit.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"context\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":1}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":1,\"created\":0,\"failed\":1,\"done\":true}\n"
+   }
+  },
+  "failedCreate": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, this intent is active:\n\n- Hiring a founding engineer who loves Rust\n\nI'll use this to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":1,\"intents_seeded\":1,\"seed_failed\":1}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":1,\"failed\":1,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000102\"]}\n"
+   }
+  },
+  "malformedIds": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Hiring a founding engineer who loves Rust\n- Want advice on raising a seed round in India\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":3,\"intents_seeded\":3,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Want advice on raising a seed round in India\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":3,\"created\":3,\"failed\":0,\"done\":true,\"ids\":[\"EEEEEEEE-0000-4000-8000-00000000000A\"],\"noId\":2}\n"
+   }
+  },
+  "duplicateIds": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Want advice on raising a seed round in India\n- Hiring a founding engineer who loves Rust\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":3,\"intents_seeded\":3,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Want advice on raising a seed round in India\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":3,\"created\":3,\"failed\":0,\"done\":true,\"ids\":[\"ffffffff-0000-4000-8000-000000000001\",\"dddddddd-0000-4000-8000-000000000300\"]}\n"
+   }
+  },
+  "caseDuplicateIds": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, these intents are active:\n\n- Looking for people building agent memory\n- Hiring a founding engineer who loves Rust\n\nI'll use these to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":2,\"intents_seeded\":2,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":2,\"failed\":0,\"done\":true,\"ids\":[\"ABCDEF0123456789\",\"abcdef0123456789\"]}\n"
+   }
+  },
+  "shortHexId": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, this intent is active:\n\n- Looking for people building agent memory\n\nI'll use this to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":1,\"intents_seeded\":1,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":1,\"created\":1,\"failed\":0,\"done\":true,\"ids\":[\"abcd\"]}\n"
+   }
+  },
+  "v2AndReason": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nBased on what you shared at signup, this intent is active:\n\n- Looking for people building agent memory\n\nI'll use this to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":1,\"intents_seeded\":1,\"seed_failed\":1,\"seed_codes\":[\"create-http-500\"]}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":1,\"failed\":1,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000101\"]}\n"
+   }
+  },
+  "listed": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\n\n- Already an intent of mine\n\nI'll use this to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":1,\"intents_seeded\":0,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {}
+  },
+  "unreachableNoKey": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nI can't load your intents right now. Tell me what you're looking for, and I'll still help you find relevant people and events.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"unreachable\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0,\"reason\":\"no_key\"}\n",
+   "requests": [],
+   "files": {}
+  },
+  "markerExists": {
+   "stdout": "Welcome to Edge City India ☀️\n\nI'm Edge, your personal agent for Edge City India. It's a pleasure to meet you.\n\nWhat can you ask me?\n• What events are happening tomorrow?\n• Please RSVP me to [event name] on the calendar.\nYou can also send me Telegram voice notes.\n\nTo complete your onboarding\nExplore the Agent Village app: https://agents.edgecity.live/\n\n1) Rolodex: browse people and track who you've met.\n2) Send someone a gold star to show gratitude (three per day).\n3) Skylight: make an avatar for me in the virtual village.\n\nYour intents\nI've read what you shared at signup, but you don't have an active intent yet. Tell me what you'd like me to look for first.\n\nI'll turn it into an intent for you to confirm, then look for people and events that fit.\n\nI'm excited for our time at Edge City India together!\n",
+   "stderr": "{\"welcome\":1,\"fallback\":\"context\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-21T06:00:00.000Z\",\"selected\":1,\"created\":1,\"failed\":0,\"done\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000900\"]}\n"
+   }
+  },
+  "reseed": {
+   "stdout": "",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":3,\"intents_seeded\":3,\"seed_failed\":0}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Want advice on raising a seed round in India\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-reseed-2026-11-22T06-00-00-000Z.json": "{\"reseededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":3,\"created\":3,\"failed\":0,\"codes\":[],\"ids\":[\"dddddddd-0000-4000-8000-000000000101\",\"dddddddd-0000-4000-8000-000000000102\",\"dddddddd-0000-4000-8000-000000000103\"]}\n"
+   }
+  },
+  "reseedRefused": {
+   "stdout": "",
+   "stderr": "{\"welcome\":1,\"fallback\":\"none\",\"intents_listed\":1,\"intents_seeded\":1,\"seed_failed\":1,\"seed_codes\":[\"intent_needs_revision\"]}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Looking for people building agent memory\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/api/intents",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "fake-index-key-not-real"
+     },
+     "body": "{\"description\":\"Hiring a founding engineer who loves Rust\",\"sourceType\":\"agentvillage\"}"
+    },
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {
+    "memory/welcome-reseed-2026-11-22T06-00-00-000Z.json": "{\"reseededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":1,\"failed\":1,\"codes\":[\"intent_needs_revision\"],\"refused\":[{\"line\":\"Looking for people building agent memory\",\"feedback\":\"Say who you want to meet.\",\"code\":\"intent_needs_revision\",\"at\":\"2026-11-22T06:00:00.000Z\",\"keys\":[\"success\",\"code\",\"error\",\"feedback\",\"recovery\"]}],\"refusedMerged\":true,\"ids\":[\"dddddddd-0000-4000-8000-000000000102\"]}\n",
+    "memory/welcome-seed.json": "{\"seededAt\":\"2026-11-22T06:00:00.000Z\",\"selected\":2,\"created\":1,\"failed\":1,\"done\":true,\"refused\":[{\"line\":\"Looking for people building agent memory\",\"feedback\":\"Say who you want to meet.\",\"code\":\"intent_needs_revision\",\"at\":\"2026-11-22T06:00:00.000Z\",\"keys\":[\"success\",\"code\",\"error\",\"feedback\",\"recovery\"]}]}\n"
+   }
+  },
+  "reseedDryRun": {
+   "stdout": "",
+   "stderr": "{\"welcome\":1,\"fallback\":\"questions\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0,\"seed_codes\":[\"would_create\",\"would_create\"]}\n",
+   "requests": [
+    {
+     "url": "https://index-mcp.fake.test/mcp",
+     "method": "POST",
+     "headers": {
+      "accept": "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-method": "tools/call",
+      "mcp-name": "list_intents",
+      "mcp-protocol-version": "2026-07-28",
+      "x-api-key": "fake-index-key-not-real",
+      "x-index-surface": "telegram"
+     },
+     "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools/call\",\"params\":{\"name\":\"list_intents\",\"arguments\":{\"limit\":20},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agentvillage-index-scripts\",\"version\":\"1.0.0\"}}}}"
+    }
+   ],
+   "files": {}
+  },
+  "reseedAlreadyRan": {
+   "stdout": "",
+   "stderr": "{\"welcome\":1,\"fallback\":\"unreachable\",\"intents_listed\":0,\"intents_seeded\":0,\"seed_failed\":0,\"seed_codes\":[\"reseed_already_ran\"]}\n",
+   "requests": [],
+   "files": {
+    "memory/welcome-reseed-2026-11-21T06-00-00-000Z.json": "{\"reseededAt\":\"2026-11-21T06:00:00.000Z\",\"selected\":1,\"created\":1,\"failed\":0,\"codes\":[]}\n"
+   }
+  }
+ }
+}

@@ -34,7 +34,10 @@
  * else (index-mcp.ts createIntentDirect: no `/prepare`, no
  * `preparationReceipt`, so Index stores the line as written and runs no
  * admission); a line that repeats another one, or any intent Index lists
- * whatever its status, is skipped.
+ * whatever its status, is skipped. F-28: with `AV_WELCOME_SEED_TAG=1`
+ * (seedTagOn) each of these creates, and a `--reseed`'s, also carries
+ * `sourceId: SEED_SOURCE_ID`, one fixed label in uuid form that marks an
+ * intent the welcome seeded; no other create in the overlay carries it.
  * `AV_WELCOME_SEED_MODE=paused` pauses each one it created (`pause_intent`).
  * It then lists the intents again (the creates leave it
  * WELCOME_RELIST_RESERVE_MS of the budget) and the welcome names the seeded
@@ -86,12 +89,21 @@
  * paused) and `seed_failed` the lines it meant to seed and could not (both 0
  * when nothing was attempted). It never carries text. It always exits 0.
  *
- * Two switches add keys after these five, each off by default (unset: the
+ * Three switches add keys after these five, each off by default (unset: the
  * line is exactly the one above), because the data door refuses a
  * welcome.sent with a key it does not know and an older control plane refuses
  * the whole line with an extra key: each goes on only after the data release
  * and the control plane's pass-through. `AV_SEED_TRAILER_V2=1` (seedTrailerV2)
  * adds `seed_codes` and `seed_recovery_kinds` when the seed left any.
+ * `AV_WELCOME_SEED_TAG=1` (seedTagOn, F-28; environment, else
+ * `$HERMES_HOME/.env`) adds, after those and before `reason`, `seed_ids`: the
+ * Index ids of the intents this run created, in order, as the seed marker's
+ * `ids` hold them, lower-cased, repeats dropped, at most SEED_IDS_TRAILER_MAX
+ * (trailerSeedIds); left out when the run created none or Index named no id.
+ * Ids only, never a text or title. The same switch tags the seed's creates
+ * (above). A control plane before F-28's pass-through drops the whole trailer
+ * with this key (telegram-onboarding.js trailerLine: any other extra key is
+ * no trailer), so it goes on only after that release.
  * `AV_WELCOME_REASON=1` (welcomeReasonOn, U-1a; environment, else
  * `$HERMES_HOME/.env`; the control plane sets it per tenant) adds, last and
  * only when `fallback` is `unreachable`, `"reason":"no_key|list_failed|bad_answer"`
@@ -139,6 +151,7 @@ import {
   type IntentRefusal,
   type RecoveryQuestion,
   AGENTVILLAGE_SOURCE_TYPE,
+  INTENT_ID,
   IndexMcpError,
   callIndexTool,
   createIntentDirect,
@@ -214,6 +227,18 @@ export const WELCOME_SEED_POLL_MS = 500;
  * resident text.
  */
 export const SEED_SOURCE_TYPE = AGENTVILLAGE_SOURCE_TYPE;
+/**
+ * F-28: the `sourceId` on every intent the welcome's seed creates (the first
+ * seed and `--reseed`: seedLines), and on no other create, while
+ * AV_WELCOME_SEED_TAG is on (seedTagOn). It marks an intent as one the
+ * welcome planted from the resident's selected intentions, so anyone holding
+ * the resident's key can list the seeds by it, with no text and no clock. One
+ * fixed label on every box, generated once, not a secret; uuid form (a
+ * version-4 uuid), so a reader that takes only a uuid takes it, and it never
+ * equals the version-7 uuid the av-events plugin sends as its intentions'
+ * own `sourceId`.
+ */
+export const SEED_SOURCE_ID = "ec9911a3-b128-4220-86be-c9ef8ccf0cdc";
 /** SEED-REVISION: the line the default run prints after ALREADY_SENT, once, when Index refused seed lines. */
 export const REFUSED_SEEDS = "REFUSED_SEEDS";
 /** Code points of a refused line kept and printed at most (the resident's own text, cut at a word). */
@@ -353,7 +378,14 @@ export function unreachableReason(err: unknown): UnreachableReason {
  * left (seedCodes) and the kinds of Index's recovery questions, both for the
  * trailer behind AV_SEED_TRAILER_V2 (codes only, never text).
  */
-export type SeedCounts = { intents_seeded: number; seed_failed: number; seed_codes?: string[]; seed_recovery_kinds?: RecoveryQuestion["kind"][] };
+export type SeedCounts = {
+  intents_seeded: number;
+  seed_failed: number;
+  seed_codes?: string[];
+  seed_recovery_kinds?: RecoveryQuestion["kind"][];
+  /** F-28, only while AV_WELCOME_SEED_TAG is on: the ids this run created (SeedIds `ids`), for the trailer's `seed_ids`. */
+  seed_ids?: string[];
+};
 const NO_SEED: SeedCounts = { intents_seeded: 0, seed_failed: 0 };
 
 /** The branch a welcome took, as `--draft` reports it on stderr; `reason` only on `unreachable`, from its read (U-1a). */
@@ -370,6 +402,7 @@ export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED, con
     seed_failed: seed.seed_failed,
     ...(seed.seed_codes?.length ? { seed_codes: seed.seed_codes } : {}),
     ...(seed.seed_recovery_kinds?.length ? { seed_recovery_kinds: seed.seed_recovery_kinds } : {}),
+    ...(seed.seed_ids?.length ? { seed_ids: seed.seed_ids } : {}),
   };
   if (read.kind === "unreachable") return { fallback: "unreachable", intents_listed: 0, ...counts, ...(read.reason ? { reason: read.reason } : {}) };
   if (read.titles.length === 0) return { fallback: context ? "context" : "questions", intents_listed: 0, ...counts };
@@ -379,11 +412,14 @@ export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED, con
 /**
  * The `--draft` stderr line for `branch`, without its newline: these five keys
  * in this order, always; with `v2` (seedTrailerV2), then `seed_codes` and
- * `seed_recovery_kinds` when the seed left any; with `withReason`
- * (welcomeReasonOn), last, `reason` when the branch is `unreachable` and
- * carries one of UNREACHABLE_REASONS; and nothing else, ever.
+ * `seed_recovery_kinds` when the seed left any; with `withSeedIds`
+ * (seedTagOn, F-28), then `seed_ids` (trailerSeedIds) when the run created an
+ * intent Index named an id for; with `withReason` (welcomeReasonOn), last,
+ * `reason` when the branch is `unreachable` and carries one of
+ * UNREACHABLE_REASONS; and nothing else, ever.
  */
-export function draftTrailer(branch: WelcomeBranch, v2 = false, withReason = false): string {
+export function draftTrailer(branch: WelcomeBranch, v2 = false, withReason = false, withSeedIds = false): string {
+  const seedIds = withSeedIds ? trailerSeedIds(branch.seed_ids) : [];
   return JSON.stringify({
     welcome: 1,
     fallback: branch.fallback,
@@ -393,6 +429,8 @@ export function draftTrailer(branch: WelcomeBranch, v2 = false, withReason = fal
     // SEED-REJECT part 3b, behind AV_SEED_TRAILER_V2 (seedTrailerV2): codes only, each key only when non-empty.
     ...(v2 && branch.seed_codes?.length ? { seed_codes: branch.seed_codes.slice(0, SEED_CODES_MAX) } : {}),
     ...(v2 && branch.seed_recovery_kinds?.length ? { seed_recovery_kinds: branch.seed_recovery_kinds.slice(0, SEED_RECOVERY_KINDS_MAX) } : {}),
+    // F-28, behind AV_WELCOME_SEED_TAG (seedTagOn): ids only, only when there is one, before `reason`.
+    ...(seedIds.length ? { seed_ids: seedIds } : {}),
     // U-1a, behind AV_WELCOME_REASON (welcomeReasonOn): a code only, on the unreachable branch only, last.
     ...(withReason && branch.fallback === "unreachable" && branch.reason !== undefined && (UNREACHABLE_REASONS as readonly string[]).includes(branch.reason)
       ? { reason: branch.reason }
@@ -421,6 +459,39 @@ export function seedTrailerV2(home: string): boolean {
  */
 export function welcomeReasonOn(home: string): boolean {
   return envOrDotenv("AV_WELCOME_REASON", home).trim() === "1";
+}
+
+/**
+ * F-28: `AV_WELCOME_SEED_TAG` (environment, else `$HERMES_HOME/.env`) is `1`:
+ * each create of the welcome's seed and of `--reseed` carries `sourceId:
+ * SEED_SOURCE_ID`, and the trailer carries `seed_ids`. Off by default, read
+ * as AV_WELCOME_REASON is: a control plane before F-28's pass-through drops
+ * the whole trailer for the unknown key, so it goes on, per tenant from the
+ * control plane, only after that release.
+ */
+export function seedTagOn(home: string): boolean {
+  return envOrDotenv("AV_WELCOME_SEED_TAG", home).trim() === "1";
+}
+
+/** The most ids the trailer's `seed_ids` names: a run creates at most MAX_LISTED (the control plane's TRAILER_MAX_SEEDED). */
+export const SEED_IDS_TRAILER_MAX = 3;
+
+/**
+ * F-28: the trailer's `seed_ids` for the ids a run created (its seed
+ * marker's `ids`): each lower-cased, only those of the id form the marker
+ * keeps (index-mcp.ts INTENT_ID: a uuid or 4 to 32 hex), a repeat (after
+ * lower-casing) dropped, in order, at most SEED_IDS_TRAILER_MAX. Ids only.
+ * Pure.
+ */
+export function trailerSeedIds(ids: readonly unknown[] | undefined): string[] {
+  const out: string[] = [];
+  for (const id of ids ?? []) {
+    if (out.length === SEED_IDS_TRAILER_MAX) break;
+    if (typeof id !== "string" || !INTENT_ID.test(id)) continue;
+    const lower = id.toLowerCase();
+    if (!out.includes(lower)) out.push(lower);
+  }
+  return out;
 }
 
 function homeFrom(argv: string[]): string {
@@ -823,7 +894,9 @@ type SeedLineInput = { text: string; title: string; key: string };
  */
 async function seedLines(home: string, target: IndexMcpTarget, clock: Clock, lines: SeedLineInput[], now: Date) {
   const mode = seedMode(home);
-  const made = (await Promise.allSettled(lines.map((line) => seedOne(target, clock, mode, line.text)))).map((r) =>
+  // F-28: the welcome's own tag on each create, only while AV_WELCOME_SEED_TAG is on.
+  const tagged = seedTagOn(home);
+  const made = (await Promise.allSettled(lines.map((line) => seedOne(target, clock, mode, line.text, tagged ? SEED_SOURCE_ID : undefined)))).map((r) =>
     r.status === "fulfilled" ? r.value : { out: null, code: "error" },
   );
   const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
@@ -848,7 +921,7 @@ async function seedLines(home: string, target: IndexMcpTarget, clock: Clock, lin
     if (shaped !== null && codes.length < SEED_CODES_MAX) codes.push(shaped);
   });
   const kinds = refused.flatMap((r) => (r.recovery ?? []).map((q) => q.kind)).slice(0, SEED_RECOVERY_KINDS_MAX);
-  return { mode, again, seeded, failed, refused, codes, kinds };
+  return { mode, again, seeded, failed, refused, codes, kinds, tagged };
 }
 
 /**
@@ -898,10 +971,17 @@ async function seedWelcome(
     return unchanged;
   }
 
-  const { mode, again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
-  recordSeed(home, now, selected.length, seeded.length, failed, refused, seedIdsOf(seeded));
+  const { mode, again, seeded, failed, refused, codes, kinds, tagged } = await seedLines(home, target, clock, lines, now);
+  const made = seedIdsOf(seeded);
+  recordSeed(home, now, selected.length, seeded.length, failed, refused, made);
   // SEED-REJECT part 3b: the codes ride on the branch only behind AV_SEED_TRAILER_V2, so with it off the branch is today's.
-  const seed: SeedCounts = { intents_seeded: seeded.length, seed_failed: failed, ...(seedTrailerV2(home) ? { seed_codes: codes, seed_recovery_kinds: kinds } : {}) };
+  // F-28: the marker's ids ride on it only behind AV_WELCOME_SEED_TAG, likewise.
+  const seed: SeedCounts = {
+    intents_seeded: seeded.length,
+    seed_failed: failed,
+    ...(seedTrailerV2(home) ? { seed_codes: codes, seed_recovery_kinds: kinds } : {}),
+    ...(tagged ? { seed_ids: made.ids } : {}),
+  };
 
   if (seeded.length === 0) return { read: again.read.kind === "listed" ? again.read : first.read, seed };
   // A seeded intent's row in the second list: by the id its create answer named, else by the text sent.
@@ -925,7 +1005,8 @@ async function seedWelcome(
 /**
  * One selected line: one direct create (createIntentDirect: `POST
  * <origin>/api/intents` with its text as `description` and SEED_SOURCE_TYPE
- * as `sourceType`, nothing else, no `/prepare`, no receipt), then, in
+ * as `sourceType`, and `sourceId` only when given (SEED_SOURCE_ID, while
+ * AV_WELCOME_SEED_TAG is on), nothing else, no `/prepare`, no receipt), then, in
  * `paused` mode, `pause_intent` with the id Index's answer names. The intent
  * (its id when the answer names one; Index's REST answer has no title, so
  * the second list's title, else the line's, is shown); Index's
@@ -958,13 +1039,13 @@ export const CREATE_BAD_URL = "create-bad-url";
  */
 export const CREATE_NO_ID = "create-no-id";
 
-async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string): Promise<SeedLine> {
+async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string, sourceId?: string): Promise<SeedLine> {
   // `description` is the resident's line exactly as selectedIntentions read it: never rewritten, trimmed or composed.
   try {
     // One create per line, inside the run's budget and timeout, the second list's reserve kept back, no retry.
     const createTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!createTarget) return { out: null, code: BUDGET_EXHAUSTED };
-    const created = await createIntentDirect(createTarget, description);
+    const created = await createIntentDirect(createTarget, description, sourceId);
     if (!created.ok) return created.refusal ? { out: created.refusal, code: created.refusal.code } : { out: null, code: createFailureCode(created) };
     const made = { id: created.id, title: null };
     if (mode === "publish") return made.id === null ? { out: null, code: CREATE_NO_ID } : { out: made, code: null };
@@ -1419,14 +1500,14 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
       const would = wouldCreate(lines);
       return welcomeBranch(first.read, { ...would, seed_codes: [...cutCodes, ...(would.seed_codes ?? [])].slice(0, SEED_CODES_MAX) });
     }
-    const { again, seeded, failed, refused, codes: sentCodes, kinds } = await seedLines(home, target, clock, lines, now);
+    const { again, seeded, failed, refused, codes: sentCodes, kinds, tagged } = await seedLines(home, target, clock, lines, now);
     const codes = [...cutCodes, ...sentCodes].slice(0, SEED_CODES_MAX);
     const counts = { selected: all.length, created: seeded.length, failed };
     const made = seedIdsOf(seeded);
     const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
     recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }), ...(cut ? { cutSkipped: cut } : {}) }, made);
     const read = again.read.kind === "listed" ? again.read : first.read;
-    return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
+    return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds, ...(tagged ? { seed_ids: made.ids } : {}) });
   } catch {
     return alone("error");
   } finally {
@@ -1601,7 +1682,7 @@ export async function main(
   if (!reseed) io.stdout(`${out.text}\n`);
   if ((reseed || argv.includes("--draft")) && out.branch) {
     const home = homeFrom(argv);
-    io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(home), welcomeReasonOn(home))}\n`);
+    io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(home), welcomeReasonOn(home), seedTagOn(home))}\n`);
   }
 }
 
