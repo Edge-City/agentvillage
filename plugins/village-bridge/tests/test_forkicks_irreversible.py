@@ -362,6 +362,24 @@ class ForKicksIrreversibleTest(unittest.TestCase):
         (proof, refusal), _, _ = self.known(result, coded(6, status='executed', actions=[{'action_key': key, 'state': 'executed'}]))
         self.assertEqual(refusal['error'], 'approval_required')
 
+    def test_n3_leaves_a_fresh_propose_as_it_was(self):
+        # N3 is the KNOWN-task path only. A fresh propose answered `requested` (not `executed`) whose wait then reads
+        # spent (a start landed in between) keeps its answer from before this change: approval_required.
+        result, _ = self.prepare(); key = self.key(result)
+        for label, read in {'policy start': answer(status='executed', actions=[{'action_key': key, 'state': 'executed'}]),
+                            'no actions': answer(status='nothing-to-wait-for', actions=[])}.items():
+            with self.subTest(label):
+                self.fresh(result)
+                ap = Mock()
+                ap.propose.return_value = answer(ok=True, task=TASK, decision='requested', state='requested', payload_hash=result['payloadHash'])
+                ap.wait.return_value = read
+                ap.start.side_effect = AssertionError('no start')
+                on_requested = Mock(return_value='tracked')
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    out = fk.authorize_order(self.record(result), result['draftId'], on_requested=on_requested)
+                self.assertEqual(out, (None, {'error': 'approval_required', 'instruction': mini.ORDER_APPROVE_IN_BOT}))
+                on_requested.assert_not_called()
+
     def test_n3_through_the_confirm_and_the_prepare(self):
         result, order = self.prepare(); self.next_turn(); key = self.key(result)
         read = answer(status='nothing-to-wait-for', actions=[])
