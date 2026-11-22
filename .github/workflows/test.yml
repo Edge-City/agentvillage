@@ -228,9 +228,8 @@ jobs:
   # One source of truth: the extractor and the check are approval.md's own
   # scripts, checked out at the pinned commit below (approval-md/approval.md is
   # public, so no token). The ref is the one line marked APPROVAL_MD_TOOL_REF
-  # below. Until approval-md/approval.md#678 (the B-167 gate on 0.4.8) merges
-  # it names that PR's head commit; when #678 merges, that line moves to #678's
-  # merge commit on approval.md main.
+  # below. It names the merge commit of approval-md/approval.md#678 (the B-167
+  # gate on 0.4.8) on approval.md main, e8845ed4 (22 Nov 2026).
   #
   # The report (first line: the GATE line) is the job summary and the
   # `class-diff` artifact (markdown + JSON).
@@ -269,7 +268,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: approval-md/approval.md
-          ref: a3877cd86271ccb848a485da1611a5911b160ecf # APPROVAL_MD_TOOL_REF: head of approval.md#678; moves to its merge commit on approval.md main when #678 merges
+          ref: e8845ed40fee2841d0be648039cf299071f8bbb0 # APPROVAL_MD_TOOL_REF: approval.md#678's merge commit on approval.md main (was its head a3877cd8)
           path: .test-deps/approval-md-tool
           persist-credentials: false
           sparse-checkout: scripts
