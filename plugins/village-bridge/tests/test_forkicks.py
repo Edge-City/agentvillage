@@ -255,6 +255,172 @@ class ForKicksTest(unittest.TestCase):
         self.assertEqual(self.transport.call_args.args[1], original)
         ap.propose.assert_not_called(); ap.start.assert_not_called()
 
+    # Line 353 hardening (lead RULED 9a55e501 (2); page probe353-0.4.8): core answers a propose `requested` + `executed`
+    # whenever the key ever had a request, whoever started it. A card withdrawn (close_expired's `timeout`), the setting
+    # moved to autonomous, then a start under the agent's own credential reads `authorization: policy`, and its wait reads
+    # the draft's action `executed`, not `granted`. A fresh propose (no `.card` task) adopts only a person's grant.
+    TASK = 'propose:' + 'a' * 32
+
+    def executed_daemon(self, wait):
+        ap = self.daemon(state='executed')
+        if isinstance(wait, BaseException):
+            ap.wait.side_effect = wait
+        else:
+            ap.wait.return_value = wait
+        return ap
+
+    def key(self, result):
+        return 'marketplace.app.action:forkicks.order.confirm:' + result['draftId']
+
+    def fresh(self, result):
+        """No `.card` task (the probe's lost or absent marker) and no recorded receipt: the next confirm proposes."""
+        self.transport.reset_mock()
+        for suffix in ('.card', '.placed', '.await'):
+            Path(self.tmp.name, 'forkicks-drafts', result['draftId'] + suffix).unlink(missing_ok=True)
+
+    def test_353_executed_propose_adopts_a_persons_spent_grant_of_this_drafts_own_action(self):
+        result = self.prepare(); self.next_turn(); key = self.key(result)
+        request = {'operation': 'forkicks.order.confirm', 'draftId': result['draftId']}
+        for status in ('nothing-to-wait-for', 'executed'):
+            with self.subTest(status=status):
+                self.fresh(result)
+                ap = self.executed_daemon(answer(status=status, actions=[{'action_key': key + 'x', 'state': 'executed'},
+                                                                         {'action_key': key, 'state': 'granted', 'seq': 3}]))
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    output = self.call(request)
+                self.assertIn('data', output)
+                ap.propose.assert_called_once(); ap.wait.assert_called_once_with(self.TASK); ap.start.assert_not_called()
+                proof = self.transport.call_args.args[1]['approval']
+                self.assertEqual(proof, {'taskId': self.TASK, 'payloadHash': result['payloadHash'], 'payload': result['approvalPayload']})
+
+    def test_353_a_policy_start_or_any_other_executed_read_is_never_adopted(self):
+        result = self.prepare(); self.next_turn(); key = self.key(result)
+        request = {'operation': 'forkicks.order.confirm', 'draftId': result['draftId']}
+        reads = {
+            # The probe: the policy start leaves the action `executed` (no person's grant).
+            'policy_start': answer(status='executed', actions=[{'action_key': key, 'state': 'executed', 'seq': 4}]),
+            'policy_start_nothing_to_wait': answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'executed'}]),
+            'requested': answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'requested'}]),
+            'withdrawn': answer(status='executed', actions=[{'action_key': key, 'state': 'withdrawn'}]),
+            'another_key_granted': answer(status='nothing-to-wait-for', actions=[{'action_key': key + 'x', 'state': 'granted'}]),
+            'another_draft_granted': answer(status='executed', actions=[{'action_key': key[:-1] + '9', 'state': 'granted'}]),
+            'two_of_mine': answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'granted'},
+                                                                          {'action_key': key, 'state': 'granted'}]),
+            'two_of_mine_mixed': answer(status='executed', actions=[{'action_key': key, 'state': 'executed'},
+                                                                     {'action_key': key, 'state': 'granted'}]),
+            'no_actions': answer(status='executed'),
+            'empty_actions': answer(status='executed', actions=[]),
+        }
+        for name, read in reads.items():
+            with self.subTest(read=name):
+                self.fresh(result)
+                ap = self.executed_daemon(read)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    output = self.call(request)
+                self.assertEqual(output, {'error': 'approval_card_closed', 'instruction': mini.ORDER_CARD_CLOSED})
+                ap.wait.assert_called_once_with(self.TASK); ap.start.assert_not_called()
+                self.transport.assert_not_called()
+
+    def test_353_a_failing_or_junk_wait_is_never_adopted(self):
+        result = self.prepare(); self.next_turn(); key = self.key(result)
+        request = {'operation': 'forkicks.order.confirm', 'draftId': result['draftId']}
+        mine = [{'action_key': key, 'state': 'granted'}]
+        def coded(code, **doc):
+            return types.SimpleNamespace(ok=False, doc=doc, exit_code=code, status=doc.get('status'))
+        junk = {
+            'pending_exit_6': coded(6, status='nothing-to-wait-for', actions=mine),
+            'error_exit_1': coded(1, status='executed', actions=mine),
+            'granted_not_spent': answer(status='granted', actions=mine),
+            'no_status': answer(actions=mine),
+            'status_not_a_string': types.SimpleNamespace(ok=True, doc={'actions': mine}, exit_code=0, status=None),
+            'actions_a_dict': answer(status='executed', actions={key: 'granted'}),
+            'actions_a_string': answer(status='executed', actions='granted'),
+            'actions_a_number': answer(status='executed', actions=7),
+            'action_not_an_object': answer(status='executed', actions=[[key, 'granted'], key]),
+            'state_not_a_string': answer(status='executed', actions=[{'action_key': key, 'state': True}]),
+        }
+        for name, read in junk.items():
+            with self.subTest(read=name):
+                self.fresh(result)
+                ap = self.executed_daemon(read)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    output = self.call(request)
+                self.assertEqual(output, {'error': 'approval_card_closed', 'instruction': mini.ORDER_CARD_CLOSED})
+                ap.start.assert_not_called(); self.transport.assert_not_called()
+        # The wait cannot be read: nothing is adopted; the honest "could not run" answer, retried by the same draftId.
+        for error in (RuntimeError('timeout'), ValueError('bad_answer')):
+            with self.subTest(error=repr(error)):
+                self.fresh(result)
+                ap = self.executed_daemon(error)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    output = self.call(request)
+                self.assertEqual(output, {'error': 'approval_unavailable', 'instruction': mini.ORDER_APPROVAL_UNAVAILABLE})
+                ap.start.assert_not_called(); self.transport.assert_not_called()
+
+    def test_353_authorize_order_checks_the_grant_before_adopting_and_keeps_the_adopt_guard(self):
+        result = self.prepare(); key = self.key(result)
+        record = fk.load_preview(Path(self.tmp.name), result['draftId'], self.config)
+        spent = answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'granted'}])
+        policy = answer(status='executed', actions=[{'action_key': key, 'state': 'executed'}])
+        for read, guard, expected in (
+            (spent, None, 'adopted'),
+            (spent, 'superseded', 'superseded'),  # a `.refused` tombstone still wins over a spent grant
+            (policy, None, 'closed'),
+            (policy, 'superseded', 'closed'),  # the guard is never asked for a draft that is not adopted
+        ):
+            with self.subTest(read=read.doc['actions'][0]['state'], guard=guard):
+                self.fresh(result)
+                ap = self.executed_daemon(read)
+                calls = []
+                guard_adopt = Mock(return_value=guard)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    proof, refusal = fk.authorize_order(record, result['draftId'], on_proposed=lambda task: calls.append(('proposed', task)),
+                                                        guard_adopt=guard_adopt, guard_start=Mock(side_effect=AssertionError('no start')))
+                self.assertEqual(calls, [('proposed', self.TASK)])  # the card task is still recorded, as before
+                ap.start.assert_not_called()
+                if expected == 'adopted':
+                    self.assertEqual((proof['taskId'], refusal), (self.TASK, None)); guard_adopt.assert_called_once_with()
+                elif expected == 'superseded':
+                    self.assertEqual((proof, refusal), (None, {'error': 'approval_card_closed', 'instruction': mini.ORDER_SUPERSEDED}))
+                else:
+                    self.assertEqual((proof, refusal), (None, {'error': 'approval_card_closed', 'instruction': mini.ORDER_CARD_CLOSED}))
+                    guard_adopt.assert_not_called()
+
+    def test_353_a_replayed_prepare_of_a_policy_started_draft_never_says_the_owner_approved(self):
+        result = self.prepare(); self.next_turn(); key = self.key(result)
+        _, order = self.preview()
+        self.transport.return_value = result
+        for read, approval in ((answer(status='executed', actions=[{'action_key': key, 'state': 'executed'}]), 'refused'),
+                               (answer(status='nothing-to-wait-for', actions=[{'action_key': key, 'state': 'granted'}]), 'granted')):
+            with self.subTest(approval=approval):
+                self.fresh(result); self.transport.return_value = result
+                ap = self.executed_daemon(read)
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    response = self.call({'operation': 'forkicks.order.prepare', **order})
+                self.assertEqual(response['approval'], approval)
+                if approval == 'refused':
+                    self.assertEqual((response['error'], response['instruction']), ('approval_card_closed', mini.ORDER_CARD_NOT_RAISED))
+                ap.start.assert_not_called()
+
+    def test_353_the_pass_and_authorize_order_share_one_grant_check(self):
+        grant = sys.modules['village_bridge._forkicks_grant']
+        key = 'marketplace.app.action:forkicks.order.confirm:d1'
+        for exit_code, status, actions in (
+            (0, 'nothing-to-wait-for', [{'action_key': key, 'state': 'granted'}]),
+            (0, 'executed', [{'action_key': key, 'state': 'granted'}]),
+            (0, 'executed', [{'action_key': key, 'state': 'executed'}]),
+            (0, 'granted', [{'action_key': key, 'state': 'granted'}]),
+            (6, 'nothing-to-wait-for', [{'action_key': key, 'state': 'granted'}]),
+            (0, 'executed', [{'action_key': key, 'state': 'granted'}] * 2),
+            (0, 'executed', [{'action_key': key + 'x', 'state': 'granted'}]),
+            (0, 'executed', None), (0, 'executed', 'granted'),
+        ):
+            read = types.SimpleNamespace(exit_code=exit_code, status=status, doc={'status': status, 'actions': actions})
+            with self.subTest(exit_code=exit_code, status=status, actions=actions):
+                expected = exit_code == 0 and status != 'granted' and actions == [{'action_key': key, 'state': 'granted'}]
+                self.assertIs(fk.grant_spent(read, key), expected)
+                self.assertIs(grant._spent(read, key), expected)
+
     def test_uninstall_during_approval_refuses_effect(self):
         result = self.prepare(); self.next_turn(); ap = self.daemon()
         def withdraw(*args):

@@ -351,19 +351,23 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
             on_proposed(task)
         proof["taskId"] = task
         if answer.doc.get("state") == "executed":
-            return _adopted(proof, guard_adopt)  # The CP re-reads the direct grant/start; same draft is merchant-idempotent.
+            # Adopted (the same draft is merchant-idempotent) only on a person's grant of this draft's own action, spent
+            # by a start: core also answers `executed` after a policy start under the agent's own credential once the
+            # card was withdrawn or expired and the setting moved (lead RULED 9a55e501 (2), page probe353). A wait
+            # that fails raises (approval_unavailable, retried by task); any other answer is the closed card.
+            if grant_spent(ap.wait(task), key):
+                return _adopted(proof, guard_adopt)
+            return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
     else:
         task = known_task
         if not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task):
             return None, {"error": "approval_refused"}
         proof["taskId"] = task
     granted = ap.wait(task)
-    if known_task is not None and granted.exit_code == 0 and granted.status in ("nothing-to-wait-for", "executed"):
+    if known_task is not None and grant_spent(granted, key):
         # Already started (an earlier confirm, or the on-grant pass): adopt it, as the propose answer's `executed`
         # path does, only when this draft's own action reads granted (a human's decision; the pass's same check).
-        mine = [a for a in (granted.doc.get("actions") or []) if isinstance(a, dict) and a.get("action_key") == key]
-        if len(mine) == 1 and mine[0].get("state") == "granted":
-            return _adopted(proof, guard_adopt)
+        return _adopted(proof, guard_adopt)
     if granted.exit_code in (1, 3, 7) or granted.status in CARD_CLOSED_STATES:
         # S2: the card is declined, withdrawn, expired or void (core: wait exit 1/3/7). No start runs, and this draft
         # gets no second card: nothing was ordered, and only a new preview can be approved.
@@ -395,3 +399,16 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
     if not started.ok or started.doc.get("authorization") != "grant":
         return None, {"error": "approval_not_started"}
     return proof, None
+
+
+def grant_spent(waited, key) -> bool:
+    """The one proof that a PERSON granted this draft and a start of this task spent it: the wait reads spent
+    (`nothing-to-wait-for`/`executed`, exit 0) with exactly one action for `key`, and that action `granted` (set only by
+    core's human-only `grant` verb; a policy start leaves it `executed`). Core answers a propose `requested` +
+    `executed` whenever the key ever had a request, whoever started it (gate.ts:5369-5380), so that answer alone proves
+    nothing. Every adoption of a started draft (authorize_order, `_forkicks_grant`) asks this; anything else is False."""
+    if waited.exit_code != 0 or waited.status not in ("nothing-to-wait-for", "executed"):
+        return False
+    actions = waited.doc.get("actions")
+    mine = [a for a in actions if isinstance(a, dict) and a.get("action_key") == key] if isinstance(actions, list) else []
+    return len(mine) == 1 and mine[0].get("state") == "granted"
