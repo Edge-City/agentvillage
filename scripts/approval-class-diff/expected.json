@@ -19,7 +19,7 @@
         "supervised-live": "sampled",
         "manual": "card"
       },
-      "reason": "a purchase always asks",
+      "reason": "a purchase always asks. INTERIM (Carter, 22 Nov 2026): today's live behaviour, an order refused under autonomous, supervised-retro and supervised-live, is accepted until the For Kicks card build lands; that build rewrites this entry to its card outcome and removes this acceptance",
       "owner": "ov#399/#406/#407",
       "propose": {
         "class": "marketplace.app.action",
@@ -81,7 +81,7 @@
         }
       },
       "accepted_by": "human:carter",
-      "accepted_at": "YYYY-MM-DD"
+      "accepted_at": "2026-11-22"
     },
     {
       "tool": "village",
@@ -786,7 +786,9 @@
           "supervised-live": "refused",
           "manual": "refused"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     },
     {
       "template": "village default",
@@ -847,7 +849,9 @@
           "supervised-live": "sampled",
           "manual": "card"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     },
     {
       "template": "village default",
@@ -910,7 +914,9 @@
           "supervised-live": "refused",
           "manual": "refused"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     },
     {
       "template": "village default",
@@ -937,7 +943,9 @@
           "supervised-live": "sampled",
           "manual": "refused"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     },
     {
       "template": "village default",
@@ -975,7 +983,9 @@
           "supervised-live": "sampled",
           "manual": "card"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     },
     {
       "template": "village default",
@@ -1011,7 +1021,9 @@
           "supervised-live": "sampled",
           "manual": "card"
         }
-      }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
     }
   ]
 }
