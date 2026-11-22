@@ -51,7 +51,7 @@ class MultiDaemon:
     def task_of(self, key):
         return 'propose:' + hashlib.md5(key.encode()).hexdigest()
 
-    def _propose(self, cls, key, summary, payload):
+    def _propose(self, cls, key, summary, payload, irreversible=False):
         task = self.task_of(key)
         h = hashlib.sha256(payload.encode()).hexdigest()
         t = self.tasks.setdefault(task, {'key': key, 'hash': h, 'state': 'requested'})

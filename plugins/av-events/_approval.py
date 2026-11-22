@@ -9,7 +9,8 @@ dogfood, behind an https facade. Its agent surface is `approval serve`'s
 four verbs of it, and decides nothing about what an answer means for an
 intention: `_intent_approval` does that.
 
-- `propose --class --key --summary --payload-json --json` (no positionals);
+- `propose --class --key --summary --payload-json [--irreversible] --json` (no positionals; see `propose`
+  for the one retry without `--irreversible` on a core that does not know it);
 - `wait <task> --timeout 0 --json`: exit 0 granted (or `executed`, or
   `nothing-to-wait-for`, which `status` names), 1 rejected / revoked /
   withdrawn / `not-registered`, 3 expired, 6 still pending, 7 void. Never
@@ -123,11 +124,15 @@ _TOKEN_OK = re.compile(r'^[\x21-\x7e]+$')
 
 
 class ApprovalUnavailable(Exception):
-    """No usable answer from the daemon (or nothing was sent). `code` says why."""
+    """No usable answer from the daemon (or nothing was sent). `code` says why. For a refusal by serve itself
+    (a non-200 status), `refusal_code` and `refusal_message` are its `{"error": {"code", "message"}}`, when the body
+    held one (else None): `propose` reads them to tell an older core's flag refusal from any other."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, refusal_code: Optional[str] = None, refusal_message: Optional[str] = None) -> None:
         super().__init__(code)
         self.code = code
+        self.refusal_code = refusal_code
+        self.refusal_message = refusal_message
 
 
 class Answer:
@@ -416,6 +421,21 @@ def _first_object(text: Any) -> Optional[dict]:
     return None
 
 
+def _serve_refusal(raw: Any) -> tuple[Optional[str], Optional[str]]:
+    """Serve's own refusal body (`{"error": {"code", "message"}, "exit_code"}`, core serve/server.ts `refuse`):
+    `(code, message)`, or `(None, None)` when the body is not one. Never logged."""
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if isinstance(raw, bytes) and len(raw) <= MAX_ANSWER_BYTES else None
+    except (UnicodeDecodeError, ValueError):
+        return None, None
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(error, dict):
+        return None, None
+    code, message = error.get("code"), error.get("message")
+    return (code if isinstance(code, str) and re.fullmatch(r"[a-z0-9:._-]{1,80}", code) else None,
+            message if isinstance(message, str) else None)
+
+
 def call(verb: str, positionals: Optional[list] = None, flags: Optional[dict] = None) -> Answer:
     """One `POST /verb/<verb>`. Raises `ApprovalUnavailable` when nothing was
     sent or no usable answer came back; otherwise the CLI's exit code and the
@@ -462,7 +482,7 @@ def call(verb: str, positionals: Optional[list] = None, flags: Optional[dict] = 
     if status == 401:
         raise ApprovalUnavailable("unauthorized")
     if status != 200:
-        raise ApprovalUnavailable(f"http_{int(status)}")
+        raise ApprovalUnavailable(f"http_{int(status)}", *_serve_refusal(raw))
     if len(raw) > MAX_ANSWER_BYTES:
         raise ApprovalUnavailable("bad_answer")
     try:
@@ -482,9 +502,43 @@ def call(verb: str, positionals: Optional[list] = None, flags: Optional[dict] = 
     return Answer(exit_code, doc)
 
 
-def propose(cls: str, key: str, summary: str, payload_json: str) -> Answer:
-    return call("propose", flags={"--class": cls, "--key": key, "--summary": summary,
-                                  "--payload-json": payload_json, "--json": True})
+#: The two ways the released core 0.4.8, which has no `propose --irreversible`, refuses the flag (both read off a
+#: real 0.4.8 run, nothing written to its log): serve's agent allowlist answers HTTP 403 with this code and a message
+#: that names the flag first; the CLI behind it answers usage, exit 2, with exactly this message.
+FLAG_REFUSED_SERVE_CODE = "serve-flag-not-permitted"
+FLAG_REFUSED_SERVE_MESSAGE = "--irreversible is not accepted on `approval propose` from the agent credential,"
+FLAG_REFUSED_CLI_MESSAGE = "unknown flag --irreversible"
+
+
+def _irreversible_unknown(answer: Optional[Answer], error: Optional[ApprovalUnavailable]) -> bool:
+    """Exactly a core without `--irreversible` refusing it; any other answer or failure is False."""
+    if error is not None:
+        return (error.code == "http_403" and error.refusal_code == FLAG_REFUSED_SERVE_CODE
+                and isinstance(error.refusal_message, str) and error.refusal_message.startswith(FLAG_REFUSED_SERVE_MESSAGE))
+    refusal = answer.doc.get("error") if answer is not None else None
+    return (answer is not None and answer.exit_code == 2 and isinstance(refusal, dict) and answer.error_code == "usage"
+            and refusal.get("message") == FLAG_REFUSED_CLI_MESSAGE)
+
+
+def propose(cls: str, key: str, summary: str, payload_json: str, irreversible: bool = False) -> Answer:
+    """`irreversible=True` sends `--irreversible` (core SPEC section 7's floor for this key: a person is always asked,
+    and core refuses a policy start of it; approval.md APRV-537). A core that does not know the flag (0.4.8 and
+    older) refuses it before anything is written; that one refusal, and nothing else, is retried ONCE without the
+    flag, which proposes exactly as before (lead RULED L60017)."""
+    flags: dict[str, Any] = {"--class": cls, "--key": key, "--summary": summary, "--payload-json": payload_json,
+                             "--json": True}
+    if irreversible is not True:
+        return call("propose", flags=flags)
+    try:
+        answer = call("propose", flags={**flags, "--irreversible": True})
+    except ApprovalUnavailable as error:
+        if not _irreversible_unknown(None, error):
+            raise
+    else:
+        if not _irreversible_unknown(answer, None):
+            return answer
+    logger.info("av-events: approval propose irreversible=unsupported retried=1")
+    return call("propose", flags=flags)
 
 
 def wait(task: str) -> Answer:

@@ -28,7 +28,7 @@ from ._mini_apps import (installed, authorize_send, gate_verified, READ_OPERATIO
                          KISMET_OPERATIONS, KISMET_WRITE_OPERATIONS, LIBRARY_OPERATIONS, FAVORLOOP_OPERATIONS, FAVORLOOP_WRITE_OPERATIONS,
                          ECV_OPERATIONS, ECV_WRITE_OPERATIONS,
                          ORDER_CARD_NOT_RAISED, ORDER_APPROVAL_REFUSED,
-                         ORDER_APPROVAL_UNAVAILABLE, ORDER_ALREADY_TOLD)
+                         ORDER_APPROVAL_UNAVAILABLE, ORDER_ALREADY_TOLD, ORDER_STARTED_UNREAD)
 from ._dreamstarter import (ds_payload, DS_APP_CODES, DS_ERRORS, DS_HANDLING, DS_INVALID, DS_CONTACT, DS_UNCLEAR,
                             DS_WRITE_UNAVAILABLE)
 from ._kismet_link import names_kismet_signin_link, carries_kismet_signin_link
@@ -1754,6 +1754,9 @@ def _forkicks_authorize(home, record, draft_id, confirm=False):
         return None, {"error": "approval_unavailable", "instruction": ORDER_APPROVAL_UNAVAILABLE}
     if refusal is not None and "instruction" not in refusal:
         refusal = {**refusal, "instruction": ORDER_APPROVAL_REFUSED}
+    if confirm and refusal is not None and "started" in refusal:
+        # Review-b #628 N2: `started` only steers the prepare answer's words; the confirm answer is unchanged.
+        refusal = {k: v for k, v in refusal.items() if k != "started"}
     return authorization, refusal
 
 
@@ -1784,6 +1787,17 @@ def _forkicks_card_at_prepare(home, config, draft_id):
                 "forkicks.order.confirm with this SAME draftId to place it; never prepare another order."}
     if refusal.get("error") == "approval_required":
         return {"approval": "requested", "instruction": refusal["instruction"]}
+    if refusal.get("error") == "approval_unavailable" and refusal.get("started") is True:
+        # Review-b #628 N2: this draft was already started (a replayed prepare), and its read proved neither a
+        # person's spent grant nor a policy start: no new card went out, and it may already be placed. The task is
+        # still handed to the pass (as before), which confirms a spent grant and tells the owner; only the words change.
+        try:
+            task = _forkicks_grant.card_task(home, draft_id)
+            if task is not None:
+                _forkicks_grant.instruction_if_tracked(home, draft_id, task, _ensure_forkicks_pass)
+        except Exception:  # noqa: BLE001 - a confirm by the same draftId still reads it
+            pass
+        return {"approval": "unavailable", "error": "approval_unavailable", "instruction": ORDER_STARTED_UNREAD}
     if refusal.get("error") == "approval_unavailable":
         # The propose was accepted (its task is recorded) but the read after it failed: the card IS out, so the
         # words say so and the pass is handed the task; never "could not be raised" for a card that went out.

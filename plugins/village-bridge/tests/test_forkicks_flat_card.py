@@ -141,7 +141,7 @@ class FlatCardBoxTest(unittest.TestCase):
 
     def daemon(self, decision='requested'):
         ap = Mock()
-        ap.propose.side_effect = lambda cls, key, summary, payload: answer(ok=True, task='propose:' + 'a' * 32, decision=decision, state='granted', payload_hash=hashlib.sha256(payload.encode()).hexdigest())
+        ap.propose.side_effect = lambda cls, key, summary, payload, irreversible=False: answer(ok=True, task='propose:' + 'a' * 32, decision=decision, state='granted', payload_hash=hashlib.sha256(payload.encode()).hexdigest())
         ap.wait.return_value = answer(status='granted')
         ap.start.return_value = answer(ok=True, authorization='grant')
         return ap
@@ -368,7 +368,7 @@ class FlatCardBoxTest(unittest.TestCase):
             ap = self.daemon(decision=decision)
             self.assertEqual(self.confirm(result['draftId'], ap)['error'], 'approval_refused')
             ap.wait.assert_not_called(); ap.start.assert_not_called()
-        ap = self.daemon(); ap.propose.side_effect = lambda *a: answer(ok=True, task='propose:' + 'a' * 32, decision='requested', payload_hash='0' * 64)
+        ap = self.daemon(); ap.propose.side_effect = lambda *a, **k: answer(ok=True, task='propose:' + 'a' * 32, decision='requested', payload_hash='0' * 64)
         self.assertEqual(self.confirm(result['draftId'], ap)['error'], 'approval_refused')
         self.transport.assert_not_called()
 
