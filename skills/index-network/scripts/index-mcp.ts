@@ -351,7 +351,7 @@ export const AGENTVILLAGE_SOURCE_TYPE = "agentvillage";
 export type RecoveryQuestion = { kind: "single" | "multi" | "text"; question: string; options: string[] };
 
 /** An intent id Index issues: a UUID, or the hex short id (the av-events plugin's INTENT_PATH_ID). */
-const INTENT_ID = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{4,32})$/;
+export const INTENT_ID = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{4,32})$/;
 
 /** Plain http is allowed to these hosts only (the av-events plugin's LOOPBACK_HOSTS). */
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -462,14 +462,16 @@ export type DirectCreate =
  * "agentvillage"}` and nothing else: no `preparationReceipt` (Index then
  * stores the line as written and runs no admission), no `networkIds` (shared
  * in every network the resident is in). `description` is sent exactly as
- * given. Same key as every Index call, `x-api-key`; JSON only; one request,
+ * given. F-28: `sourceId`, only when the caller passes one (the welcome's seed
+ * tag, welcome.ts SEED_SOURCE_ID, behind AV_WELCOME_SEED_TAG), goes last;
+ * without it the body is byte for byte the one above. Same key as every Index call, `x-api-key`; JSON only; one request,
  * no retry, the target's timeout, no redirect. The shape is the av-events
  * plugin's production create (`_record_intention.py` publish_intent) and
  * Index's controller (intent.controller.ts `create`, a91c3ff). Never throws:
  * any HTTP answer is a status, a transport failure or timeout is status 0;
  * a URL indexCreateUrl refuses is status 0 with `badUrl`, and no request.
  */
-export async function createIntentDirect(target: IndexMcpTarget, description: string): Promise<DirectCreate> {
+export async function createIntentDirect(target: IndexMcpTarget, description: string, sourceId?: string): Promise<DirectCreate> {
   const url = indexCreateUrl(target.mcpUrl);
   if (url === null) return { ok: false, status: 0, refusal: null, badUrl: true };
   const send = target.fetch ?? globalThis.fetch;
@@ -478,7 +480,7 @@ export async function createIntentDirect(target: IndexMcpTarget, description: st
     res = await send(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json", "x-api-key": target.apiKey },
-      body: JSON.stringify({ description, sourceType: AGENTVILLAGE_SOURCE_TYPE }),
+      body: JSON.stringify(sourceId === undefined ? { description, sourceType: AGENTVILLAGE_SOURCE_TYPE } : { description, sourceType: AGENTVILLAGE_SOURCE_TYPE, sourceId }),
       redirect: "error",
       signal: AbortSignal.timeout(target.timeoutMs ?? INDEX_MCP_TIMEOUT_MS),
     });
