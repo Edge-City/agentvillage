@@ -60,7 +60,7 @@ import time
 import uuid
 from datetime import date as _date, datetime, timedelta, timezone
 
-from ._forkicks import cache_path, canonical, checked_payload, load_preview, order_preview, quote_expires as _expires
+from ._forkicks import cache_path, canonical, checked_payload, grant_spent, load_preview, order_preview, quote_expires as _expires
 from ._mini_apps import ORDER_PLACED_ON_APPROVAL, approval_modules
 
 LOG = logging.getLogger("village_bridge")
@@ -644,10 +644,9 @@ def close_expired(home, draft_id, task) -> bool:
 
 
 def _spent(waited, key) -> bool:
-    """The wait shows this draft's grant spent by a start of this task (its own action `granted`): an order in flight."""
-    mine = [a for a in (waited.doc.get("actions") or []) if isinstance(a, dict) and a.get("action_key") == key]
-    return (waited.exit_code == 0 and waited.status in ("nothing-to-wait-for", "executed") and len(mine) == 1
-            and mine[0].get("state") == "granted")
+    """The wait shows this draft's grant spent by a start of this task (its own action `granted`): an order in flight.
+    The one check `authorize_order` adopts by too (`_forkicks.grant_spent`)."""
+    return grant_spent(waited, key)
 
 
 def _refusal_spent(marker, task, key, reason) -> bool:
