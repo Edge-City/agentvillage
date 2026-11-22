@@ -269,7 +269,9 @@ describe("the class-diff job and script (static)", () => {
     expect(order?.propose?.decision).toBe("card");
     expect(order?.propose?.card_style).toBe("minimal");
     expect(order?.propose?.key).toBe("marketplace.app.action:forkicks.order.confirm:" + String(order?.input?.draftId));
-    expect(order?.reason).toBe("a purchase always asks");
+    // Carter's INTERIM acceptance (22 Nov 2026, approval.md#679) adds its terms after the rule;
+    // the rule stays first, and the card build removes them with the acceptance.
+    expect(order?.reason).toMatch(/^a purchase always asks(\. INTERIM \(Carter, \d{1,2} [A-Z][a-z]{2} \d{4}\): .+)?$/);
     // B-172 cancelled: EdgeOS RSVP runs on its own, no card, today.
     const rsvp = doc.entries.filter((e) => e.file === "skills/edgeos/SKILL.md" && /edgeos\.ts rsvp/.test(e.command ?? ""));
     expect(rsvp.length).toBe(2);
