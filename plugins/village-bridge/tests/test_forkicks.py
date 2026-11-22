@@ -52,7 +52,7 @@ class ForKicksTest(unittest.TestCase):
 
     def daemon(self, decision='requested', state='granted'):
         ap = Mock()
-        ap.propose.side_effect = lambda cls, key, summary, payload: answer(ok=True, task='propose:' + 'a' * 32, decision=decision, state=state, payload_hash=hashlib.sha256(payload.encode()).hexdigest())
+        ap.propose.side_effect = lambda cls, key, summary, payload, irreversible=False: answer(ok=True, task='propose:' + 'a' * 32, decision=decision, state=state, payload_hash=hashlib.sha256(payload.encode()).hexdigest())
         ap.wait.return_value = answer(status='granted')
         ap.start.return_value = answer(ok=True, authorization='grant')
         return ap

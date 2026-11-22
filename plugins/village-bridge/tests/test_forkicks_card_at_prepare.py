@@ -92,7 +92,7 @@ class CardAtPrepareTest(unittest.TestCase):
             return out
 
         def spy(name, real):
-            return lambda *a: log.append((name, a[1] if name == 'propose' else a[0], time.perf_counter())) or real(*a)
+            return lambda *a, **k: log.append((name, a[1] if name == 'propose' else a[0], time.perf_counter())) or real(*a, **k)
 
         self.daemon.propose.side_effect = spy('propose', self.daemon._propose)
         self.daemon.wait.side_effect = spy('wait', self.daemon._wait)
@@ -196,7 +196,7 @@ class CardAtPrepareTest(unittest.TestCase):
             with self.subTest(decision=decision):
                 for path in self.home.joinpath('forkicks-drafts').glob('*'):
                     path.unlink()
-                self.daemon.propose = Mock(side_effect=lambda cls, key, summary, payload, decision=decision: answer(
+                self.daemon.propose = Mock(side_effect=lambda cls, key, summary, payload, irreversible=False, decision=decision: answer(
                     0, ok=True, task=TASK, decision=decision, payload_hash=hashlib.sha256(payload.encode()).hexdigest()))
                 response = self.prepare()
                 self.assertEqual(response['data'], self.prepared)
@@ -212,12 +212,12 @@ class CardAtPrepareTest(unittest.TestCase):
 
     def test_every_refusal_at_prepare_returns_the_preview_and_says_nothing_was_ordered(self):
         def refuse_with(**doc):
-            return lambda cls, key, summary, payload: answer(0, **{'ok': True, 'task': TASK, 'decision': 'requested',
+            return lambda cls, key, summary, payload, irreversible=False: answer(0, **{'ok': True, 'task': TASK, 'decision': 'requested',
                                                                     'payload_hash': hashlib.sha256(payload.encode()).hexdigest(), **doc})
         cases = {
             'approval_modules unavailable': ('approval_unavailable', lambda: self.modules[fk].configure_mock(side_effect=ValueError('approval_unavailable'))),
             'propose raises': ('approval_unavailable', lambda: setattr(self.daemon.propose, 'side_effect', RuntimeError('timeout'))),
-            'propose not ok': ('approval_refused', lambda: setattr(self.daemon.propose, 'side_effect', lambda *a: answer(1, ok=False, error={'code': 'x'}))),
+            'propose not ok': ('approval_refused', lambda: setattr(self.daemon.propose, 'side_effect', lambda *a, **k: answer(1, ok=False, error={'code': 'x'}))),
             'hash mismatch': ('approval_refused', lambda: setattr(self.daemon.propose, 'side_effect', refuse_with(payload_hash='0' * 64))),
             'bad task id': ('approval_refused', lambda: setattr(self.daemon.propose, 'side_effect', refuse_with(task='propose:../x'))),
         }

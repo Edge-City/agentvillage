@@ -342,9 +342,11 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
             on_quote_expired(None)  # no card is raised for a quote that is gone
             return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
         # The app's payload, byte for byte (its confirm compares it with the stored one): the box only checks it.
-        answer = ap.propose(APPROVAL_CLASS, key, summary, held)
+        answer = ap.propose(APPROVAL_CLASS, key, summary, held, irreversible=True)
         task = answer.doc.get("task")
-        # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy.
+        # Purchases ALWAYS require a human grant, even when Gold Stars uses autonomous policy. `irreversible=True` asks
+        # core for SPEC section 7's floor (a card under every setting, no policy start: approval.md APRV-537); a core
+        # without the flag (0.4.8) refuses it and av-events proposes once more without it (lead RULED L60017).
         if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
             return None, {"error": "approval_refused"}
         if on_proposed is not None:
@@ -354,16 +356,20 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
             # Adopted (the same draft is merchant-idempotent) only on a person's grant of this draft's own action, spent
             # by a start: core also answers `executed` after a policy start under the agent's own credential once the
             # card was withdrawn or expired and the setting moved (lead RULED 9a55e501 (2), page probe353).
-            waited = ap.wait(task)
-            if grant_spent(waited, key):
+            try:
+                waited = ap.wait(task)
+            except Exception:  # noqa: BLE001 - read as "neither" below, never as a grant or a closed card
+                waited = None
+            if waited is not None and grant_spent(waited, key):
                 return _adopted(proof, guard_adopt)
-            if started_without_grant(waited, key):
+            if waited is not None and started_without_grant(waited, key):
                 return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
-            # Neither read (review-b #628 S1): a wait that fails raises, and a wait that answers anything else (a
-            # refusal doc for an unreadable log, no actions, junk) proves neither a grant nor its absence. A person's
-            # grant may be spent and the order placed, so never "nothing was ordered": the honest "could not run",
-            # retried by the same draftId (the recorded task is then read by the known-task path).
-            return None, {"error": "approval_unavailable", "instruction": ORDER_APPROVAL_UNAVAILABLE}
+            # Neither read (review-b #628 S1): a wait that fails, and a wait that answers anything else (a refusal doc
+            # for an unreadable log, no actions, junk) proves neither a grant nor its absence. A person's grant may be
+            # spent and the order placed, so never "nothing was ordered": the honest "could not run", retried by the
+            # same draftId (the recorded task is then read by the known-task path). `started` (review-b #628 N2): the
+            # draft was already started, so prepare never says a new card was sent (the confirm answer drops it).
+            return None, {"error": "approval_unavailable", "instruction": ORDER_APPROVAL_UNAVAILABLE, "started": True}
     else:
         task = known_task
         if not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task):
@@ -378,6 +384,14 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
         # S2: the card is declined, withdrawn, expired or void (core: wait exit 1/3/7). No start runs, and this draft
         # gets no second card: nothing was ordered, and only a new preview can be approved.
         return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+    if known_task is not None and granted.exit_code == 0 and granted.status in ("nothing-to-wait-for", "executed"):
+        # Review-b #628 N3: this draft's task is already started, but not on its own spent grant (adopted above), so
+        # no card is live and "approve it on its card" would point at nothing. Read as the propose answer's
+        # `executed` branch reads it: a policy start of this draft's action (proved) is the closed card; any other
+        # spent read proves neither, so the honest "could not run" (the same draftId again; never a new card).
+        if started_without_grant(granted, key):
+            return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+        return None, {"error": "approval_unavailable", "instruction": ORDER_APPROVAL_UNAVAILABLE, "started": True}
     if on_quote_expired is not None and _quote_gone(record, now):
         # Quote expiry: neither a tap nor a start can place this draft any more; its card is withdrawn.
         if on_quote_expired(task) is False:

@@ -48,7 +48,7 @@ class Daemon:
         self.start = Mock(side_effect=self._start)
         self.authorization = 'grant'
 
-    def _propose(self, cls, key, summary, payload):
+    def _propose(self, cls, key, summary, payload, irreversible=False):
         return answer(0, ok=True, task=TASK, decision='requested', state='executed' if self.state == 'started' else None,
                       payload_hash=hashlib.sha256(payload.encode()).hexdigest())
 

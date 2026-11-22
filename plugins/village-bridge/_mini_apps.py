@@ -407,3 +407,13 @@ def authorize_send(preview: object, draft_id: str):
     if not started.ok or started.doc.get("authorization") != "grant":
         return None, {"error": "approval_not_started"}
     return proof, None
+
+
+# Review-b #628 N2: a replayed prepare of a For Kicks draft that was already started, whose read proved neither the
+# owner's grant nor its absence. No new card went out, and the order may already be placed, so neither is claimed.
+# (Kept below authorize_send: the class-diff entries name the Gold Stars propose at :379.)
+ORDER_STARTED_UNREAD = ("This exact order was already started earlier, and I couldn't check it just now, so no new approval "
+                        "card was sent and it may already be placed. Show the preview, then tell the owner plainly that "
+                        "you couldn't check this order just now; never say a card was sent, that it was placed, or that "
+                        "nothing was ordered. Call forkicks.order.confirm with this SAME draftId later for its outcome; "
+                        "never prepare another order.")
