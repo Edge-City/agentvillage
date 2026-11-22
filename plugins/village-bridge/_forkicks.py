@@ -9,7 +9,7 @@ import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from ._mini_apps import approval_modules, ORDER_APPROVE_IN_BOT, ORDER_CARD_CLOSED, ORDER_SUPERSEDED, ORDER_NEWEST_UNREADABLE
+from ._mini_apps import approval_modules, ORDER_APPROVAL_UNAVAILABLE, ORDER_APPROVE_IN_BOT, ORDER_CARD_CLOSED, ORDER_SUPERSEDED, ORDER_NEWEST_UNREADABLE  # one line: the propose stays at :345 (the class-diff entry names it)
 
 MAX_PAYLOAD_BYTES = 60000
 SUMMARY_MAX_BYTES = 4096
@@ -353,11 +353,17 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
         if answer.doc.get("state") == "executed":
             # Adopted (the same draft is merchant-idempotent) only on a person's grant of this draft's own action, spent
             # by a start: core also answers `executed` after a policy start under the agent's own credential once the
-            # card was withdrawn or expired and the setting moved (lead RULED 9a55e501 (2), page probe353). A wait
-            # that fails raises (approval_unavailable, retried by task); any other answer is the closed card.
-            if grant_spent(ap.wait(task), key):
+            # card was withdrawn or expired and the setting moved (lead RULED 9a55e501 (2), page probe353).
+            waited = ap.wait(task)
+            if grant_spent(waited, key):
                 return _adopted(proof, guard_adopt)
-            return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+            if started_without_grant(waited, key):
+                return None, {"error": "approval_card_closed", "instruction": ORDER_CARD_CLOSED}
+            # Neither read (review-b #628 S1): a wait that fails raises, and a wait that answers anything else (a
+            # refusal doc for an unreadable log, no actions, junk) proves neither a grant nor its absence. A person's
+            # grant may be spent and the order placed, so never "nothing was ordered": the honest "could not run",
+            # retried by the same draftId (the recorded task is then read by the known-task path).
+            return None, {"error": "approval_unavailable", "instruction": ORDER_APPROVAL_UNAVAILABLE}
     else:
         task = known_task
         if not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task):
@@ -407,8 +413,23 @@ def grant_spent(waited, key) -> bool:
     core's human-only `grant` verb; a policy start leaves it `executed`). Core answers a propose `requested` +
     `executed` whenever the key ever had a request, whoever started it (gate.ts:5369-5380), so that answer alone proves
     nothing. Every adoption of a started draft (authorize_order, `_forkicks_grant`) asks this; anything else is False."""
+    return _own_spent_state(waited, key) == "granted"
+
+
+def started_without_grant(waited, key) -> bool:
+    """The wait PROVES no person granted this started draft: a closed card (wait exit 1/3/7 with a closed state), or a
+    spent read whose one action for `key` is `executed` (core's state for a policy start; never set by a grant). Only
+    this lets the executed branch say "nothing was ordered"; any other read is unknown, not closed."""
+    if waited.exit_code in (1, 3, 7) and waited.status in CARD_CLOSED_STATES:
+        return True
+    return _own_spent_state(waited, key) == "executed"
+
+
+def _own_spent_state(waited, key):
+    """The state of this draft's one action on a spent read (exit 0, `nothing-to-wait-for`/`executed`), else None."""
     if waited.exit_code != 0 or waited.status not in ("nothing-to-wait-for", "executed"):
-        return False
+        return None
     actions = waited.doc.get("actions")
     mine = [a for a in actions if isinstance(a, dict) and a.get("action_key") == key] if isinstance(actions, list) else []
-    return len(mine) == 1 and mine[0].get("state") == "granted"
+    state = mine[0].get("state") if len(mine) == 1 else None
+    return state if isinstance(state, str) else None
