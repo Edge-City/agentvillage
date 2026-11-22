@@ -37,6 +37,13 @@ SERVE_403_0_4_8 = ('{"error":{"code":"serve-flag-not-permitted","message":"--irr
                    'this verb and nothing else. A flag added to it later is refused until somebody decides a harness under '
                    'oversight should have it"},"exit_code":2}').encode()
 CLI_STDERR_0_4_8 = '{"error":{"code":"usage","message":"unknown flag --irreversible"}}\n'
+# approval.md#681 at a050b8f0 (built from a copy, run as agent:hermes): the flag on a key that was proposed without it
+# and cannot be floored. Exit 1, this stderr, nothing appended; serve answers 200 wrapping the same bytes.
+REFUSED_681 = {
+    'already-decided (granted)': '{"ok":false,"error":{"code":"already-decided","message":"action marketplace.app.action:forkicks.order.confirm:fk-draft-probe-0001 was proposed without --irreversible and a person has already answered that request (granted at seq 4), so the declaration cannot be recorded for this key and the key is NOT floored. A key keeps what it was first proposed with: propose the irreversible action under a new key. Nothing was appended.","state":"granted"}}\n',
+    'already-decided (rejected)': '{"ok":false,"error":{"code":"already-decided","message":"action marketplace.app.action:forkicks.order.confirm:fk-draft-probe-0001 was proposed without --irreversible and a person has already answered that request (rejected at seq 4), so the declaration cannot be recorded for this key and the key is NOT floored. A key keeps what it was first proposed with: propose the irreversible action under a new key. Nothing was appended.","state":"rejected"}}\n',
+    'task-already-registered': '{"ok":false,"error":{"code":"task-already-registered","message":"action marketplace.app.action:forkicks.order.confirm:fk-draft-probe-0001 is already registered under task propose:8fe7a0dc56ac0138aed0049a59e13e17 without --irreversible, and the policy authorizes its class on its own (allow_irreversible), so no request is filed that could record the declaration: the key is NOT floored. A key keeps what it was first proposed with: propose the irreversible action under a new key. Nothing was appended."}}\n',
+}
 
 
 def served(exit_code, stdout='', stderr=''):
@@ -361,6 +368,52 @@ class ForKicksIrreversibleTest(unittest.TestCase):
         # A spent read is not taken for the closed card or the could-not-run answer at exit 6 or exit 0 + granted.
         (proof, refusal), _, _ = self.known(result, coded(6, status='executed', actions=[{'action_key': key, 'state': 'executed'}]))
         self.assertEqual(refusal['error'], 'approval_required')
+
+    # ---- core #681 at a050b8f0: a flagged propose that cannot floor the key is a STOP (lead ruling) ----------------
+
+    def refused_681(self):
+        """The real refusals (built a050b8f0, run on throwaway stores; nothing appended), in the two forms the plugin
+        can receive: serve's own 200 body, and the CLI's output through a transport that wraps it the same way."""
+        out = {}
+        for name, stderr in REFUSED_681.items():
+            out[name + ' (serve)'] = (200, json.dumps({'exit_code': 1, 'stdout': '', 'stderr': stderr, 'stdout_truncated': False, 'stderr_truncated': False}).encode())
+            out[name + ' (cli)'] = served(1, '', stderr)
+        return out
+
+    def test_681_a_key_that_cannot_be_floored_stops_the_order_with_no_unflagged_propose(self):
+        result, order = self.prepare(); self.next_turn()
+        for label, refusal in self.refused_681().items():
+            for op in ('confirm', 'prepare'):
+                with self.subTest(label, op=op):
+                    self.fresh(result); self.transport.reset_mock(); self.transport.return_value = result
+                    serve = Serve([refusal, AssertionError('never an unflagged propose on the old key')])
+                    with patch.object(fk, 'approval_modules', return_value=self.real_client(serve)):
+                        if op == 'confirm':
+                            self.transport.return_value = {'orderId': 'order-1'}
+                            output = self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})
+                            self.assertEqual(output, {'error': 'approval_refused', 'instruction': mini.ORDER_APPROVAL_REFUSED})
+                            self.transport.assert_not_called()  # no purchase
+                        else:
+                            output = self.call({'operation': 'forkicks.order.prepare', **order})
+                            self.assertEqual((output['approval'], output['error'], output['instruction']),
+                                             ('refused', 'approval_refused', mini.ORDER_CARD_NOT_RAISED))
+                            self.assertEqual([c.args[1]['operation'] for c in self.transport.call_args_list], ['forkicks.order.prepare'])
+                    self.assertEqual(serve.verbs(), ['propose'])  # one flagged propose: no retry, no wait, no start
+                    self.assertIs(serve.propose_flags()[0]['--irreversible'], True)
+                    self.assertFalse(Path(self.tmp.name, 'forkicks-drafts', result['draftId'] + '.card').exists())
+
+    def test_681_a_flagged_propose_over_a_pending_unflagged_request_is_the_card(self):
+        # Core withdraws the pending request (superseded) and files a floored one: `requested`, not idempotent, same task.
+        result, _ = self.prepare()
+        doc = {'ok': True, 'task': TASK, 'action_key': self.key(result), 'class': fk.APPROVAL_CLASS, 'payload_hash': result['payloadHash'],
+               'decision': 'requested', 'state': 'requested', 'seq': 5, 'idempotent': False}
+        self.fresh(result)
+        serve = Serve([served(0, json.dumps(doc) + '\n'), AssertionError('one propose')])
+        proposed = []
+        with patch.object(fk, 'approval_modules', return_value=self.real_client(serve)):
+            proof, refusal = fk.authorize_order(self.record(result), result['draftId'], on_proposed=proposed.append)
+        self.assertEqual(proposed, [TASK]); self.assertIsNone(refusal); self.assertEqual(proof['taskId'], TASK)
+        self.assertEqual(serve.verbs(), ['propose', 'wait', 'start'])
 
     def test_n3_leaves_a_fresh_propose_as_it_was(self):
         # N3 is the KNOWN-task path only. A fresh propose answered `requested` (not `executed`) whose wait then reads

@@ -141,6 +141,10 @@ OTHER_ANSWERS = {
     "class_not_requestable": served(1, "", json.dumps({"error": {"code": "class-not-agent-requestable", "message": "x"}}) + "\n"),
     "duplicate_request": served(1, "", json.dumps({"error": {"code": "duplicate-request", "message": "x"}}) + "\n"),
     "autonomous": served(0, json.dumps({"ok": True, "task": TASK, "decision": "autonomous"}) + "\n"),
+    # approval.md#681 (a050b8f0, run): the flag on a key first proposed without it that cannot be floored. A STOP,
+    # never an unflagged retry on the old key (lead ruling): exit 1, nothing appended.
+    "already_decided": served(1, "", json.dumps({"ok": False, "error": {"code": "already-decided", "message": "action ... was proposed without --irreversible and a person has already answered that request (granted at seq 4), so the declaration cannot be recorded for this key and the key is NOT floored. A key keeps what it was first proposed with: propose the irreversible action under a new key. Nothing was appended.", "state": "granted"}}) + "\n"),
+    "task_already_registered": served(1, "", json.dumps({"ok": False, "error": {"code": "task-already-registered", "message": "action ... is already registered under task propose:... without --irreversible, and the policy authorizes its class on its own (allow_irreversible), so no request is filed that could record the declaration: the key is NOT floored. A key keeps what it was first proposed with: propose the irreversible action under a new key. Nothing was appended."}}) + "\n"),
 }
 
 
