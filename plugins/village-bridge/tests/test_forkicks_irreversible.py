@@ -111,17 +111,16 @@ class ForKicksIrreversibleTest(unittest.TestCase):
         if not hasattr(self, 'gate'):
             gate = patch.object(bridge, 'gate_verified', return_value=None); self.gate = gate.start(); self.addCleanup(gate.stop)
 
-    def preview(self):
-        draft = '550e8400-e29b-41d4-a716-446655440000'
+    def preview(self, draft='550e8400-e29b-41d4-a716-446655440000'):
         order = {'items': [{'itemId': 'coffee', 'qty': 2, 'optionIds': ['oat']}], 'fulfilment': {'type': 'pickup', 'locationId': 'cafe', 'date': '2026-10-19'}, 'paymentMethod': 'upi', 'note': 'less sugar'}
         quote = {'quoteId': 'quote-1', 'canOrder': True, 'totalInr': 380, 'location': {'name': 'Café', 'address': 'Mandrem, Goa', 'opens': '2026-10-19T08:00:00+05:30'}, 'lines': [{'name': 'Coffee', 'qty': 2, 'options': ['oat milk'], 'unitInr': 190, 'lineInr': 380}]}
         payload = {'appId': 'forkicks', 'operation': 'forkicks.order.confirm', 'preview': {'appId': 'forkicks', 'draftId': draft, **order, 'quote': quote, 'displayName': 'Test resident'}}
         return {'draftId': draft, 'quote': quote, 'displayName': 'Test resident', 'approvalPayload': payload, 'payloadHash': hashlib.sha256(fk.canonical(payload).encode()).hexdigest()}, order
 
-    def prepare(self):
+    def prepare(self, draft='550e8400-e29b-41d4-a716-446655440000'):
         """A saved draft (its prepare's own card is not this file's subject: the daemon is a stand-in there)."""
         self.enable()
-        result, order = self.preview()
+        result, order = self.preview(draft)
         self.transport.return_value = result
         with patch.object(fk, 'approval_modules', side_effect=ValueError('approval_unavailable')):
             response = self.call({'operation': 'forkicks.order.prepare', **order})
@@ -391,7 +390,10 @@ class ForKicksIrreversibleTest(unittest.TestCase):
                         if op == 'confirm':
                             self.transport.return_value = {'orderId': 'order-1'}
                             output = self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})
-                            self.assertEqual(output, {'error': 'approval_refused', 'instruction': mini.ORDER_APPROVAL_REFUSED})
+                            # already-decided: the key can never be floored, so this draft is closed for good (lead,
+                            # read of #629); task-already-registered keeps the refusal words.
+                            words = mini.ORDER_CARD_CLOSED if label.startswith('already-decided') else mini.ORDER_APPROVAL_REFUSED
+                            self.assertEqual(output, {'error': 'approval_refused', 'instruction': words})
                             self.transport.assert_not_called()  # no purchase
                         else:
                             output = self.call({'operation': 'forkicks.order.prepare', **order})
@@ -451,3 +453,68 @@ class ForKicksIrreversibleTest(unittest.TestCase):
                         output = self.call({'operation': 'forkicks.order.prepare', **order})
                         self.assertEqual((output['approval'], output['instruction']), ('unavailable', mini.ORDER_STARTED_UNREAD))
                 ap.start.assert_not_called()
+
+    # ---- follow-ups from the lead's read of #629 --------------------------------------------------------------------
+
+    def test_the_words_for_each_refused_propose_code(self):
+        # The agent's words for a refused propose, by core's refusal code (confirm path; prepare keeps
+        # ORDER_CARD_NOT_RAISED for all of them, pinned in test_681_a_key_that_cannot_be_floored...).
+        result, _ = self.prepare(); self.next_turn()
+        cases = {'already-decided': mini.ORDER_CARD_CLOSED, 'task-already-registered': mini.ORDER_APPROVAL_REFUSED,
+                 'duplicate-request': mini.ORDER_APPROVAL_REFUSED, 'class-not-agent-requestable': mini.ORDER_APPROVAL_REFUSED,
+                 'payload-mismatch': mini.ORDER_APPROVAL_REFUSED, None: mini.ORDER_APPROVAL_REFUSED}
+        for code, words in cases.items():
+            with self.subTest(code=code):
+                self.fresh(result)
+                ap = Mock()
+                ap.propose.return_value = types.SimpleNamespace(ok=False, exit_code=1, status=None, error_code=code,
+                                                                doc={'ok': False, **({'error': {'code': code, 'message': 'x'}} if code else {})})
+                with patch.object(fk, 'approval_modules', return_value=ap):
+                    output = self.call({'operation': 'forkicks.order.confirm', 'draftId': result['draftId']})
+                self.assertEqual(output, {'error': 'approval_refused', 'instruction': words})
+                ap.propose.assert_called_once(); ap.wait.assert_not_called(); ap.start.assert_not_called()
+                self.transport.assert_not_called()
+        # The code only counts on a refused answer: a `requested` answer that carries the word anywhere is the card.
+        self.fresh(result)
+        ap = Mock()
+        ap.propose.return_value = types.SimpleNamespace(ok=True, exit_code=0, status=None, error_code='already-decided',
+                                                        doc={'ok': True, 'task': TASK, 'decision': 'autonomous', 'payload_hash': result['payloadHash']})
+        with patch.object(fk, 'approval_modules', return_value=ap):
+            self.assertEqual(fk.authorize_order(self.record(result), result['draftId']), (None, {'error': 'approval_refused'}))
+
+    def test_two_orders_get_two_approval_keys_and_a_retried_draft_keeps_its_key(self):
+        # Two drafts whose ids differ only in their LAST character, so a key cut short anywhere collides.
+        a_id, b_id = '550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001'
+        proposed = []
+
+        def daemon():
+            ap = Mock()
+            def propose(cls, key, summary, payload, irreversible=False):
+                proposed.append(key)
+                task = 'propose:' + hashlib.md5(key.encode()).hexdigest()  # core derives the task from the key
+                return answer(ok=True, task=task, decision='requested', state='requested', payload_hash=hashlib.sha256(payload.encode()).hexdigest())
+            ap.propose.side_effect = propose
+            ap.wait.return_value = answer(status='granted')
+            ap.start.return_value = answer(ok=True, authorization='grant')
+            return ap
+
+        sent = {}
+        for draft in (a_id, b_id):
+            result, _ = self.prepare(draft); self.next_turn()
+            ap = daemon()
+            with patch.object(fk, 'approval_modules', return_value=ap):
+                output = self.call({'operation': 'forkicks.order.confirm', 'draftId': draft})
+            self.assertEqual(output['data']['orderId'], 'order-1', draft)
+            sent[draft] = self.transport.call_args.args[1]
+            self.assertEqual(ap.start.call_args.args[1], proposed[-1])  # the start spends this draft's own key
+        key_a, key_b = proposed
+        self.assertNotEqual(key_a, key_b, 'two orders must never share one approval key')
+        self.assertEqual(key_a, fk.APPROVAL_CLASS + ':forkicks.order.confirm:' + a_id)
+        self.assertEqual(key_b, fk.APPROVAL_CLASS + ':forkicks.order.confirm:' + b_id)
+        self.assertNotEqual(sent[a_id]['approval']['taskId'], sent[b_id]['approval']['taskId'])
+        # The same draft retried (its markers lost, so it proposes again): the same key, so core answers the same task.
+        result_a, _ = self.preview(a_id)
+        self.fresh(result_a)
+        with patch.object(fk, 'approval_modules', return_value=daemon()):
+            fk.authorize_order(self.record(result_a), a_id)
+        self.assertEqual(proposed, [key_a, key_b, key_a])
