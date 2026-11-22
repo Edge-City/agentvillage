@@ -1,0 +1,1029 @@
+{
+  "about": "B-167N new-calls expectations: one entry per call a skill or mini-app adds or changes (recipes by file + command, harness-tool envelopes by tool + input), the outcome its author declares under the village default template and in each settings cell (class, decision, card_style, matrix), and for a limiting entry Carter's acceptance by name (accepted_by human:carter, accepted_at YYYY-MM-DD). Read by approval.md's scripts/overlay-recipes-check.mjs --expected (scripts/approval-class-diff.sh). Protected like the allowlist: a change here is reviewed by approval and pinned.",
+  "template": "village default",
+  "entries": [
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.order.confirm",
+        "draftId": "fk-draft-0001"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "a purchase always asks. INTERIM (Carter, 22 Nov 2026): today's live behaviour, an order refused under autonomous, supervised-retro and supervised-live, is accepted until the For Kicks card build lands; that build rewrites this entry to its card outcome and removes this acceptance",
+      "owner": "ov#399/#406/#407",
+      "propose": {
+        "class": "marketplace.app.action",
+        "key": "marketplace.app.action:forkicks.order.confirm:fk-draft-0001",
+        "summary": "For Kicks order",
+        "payload": {
+          "appId": "forkicks",
+          "operation": "forkicks.order.confirm",
+          "preview": {
+            "appId": "forkicks",
+            "draftId": "fk-draft-0001",
+            "quote": {
+              "lines": [
+                {
+                  "itemId": "item-0001",
+                  "name": "Cold brew",
+                  "qty": 1,
+                  "options": [],
+                  "optionIds": [],
+                  "unitInr": 250,
+                  "lineInr": 250
+                }
+              ],
+              "totalInr": 250,
+              "location": {
+                "name": "Test cafe stop",
+                "address": "Test address",
+                "opens": "2026-10-22T08:00:00+05:30"
+              }
+            },
+            "displayName": "Test resident",
+            "items": [
+              {
+                "itemId": "item-0001",
+                "qty": 1,
+                "optionIds": []
+              }
+            ],
+            "fulfilment": {
+              "type": "pickup",
+              "locationId": "loc-0001",
+              "date": "2026-10-22"
+            },
+            "paymentMethod": "upi"
+          }
+        },
+        "source": "plugins/village-bridge/_forkicks.py:345",
+        "accepts": [
+          "requested"
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "refused",
+          "supervised-retro": "refused",
+          "supervised-live": "refused",
+          "manual": "card"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.menu",
+        "format": "image"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks browse: reading the menu runs on its own, as every village read does (marketplace.app.read is autonomous in the village default).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.schedule",
+        "days": 7
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks browse: reading the schedule runs on its own, as every village read does (marketplace.app.read is autonomous in the village default).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "forkicks.order.prepare",
+        "items": [
+          {
+            "itemId": "item-0001",
+            "qty": 1,
+            "optionIds": []
+          }
+        ],
+        "fulfilment": {
+          "type": "pickup",
+          "locationId": "loc-0001"
+        },
+        "paymentMethod": "upi"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "For Kicks quote and draft: preparing the exact order preview runs on its own through the village tool; the purchase itself asks at confirm (its own propose).",
+      "owner": "ov#399/#406/#407"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "list_cities",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "find_scene_entities",
+        "arguments": {
+          "kind": "venue",
+          "query": "test",
+          "city": "Goa"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_artist",
+        "arguments": {
+          "query": "test"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_venue",
+        "arguments": {
+          "query": "test"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "search_events",
+        "arguments": {
+          "city": "Goa",
+          "when": "today"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "recommend_events",
+        "arguments": {
+          "city": "Goa",
+          "when": "this weekend"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.read",
+        "appId": "dizko",
+        "tool": "get_event",
+        "arguments": {
+          "id": "evt-0001"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko public read through the village tool: runs on its own with no card (Carter L17375: Dizko works today with zero approval blockages).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.read",
+        "appId": "dizko",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko reads its own context namespace through the village tool: runs on its own with no card (NEW-03, rc44).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.write",
+        "appId": "dizko",
+        "arguments": {
+          "key": "test-note",
+          "value": "fake"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Dizko saves the owner's note in its own context namespace: no card, the village tool's gated-write path (NEW-03, rc44; __init__.py gate_verified).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.read",
+        "appId": "mosaic",
+        "arguments": {}
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Mosaic reads its own context namespace through the village tool: runs on its own with no card (NEW-03, rc44).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "mini-app.context.write",
+        "appId": "mosaic",
+        "arguments": {
+          "key": "test-note",
+          "value": "fake"
+        }
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Mosaic saves the owner's note in its own context namespace: no card, the village tool's gated-write path (NEW-03, rc44; __init__.py gate_verified).",
+      "owner": "ov#421 (mini-apps v2 manifests)"
+    },
+    {
+      "file": "skills/edgeos/SKILL.md",
+      "command": "bun skills/edgeos/scripts/edgeos.ts rsvp {event_id}",
+      "class": "exec.local",
+      "decision": "auto",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "EdgeOS RSVP runs on its own today with no card (B-172 cancelled, DECISIONS 21 Oct): pinned so no core or template move adds a gate to it.",
+      "owner": "skills/edgeos (EdgeOS skill; B-167N pin)"
+    },
+    {
+      "file": "skills/edgeos/SKILL.md",
+      "command": "bun skills/edgeos/scripts/edgeos.ts rsvp {event_id} --occurrence {occurrence_iso}",
+      "class": "exec.local",
+      "decision": "auto",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "EdgeOS RSVP runs on its own today with no card (B-172 cancelled, DECISIONS 21 Oct): pinned so no core or template move adds a gate to it.",
+      "owner": "skills/edgeos (EdgeOS skill; B-167N pin)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.initialize"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.initialize): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.guide"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.guide): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_hours"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_hours): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_shifts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_shifts): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.get_shift"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.get_shift): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.plan_view"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.plan_view): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.open_shifts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.open_shifts): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.my_requests"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.my_requests): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.move_targets"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.move_targets): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.propose"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers read (eci-volunteers.propose): runs on its own as every village read does; marketplace.app.read is autonomous in the village default. propose only checks a change and returns a code.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.confirm"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers write (eci-volunteers.confirm): the hook sees the village tool, marketplace.app.read, autonomous in the village default; the bridge sends it only for a code a propose showed in this conversation, and no daemon propose sits behind it.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "eci-volunteers.link"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Edge City Volunteers write (eci-volunteers.link): the hook sees the village tool, marketplace.app.read, autonomous in the village default; the bridge sends it only for a code a propose showed in this conversation, and no daemon propose sits behind it.",
+      "owner": "ov#591 (Edge City Volunteers v3 reviewed app)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "kismet.web_link"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Kismet web link (kismet.web_link): opens Kismet on the web in the owner's private chat; the hook sees the village tool, marketplace.app.read, autonomous in the village default; no daemon propose behind it.",
+      "owner": "ov#599 (Kismet 1.2.0)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "zzz.schedule_posts"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "zzz.bot repeating posts (zzz.schedule_posts, an owner-only write on the owner's ask): the hook sees the village tool, marketplace.app.read, autonomous in the village default; no daemon propose behind it.",
+      "owner": "ov#595 (zzzbot repeating posts)"
+    },
+    {
+      "tool": "village",
+      "input": {
+        "operation": "gold-stars.send",
+        "draftId": "gs-draft-0001"
+      },
+      "class": "marketplace.app.read",
+      "decision": "auto",
+      "card_style": "minimal",
+      "template": "village default",
+      "matrix": {
+        "ask": "card",
+        "autonomous": "auto",
+        "supervised-retro": "auto",
+        "supervised-live": "sampled",
+        "manual": "card"
+      },
+      "reason": "Gold Stars send: the hook sees the village tool (marketplace.app.read, autonomous); the bridge then proposes marketplace.app.action.gold-stars.send, autonomous in the village default, so a confirmed star sends with no card; under ask or manual it cards.",
+      "owner": "overlay 944244c3 (Gold Stars mini-app; B-133 policy row)",
+      "propose": {
+        "class": "marketplace.app.action.gold-stars.send",
+        "key": "marketplace.app.action.gold-stars.send:gs-draft-0001",
+        "summary": "Send one Gold Star: Test resident",
+        "payload": {
+          "appId": "gold-stars",
+          "operation": "gold-stars.send",
+          "preview": {
+            "appId": "gold-stars",
+            "attendeeId": "att-0001",
+            "draftId": "gs-draft-0001",
+            "note": "Thank you for the fixture",
+            "recipientName": "Test resident",
+            "visibility": "named"
+          }
+        },
+        "source": "plugins/village-bridge/_mini_apps.py:379",
+        "accepts": [
+          "autonomous",
+          "requested"
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "refused",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.inferred.index): the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing publishes without the resident's yes.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.inferred.index",
+        "key": "intent.publish.inferred.index:0193a6c0-0000-7000-8000-000000000001",
+        "summary": "Publish to Index an intention your agent inferred (intention 0193a6c0-0000-7000-8000-000000000001).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:401",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.stated.index): the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, which the village default gives this class.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.stated.index",
+        "key": "intent.publish.stated.index:0193a6c0-0000-7000-8000-000000000002",
+        "summary": "Publish to Index an intention you stated (intention 0193a6c0-0000-7000-8000-000000000002).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:401",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.inferred.index): the first propose of a held intention, behind no hooked call (the av-events plugin owns no gated tool): this class is manual in the village default, so the resident gets a minimal card and Index publishes only on a yes.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.inferred.index",
+        "key": "intent.publish.inferred.index:0193a6c0-0000-7000-8000-000000000003",
+        "summary": "Publish to Index an intention your agent inferred (intention 0193a6c0-0000-7000-8000-000000000003).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:424",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_record_intention.py",
+            "function": "_held_through_approval",
+            "class": "intent.publish.inferred.index"
+          }
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "template": "village default",
+      "reason": "Intent publish (intent.publish.stated.index): the first propose of a held intention, behind no hooked call (the av-events plugin owns no gated tool): this class is autonomous in the village default, so a stated intention publishes with no card; under ask or manual it cards.",
+      "owner": "overlay plugins/av-events/_intent_approval.py (intent publish to Index)",
+      "propose": {
+        "class": "intent.publish.stated.index",
+        "key": "intent.publish.stated.index:0193a6c0-0000-7000-8000-000000000004",
+        "summary": "Publish to Index an intention you stated (intention 0193a6c0-0000-7000-8000-000000000004).",
+        "payload": {
+          "text": "Find a climbing partner for Saturday mornings"
+        },
+        "source": "plugins/av-events/_intent_approval.py:424",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_record_intention.py",
+            "function": "_stated_through_approval",
+            "class": "intent.publish.stated.index"
+          }
+        ],
+        "decision": "auto",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      }
+    },
+    {
+      "template": "village default",
+      "reason": "Digest share: the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing is sent without the resident's yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "digest.share",
+        "key": "digest.share:5b0c1f2e-0000-4000-8000-000000000001",
+        "summary": "Share a digest your agent drafted with the village until 2026-11-28T10:00:00Z (digest 5b0c1f2e-0000-4000-8000-000000000001).",
+        "payload": {
+          "digest_id": "5b0c1f2e-0000-4000-8000-000000000001",
+          "scope": "village",
+          "text": "A fixture digest about my week",
+          "expires_at": "2026-11-28T10:00:00Z"
+        },
+        "source": "plugins/av-events/_share_vote.py:1077",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "refused",
+          "manual": "refused"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "template": "village default",
+      "reason": "Village vote: the same propose again before the start, to check that the policy still clears the key; the plugin goes on only with autonomous or supervised, so under the village default (manual) this re-check does not clear and nothing is sent without the resident's yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "village.vote",
+        "key": "village.vote:weekly-2026-11-21:6c1d2e3f-0000-4000-8000-000000000002",
+        "summary": "Answer to send for you: Yes (option yes). Weekly village question weekly-2026-11-21: “Should the fixture pass?”",
+        "payload": {
+          "question_id": "weekly-2026-11-21",
+          "answer": "yes"
+        },
+        "source": "plugins/av-events/_share_vote.py:1077",
+        "accepts": [
+          "autonomous",
+          "supervised"
+        ],
+        "decision": "refused",
+        "matrix": {
+          "ask": "refused",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "refused"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "template": "village default",
+      "reason": "Digest share: the first propose of a held entry, behind no hooked call (the av-events plugin owns no gated tool); the class is manual in the village default, so the resident gets a minimal card and nothing is sent without a yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "digest.share",
+        "key": "digest.share:5b0c1f2e-0000-4000-8000-000000000002",
+        "summary": "Share a digest your agent drafted with the village until 2026-11-28T10:00:00Z (digest 5b0c1f2e-0000-4000-8000-000000000002).",
+        "payload": {
+          "digest_id": "5b0c1f2e-0000-4000-8000-000000000002",
+          "scope": "village",
+          "text": "A fixture digest about my week",
+          "expires_at": "2026-11-28T10:00:00Z"
+        },
+        "source": "plugins/av-events/_share_vote.py:1119",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_share_vote.py",
+            "function": "_share",
+            "class": "digest.share"
+          }
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    },
+    {
+      "template": "village default",
+      "reason": "Village vote: the first propose of a held entry, behind no hooked call (the av-events plugin owns no gated tool); the class is manual in the village default, so the resident gets a minimal card and nothing is sent without a yes.",
+      "owner": "overlay plugins/av-events/_share_vote.py (digest share and village vote)",
+      "propose": {
+        "class": "village.vote",
+        "key": "village.vote:weekly-2026-11-22:6c1d2e3f-0000-4000-8000-000000000002",
+        "summary": "Answer to send for you: Yes (option yes). Weekly village question weekly-2026-11-22: “Should the fixture pass?”",
+        "payload": {
+          "question_id": "weekly-2026-11-22",
+          "answer": "yes"
+        },
+        "source": "plugins/av-events/_share_vote.py:1119",
+        "accepts": [
+          "autonomous",
+          "requested",
+          "supervised"
+        ],
+        "writers": [
+          {
+            "file": "plugins/av-events/_share_vote.py",
+            "function": "_vote",
+            "class": "village.vote"
+          }
+        ],
+        "decision": "card",
+        "card_style": "minimal",
+        "matrix": {
+          "ask": "card",
+          "autonomous": "auto",
+          "supervised-retro": "auto",
+          "supervised-live": "sampled",
+          "manual": "card"
+        }
+      },
+      "accepted_by": "human:carter",
+      "accepted_at": "2026-11-22"
+    }
+  ]
+}
