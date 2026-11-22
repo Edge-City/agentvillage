@@ -228,12 +228,11 @@ jobs:
   # One source of truth: the extractor and the check are approval.md's own
   # scripts, checked out at the pinned commit below (approval-md/approval.md is
   # public, so no token). The ref is the one line marked APPROVAL_MD_TOOL_REF
-  # below. Until the approval.md NEW-CALLS PR (B-167N, stacked on the B-167 gate
-  # PR, #678) merges, it names that PR's head commit. B-167N fold 1 M4 + fold 2
-  # S-D1: the job fails unless that commit is on approval.md main's first-parent
-  # line (a state main held, never a merge-queue branch commit) at or above the
-  # floor in tool-ref-on-main.sh, so this job stays red until that PR merges and
-  # the ref (and the floor) move to the commit that merges it.
+  # below: the commit that merged the approval.md NEW-CALLS PR (B-167N,
+  # approval.md#679) on approval.md main. B-167N fold 1 M4 + fold 2 S-D1: the
+  # job fails unless that commit is on approval.md main's first-parent line (a
+  # state main held, never a merge-queue branch commit) at or above the floor
+  # in tool-ref-on-main.sh, which is the same commit.
   #
   # B-167N fold 2 M-D1 (the review's delta and its ruling): the tool is
   # a fresh clone in the runner's temp dir, outside this checkout, so no file of
@@ -259,7 +258,7 @@ jobs:
     timeout-minutes: 25
     env:
       # APPROVAL_MD_TOOL_REF, see the comment above: the one place the ref is named.
-      AV_APPROVAL_MD_TOOL_REF: 4dc2da330f7afeb9e4d00630d3a4bc9d8c313b3e # APPROVAL_MD_TOOL_REF: head of the approval.md NEW-CALLS PR (stacked on #678); moves to that PR's merge commit on approval.md main when it merges, with floor_default in tool-ref-on-main.sh
+      AV_APPROVAL_MD_TOOL_REF: a521a91df2ee474a7b3f5cd83f6a02479699bea1 # APPROVAL_MD_TOOL_REF: the merge commit of approval.md#679 (NEW-CALLS) on approval.md main
     steps:
       # Full history, every branch and tag: every event measures against the
       # previous release (the overlay the boxes run), not HEAD^1 (B-167 fold 1 S-2;

@@ -16,9 +16,9 @@
 #   whole. (A queue group of several PRs also puts its in-between merge results on
 #   that line; each is main plus reviewed PRs, built by the queue.)
 # - The floor (fold 2 S-D1): an older main commit carries an older pinned copy and an
-#   older check. floor_default is approval.md v0.4.7's commit (release 0.4.7, #667),
-#   main's head when this was written; move it to the commit that merges #668 when the
-#   ref moves there.
+#   older check. floor_default is the commit that merged approval.md#679 (NEW-CALLS, 22 Nov
+#   2026), the same commit as the ref: no older main state carries Carter's accepted
+#   expected.json.
 # - Intact (fold 2 M-D1): tool-intact.sh, so a clone whose files were changed after
 #   checkout (the review: a dirty tree on a main commit passed fold 1) fails here.
 #
@@ -32,7 +32,7 @@
 #   changed), 2 usage, a floor that is no main state, or a fetch that failed.
 set -euo pipefail
 
-floor_default=eaa762237b6d8303ca791f70dcf9d6831dece5aa
+floor_default=a521a91df2ee474a7b3f5cd83f6a02479699bea1
 dir=${1:-}
 url=${2:-https://github.com/approval-md/approval.md.git}
 floor=${3:-$floor_default}
