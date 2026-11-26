@@ -39,11 +39,18 @@ const REPO = join(import.meta.dir, "..", "..");
 
 /**
  * The approval.md core version the boxes run (control plane APPROVAL_MD_VERSION:
- * 0.4.6 from 19 Oct, 0.4.8 from the fleet roll that follows its publish) and the
- * one this file's rule and classifier run were checked against. Moving the pin
- * means re-running part 2 against that core first.
+ * 0.4.6 from 19 Oct, 0.4.8 after it, 0.4.9 from the control-plane pin that
+ * follows this constant's move) and the one this file's rule and classifier run
+ * were checked against (0.4.9: part 2 and edgeos-verbs-corpus.test.ts run against
+ * an approval-md checkout at v0.4.9, gitHead 78911a2c, 26 Nov 2026). Moving the
+ * pin means re-running part 2 against that core first. From 0.4.9 core judges
+ * where a write lands (approval.md#695): it reads the path-like `--url` value of
+ * part 2's POST case (`--url "-o/home/hermes/…" -d '{}'`) as a landing, and a
+ * landing in another user's home is `files.write.guarded` (minimum manual). On a
+ * machine whose HOME is not /home/hermes that one case fails; run part 2 with
+ * HOME=/home/hermes, the box's home, where it classes `network.call` alone.
  */
-export const APPROVAL_MD_PINNED = "0.4.8";
+export const APPROVAL_MD_PINNED = "0.4.9";
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
