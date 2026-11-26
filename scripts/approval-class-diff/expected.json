@@ -19,8 +19,8 @@
         "supervised-live": "sampled",
         "manual": "card"
       },
-      "reason": "a purchase always asks. INTERIM (Carter, 22 Nov 2026): today's live behaviour, an order refused under autonomous, supervised-retro and supervised-live, is accepted until the For Kicks card build lands; that build rewrites this entry to its card outcome and removes this acceptance",
-      "owner": "ov#399/#406/#407",
+      "reason": "a purchase always asks",
+      "owner": "ov#399/#406/#407, ov#629",
       "propose": {
         "class": "marketplace.app.action",
         "key": "marketplace.app.action:forkicks.order.confirm:fk-draft-0001",
@@ -70,13 +70,14 @@
         "accepts": [
           "requested"
         ],
+        "irreversible": true,
         "decision": "card",
         "card_style": "minimal",
         "matrix": {
           "ask": "card",
-          "autonomous": "refused",
-          "supervised-retro": "refused",
-          "supervised-live": "refused",
+          "autonomous": "card",
+          "supervised-retro": "card",
+          "supervised-live": "card",
           "manual": "card"
         }
       },

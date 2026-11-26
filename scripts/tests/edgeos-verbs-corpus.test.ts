@@ -27,7 +27,7 @@
  * `AV_APPROVAL_MD_CORE_DIR`, and `node` on PATH. Overlay CI has neither, so it skips there; run it
  * locally:
  *
- *   AV_APPROVAL_MD_CORE_DIR=<approval-md checkout at v0.4.8, built> bun test scripts/tests/edgeos-verbs-corpus.test.ts
+ *   AV_APPROVAL_MD_CORE_DIR=<approval-md checkout at v0.4.9, built> bun test scripts/tests/edgeos-verbs-corpus.test.ts
  *
  * No network: the hook only classifies; nothing it allows is run.
  */

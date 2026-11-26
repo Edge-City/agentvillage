@@ -348,6 +348,10 @@ def authorize_order(record, draft_id, on_requested=None, known_task=None, on_pro
         # core for SPEC section 7's floor (a card under every setting, no policy start: approval.md APRV-537); a core
         # without the flag (0.4.8) refuses it and av-events proposes once more without it (lead RULED L60017).
         if not answer.ok or not isinstance(task, str) or not re.fullmatch(r"propose:[a-f0-9]{32}", task) or answer.doc.get("payload_hash") != record["payloadHash"] or answer.doc.get("decision") != "requested":
+            if not answer.ok and getattr(answer, "error_code", None) == "already-decided":
+                # approval.md#681: a person already decided this draft's key unflagged, so it can never be floored;
+                # this draft is closed for good (lead, read of #629): only a new preview, under a new key, can order.
+                return None, {"error": "approval_refused", "instruction": ORDER_CARD_CLOSED}
             return None, {"error": "approval_refused"}
         if on_proposed is not None:
             on_proposed(task)
