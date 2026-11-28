@@ -54,14 +54,19 @@ runner's pinned reader, and config.yaml for a patch of it):
    key, read by the runner's own pinned reader (POLICY_READER_SHA256). A store or reader that cannot be read
    refuses. A pause, a removal, and any job that is not covered pass.
 6. The allow list itself (S1), whatever carries it: `--enabled`, or `"enabled": [`, with a policy key.
+Every path is folded first (`.` and `..` parts, posixpath.normpath; in code and file text too), and a relative
+path whose folder no `cd` in the same command made known counts from the Hermes home, where the terminal starts. A
+command that reads the setting is still put through rules 4 and 5, and a redirect onto guarded code or config is
+never a safe one. The `hermes cron` rule checks EVERY word after the verb (and each `--opt=value` value), not the one
+a parser would pick; a `cronjob_manage` job_id may be a list, and an update's `name` is checked too.
 
 Not caught (a same-user guard against instruction-following, not an operating-system boundary; a multi-step
 evasion by a model that has read this guard is not stopped by any name list): a name built from pieces none of
 which is a FRAGMENT (in code: none of which is a CODE_PIECE or CODE_NAME_PIECE), or across calls (shell variables,
 files, symlinks or a `cd` kept from an earlier call, then a bare glob); a script written earlier without naming
 what it edits, run later by the terminal or as a no-agent cron script; an archive or tree copied into the home by
-a relative name after a `cd`; a renamed ancestor of the Hermes home; any installed script that is not on the lists
-above; text to speech, image and video outputs and browser downloads (their paths are not read); and anything run
+a relative name after a `cd`; a renamed ancestor of the Hermes home; a symlink (text cannot see one); any
+installed script that is not on the lists above; text to speech, image and video outputs and browser downloads (their paths are not read); and anything run
 outside Hermes's tool dispatch (an operator's shell, the installer, are not hooked).
 
 No switch: an off switch would be an `.env` line the agent itself could write. Never raises (Hermes blocks every
@@ -75,6 +80,7 @@ import fnmatch
 import logging
 import os
 import re
+import posixpath
 import shlex
 from typing import Any, Iterator, List, Mapping, Optional
 
@@ -349,7 +355,7 @@ def _segments(command: str) -> List[List[str]]:
     return [segment for segment in segments if segment]
 
 
-def _safe_target(token: str, target: str, in_folder: bool) -> bool:
+def _safe_target(token: str, target: str, in_folder: bool, homes: frozenset = HOME_WORDS) -> bool:
     """A write redirect that provably misses the setting: /dev/null, a descriptor copy, or a literal path that
     names nothing of the setting, holds no glob or variable, does not lie in `av-events`, and is not relative
     after a `cd` into it. A read-write `<>` never is."""
@@ -363,10 +369,13 @@ def _safe_target(token: str, target: str, in_folder: bool) -> bool:
         return False
     if _in_folder(path):
         return False
+    folded = _as_path(path)
+    if _in_folder(folded) or _code_path(folded, homes) or _code_parent(folded, homes) or _home_config(folded, homes, False):
+        return False  # bypass 3: never a safe target onto the code or config the other rules guard
     return path.startswith(("/", "~", "$")) or not in_folder
 
 
-def _words(segment: List[str], in_folder: bool = False) -> Optional[List[str]]:
+def _words(segment: List[str], in_folder: bool = False, homes: frozenset = HOME_WORDS) -> Optional[List[str]]:
     """A simple command's words without its redirections, or None when it writes through one that is not a
     `_safe_target`, or reads a heredoc or here-string."""
     words, skip = [], False
@@ -377,7 +386,7 @@ def _words(segment: List[str], in_folder: bool = False) -> Optional[List[str]]:
             return None
         elif ">" in token:
             target = segment[i + 1] if i + 1 < len(segment) else ""
-            if not _safe_target(token, target, in_folder):
+            if not _safe_target(token, target, in_folder, homes):
                 return None
             skip = True
         elif token != "<":
@@ -424,7 +433,7 @@ def read_only(command: str, homes: frozenset = HOME_WORDS) -> bool:
         return False
     placed = (False, False)
     for segment in segments:
-        words = _words(segment, placed[0])
+        words = _words(segment, placed[0], homes)
         if words is None:
             return False
         if not words:
@@ -449,12 +458,13 @@ def _home_words(environ: Mapping[str, str]) -> frozenset:
 
 
 def _as_path(word: str) -> str:
-    """An argument as a path: the value after a `--flag=`, `of=` or `NAME=`, lower case, without a trailing
-    `/` or `/.`."""
+    """An argument as a path: the value after a `--flag=`, `of=` or `NAME=`, lower case, `.` and `..` parts
+    folded (posixpath.normpath: `plugins/x/../av-events` is `plugins/av-events`), without a trailing `/`.
+    Text alone cannot see a symlink: one made in an earlier call is not followed (state across calls)."""
     value = word.rsplit("=", 1)[-1].lower()
-    while len(value) > 1 and (value.endswith("/") or value.endswith("/.")):
-        value = value[:-1] if value.endswith("/") else value[:-2]
-    return value
+    if value:
+        value = posixpath.normpath(value)
+    return "" if value == "." else value
 
 
 def _could_be_home(parent: str, homes: frozenset, in_home: bool) -> bool:
@@ -592,28 +602,46 @@ def _code_path(path: str, homes: frozenset = HOME_WORDS) -> bool:
         return True
     if _GLOB_CHARS & set(last) and len(parts) > 1 and _could_match(parts[-2], "scripts"):
         folder = path.rsplit("/", 1)[0]
-        if _is_home(folder.rsplit("/", 1)[0] if "/" in folder else "", homes):
+        base = folder.rsplit("/", 1)[0] if "/" in folder else ""
+        if _is_home(base, homes) or (base == "" and _is_relative(path)):
             return any(_could_match(last, sample) for sample in _SCRIPT_SAMPLES)
     return False
 
 
+def _is_relative(path: str) -> bool:
+    return bool(path) and not path.startswith(("/", "~", "$"))
+
+
 def _code_parent(path: str, homes: frozenset) -> bool:
-    """`path` is a CODE_PARENTS folder of the Hermes home (or a CODE_DIRS folder above its scripts)."""
+    """`path` is a CODE_PARENTS folder of the Hermes home. A relative path whose folder no `cd` in the command
+    made known counts from the Hermes home, where the terminal starts on a box (install/config.ts:104 sets
+    terminal.cwd; Hermes falls back to TERMINAL_CWD, then ~: tools/terminal_tool_config.py:48-52)."""
     for seq in CODE_PARENTS:
         suffix = "/".join(seq)
         if path == suffix or path.endswith("/" + suffix):
             prefix = path[: len(path) - len(suffix)].rstrip("/")
-            if _is_home(prefix, homes):
+            if _is_home(prefix, homes) or (prefix == "" and _is_relative(path)):
                 return True
     return False
 
 
 def _resolve(word: str, cwd: str) -> str:
-    """An argument as a path, lower case, joined to the folder a `cd` in the same command made current."""
+    """An argument as a path, lower case, joined to the folder a `cd` in the same command made current, then
+    folded again (a `..` may climb out of that folder)."""
     path = _as_path(word)
     if cwd and path and not path.startswith(("/", "~", "$")):
-        return f"{cwd.rstrip('/')}/{path}"
+        return posixpath.normpath(f"{cwd.rstrip('/')}/{path}")
     return path
+
+
+#: A path-like word with a `.` or `..` part, in free text (code, a file's content).
+_DOTTED_PATH = re.compile(r"[^\s'\"(),+;&|<>`=\[\]{}]*/\.\.?(?=/|[\s'\"(),+;&|<>`=\[\]{}]|$)(?:/[^\s'\"(),+;&|<>`=\[\]{}]*)?")
+
+
+def _folded(text: str) -> str:
+    """`text` with every path-like word that holds a `.` or `..` part folded (bypass 1: `plugins/x/../av-events`
+    in code or in a file's content)."""
+    return _DOTTED_PATH.sub(lambda m: posixpath.normpath(m.group(0)), text)
 
 
 def _home_config(path: str, homes: frozenset, cwd_known: bool) -> bool:
@@ -655,29 +683,38 @@ def _inline_code(name: str, args: List[str]) -> bool:
 
 
 def _hermes_refuses(name: str, args: List[str], environ: Mapping[str, str]) -> bool:
-    """`hermes plugins disable|remove|... av-events|av_events`, `hermes config set|unset ... plugins`, and a
-    `hermes cron resume|run|edit|...` of a covered job the setting keeps off (or `create --name` of one)."""
-    if name != "hermes" or len(args) < 2:
+    """`hermes [global options] plugins disable|remove|rm|uninstall|update ...` naming av-events or av_events,
+    `hermes config <verb> ...` naming CONFIG_WORDS, and `hermes cron resume|enable|update|edit|run ...` or
+    `create|add ...` where ANY word after the verb (each value of `--opt=value` too) is a covered job the setting
+    keeps off. Every word is checked, not the one a parser would pick (bypass 4: argparse takes value options
+    before the positional, `--opt=value`, abbreviations such as `--na`, and global options before the group)."""
+    if name != "hermes":
         return False
-    group, verb, rest = args[0].lower(), args[1].lower(), args[2:]
+    lowered = [arg.lower() for arg in args]
+    group_at = next((i for i, arg in enumerate(lowered) if arg in ("plugins", "config", "cron")), None)
+    if group_at is None:
+        return False
+    verb_at = next((i for i in range(group_at + 1, len(args)) if not args[i].startswith("-")), None)
+    if verb_at is None:
+        return False
+    group, verb = lowered[group_at], lowered[verb_at]
+    words = []
+    for arg in args[verb_at + 1:]:
+        if arg == "--":
+            continue
+        if arg.startswith("-"):
+            if "=" in arg:
+                words.append(arg.split("=", 1)[1])
+            continue
+        words.append(arg)
     if group == "plugins":
-        return verb in HERMES_PLUGIN_VERBS and any(arg.lower() in PLUGIN_NAMES for arg in rest)
+        return verb in HERMES_PLUGIN_VERBS and any(word.lower() in PLUGIN_NAMES for word in words)
     if group == "config":
-        return verb != "show" and any(word in " ".join(rest).lower() for word in CONFIG_WORDS)
-    if group == "cron":
-        if verb == "create":
-            names = [rest[i + 1] for i, arg in enumerate(rest[:-1]) if arg == "--name"]
-            return any(_cron_refuses(None, job, environ) for job in names)
-        if verb in CRON_ON_ACTIONS:
-            refs, skip = [], False
-            for arg in rest:
-                if skip:
-                    skip = False
-                elif arg in ("--at",):
-                    skip = True
-                elif not arg.startswith("-"):
-                    refs.append(arg)
-            return any(_cron_refuses(ref, None, environ) for ref in refs[:1])
+        return verb != "show" and any(piece in " ".join(args[verb_at + 1:]).lower() for piece in CONFIG_WORDS)
+    if verb in ("create", "add"):
+        return any(_cron_refuses(None, word, environ) for word in words)
+    if verb in CRON_ON_ACTIONS:
+        return any(_cron_refuses(word, None, environ) for word in words)
     return False
 
 
@@ -789,12 +826,19 @@ def _cron_refuses(ref: Optional[str], name: Optional[str], environ: Mapping[str,
 
 
 def _cron_tool_refuses(args: dict, environ: Mapping[str, str]) -> bool:
+    """`cronjob_manage` create with a covered `name`; resume/enable/update/edit/run/run_now/trigger whose
+    `job_id` (a string, or each string of a list) is a covered job, or whose `name` (an update renames) is a
+    covered name; unless the setting allows the job."""
     action = str(args.get("action") or "").strip().lower()
+    names = [args["name"]] if isinstance(args.get("name"), str) else []
     if action == "create":
-        return _cron_refuses(None, args.get("name"), environ)
-    if action in CRON_ON_ACTIONS and isinstance(args.get("job_id"), str) and args["job_id"].strip():
-        return _cron_refuses(args["job_id"].strip(), None, environ)
-    return False
+        return any(_cron_refuses(None, job, environ) for job in names)
+    if action not in CRON_ON_ACTIONS:
+        return False
+    raw = args.get("job_id")
+    refs = [raw] if isinstance(raw, str) else [ref for ref in raw if isinstance(ref, str)] if isinstance(raw, (list, tuple)) else []
+    return (any(_cron_refuses(ref.strip(), None, environ) for ref in refs if ref.strip())
+            or any(_cron_refuses(None, job, environ) for job in names))
 
 
 def _v4a_paths(text: str) -> List[str]:
@@ -829,7 +873,7 @@ def _file_tool_refuses(tool_name: str, args: dict, environ: Mapping[str, str]) -
     it, its name in the text, HERMES_SAFE_MODE, the allow-list shape, a config.yaml that would not load
     av-events, an overlay skill's scripts, or a covered cron job switched on."""
     homes = _home_words(environ)
-    texts = [flat(text) for text in _strings(args)]
+    texts = [_folded(flat(text)) for text in _strings(args)]
     if any(piece in text for text in texts for piece in CODE_NAME_PIECES) or any(_allow_shape(text) for text in texts):
         return True
     paths = [args[field] for field in PATH_FIELDS if isinstance(args.get(field), str)]
@@ -859,10 +903,10 @@ def _file_tool_refuses(tool_name: str, args: dict, environ: Mapping[str, str]) -
                     return True
     if tool_name == "skill_manage" and str(args.get("name") or "").strip().lower() in ("index-network", "zzzbot"):
         action = str(args.get("action") or "").lower()
-        file_path = str(args.get("file_path") or "").lstrip("./").lower()
-        if action in ("delete", "remove") or file_path.startswith("scripts/") or any(
-                isinstance(op, dict) and str(op.get("file_path") or "").lstrip("./").lower().startswith("scripts/")
-                for op in (args.get("operations") or [])):
+        file_paths = [args.get("file_path")] + [op.get("file_path") for op in (args.get("operations") or [])
+                                                 if isinstance(op, dict)]
+        folded = [_as_path(str(path)) for path in file_paths if isinstance(path, str) and path]
+        if action in ("delete", "remove") or any(path == "scripts" or path.startswith("scripts/") for path in folded):
             return True
     return tool_name == "cronjob_manage" and _cron_tool_refuses(args, environ)
 
@@ -883,12 +927,16 @@ def _terminal_refuses(command: str, environ: Mapping[str, str]) -> bool:
     homes = _home_words(environ)
     if _allow_shape(text) and (not read_only(command, homes) or _writes_through_redirect(command)):
         return True
-    if names_setting(text, homes):
-        return not read_only(command, homes)
+    named = names_setting(text, homes)
+    if named and not read_only(command, homes):
+        return True
+    # Bypass 3: a read-only command that names the setting still goes through every other rule.
     if _touches_code(command, environ):
         return True
     if _swaps_folder(command, environ):
         return True
+    if named:
+        return False  # provably read-only: no opaque syntax, only READ_ONLY commands or the status shape
     return _has_fragment(text) and _opaque(command)
 
 
@@ -923,7 +971,7 @@ def matches(tool_name: Any, args: Any, environ: Optional[Mapping[str, str]] = No
         code = args.get("code")
         if not isinstance(code, str):
             return False
-        text = flat(code)
+        text = _folded(flat(code))
         return (any(piece in text for piece in CODE_PIECES + CODE_NAME_PIECES) or _allow_shape(text)
                 or names_setting(text, _home_words(environ)))
     command = _command_text(tool_name, args)
