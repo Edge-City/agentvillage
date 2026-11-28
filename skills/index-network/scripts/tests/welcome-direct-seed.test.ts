@@ -301,6 +301,20 @@ describe("the welcome's seed: direct creates, no prepare, no MCP create_intent",
     expect(calls.filter((c) => c.name === "pause_intent").map((c) => c.arguments?.intentId).sort()).toEqual([0x101, 0x102, 0x103].map(idFor));
     expect(text).toBe(golden.seededPausedThree);
   });
+
+  test("paused mode: the setting going OFF while a create is in flight still pauses that intent, and creates no more", async () => {
+    writeLines(LINES);
+    process.env.AV_WELCOME_SEED_MODE = "paused";
+    // The first create lands, and the operator setting is removed before its answer is read.
+    const index = fakeIndex((n) => {
+      if (n === 1) rmSync(postVillagePolicyPath(home), { force: true });
+      return undefined;
+    });
+    const { calls, creates } = await run(index);
+    expect(creates).toHaveLength(1);
+    expect(calls.filter((c) => c.name === "pause_intent").map((c) => c.arguments?.intentId)).toEqual([idFor(0x101)]);
+    expect(index.rows).toEqual([{ id: idFor(0x101), summary: LINES[0], status: "paused" }]);
+  });
 });
 
 // ── --reseed and --reseed --dry-run ──────────────────────────────────────────

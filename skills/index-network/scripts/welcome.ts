@@ -1056,7 +1056,9 @@ async function seedOne(home: string, target: IndexMcpTarget, clock: Clock, mode:
     if (made.id === null) return { out: null, code: "pause-no-id" };
     const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!pauseTarget) return { out: null, code: BUDGET_EXHAUSTED };
-    if (!postVillageAllowed(home, "welcome_seed")) return { out: made, code: "post-village-disabled" };
+    // No policy check between the create and its pause: an intent this run just created is always
+    // paused, also when the operator setting went OFF while the create was in flight. Skipping the
+    // pause there would leave it live. The setting gates the create (above), never the pause.
     return writeRefused(await callIndexTool(pauseTarget, "pause_intent", { intentId: made.id }))
       ? { out: null, code: "pause-refused" }
       : { out: made, code: null };
