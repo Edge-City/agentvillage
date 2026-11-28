@@ -948,7 +948,7 @@ def _output(context: dict, home: Path):
     timeout = _timeout(_budget(MODEL_SECONDS, COMPLETE_SECONDS, MODEL_MIN_SECONDS))
     with httpx.Client(trust_env=False, timeout=timeout) as client_http:
         with OpenAI(api_key=key, base_url=endpoint, http_client=client_http, max_retries=0) as client:
-            if not _post_village_allowed(home):
+            if not _turn_allowed(home, context):
                 raise ValueError("post-village-disabled")
             response = client.chat.completions.create(model=model, messages=[
                 {"role": "system", "content": _system(room) +
@@ -1465,7 +1465,7 @@ def _agent_output(context: dict, home: Path, job_id: str, state: dict):
             raise ValueError("agent-cap")  # today's one call (the claimed turn already counted) runs instead
         state["agent"] = state.get("agent", 0) + 1  # counted before the agent's calls, as a model turn is
         _state_write(home, state)
-        if not _post_village_allowed(home):
+        if not _turn_allowed(home, context):
             raise ValueError("post-village-disabled")
         text, code = _agent_turn(scheduler, job_id, _agent_prompt(room), min(AGENT_SECONDS, left))
         if code is None:
@@ -1477,7 +1477,7 @@ def _agent_output(context: dict, home: Path, job_id: str, state: dict):
         code = _agent_error(error, "agent-output")
     _note(code)
     _turn["room"] = (context, room)
-    if not _post_village_allowed(home):
+    if not _turn_allowed(home, context):
         raise ValueError("post-village-disabled")
     return _output(context, home)
 
@@ -1622,7 +1622,7 @@ def reason_line(error: BaseException) -> str:
     return f"zzz-autonomy: {_step} {name} {_reason(error)}\n"
 
 
-def _post_village_allowed(home: Path):
+def _post_village_allowed(home: Path, key: str = "zzz_event_autonomy"):
     # One canonical reader shipped with the trusted overlay plugin; no sys.path discovery.
     try:
         path = home / "plugins" / "village-bridge" / "_post_village_policy.py"
@@ -1638,9 +1638,22 @@ def _post_village_allowed(home: Path):
             return False
         module = {"__name__": "agentvillage_post_village_policy"}
         exec(compile(raw, "<post-village-policy>", "exec"), module)
-        return module["runtime_allowed"](home, "zzz_event_autonomy")
+        return module["runtime_allowed"](home, key)
     except Exception:
         return False
+
+
+# S2 (review-b on ov#632): an owner's repeating schedule is stored server-side (the app's zzz_owner_schedules row and the
+# zzz.bot new-topic pace it wrote); its posts are this runner's new_topic turns, and the app marks each one by putting
+# this line first in owner_instruction (app owner-schedule.ts scheduleLine). Such a turn also needs zzz_owner_repeating.
+# The line is matched anywhere in the text, so a doubtful turn errs toward no post.
+SCHEDULE_LINE = "(From the Agent Village app) Your owner asked you to post on a schedule about: "
+
+
+def _turn_allowed(home: Path, context: dict) -> bool:
+    instruction = context.get("owner_instruction") if isinstance(context, dict) else None
+    scheduled = isinstance(instruction, str) and SCHEDULE_LINE in instruction
+    return _post_village_allowed(home) and (not scheduled or _post_village_allowed(home, "zzz_owner_repeating"))
 
 
 def run(home: Path):
@@ -1729,7 +1742,7 @@ def _claimed_turn(home: Path, cfg: dict, http, candidate, state: dict):
     context = _activity(http, cfg, "context", **fields)
     if context.get("candidate_id") != candidate["id"] or context.get("kind") != candidate["kind"]:
         raise ValueError("context-mismatch")
-    if not _post_village_allowed(home):
+    if not _turn_allowed(home, context):
         raise ValueError("post-village-disabled")
     if not _installed(home) or _job(home, cfg) is None:
         raise ValueError("authority-changed")
@@ -1746,7 +1759,7 @@ def _claimed_turn(home: Path, cfg: dict, http, candidate, state: dict):
         output, code = _output(context, home), None
     else:
         output, code = _agent_output(context, home, _job(home, cfg), state), None
-    if not _post_village_allowed(home):
+    if not _turn_allowed(home, context):
         raise ValueError("post-village-disabled")
     if not _installed(home) or _job(home, cfg) is None:
         raise ValueError("authority-changed")

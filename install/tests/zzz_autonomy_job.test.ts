@@ -149,7 +149,7 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   const v222=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v222.py.fixture"));
   expect(digest(v222)).toBe("84fd99eae798c4f5447392781557565f4cc03e4ef2361f5bacb59815877caf59");
   expect(v222.equals(current)).toBe(false);
-  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(v222),"a99f640dc63014d7ffa9ec5ea5da7b5f2ded90da4edd8b203ca9294aaeb51317","287b31467c14c2d5a478617f13f4330241d61e32a6ee7cb7a860789875dd5c8d",digest(current)]);
+  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(v222),"a99f640dc63014d7ffa9ec5ea5da7b5f2ded90da4edd8b203ca9294aaeb51317","287b31467c14c2d5a478617f13f4330241d61e32a6ee7cb7a860789875dd5c8d","8c3ec8dc765e46213fe0b5ee5bf4c28b348750162309d950cd7e22229778894e",digest(current)]);
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const shim=join(home,"scripts",AUTONOMY_JOB_SCRIPT);

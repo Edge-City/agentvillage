@@ -41,6 +41,7 @@ export const AUTONOMY_SHIPPED = {
     "a99f640dc63014d7ffa9ec5ea5da7b5f2ded90da4edd8b203ca9294aaeb51317", // + the job check accepts any of the five schedule phases `[0-4]-59/5 * * * *`, so a bridge-token rotation with no re-stage never stops the job (lead L41427, review-a A-93), marked by the RUNNER_ACCEPTS_ANY_SLOT line cp greps (review-b cp#555 S1)
     "287b31467c14c2d5a478617f13f4330241d61e32a6ee7cb7a860789875dd5c8d", // historical India skill text, current exact skill pins; Esmeralda retired
     "8c3ec8dc765e46213fe0b5ee5bf4c28b348750162309d950cd7e22229778894e", // explicit post-village policy gate and pinned canonical reader
+    "a4ee9ccde9fa06c48cd0920fb6bc8873e09c71ddb4cd0b722278f90a7e85ccd3", // + a turn carrying the app's schedule line also needs zzz_owner_repeating (review-b ov#632 S2)
   ],
   "prompts/autonomy.md": ["93b8442797de1957ac5e64eb7477e1288601654fdaccb56fc4791f0bfd608587"],
 } as const;
