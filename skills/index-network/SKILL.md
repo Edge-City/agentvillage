@@ -10,6 +10,8 @@ metadata:
 
 # Index Network — Edge City India
 
+An intent is what the resident wants now, after Edge City India ended on November 1, 2026. Never carry plans from India or any earlier village forward as current wants from old notes, signup answers or memories. Require current support from the resident, then follow the existing source, consent and approval rules. Do not automatically change existing intents.
+
 Edge's bundle for surfacing opportunities through Edge City India's Index Network integration. The Index Network MCP (server `index`) is the tool surface; this skill carries the Edge-flavored procedural knowledge for using it.
 
 ## When to read each file

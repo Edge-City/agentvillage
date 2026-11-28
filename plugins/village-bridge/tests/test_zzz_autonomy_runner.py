@@ -49,11 +49,26 @@ def clients():
 
 
 class TestAutonomyRunner(unittest.TestCase):
+    def test_policy_revocation_during_agent_timeout_blocks_model_fallback(self):
+        policy = self.home / "av-events/post-village-policy.json"
+        def turn(*args):
+            policy.write_text('{"version":1,"enabled":[]}')
+            raise TimeoutError("synthetic timeout")
+        with patch.object(runner, "_room", return_value={"owner": "synthetic", "data": {}}), patch.object(runner, "_hermes", return_value=object()), patch.object(runner, "_private_corpus", return_value=[]), patch.object(runner, "_state_write"), patch.object(runner, "_agent_prompt", return_value="synthetic"), patch.object(runner, "_agent_turn", side_effect=turn), patch.object(runner, "_output") as fallback, patch.object(runner, "_note"):
+            with self.assertRaisesRegex(ValueError, "post-village-disabled"):
+                runner._agent_output({}, self.home, "aaaaaaaaaaaa", {})
+            fallback.assert_not_called()
+
     def setUp(self):
         # run() quiets logging process-wide (_quiet_sdk); restore it so later test files still see their logs.
         self.addCleanup(logging.disable, logging.root.manager.disable)
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name).resolve()  # macOS /var is a symlink; the runner refuses linked parents
+        (self.home / "av-events").mkdir(exist_ok=True)
+        (self.home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_event_autonomy"]}))
+        helper = self.home / "plugins/village-bridge/_post_village_policy.py"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes((Path(__file__).parents[1] / "_post_village_policy.py").read_bytes())
         (self.home / "cron").mkdir()
         self.cfg = {"origin": "https://agents.edgecity.live", "token": TOKEN,
                     "expiresAt": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}
@@ -73,6 +88,36 @@ class TestAutonomyRunner(unittest.TestCase):
 
     def save_job(self):
         (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [self.job]}))
+
+    def test_post_village_off_prevents_any_fetch_or_model_route(self):
+        (self.home / "av-events/post-village-policy.json").unlink()
+        with patch.object(runner, "_activity") as activity, patch.object(runner, "_model_route") as model:
+            runner.run(self.home)
+        activity.assert_not_called(); model.assert_not_called()
+
+    def test_post_village_revocation_before_model_or_complete_prevents_public_write(self):
+        for phase in ("context", "model"):
+            with self.subTest(phase=phase):
+                target = self.home / "av-events/post-village-policy.json"
+                target.write_text(json.dumps({"version": 1, "enabled": ["zzz_event_autonomy"]}))
+                ops = []
+                def activity(_http, _cfg, operation, **_args):
+                    ops.append(operation)
+                    if operation == "claim": return {"candidate": dict(self.CANDIDATE)}
+                    if operation == "context":
+                        if phase == "context": target.unlink()
+                        return {"candidate_id": self.CANDIDATE["id"], "kind": "comment", "agent_turn": False}
+                    raise AssertionError("public complete must not run")
+                def output(_context, _home):
+                    ops.append("model"); target.unlink(); return {"silent": True}
+                with patch.dict(sys.modules, clients()), \
+                        patch.object(runner, "_model_route", return_value=("https://openrouter.ai/api/v1", "fixture", "model")), \
+                        patch.object(runner, "_activity", side_effect=activity), patch.object(runner, "_output", side_effect=output):
+                    with self.assertRaisesRegex(ValueError, "post-village-disabled"):
+                        runner.run(self.home)
+                self.assertEqual(ops, ["claim", "context"] + (["model"] if phase == "model" else []))
+                backoff = self.home / "zzzbot" / runner.BACKOFF_FILE
+                if backoff.exists(): backoff.unlink()
 
     def test_null_claim_makes_zero_model_calls_and_no_completion(self):
         ops = []
@@ -660,7 +705,9 @@ class TestAutonomyRunner(unittest.TestCase):
                 handler = signal.getsignal(signal.SIGALRM)
                 try:
                     # main() as the scheduler runs it, its run() pointed at this test's home.
+                    # A seat-only turn never loads Hermes; isolate prior full-agent test state.
                     with patch.dict(os.environ, env, clear=True), \
+                            patch.object(runner, "_agent_loaded", False), \
                             patch.object(runner, "run", side_effect=lambda _home: real_run(self.home)), \
                             patch.object(runner.os, "write", side_effect=write), \
                             patch.object(runner.os, "_exit", side_effect=SystemExit):
@@ -1101,6 +1148,11 @@ class TestResidentBrief(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name).resolve()
+        (self.home / "av-events").mkdir(exist_ok=True)
+        (self.home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_event_autonomy"]}))
+        helper = self.home / "plugins/village-bridge/_post_village_policy.py"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes((Path(__file__).parents[1] / "_post_village_policy.py").read_bytes())
 
     def brief(self, snippets=None, **fields):
         return {"agent_name": "Juniper", "voice": "warm, brief, curious",

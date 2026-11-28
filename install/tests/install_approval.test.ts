@@ -2195,14 +2195,16 @@ describe("DATA-380: the shim answers allow and block without node", () => {
     }
   });
 
-  test("allow, block, an answered wait and an unreachable facade start no node; every outcome line says path=fast", () => {
-    for (const shell of DATA380_SHELLS) {
-      for (const [mode, code, calls] of [
-        ["allow", 0, 1],
-        ["block", 2, 1],
-        ["waiting", 2, 1],
-        ["unreachable", 2, 1],
-      ] as const) {
+  // Each independent shell/mode retains Bun's default five-second budget.
+  // Grouping all controls in one synchronous test interrupts later fixtures on slower hosts.
+  for (const shell of DATA380_SHELLS) {
+    for (const [mode, code, calls] of [
+      ["allow", 0, 1],
+      ["block", 2, 1],
+      ["waiting", 2, 1],
+      ["unreachable", 2, 1],
+    ] as const) {
+      test(`allow, block, an answered wait and an unreachable facade start no node; every outcome line says path=fast [${shell}: ${mode}]`, () => {
         const fx = shimFixture(mode, null, { shell });
         const r = fx.run();
         expect([shell, mode, r.code, r.calls, fx.nodeCalls()]).toEqual([shell, mode, code, calls, 0]);
@@ -2210,13 +2212,15 @@ describe("DATA-380: the shim answers allow and block without node", () => {
         expect(lines.length).toBeGreaterThan(0);
         for (const line of lines) expect(line).toContain(" path=fast elapsed_ms=");
         expect(fx.log()).toContain("start tool=terminal ");
-      }
+      });
+    }
+    test(`allow, block, an answered wait and an unreachable facade start no node; every outcome line says path=fast [${shell}: wait-then-allow]`, () => {
       const fx = shimFixture("wait-then-allow", null, { shell });
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "30" });
       expect([shell, r.code, r.stdout, r.calls, fx.nodeCalls()]).toEqual([shell, 0, "{}", 3, 0]);
       expect(fx.log().match(/outcome=wait .* path=fast /g)?.length).toBe(2);
-    }
-  });
+    });
+  }
 
   test("the core's own allow, under a UTF-8 locale and Hermes's own envelope layout, starts no node", () => {
     for (const shell of DATA380_SHELLS) {

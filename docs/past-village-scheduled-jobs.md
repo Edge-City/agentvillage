@@ -1,0 +1,58 @@
+# Scheduled work after Edge City India
+
+Edge City India ran October 11 to November 1, 2026 and has ended. The agent's current wants and availability must come from current resident context and verified service results. India guides and old plans remain historical.
+
+This is a source inventory and decision list, not a tenant job audit. Ten core job specifications are declared in `install/install_index.ts`; two zzz.bot job families are conditional, three templates are created only on request, and a preview is temporary. A previous deployment inventory counted fourteen jobs; this document does not establish which jobs any box currently has or which are enabled. Schedules below are source defaults, normally in the configured Hermes zone (Asia/Kolkata by default), with tenant staggering where declared.
+
+After **2026-11-01T18:30:00Z** (November 2 at 00:00 IST), covered work requires an explicit per-job allow in `$HERMES_HOME/av-events/post-village-policy.json`. Missing, unreadable or invalid policy means OFF. The strict schema is `{"version":1,"enabled":["daily_digest"]}`; only the nine keys below are accepted, without duplicates. Legacy cron flags, installed projections and earlier enabled state do not substitute for this post-event choice.
+
+The separate operator command edits one key atomically, preserves other valid choices, and never creates, resumes or runs a job:
+
+```sh
+bun install/post_village_policy.ts status --home /absolute/resident/home
+bun install/post_village_policy.ts set --home /absolute/resident/home --job daily_digest --enabled true
+```
+
+Only an operator should use that command. This same-user configuration is not an operating-system authorization boundary. A valid allow still requires the existing consent, projection, autonomy and approval gates and no resident/admin hold. Generic job enable and resident resume cannot grant an opt-in or upgrade an old ungated job. Resident resume may clear the resident’s own hold only after explicit operator allow and proof of the current installed gate; admin/settings holds remain binding. New covered jobs are created paused; an allowed existing job keeps its enabled/paused state. OFF jobs are paused and read back on reinstall, preserving their IDs and schedules. Failed pause/readback fails the stage and preserves the job; it does not prove the job is paused. Runtime checks also protect direct entry points and recheck after lock waits and immediately before effects. If the operator revokes permission while the digest’s task completion is awaited, its public body is withheld; its already-recorded delivery/task completion is retained to preserve at-most-once handling.
+
+| Policy key | Covered work |
+|---|---|
+| daily_digest | Daily digest, its preparation, and brief/digest-preview aliases |
+| opportunity_midday | Midday opportunity drop |
+| opportunity_evening | Evening opportunity drop |
+| negotiation_summary | Negotiation summary |
+| pending_alert | Pending opportunity alert |
+| zzz_pairs | Managed private-pair polling and replies |
+| zzz_event_autonomy | Managed event autonomy |
+| zzz_owner_repeating | New owner-requested repeating schedules; stopping with `every_minutes:null` stays available |
+| welcome_seed | Automatic welcome/reseed intent creation; OFF still welcomes and reads existing intents, without creating/pausing intents or claiming seed/refusal markers |
+
+Already configured server-side repeating posts cannot be stopped by a local file. Their active state, last posts and any authorized stop/readback require a separate operator action. No remote action is performed by this source change.
+
+The existing evening questions, memory signal sync, token usage audit and knowledge sync retain their existing gates; they are not in this new OFF list. The brief's weather source is still fixed to historical Mandrem with Asia/Kolkata day boundaries, not a verified resident location. Inspect current sources before enabling delivery. Optional-service availability, including Skylight, gold stars and FavorLoop, has not been verified live by this change.
+
+| Job | Source default | Recommendation and decision needed |
+|---|---|---|
+| Edge — memory signal sync | 01:00 daily | **Reword, retain only under existing consent and inference gates.** Old signup/context/village plans are not current wants; the prompt now requires current support. Do not bulk retire or rewrite existing intentions. |
+| Edge — digest prepare | 02:00 daily, script only | **OFF under daily_digest; retain existing deterministic state.** Before a later delivery decision, choose useful post-event sources, timezone and location; do not assume Goa remains their location. Covered by daily_digest; OFF until explicitly allowed. |
+| Edge — daily digest | 08:00 daily | **OFF under daily_digest pending a post-event source/location decision.** Current prompts avoid India greetings and historical calendar fallback. Existing preparation can still supply fixed Mandrem weather context: inspect a synthetic/canary output before any later activation decision. |
+| Edge — negotiation summary | 14:00 daily | **OFF under negotiation_summary; later use requires current resident wants.** Never carry old India meeting plans forward; ask whether continued post-event community discovery is wanted. |
+| Edge — evening questions | 19:00 daily | **Reword; offer pause.** Questions about meeting outcomes should fit the resident's current circumstances, not assume another village evening or physical meeting in Goa. |
+| Edge — opportunity drop (midday) | 12:00 daily | **OFF under opportunity_midday.** Current community contact can remain useful; an ended event is not a reason to infer current local availability. |
+| Edge — opportunity drop (evening) | 17:00 daily | **OFF under opportunity_evening**, on the same terms as the midday job. |
+| Edge — pending opportunity | Hourly at :20, normally staggered :20–:29 | **OFF under pending_alert, with the existing paused/default switch and resident holds still binding.** Do not activate it for this change. Any later decision should consider duplication with the daily digest and current wants. |
+| Edge — token usage audit | 09:00 daily, deterministic local audit | **Retain existing setting.** Post-event cost visibility remains useful; no reason to change its privacy or delivery contract. |
+| Edge — knowledge sync | Every 30 minutes, script only | **Retain unchanged under its existing gates.** A recent sync only refreshes an archive; it does not establish live India availability. Do not change sync workflows or execution here. |
+| Edge — zzz pairs | Conditional managed mini-app schedule | **OFF unless zzz_pairs is explicitly allowed, plus existing participation/consent settings.** The `india` room is a historical community identifier, not an ongoing event or location. Review whether paired post-event participation is still wanted. |
+| Edge — zzz event autonomy | Conditional managed mini-app schedule | **OFF unless zzz_event_autonomy is explicitly allowed, plus existing owner autonomy gates and settings.** The event ending does not itself authorize stopping or starting community participation; review the owner's current wishes before any change. |
+| Edge — template: brief / digest-preview / evening-ask | Resident-selected schedules, no template default | **Review individually.** Reworded prompts apply when reconciled; existing resident schedule choices/holds remain. A brief template needs the same current-source/location decision as the main digest. |
+| Index morning | External pinned Index plugin, installed only under its existing gate | **Retain the gate.** Release owner should review the pinned plugin's wording before a later authorized wake. This inventory did not fetch or execute its external prompt. |
+| Edge — preview | Temporary explicit preview | **Retain as an on-demand preview**, never create or run it as part of this review. Use a later authorized preview to inspect current source context before approving delivery. |
+
+Historical reference snapshots and API scopes remain intact. Installing revised text is separate from approving any future roll, wake, tag or production change. The frozen runtime AGENTS.md diff requires its own review before release.
+
+The heartbeat and Agent Plaza selfie are already retired from the core cron catalog; do not re-enable them. Installer `--preserve-context` skips the revised AGENTS.md/SOUL.md; stored cron prompt refresh is also conditional on the actual authorized installation path. A source change or passing test is not evidence that a resident runtime loaded it.
+
+The root installer performs an independent read-only audit immediately before any automatic gateway restart, including when `--skip-index`, `--skip-crons`, `--preserve-context` or `--no-restart` is used. Skips retain their normal no-reconciliation meaning. Actual absent or conclusively paused covered jobs verify without mutation; runnable operator-allowed jobs require their existing gates. Unreadable state, active OFF work or failed covered reconciliation produces fixed unverified reasons, nonzero exit and no automatic restart or installed-success banner. This audit does not verify remote repeating schedules, welcome execution, AGENTS loading or general release readiness. `--preserve-context` can retain earlier AGENTS/SOUL text; a covered-job audit is not a receipt for loading the proposed context.
+
+FavorLoop's integration README records planned data deletion on 30 November 2026. That source statement is not live verification of its lifecycle or current availability. Resolve its current status before offering or activating it. Skylight and gold-star availability in the unchanged welcome lines likewise remains unverified; no service call was made for this change.

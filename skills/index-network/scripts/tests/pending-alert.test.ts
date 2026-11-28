@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
 /**
  * DATA-430 (overlay half): the pending-opportunity alert's pick (pending-alert.ts) over Index's
  * recorded reply shape (index-mcp-fake.ts): the first run seeds the ledger silently, a newly
@@ -17,16 +18,20 @@ import { FAKE_API_KEY, FAKE_MCP_URL, type ToolHandler, indexMcpFake, pagedOpport
 import { failureInputs } from "./index-failure-inputs";
 
 const originalFetch = globalThis.fetch;
+const originalHermesHome = process.env.HERMES_HOME;
 const dirs: string[] = [];
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalHermesHome === undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME = originalHermesHome;
   while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
 });
 
 function stateFile(initial?: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "pending-alert-"));
   dirs.push(dir);
+  process.env.HERMES_HOME = dir;
+  allowPostVillageFixture(dir, "pending_alert");
   const file = join(dir, "heartbeat-state.json");
   if (initial !== undefined) writeFileSync(file, typeof initial === "string" ? initial : JSON.stringify(initial));
   return file;

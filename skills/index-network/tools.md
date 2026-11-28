@@ -57,7 +57,9 @@ You may use a pattern in their reasons to suggest changing or pausing a signal, 
 
 ## Capturing new signal in conversation
 
-The first signal already exists outside chat. Do not ask what they are open to. When they say something new in this conversation, capture it — that is how later wants get matched. Treat any "what I'm working on / looking for / open to" message as capturable on its own merits.
+An intent is what the resident wants now, after Edge City India ended on November 1, 2026. Never carry plans from India or any earlier village forward as current wants from old notes, signup answers or memories. Require current support from the resident, then follow the existing source, consent and approval rules. Do not automatically change existing intents.
+
+The first signal may already exist outside chat. When their present words support that want as current, do not redundantly ask what they are open to. If only historical material supports it, ask whether it still reflects what they want now; never treat its existence alone as current support. When they say something new in this conversation, capture it — that is how later wants get matched. Treat any "what I'm working on / looking for / open to" message as capturable on its own merits.
 
 If `record_intention` is available (in your tool list, or found with `tool_search` and called through `tool_call`), it replaces `create_intent` for every new signal in this file: call `record_intention` wherever this file says `create_intent`, under the same rules (at most once per message, one clarifying follow-up if it comes back as too vague, no paraphrased retry). Otherwise use `create_intent` as below. Do not call `list_opportunities` in the same turn just to prove the new signal matched.
 

@@ -1,3 +1,4 @@
+import { runAllowedProactive } from "../post-village-fixtures";
 /**
  * Child process for state-lock.test.ts (DATA-314 B1-fix F2): runs one lock
  * wait the way the trigger does, with a hard-stop timer beside it, and prints
@@ -14,7 +15,7 @@
 import { existsSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { runProactive } from "../../proactive";
+import {  } from "../../proactive";
 import { acquireStateLock, lockPathFor } from "../../state-lock";
 
 const [stateFile, mode, hardStopArg] = process.argv.slice(2);
@@ -36,7 +37,7 @@ const racingNow = () => {
 
 try {
   if (mode === "proactive") {
-    const result = await runProactive("brief", {
+    const result = await runAllowedProactive("brief", {
       home: dirname(dirname(stateFile!)),
       now: () => new Date("2026-10-12T02:30:00Z"),
       lock: { waitMs: 60_000 },

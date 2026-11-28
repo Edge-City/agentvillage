@@ -1,3 +1,4 @@
+import { runAllowedProactive } from "./post-village-fixtures";
 /**
  * P1-fix S5: every proactive agent job's Script Output names the agent: `agentName` is the
  * resident's nickname from $HERMES_HOME/av-profile.json, read through the agent-profile skill's
@@ -16,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { type AgentAction, type ProactiveOptions, agentNameFor, runProactive } from "../proactive";
+import { type AgentAction, type ProactiveOptions, agentNameFor } from "../proactive";
 
 const MORNING = new Date("2026-10-12T02:30:00Z"); // 08:00 IST
 const SKILLS = join(import.meta.dir, "..", "..", "..");
@@ -90,7 +91,7 @@ describe("agentName in every proactive agent job's Script Output", () => {
   for (const action of ACTIONS) {
     test.each(FILES)(`${action}: %s -> %s`, async (_, write, expected) => {
       write();
-      const result = await runProactive(action, options());
+      const result = await runAllowedProactive(action, options());
       expect(result.woke).toBe(true);
       const view = output(result.lines);
       expect(Object.keys(view)[0]).toBe("agentName");
@@ -105,7 +106,7 @@ describe("agentName in every proactive agent job's Script Output", () => {
   test("a team tenant's preview carries the name too", async () => {
     process.env.AV_TEAM_TENANT = "1";
     writeProfile(GOOD);
-    const result = await runProactive("brief", options({ preview: true }));
+    const result = await runAllowedProactive("brief", options({ preview: true }));
     expect(result.woke).toBe(true);
     expect(output(result.lines).agentName).toBe("Mira");
   });
@@ -132,7 +133,8 @@ describe("the prompts that write to the resident take the name from the Script O
     const first = text.split("\n")[0];
     expect(first.startsWith("You are Edge,")).toBe(false);
     expect(first).toContain("`agentName`");
-    expect(first).toContain("Edge City India");
+    expect(first).toContain("the user's agent in Agent Village");
+    expect(first).not.toContain("agent for Edge City India");
     expect(first).toContain("(Edge when it is missing)");
   });
 });

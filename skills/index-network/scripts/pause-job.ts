@@ -42,8 +42,11 @@
  * shell, never for longer than HERMES_TIMEOUT_MS, and its output is never
  * read or printed.
  */
+import { readHolds, type Hold, type HoldsRead } from "./job-holds";
+import { postVillageAllowed, postVillageKeyForJob } from "./post-village-policy";
+import { indexRunnableShapeVerified } from "./post-village-runnable";
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
@@ -52,11 +55,9 @@ import { parseStoredCron } from "./job-settings";
 import {
   CONTACT_STYLE_JOB_NAMES,
   HERMES_JOB_ID_RE,
-  HOLDS_MAX_BYTES,
   MESSAGE_LABELS,
   MESSAGE_LABEL_NAMES,
   type HoldBy,
-  type HoldState,
   type MessageLabel,
   installedJobsPath,
   isHoldAt,
@@ -235,91 +236,7 @@ function enabledIs(home: string, id: string, enabled: boolean): boolean {
 
 // ── The holds file ──────────────────────────────────────────────────────────
 
-/** One job's hold as read: a hold without `by` is an admin's; one without `at` has no time. */
-export interface Hold {
-  state: HoldState;
-  at?: string;
-  by?: HoldBy;
-}
-
-export type HoldsRead = { status: "ok"; holds: Map<string, Hold> } | { status: "unreadable" };
-
-const UNREADABLE: HoldsRead = Object.freeze({ status: "unreadable" });
-
-/**
- * The holds in the file's text, with the control plane's readers' rules
- * (job-control.js parseHolds, parseHoldTimes, parseHoldBy): empty text is no
- * holds; text that is not JSON, or not a JSON object, is unreadable. Only
- * entries whose id has Hermes's shape and whose state is `paused` or `active`
- * are kept (the control plane's id grammar is wider, but an id of any other
- * shape names no Hermes job, so dropping it changes nothing it acts on). Each
- * kept entry keeps its `at` when that is an ISO time, and its `by` when that
- * is one of HOLD_BY_WORDS. Everything else is dropped.
- */
-export function parseHolds(text: string): HoldsRead {
-  const trimmed = text.trim();
-  if (!trimmed) return { status: "ok", holds: new Map() };
-  let data: unknown;
-  try {
-    data = JSON.parse(trimmed);
-  } catch {
-    return UNREADABLE;
-  }
-  if (!isPlainObject(data)) return UNREADABLE;
-  const states = isPlainObject(data.holds) ? data.holds : {};
-  const times = isPlainObject(data.at) ? data.at : {};
-  const placers = isPlainObject(data.by) ? data.by : {};
-  const holds = new Map<string, Hold>();
-  for (const [id, state] of Object.entries(states)) {
-    if (!HERMES_JOB_ID_RE.test(id) || !isHoldState(state)) continue;
-    const hold: Hold = { state };
-    const at = Object.hasOwn(times, id) ? times[id] : undefined;
-    if (isHoldAt(at)) hold.at = at;
-    const by = Object.hasOwn(placers, id) ? placers[id] : undefined;
-    if (isHoldBy(by)) hold.by = by;
-    holds.set(id, hold);
-  }
-  return { status: "ok", holds };
-}
-
-/**
- * The holds file, read as the control plane reads it (job-control.js
- * READ_HOLDS_CMD, `head -c 65536`, then parseHolds): its first
- * HOLDS_MAX_BYTES bytes, decoded as UTF-8 with replacement characters, then
- * parsed. A longer file is not unreadable by itself: its prefix is what is
- * parsed. Missing is no holds. A path that is not a regular file, a failed
- * read, or a prefix that is not a JSON object is unreadable.
- */
-export function readHolds(home: string): HoldsRead {
-  const path = jobHoldsPath(home);
-  try {
-    // Checked before the open, so a FIFO or a directory is never opened.
-    if (!statSync(path).isFile()) return UNREADABLE;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT" ? { status: "ok", holds: new Map() } : UNREADABLE;
-  }
-  let fd: number;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  } catch {
-    return UNREADABLE;
-  }
-  try {
-    if (!fstatSync(fd).isFile()) return UNREADABLE;
-    const buffer = Buffer.alloc(HOLDS_MAX_BYTES);
-    let length = 0;
-    while (length < buffer.length) {
-      const read = readSync(fd, buffer, length, buffer.length - length, null);
-      if (read === 0) break;
-      length += read;
-    }
-    return parseHolds(buffer.toString("utf8", 0, length));
-  } catch {
-    return UNREADABLE;
-  } finally {
-    closeSync(fd);
-  }
-}
+export { parseHolds, readHolds, type Hold, type HoldsRead } from "./job-holds";
 
 /**
  * The file's text for `holds`, in the control plane's format
@@ -486,12 +403,37 @@ function changeCommand(
   const refusal = resumeRefusal(action, readHolds(home), jobs, label);
   if (refusal) return refusal;
 
+  // Own resident holds may be cleared; resumeRefusal above still rejects admin/settings holds.
+  const resumePolicyError = (): string | undefined => {
+    if (action !== "resume") return;
+    const latestStore = readJobsStore(home);
+    if ("unreadable" in latestStore) return "jobs-store-unreadable";
+    const holdRefusal = resumeRefusal(action, readHolds(home), jobs, label);
+    if (holdRefusal) return String(holdRefusal.out.error);
+    for (const job of jobs) {
+      // Hermes mutates by ID alone: require one raw matching-ID row before inspecting its name/shape.
+      const matches = latestStore.jobs.filter((entry): entry is Record<string, unknown> => isPlainObject(entry) && entry.id === job.id);
+      if (matches.length !== 1) return matches.length ? "job-id-ambiguous" : "job-missing";
+      const latest = matches[0]!;
+      if (latest.name !== job.raw.name) return "job-missing";
+      const key = postVillageKeyForJob(latest.name);
+      if (!key) continue;
+      if (!postVillageAllowed(home, key, now())) return "post-village-disabled";
+      if (!indexRunnableShapeVerified(home, latest)) return "post-village-gates-unverified";
+    }
+  };
+  const policyError = resumePolicyError();
+  if (policyError) return refused(policyError, { label });
+
   const wantEnabled = action === "resume";
   const willChange = (job: LabelJob): boolean => storedJobEnabled(job.raw) !== wantEnabled;
   // A resume also re-anchors a running job whose next run is already due: an
   // earlier run that resumed it and was cut off before its re-anchor (B1).
   const needsHermes = (job: LabelJob): boolean => willChange(job) || (wantEnabled && missedSlot(job.raw, now()));
   if (jobs.some(needsHermes) && !ctx.hermesReady()) return refused("hermes-unavailable", { label });
+
+  const latePolicyError = resumePolicyError();
+  if (latePolicyError) return refused(latePolicyError, { label });
 
   // 1. The holds first: read again right before the write, and only this run's entries changed.
   let holdsStatus: "ok" | "unreadable" = "ok";
@@ -530,6 +472,10 @@ function changeCommand(
   let mayFire = false;
   const hermes = (args: string[]): void => {
     guard(timeoutMs);
+    if (args[1] === "resume") {
+      const error = resumePolicyError();
+      if (error) throw new Error(error);
+    }
     ctx.hermes(args);
   };
   for (const job of jobs) {

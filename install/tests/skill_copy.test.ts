@@ -13,7 +13,7 @@ import { afterEach, expect, test } from "bun:test";
 import { resetSteps } from "../reset";
 
 import { EDGE_SKILL_NAMES, RETIRED_SKILL_DIRS } from "../paths";
-import { removeRetiredSkillDirs } from "../skill_copy";
+import { copySkillBundles, removeRetiredSkillDirs } from "../skill_copy";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temps: string[] = [];
@@ -46,9 +46,9 @@ test("geo-esmeralda is retired, and no name is both shipped and retired", () => 
   expect(RETIRED_SKILL_DIRS).toContain("geo-esmeralda");
   const shipped = new Set<string>(EDGE_SKILL_NAMES);
   expect(RETIRED_SKILL_DIRS.filter((name) => shipped.has(name))).toEqual([]);
-  // edge-esmeralda stays installed as background (orchestrator's call).
-  expect(EDGE_SKILL_NAMES).toContain("edge-esmeralda");
-  expect(RETIRED_SKILL_DIRS as readonly string[]).not.toContain("edge-esmeralda");
+  // Historical Esmeralda remains in source but is retired from runtime installs.
+  expect(EDGE_SKILL_NAMES as readonly string[]).not.toContain("edge-esmeralda");
+  expect(RETIRED_SKILL_DIRS as readonly string[]).toContain("edge-esmeralda");
 });
 
 test("every retired name is one plain directory name", () => {
@@ -105,11 +105,11 @@ test("Hermes bundled skills, a resident's own skill and every shipped Edge skill
 
 test("a name still shipped in EDGE_SKILL_NAMES is never removed, even if passed in", () => {
   const root = temp("av-skills-");
-  skill(root, "edge-esmeralda");
+  skill(root, "edge-india");
   const { lines, log } = collect();
 
-  expect(removeRetiredSkillDirs(root, ["edge-esmeralda"], log)).toEqual([]);
-  expect(existsSync(join(root, "edge-esmeralda", "SKILL.md"))).toBe(true);
+  expect(removeRetiredSkillDirs(root, ["edge-india"], log)).toEqual([]);
+  expect(existsSync(join(root, "edge-india", "SKILL.md"))).toBe(true);
   expect(lines).toEqual([]);
 });
 
@@ -192,5 +192,32 @@ test("reset.ts removeEdgeSkills also removes a retired bundle, and keeps a Herme
     if (previous === undefined) delete process.env.HERMES_HOME;
     else process.env.HERMES_HOME = previous;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test("an upgrade removes Esmeralda and a fresh default install never copies it", () => {
+  const source = temp("av-source-");
+  const installed = temp("av-upgrade-");
+  const fresh = temp("av-fresh-");
+  skill(source, "edge-india");
+  skill(source, "edge-esmeralda");
+  skill(installed, "edge-esmeralda");
+  skill(installed, "resident-notes");
+  copySkillBundles(source, installed);
+  expect(removeRetiredSkillDirs(installed, RETIRED_SKILL_DIRS, () => {})).toEqual(["edge-esmeralda"]);
+  copySkillBundles(source, fresh);
+  expect(existsSync(join(fresh, "edge-esmeralda"))).toBe(false);
+  expect(existsSync(join(fresh, "edge-india", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(installed, "resident-notes", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(source, "edge-esmeralda", "SKILL.md"))).toBe(true);
+});
+
+test("Index bundle ships both shared resume helpers and exact runnable proof pins", () => {
+  const target = temp("av-test-post-village-copy-");
+  copySkillBundles(join(REPO_ROOT, "skills"), target, ["index-network"]);
+  for (const file of ["job-holds.ts", "post-village-runnable.ts", "post-village-runnable-pins.json", "post-village-policy.ts"]) {
+    const relative = join("index-network/scripts", file);
+    expect(readFileSync(join(target, relative))).toEqual(readFileSync(join(REPO_ROOT, "skills", relative)));
   }
 });

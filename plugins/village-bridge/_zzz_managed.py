@@ -4,6 +4,12 @@ The app and ZZZ remain the authority for the current pair and every operation.
 This file keeps only cursors, IDs and a short reply reservation; no post text.
 """
 from __future__ import annotations
+if __package__:
+    from ._post_village_policy import runtime_allowed as post_village_allowed
+else:
+    # Standalone pre-run main delegates to the package copy below. Never import through sys.path.
+    def post_village_allowed(_home, _key):
+        return False
 
 import fcntl
 import hashlib
@@ -68,7 +74,7 @@ def participation_on(home: Path) -> bool:
     """
     try:
         from ._mini_apps import zzz_participation
-        return zzz_participation(home) is True
+        return post_village_allowed(home, "zzz_pairs") and zzz_participation(home) is True
     except Exception:
         return False
 
@@ -320,6 +326,8 @@ def reserve_reply(home: Path, transport, config, thread: str) -> bool:
             if datetime.now(timezone.utc).timestamp() - pending.get("at", 0) > 1800:
                 state["pending"] = None
                 return False
+            if not post_village_allowed(home, "zzz_pairs"):
+                return False
             state["pending"] = None  # consume before network; uncertain writes are never repeated
             state["replies"] += 1
             key = _thread_key(room, thread)
@@ -351,10 +359,14 @@ def reserve_bootstrap(home: Path, transport, config, room: str):
             if pairs.get(room) != identity or datetime.now(timezone.utc).timestamp() - pending.get("at", 0) > 1800:
                 state["pending"] = None
                 return None
+            if not post_village_allowed(home, "zzz_pairs"):
+                return None
             changes = transport(config, {"operation": "zzz.changes", "room": room, "after": "0", "limit": 1})
             if (not isinstance(changes, dict) or changes.get("kind") != "zzz.changes"
                     or changes.get("items") != [] or changes.get("nextCursor")):
                 state["pending"] = None
+                return None
+            if not post_village_allowed(home, "zzz_pairs"):
                 return None
             state["pending"] = None
             state["replies"] += 1
@@ -390,6 +402,12 @@ def poll(home: Path, transport, config, installed):
     """Return at most one ID-only wake. First encounter drains history as baseline."""
     if not participation_on(home) or not installed(home, "zzzbot", "zzz.list_rooms"):
         return None
+    raw_transport = transport
+    def guarded_transport(config, payload):
+        if not post_village_allowed(home, "zzz_pairs"):
+            raise ValueError("post-village-disabled")
+        return raw_transport(config, payload)
+    transport = guarded_transport
     with locked_state(home) as state:
         now = datetime.now(timezone.utc).timestamp()
         if not _budget_open(state) or not _pause_open(state):
@@ -483,7 +501,8 @@ def poll(home: Path, transport, config, installed):
             state["retryAt"] = now if saw_item else now + (1200 if pairs else 3600)
             if event:
                 # Current authority again immediately before offering an agent turn.
-                if current_pairs(transport, config).get(event["roomId"]) == {"requestId": event["requestId"], "consentEpoch": event["consentEpoch"]}:
+                if (current_pairs(transport, config).get(event["roomId"]) == {"requestId": event["requestId"], "consentEpoch": event["consentEpoch"]}
+                        and post_village_allowed(home, "zzz_pairs")):
                     state["pending"] = event
                     keys = ("kind", "roomId") if event["kind"] == "bootstrap" else ("kind", "roomId", "threadId", "postId")
                     return {key: event[key] for key in keys}

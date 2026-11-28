@@ -1,13 +1,12 @@
 # Agentvillage Skills
 
-Agent skills for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other MCP hosts.
+Agent Village skills, originally for **Edge City India 2026**, which has ended (Oct 11 – Nov 1, Mandrem, Goa, India). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other MCP hosts.
 
 ## What you get
 
-Eight skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
+The skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
 
-- **edge-india** — Edge City India 2026 (the current event) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `p2p-lanes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
-- **edge-esmeralda** — background on the *previous* popup, Edge Esmeralda 2026 (not the current event): popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
+- **edge-india** — Edge City India 2026 (the ended event; historical background) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `p2p-lanes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, the cron jobs' prompts (`prompts/`) and the memory-signal gate (`scripts/memory_signal_gate.py`), and heartbeat tasks.
 - **agent-plaza** — Agent Plaza selfie delivery, optional Turing Falls steering, and follow-up guidance: consumes a black-box Plaza image packet, sends Telegram-compatible local images directly through the Telegram Bot API, writes operational state outside model-read memory, teaches ordinary chat how to route later replies toward IRL closeout, and gives agents guarded instructions for human-confirmed villager movement/speech when Turing Falls credentials already exist.
@@ -60,7 +59,7 @@ revokes its permission and removes only a skill file the installer does not ship
 (`dizko`, `zzzbot`, `slopfolio`, `dreamstarter`, `forkicks`, `kismet`, `library`, `favorloop` and `eci-volunteers`). Copying a skill alone grants no API access.
 See [the builder starter and review contract](../mini-apps/README.md).
 
-The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.
+The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edgeos` uses the explicitly configured popup id; no historical skill supplies a default. The `edge-esmeralda` archive remains in source and is retired from installed skills. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install the current supported bundles together.
 
 ## Host-specific silence
 
@@ -119,7 +118,6 @@ OpenClaw persists credentials in `~/.openclaw/openclaw.json` — no shell profil
 
 ```bash
 hermes skills install Edge-City/agentvillage/skills/edge-india --force
-hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
 hermes skills install Edge-City/agentvillage/skills/agent-plaza --force

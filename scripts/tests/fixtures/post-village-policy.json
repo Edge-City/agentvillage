@@ -1,0 +1,192 @@
+{
+  "cutoff": "2026-11-01T18:30:00Z",
+  "keys": [
+    "daily_digest",
+    "opportunity_midday",
+    "opportunity_evening",
+    "negotiation_summary",
+    "pending_alert",
+    "zzz_pairs",
+    "zzz_event_autonomy",
+    "zzz_owner_repeating",
+    "welcome_seed"
+  ],
+  "cases": [
+    {
+      "name": "one opt-in daily_digest",
+      "raw": "{\"version\": 1, \"enabled\": [\"daily_digest\"]}",
+      "enabled": [
+        "daily_digest"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in opportunity_midday",
+      "raw": "{\"version\": 1, \"enabled\": [\"opportunity_midday\"]}",
+      "enabled": [
+        "opportunity_midday"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in opportunity_evening",
+      "raw": "{\"version\": 1, \"enabled\": [\"opportunity_evening\"]}",
+      "enabled": [
+        "opportunity_evening"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in negotiation_summary",
+      "raw": "{\"version\": 1, \"enabled\": [\"negotiation_summary\"]}",
+      "enabled": [
+        "negotiation_summary"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in pending_alert",
+      "raw": "{\"version\": 1, \"enabled\": [\"pending_alert\"]}",
+      "enabled": [
+        "pending_alert"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in zzz_pairs",
+      "raw": "{\"version\": 1, \"enabled\": [\"zzz_pairs\"]}",
+      "enabled": [
+        "zzz_pairs"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in zzz_event_autonomy",
+      "raw": "{\"version\": 1, \"enabled\": [\"zzz_event_autonomy\"]}",
+      "enabled": [
+        "zzz_event_autonomy"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in zzz_owner_repeating",
+      "raw": "{\"version\": 1, \"enabled\": [\"zzz_owner_repeating\"]}",
+      "enabled": [
+        "zzz_owner_repeating"
+      ],
+      "valid": true
+    },
+    {
+      "name": "one opt-in welcome_seed",
+      "raw": "{\"version\": 1, \"enabled\": [\"welcome_seed\"]}",
+      "enabled": [
+        "welcome_seed"
+      ],
+      "valid": true
+    },
+    {
+      "name": "empty",
+      "raw": "{\"version\":1,\"enabled\":[]}",
+      "enabled": [],
+      "valid": true
+    },
+    {
+      "name": "reordered",
+      "raw": "{ \"enabled\": [\"welcome_seed\"], \"version\": 1.0 }",
+      "enabled": [
+        "welcome_seed"
+      ],
+      "valid": true
+    },
+    {
+      "name": "null",
+      "raw": "null",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "true",
+      "raw": "true",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "bool version",
+      "raw": "{\"version\":true,\"enabled\":[]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "unknown version",
+      "raw": "{\"version\":2,\"enabled\":[]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "unknown key",
+      "raw": "{\"version\":1,\"enabled\":[\"all\"]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "duplicate enabled",
+      "raw": "{\"version\":1,\"enabled\":[\"welcome_seed\",\"welcome_seed\"]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "duplicate property",
+      "raw": "{\"version\":1,\"version\":1,\"enabled\":[]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "escaped duplicate",
+      "raw": "{\"version\":1,\"ver\\u0073ion\":1,\"enabled\":[]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "extra",
+      "raw": "{\"version\":1,\"enabled\":[],\"service\":\"never-output\"}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "missing key",
+      "raw": "{\"version\":1}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "object enabled",
+      "raw": "{\"version\":1,\"enabled\":{}}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "boolean entry",
+      "raw": "{\"version\":1,\"enabled\":[true]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "nan",
+      "raw": "{\"version\":NaN,\"enabled\":[]}",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "broken",
+      "raw": "{",
+      "enabled": [],
+      "valid": false
+    },
+    {
+      "name": "UTF-8 BOM rejected consistently",
+      "raw": "\ufeff{\"version\":1,\"enabled\":[\"daily_digest\"]}",
+      "enabled": [],
+      "valid": false
+    }
+  ]
+}

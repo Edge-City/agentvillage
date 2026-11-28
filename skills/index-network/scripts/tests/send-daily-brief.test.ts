@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,8 @@ const tmpDirs: string[] = [];
 function tempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "send-daily-brief-"));
   tmpDirs.push(dir);
+  process.env.HERMES_HOME = dir;
+  allowPostVillageFixture(dir, "daily_digest");
   process.chdir(dir);
   process.env.HERMES_HOME = dir;
   return dir;
@@ -23,6 +26,8 @@ function tempWorkspace(): string {
 function makeTmp(): string {
   const dir = mkdtempSync(join(tmpdir(), "send-daily-brief-"));
   tmpDirs.push(dir);
+  process.env.HERMES_HOME = dir;
+  allowPostVillageFixture(dir, "daily_digest");
   return dir;
 }
 

@@ -167,7 +167,10 @@ def test_hash_key_prefers_av_events_key_then_makes_its_own(plugin, home):
 
 def test_a_key_file_that_is_not_private_is_never_used(plugin, home):
     """Review round 1: keys are read with the private-file checks (regular, this user, 0600)."""
-    (home / "av-events" / "hash.key").write_text("ab" * 32 + "\n")  # 0644 by default
+    key_file = home / "av-events" / "hash.key"
+    key_file.write_text("ab" * 32 + "\n")
+    os.chmod(key_file, 0o644)  # Deliberately public regardless of the test runner's umask.
+    assert key_file.stat().st_mode & 0o777 == 0o644
     own = plugin.hash_key()
     assert own is not None and own != bytes.fromhex("ab" * 32)
     os.chmod(home / "av-events" / "av-rate.key", 0o644)

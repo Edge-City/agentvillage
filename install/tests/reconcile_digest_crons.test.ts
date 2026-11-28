@@ -16,8 +16,9 @@ import {
   staggeredSchedule,
 } from "../install_index";
 import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
-import { syncZzzInstalledJobId, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT } from "../zzz_job_registry";
+import { isExactZzzManagedJob, syncZzzInstalledJobId, ZZZ_JOB_NAME, ZZZ_JOB_SCRIPT } from "../zzz_job_registry";
 import YAML from "yaml";
+import { postVillageKeyForJob } from "../../skills/index-network/scripts/post-village-policy";
 
 const SEED = "ix_integration_seed";
 const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, PENDING, TOKEN_AUDIT, KNOWLEDGE] = DIGEST_CRON_SPECS;
@@ -129,9 +130,9 @@ function currentZzzJob(id: string): Record<string, unknown> & { id: string } {
     skills: [], skill: null, context_from: null, monitor_script: null, monitor_url: null };
 }
 
-/** rc29 installs the pending alert paused (pending_alert_off.test.ts); a fixture of an installed tenant holds it so. */
+/** Current covered fixtures are paused; OFF readback must preserve their ID and schedule. */
 function rc29PauseState(spec: typeof DIGEST_CRON_SPECS[number]): Record<string, unknown> {
-  return spec === PENDING ? { enabled: false, state: "paused", paused_at: "2026-10-09T09:20:00Z" } : {};
+  return postVillageKeyForJob(spec.name) ? { enabled: false, state: "paused", paused_at: "2026-10-09T09:20:00Z" } : {};
 }
 
 /** A job as main left it before DATA-314: no proactive script, agent mode, no failure target. */
@@ -275,7 +276,7 @@ test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () 
   expect(cronCalls()).toEqual([["cron", "remove", "z1"]]);
 });
 
-test("jobs still on old synchronized defaults get schedule-only migrations", () => {
+test("uncovered old defaults migrate; covered jobs preserve their schedules", () => {
   writeJobs([
     { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", script: SIGNALS.scriptInstallName, schedule: { expr: SIGNALS.schedule } },
     { ...currentJob(PREPARE, "p1"), schedule: { expr: PREPARE.schedule } },
@@ -294,9 +295,7 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
   const calls = cronCalls();
   expect(calls).toEqual([
     ["cron", "edit", "g1", "--schedule", staggeredSchedule(SIGNALS, SEED)],
-    ["cron", "edit", "s1", "--schedule", staggeredSchedule(SEND, SEED)],
-    // The prefetch is reconciled last (B1-fix F9).
-    ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
+    // Covered SEND/PREPARE preserve old schedules; no automatic activation/migration.
   ]);
 });
 
@@ -340,7 +339,7 @@ test("memory signal sync cron gets its script back in place when its script path
   expect(cronCalls()).toEqual([["cron", "edit", "g1", "--script", SIGNALS.scriptInstallName!]]);
 });
 
-test("stale prompt + old default schedule produce two independent edit calls", () => {
+test("a stale covered prompt updates in place while its old default schedule stays fixed", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
@@ -359,7 +358,7 @@ test("stale prompt + old default schedule produce two independent edit calls", (
   const sendEdits = cronCalls().filter((argv) => argv[2] === "s1");
   expect(sendEdits).toEqual([
     ["cron", "edit", "s1", "--prompt", "SEND_BODY"],
-    ["cron", "edit", "s1", "--schedule", staggeredSchedule(SEND, SEED)],
+
   ]);
 });
 
@@ -404,24 +403,20 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
   expect(removes).toEqual([["cron", "remove", "old1"]]);
 });
 
-test("Index preserves only the exact installer-owned ZZZ job shape", () => {
-  const exact = currentZzzJob("aaaaaaaaaaaa");
+test("Index preserves reserved ZZZ pair rows without adopting unsafe shapes", () => {
+  const exact = { ...currentZzzJob("aaaaaaaaaaaa"), enabled: false };
   writeJobs([
     exact,
     { ...exact, id: "bbbbbbbbbbbb", script: "other.sh" },
     { ...exact, id: "cccccccccccc", enabled_toolsets: ["village"] },
     { ...exact, id: "dddddddddddd", no_agent: false },
     { ...exact, id: "eeeeeeeeeeee", workdir: "/tmp" },
-    { ...exact, id: "ffffffffffff", enabled: false },
+    { ...exact, id: "ffffffffffff", schedule: { kind: "cron", expr: "17 10 * * *" } },
+    { id: "999999999999", name: "Edge — retired unrelated", enabled: false },
   ]);
-
   reconcileDigestCronJobs({ ...process.env });
-
-  expect(cronCalls().filter((argv) => argv[1] === "remove")).toEqual([
-    ["cron", "remove", "bbbbbbbbbbbb"], ["cron", "remove", "cccccccccccc"],
-    ["cron", "remove", "dddddddddddd"], ["cron", "remove", "eeeeeeeeeeee"],
-    ["cron", "remove", "ffffffffffff"],
-  ]);
+  expect(cronCalls().filter((argv) => argv[1] === "remove")).toEqual([["cron", "remove", "999999999999"]]);
+  expect(JSON.parse(readFileSync(join(home, "av-events/installed_jobs.json"), "utf8")).zzzJobId).toBeUndefined();
 });
 
 test("only a confirmed ZZZ job gains registry provenance and survives Index reconciliation", () => {
@@ -812,33 +807,54 @@ function installStatus(): { version: number; at: string; cron_failed: string[] }
   return JSON.parse(readFileSync(installStatusPath(home), "utf8"));
 }
 
-test("R1: a failed cron edit exits 0, writes the status file with the job's name, and prints the one count line; a clean run empties it", () => {
-  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
-  // The pending alert is present (paused): the stub keeps no jobs.json, so one it created could not be read back and paused.
-  writeJobs([oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"), currentJob(PENDING, "pa1")]);
+for (const [spec, covered] of [[NEGOTIATION, true], [EVENING, false]] as const) {
+  test(`R1: ${covered ? "covered" : "uncovered"} edit failure preserves status and obeys the root audit exit gate`, () => {
+    const targetId = "aaaaaaaaaaaa";
+    process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: [targetId] });
+    // Canonical unique Hermes IDs and paused covered jobs isolate the failure gate,
+    // rather than accidentally exercising job-row-invalid or unconfirmed creates.
+    writeJobs(DIGEST_CRON_SPECS.map((entry, n) => entry === spec
+      ? oldShapeJob(entry, targetId, "OLD_PROMPT")
+      : currentJob(entry, (n + 1).toString(16).padStart(12, "0"))));
 
-  const failed = runInstall();
-  expect({ code: failed.code, stderr: failed.code === 0 ? "" : failed.stderr }).toEqual({ code: 0, stderr: "" });
-  const status = installStatus();
-  expect(status.version).toBe(1);
-  expect(status.cron_failed).toEqual([NEGOTIATION.name]);
-  expect(new Date(status.at).toISOString()).toBe(status.at);
-  expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
-  expect(failed.stdout.split("\n").filter((line) => line.startsWith("agentvillage-install:"))).toEqual([cronFailedLine(1)]);
-  expect(cronFailedLine(1)).toBe("agentvillage-install: cron_failed=1");
-  // Nothing claims a gateway restart this process did not do.
-  expect(`${failed.stdout}${failed.stderr}`).not.toContain("gateway restart included");
-  expect(failed.stderr).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
+    const failed = runInstall();
+    expect(failed.code).toBe(covered ? 1 : 0);
+    const status = installStatus();
+    expect(status.version).toBe(1);
+    expect(status.cron_failed).toEqual([spec.name]);
+    expect(new Date(status.at).toISOString()).toBe(status.at);
+    expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
+    const auditPrefix = "agentvillage-install: post_village_policy=";
+    const auditLines = failed.stdout.split("\n").filter((line) => line.startsWith(auditPrefix));
+    expect(auditLines).toHaveLength(1);
+    const audit = JSON.parse(auditLines[0].slice(auditPrefix.length));
+    expect(audit.status).toBe(covered ? "unverified" : "verified");
+    expect(audit.reasons).not.toContain("job-row-invalid");
+    const persisted = JSON.parse(readFileSync(installStatusPath(home), "utf8"));
+    expect(persisted.post_village_policy).toEqual(audit);
+    const countLines = failed.stdout.split("\n").filter((line) => line.startsWith("agentvillage-install: cron_failed="));
+    expect(countLines).toEqual(covered ? [] : [cronFailedLine(1)]);
+    if (covered) {
+      expect(audit.reasons).toContain("covered-reconciliation-failed");
+      expect(failed.stderr).toContain("gateway not restarted");
+    } else {
+      expect(audit.reasons).toEqual([]);
+      expect(failed.stderr).toContain(`1 Index cron job(s) failed to update (${spec.name})`);
+    }
+    expect(`${failed.stdout}${failed.stderr}`).not.toContain("gateway restart included");
 
-  process.env.HERMES_BIN = writeStubHermes(home);
-  const clean = runInstall();
-  expect(clean.code).toBe(0);
-  // DATA-373: after install, Hermes's cron wrapper is off.
-  expect(YAML.parse(readFileSync(join(home, "config.yaml"), "utf8")).cron.wrap_response).toBe(false);
-  expect(installStatus().cron_failed).toEqual([]);
-  expect(clean.stdout).not.toContain("agentvillage-install:");
-  expect(readdirSync(join(home, "av-events")).filter((name) => name.includes(".tmp"))).toEqual([]);
-}, 60_000);
+    process.env.HERMES_BIN = writeStubHermes(home);
+    const clean = runInstall();
+    expect(clean.code).toBe(0);
+    expect(YAML.parse(readFileSync(join(home, "config.yaml"), "utf8")).cron.wrap_response).toBe(false);
+    expect(installStatus().cron_failed).toEqual([]);
+    const cleanAuditLines = clean.stdout.split("\n").filter((line) => line.startsWith(auditPrefix));
+    expect(cleanAuditLines).toHaveLength(1);
+    expect(JSON.parse(cleanAuditLines[0].slice(auditPrefix.length))).toMatchObject({ status: "verified", reasons: [] });
+    expect(clean.stdout.split("\n").filter((line) => line.startsWith("agentvillage-install: cron_failed="))).toEqual([]);
+    expect(readdirSync(join(home, "av-events")).filter((name) => name.includes(".tmp"))).toEqual([]);
+  }, 60_000);
+}
 
 test("R1: the status file is written by temp file and rename, 0600, with an empty list when nothing failed", () => {
   const at = new Date("2026-10-12T02:30:00.000Z");
@@ -887,4 +903,27 @@ test("DATA-361: after the prompts and the gate moved to skills/index-network, an
   expect(cronCalls()).toEqual([]);
   expect(installedIds()).toEqual(jobs.map((job) => job.id as string).sort());
   expect(readFileSync(installedMemorySignalScript(), "utf8")).toBe(readFileSync(join(repoSkills, SIGNALS.scriptFile!), "utf8"));
+});
+
+test("post-village registry exact shape accepts only boolean enable states and keeps paused ownership", () => {
+  const paused = { ...currentZzzJob("aaaaaaaaaaaa"), enabled: false };
+  expect(isExactZzzManagedJob(paused)).toBe(true);
+  expect(isExactZzzManagedJob({ ...paused, enabled: true })).toBe(true);
+  for (const enabled of [undefined, null, "false", "true", 0, 1, {}]) {
+    const bad = { ...paused, enabled };
+    expect(isExactZzzManagedJob(bad)).toBe(false); writeJobs([bad]);
+    expect(() => syncZzzInstalledJobId(home, paused.id)).toThrow("zzz_job_not_confirmed");
+  }
+  for (const bad of [{ ...paused, no_agent: false }, { ...paused, script: "old-ungated.sh" }, { ...paused, enabled_toolsets: ["all"] }, { ...paused, schedule: { kind: "cron", expr: "* * * * *" } }]) {
+    expect(isExactZzzManagedJob(bad)).toBe(false); writeJobs([bad]);
+    expect(() => syncZzzInstalledJobId(home, paused.id)).toThrow("zzz_job_not_confirmed");
+  }
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => ({ ...currentJob(spec, `00000000000${n}`), enabled: false }));
+  writeJobs([...ours, paused]); syncZzzInstalledJobId(home, paused.id);
+  const before = readFileSync(join(home, "cron/jobs.json"), "utf8");
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls().filter((argv) => argv[1] === "remove" && argv[2] === paused.id)).toEqual([]);
+  expect(readFileSync(join(home, "cron/jobs.json"), "utf8")).toBe(before);
+  expect(JSON.parse(readFileSync(join(home, "av-events/installed_jobs.json"), "utf8")).zzzJobId).toBe(paused.id);
+  expect(installedIds()).toContain(paused.id);
 });

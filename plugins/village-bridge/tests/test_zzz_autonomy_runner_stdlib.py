@@ -393,6 +393,11 @@ class ShippedRunnerHome:
     def __init__(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name).resolve()  # macOS /var is a symlink; the runner refuses linked parents
+        (self.home / "av-events").mkdir(exist_ok=True)
+        (self.home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_event_autonomy"]}))
+        helper = self.home / "plugins/village-bridge/_post_village_policy.py"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes((Path(__file__).parents[1] / "_post_village_policy.py").read_bytes())
         (self.home / "cron").mkdir()
         (self.home / "scripts").mkdir()
         self.script = self.home / "scripts" / runner.JOB_SCRIPT

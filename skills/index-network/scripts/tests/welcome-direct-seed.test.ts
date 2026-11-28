@@ -1,3 +1,5 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
+import { postVillagePolicyPath } from "../post-village-policy";
 /**
  * The welcome's seed creates directly on Index (lead's ruling, 13 Oct 2026
  * 06:03Z, after Seref: "if you're hitting /prepare you'll get rewritten. you
@@ -53,6 +55,8 @@ const saved: Record<string, string | undefined> = {};
 const VARS = ["INDEX_API_KEY", "INDEX_MCP_URL", "INDEX_API_URL", "HERMES_HOME", "AV_WELCOME_SEED_MODE", "AV_SEED_TRAILER_V2", "AV_CONNECTIONS_URL"];
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-welcome-direct-"));
+  // These legacy seed/reseed positives explicitly opt into the one welcome key.
+  allowPostVillageFixture(home, "welcome_seed");
   for (const key of VARS) {
     saved[key] = process.env[key];
     delete process.env[key];
@@ -568,4 +572,19 @@ describe("N1: --reseed never sends a line the seed marker kept cut", () => {
     expect(index.fake.calls.filter((c) => c.name === CREATE_CALL)).toEqual([]);
     expect(JSON.parse(real.stderr).seed_codes).toContain("reseed-cut-line");
   });
+});
+
+
+test("post-village welcome OFF cannot create, pause or claim seed state even with selected lines", async () => {
+  writeLines(LINES); process.env.AV_WELCOME_SEED_MODE = "paused";
+  for (const wrongKey of [false, true]) {
+    rmSync(postVillagePolicyPath(home), { force: true });
+    if (wrongKey) allowPostVillageFixture(home, "daily_digest");
+    const index = fakeIndex(); const out = await run(index);
+    expect(out.names).toEqual(["list_intents"]); expect(out.creates).toEqual([]);
+    expect(out.branch).toMatchObject({ intents_seeded: 0, seed_failed: 0 });
+    expect(out.text).not.toContain("will stay paused");
+    expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
+    expect(existsSync(join(home, WELCOME_STATE_FILE))).toBe(false);
+  }
 });

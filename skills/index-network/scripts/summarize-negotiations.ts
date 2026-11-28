@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed } from "./post-village-policy";
 /**
  * Build the afternoon follow-up for the check-in cron, then output structured
  * context for the LLM to narrate.
@@ -358,11 +359,14 @@ export interface FollowUpResult {
  * `main()` prints the result and the proactive trigger stages it.
  */
 export async function followUp(options: {
+  /** Tenant policy home; the trigger passes its existing home seam, including previews. */
+  home?: string;
   stateFile?: string;
   date?: string;
   apiKey?: string;
   mcpUrl?: string;
 } = {}): Promise<FollowUpResult | SilentResult> {
+  if (!postVillageAllowed(options.home ?? (process.env.HERMES_HOME?.trim() || "/opt/data"), "negotiation_summary")) return { silent: true, reason: "post-village-disabled" };
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const date = options.date ?? villageDate();
 
@@ -386,6 +390,7 @@ export async function followUp(options: {
       requestedLimit: PENDING_LIST_LIMIT,
       pagination: toolJsonObject(opportunityText)?.root.pagination,
     });
+    if (!postVillageAllowed(options.home ?? (process.env.HERMES_HOME?.trim() || "/opt/data"), "negotiation_summary")) return { silent: true, reason: "post-village-disabled" };
     const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
     signals = intentsFrom(intentText);
   } catch (err) {
@@ -396,6 +401,7 @@ export async function followUp(options: {
   }
 
   const state = await readJsonObject(stateFile);
+  if (!postVillageAllowed(options.home ?? (process.env.HERMES_HOME?.trim() || "/opt/data"), "negotiation_summary")) return { silent: true, reason: "post-village-disabled" };
   const summaryState = (state.negotiationSummary ?? {}) as NegotiationSummaryState;
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
@@ -443,6 +449,7 @@ export async function followUp(options: {
     ...(!readOnly && deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
   });
 
+  if (!postVillageAllowed(options.home ?? (process.env.HERMES_HOME?.trim() || "/opt/data"), "negotiation_summary")) return { silent: true, reason: "post-village-disabled" };
   return { signals, needsAttention, waiting, newlyResolved };
 }
 

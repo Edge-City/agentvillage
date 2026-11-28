@@ -46,3 +46,7 @@
 /skills/index-network/scripts/message-labels.ts @soycarts
 /skills/index-network/scripts/pause-job.ts   @soycarts
 /skills/index-network/scripts/state-lock.ts  @soycarts
+/skills/index-network/scripts/job-holds.ts   @soycarts
+/skills/index-network/scripts/post-village-policy.ts @soycarts
+/skills/index-network/scripts/post-village-runnable.ts @soycarts
+/skills/index-network/scripts/post-village-runnable-pins.json @soycarts

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+POLICY_READER_SHA256 = "57c6ad036e45d397dffb6305059e92e09d03b7e116fcebdb2ad68cbacf4f765d"
 JOB_NAME = "Edge — zzz event autonomy"
 RUNNER_ACCEPTS_ANY_SLOT = True  # A-93: the job check accepts any of the five phases; cp greps this line
 JOB_SCRIPT = "zzz_autonomy_runner.py"
@@ -947,6 +948,8 @@ def _output(context: dict, home: Path):
     timeout = _timeout(_budget(MODEL_SECONDS, COMPLETE_SECONDS, MODEL_MIN_SECONDS))
     with httpx.Client(trust_env=False, timeout=timeout) as client_http:
         with OpenAI(api_key=key, base_url=endpoint, http_client=client_http, max_retries=0) as client:
+            if not _post_village_allowed(home):
+                raise ValueError("post-village-disabled")
             response = client.chat.completions.create(model=model, messages=[
                 {"role": "system", "content": _system(room) +
                  ("" if owner is None else "\n\n" + OWNER_HEADER + "\n" + owner)},
@@ -1041,10 +1044,9 @@ AGENT_TOOLSET, AGENT_TOOL = "zzz-autonomy-read", "village_skill"
 # to a digest this runner ships (a test holds each to the overlay's own file), so a file the resident's agent wrote or
 # changed (Hermes skill_manage, DM creation nudges), in any folder, is never read. The text is never rendered.
 SKILL_SHIPPED = {
-    "edgeos": ("37d9dab653ce23db2b726fe87a35928081d3a411c9055c7c0a289c0e63b64f9d",),
-    "edge-india": ("ef297e5d05aa32c5ed581bb50d082db9f8d4201e30c6a1114f848d8636436e82",),
-    "edge-esmeralda": ("9d6b4350857a099408a773353146e5bf32962afe7d8aa20870eb5d208bef5ea7",),
-    "index-network": ("a67e5bae85818b3d5d0481c77179c0e76ab20a106dabd44502fa67727f9ac501",),
+    "edgeos": ("1fe7d1dd67b3a341743735e58a498a6d6a8c7163e1a310d11aab85a9d76934b9",),
+    "edge-india": ("7b32d9c74f92548c5a19de8f6165cc4ef206e77be42d8eb8783197f64ed6e944",),
+    "index-network": ("8121b97005019bc3b3399925656e69b541f35a97875006fccdbf482d01934ea4",),
 }
 AGENT_SKILLS = tuple(SKILL_SHIPPED)
 SKILL_MAX_BYTES = 65536
@@ -1058,9 +1060,10 @@ AGENT_ITERATIONS, AGENT_SKILL_CALLS, AGENT_DAILY_TURNS = 3, 2, 40
 # never the box config's effort: a short task, and medium thinking on each call nears the AGENT_SECONDS join.
 AGENT_REASONING = {"enabled": True, "effort": "low"}
 SKILL_SCHEMA = {"name": AGENT_TOOL, "description": (
-    "Read one of your village skills (read-only, at most two reads): edgeos covers the current event and its "
-    "schedule tools; edge-india is public village knowledge; edge-esmeralda the previous village; index-network who "
-    "to meet."),
+    "Read one of your village skills (read-only, at most two reads): edgeos covers the configured popup and "
+    "schedule tools; verify returned dates before describing current availability. Edge City India ran October 11 "
+    "to November 1, 2026 and has ended; edge-india is historical background. Index-network covers current wants "
+    "and people to meet; never carry old village plans forward as current."),
     "parameters": {"type": "object", "properties": {"name": {"type": "string", "enum": list(AGENT_SKILLS)}},
                    "required": ["name"]}}
 LEAK_CHARS, QUOTE_CHARS = 24, 120  # one quote of the replied-to post (lead ruling, ov#580 a): it is public there
@@ -1462,6 +1465,8 @@ def _agent_output(context: dict, home: Path, job_id: str, state: dict):
             raise ValueError("agent-cap")  # today's one call (the claimed turn already counted) runs instead
         state["agent"] = state.get("agent", 0) + 1  # counted before the agent's calls, as a model turn is
         _state_write(home, state)
+        if not _post_village_allowed(home):
+            raise ValueError("post-village-disabled")
         text, code = _agent_turn(scheduler, job_id, _agent_prompt(room), min(AGENT_SECONDS, left))
         if code is None:
             output = {"silent": True} if text.strip() == "[SILENT]" else _parse_output(text, room)
@@ -1472,6 +1477,8 @@ def _agent_output(context: dict, home: Path, job_id: str, state: dict):
         code = _agent_error(error, "agent-output")
     _note(code)
     _turn["room"] = (context, room)
+    if not _post_village_allowed(home):
+        raise ValueError("post-village-disabled")
     return _output(context, home)
 
 
@@ -1615,6 +1622,27 @@ def reason_line(error: BaseException) -> str:
     return f"zzz-autonomy: {_step} {name} {_reason(error)}\n"
 
 
+def _post_village_allowed(home: Path):
+    # One canonical reader shipped with the trusted overlay plugin; no sys.path discovery.
+    try:
+        path = home / "plugins" / "village-bridge" / "_post_village_policy.py"
+        if any(part.is_symlink() for part in (path, *path.parents)):
+            return False
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            meta = os.fstat(stream.fileno())
+            if not stat.S_ISREG(meta.st_mode) or meta.st_size > 16384:
+                return False
+            raw = stream.read(16385)
+        if hashlib.sha256(raw).hexdigest() != POLICY_READER_SHA256:
+            return False
+        module = {"__name__": "agentvillage_post_village_policy"}
+        exec(compile(raw, "<post-village-policy>", "exec"), module)
+        return module["runtime_allowed"](home, "zzz_event_autonomy")
+    except Exception:
+        return False
+
+
 def run(home: Path):
     global _deadline
     _deadline = _clock() + RUN_BUDGET_SECONDS
@@ -1625,6 +1653,8 @@ def run(home: Path):
 
 
 def _run(home: Path):
+    if not _post_village_allowed(home):
+        return
     _quiet_sdk()
     _enter("installed")
     if not _installed(home):
@@ -1661,6 +1691,8 @@ def _run(home: Path):
         if not _importable("openai"):
             raise ValueError("model-client")
         with httpx.Client(trust_env=False, timeout=10) as http:
+            if not _post_village_allowed(home):
+                return
             claim = _activity(http, cfg, "claim")
             cap = _seat_cap(claim)
             if cap != state.get("cap"):
@@ -1692,9 +1724,13 @@ def _claimed_turn(home: Path, cfg: dict, http, candidate, state: dict):
     if not isinstance(candidate, dict) or not UUID.fullmatch(str(candidate.get("id", ""))) or not HEX.fullmatch(str(candidate.get("lease_token", ""))) or candidate.get("kind") not in KIND:
         raise ValueError("claim-shape")
     fields = {"candidate_id": candidate["id"], "lease_token": candidate["lease_token"]}
+    if not _post_village_allowed(home):
+        raise ValueError("post-village-disabled")
     context = _activity(http, cfg, "context", **fields)
     if context.get("candidate_id") != candidate["id"] or context.get("kind") != candidate["kind"]:
         raise ValueError("context-mismatch")
+    if not _post_village_allowed(home):
+        raise ValueError("post-village-disabled")
     if not _installed(home) or _job(home, cfg) is None:
         raise ValueError("authority-changed")
     # The daily cap counts the turn before the model call: a turn that times out or fails after it still counts.
@@ -1710,6 +1746,8 @@ def _claimed_turn(home: Path, cfg: dict, http, candidate, state: dict):
         output, code = _output(context, home), None
     else:
         output, code = _agent_output(context, home, _job(home, cfg), state), None
+    if not _post_village_allowed(home):
+        raise ValueError("post-village-disabled")
     if not _installed(home) or _job(home, cfg) is None:
         raise ValueError("authority-changed")
     receipt = _activity(http, cfg, "complete", **fields, output=output)

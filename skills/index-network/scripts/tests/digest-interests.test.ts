@@ -1,3 +1,4 @@
+import { runAllowedProactive } from "./post-village-fixtures";
 /**
  * DATA-372: the daily digest names only interests the resident stated.
  *
@@ -30,7 +31,7 @@ import {
   statedInterestTags,
   TAG_KEYWORDS,
 } from "../build-daily-brief-context";
-import { type ProactiveOptions, runProactive, statedInterestsFor } from "../proactive";
+import { type ProactiveOptions, statedInterestsFor } from "../proactive";
 
 const MORNING = new Date("2026-10-12T02:30:00Z"); // 08:00 IST
 const DATE = "2026-10-12";
@@ -283,7 +284,7 @@ describe("the morning brief's you.interests", () => {
   test("a profile with interests: exactly those, in order, deduplicated; nothing from memory; no about me", async () => {
     writeProfile(profile(["Soil health", "Jazz", "soil health", "d/acc"]));
     const seen: { statedInterests?: string[] }[] = [];
-    const result = await runProactive("brief", options("We are here. I tinker with VR rigs.", seen));
+    const result = await runAllowedProactive("brief", options("We are here. I tinker with VR rigs.", seen));
     expect(result.woke).toBe(true);
     expect(seen[0]?.statedInterests).toEqual(["Soil health", "Jazz", "soil health", "d/acc"]);
     // Stated text takes the stricter cleaner: a slash gets spaces (never a /command).
@@ -294,7 +295,7 @@ describe("the morning brief's you.interests", () => {
   test("B1: a profile with no interests names none, though memory tags exist (they only pick events and notes)", async () => {
     writeProfile(profile([]));
     const seen: { statedInterests?: string[] }[] = [];
-    const result = await runProactive("brief", options("We are here. I tinker with VR rigs.", seen));
+    const result = await runAllowedProactive("brief", options("We are here. I tinker with VR rigs.", seen));
     expect(seen[0]?.statedInterests).toEqual([]);
     expect(you(result.lines).interests).toEqual([]);
   });
@@ -309,13 +310,13 @@ describe("the morning brief's you.interests", () => {
     // The memory fallback still finds tags (for event picks) ...
     expect(resolveInterests([], memory).interestTags).toEqual(["Education", "Food Systems", "Health & Longevity", "New Urbanism"]);
     // ... but the brief names none of them.
-    const result = await runProactive("brief", options(memory));
+    const result = await runAllowedProactive("brief", options(memory));
     expect(you(result.lines).interests).toEqual([]);
   });
 
   test("S2: a stated interest the cleaner widens is not cut (cap 60 after cleaning)", async () => {
     writeProfile(profile(["Climate/energy policy and carbon markets", "Open-source hardware/robotics for farms"]));
-    const result = await runProactive("brief", options(""));
+    const result = await runAllowedProactive("brief", options(""));
     expect(you(result.lines).interests).toEqual([
       "Climate / energy policy and carbon markets",
       "Open-source hardware / robotics for farms",
@@ -324,18 +325,18 @@ describe("the morning brief's you.interests", () => {
 
   test("dedupe runs after cleaning: two spellings that clean the same are one", async () => {
     writeProfile(profile(["AI/ML", "AI / ML", "Music"]));
-    const result = await runProactive("brief", options(""));
+    const result = await runAllowedProactive("brief", options(""));
     expect(you(result.lines).interests).toEqual(["AI / ML", "Music"]);
   });
 
   test("no profile and prose with no interest word: the list is empty", async () => {
-    const result = await runProactive("brief", options("We are here. Carter said the market starts early."));
+    const result = await runAllowedProactive("brief", options("We are here. Carter said the market starts early."));
     expect(you(result.lines).interests).toEqual([]);
   });
 
   test("the template brief takes the same path", async () => {
     writeProfile(profile(["Poetry"]));
-    const result = await runProactive("tpl-brief", options("I tinker with VR rigs."));
+    const result = await runAllowedProactive("tpl-brief", options("I tinker with VR rigs."));
     expect(you(result.lines).interests).toEqual(["Poetry"]);
   });
 

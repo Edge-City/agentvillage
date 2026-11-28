@@ -7,6 +7,8 @@ author: Edge Library
 
 # Edge Library
 
+Edge City India ran October 11 to November 1, 2026 and has ended. Its name identifies this community and historical material; it does not establish current location, availability or plans. Use the installed service's returned facts for its current capabilities, and never assume residents are still in Goa.
+
 Adapted by Edge City from the Edge Library bundle (Edge-City/agentvillage#506,
 by Nhajela). This version only reads.
 

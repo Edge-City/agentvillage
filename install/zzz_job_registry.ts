@@ -11,13 +11,13 @@ type Registry = { ids: string[]; zzzJobId?: string };
 const emptyJobField = (value: unknown): boolean => value == null || value === ""
   || (Array.isArray(value) && value.length === 0);
 
-/** Only the job shape confirmed by the ZZZ installer can acquire a name. */
+/** Installed owned shape, not runnable authorization: exact jobs may be paused or enabled. */
 export function isExactZzzManagedJob(value: unknown): value is { id: string } {
   if (!value || typeof value !== "object") return false;
   const job = value as Record<string, unknown>;
   return typeof job.id === "string" && HERMES_JOB_ID_RE.test(job.id)
     && job.name === ZZZ_JOB_NAME && job.script === ZZZ_JOB_SCRIPT
-    && job.enabled === true && job.no_agent === true && !job.workdir
+    && typeof job.enabled === "boolean" && job.no_agent === true && !job.workdir
     && JSON.stringify(job.enabled_toolsets) === JSON.stringify(TOOLSETS)
     && job.deliver === "local" && job.failure_deliver === "local"
     && typeof job.schedule === "object" && job.schedule !== null

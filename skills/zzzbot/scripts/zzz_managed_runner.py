@@ -271,12 +271,16 @@ def _shim_allowed(home: Path, gate, session_id: str, call_id: str, operation: st
 
 def _policy_allowed(home: Path, managed, gate, session_id: str, call_id: str,
                     operation: str, arguments: dict, room: str | None = None) -> bool:
+    if not managed.post_village_allowed(home, "zzz_pairs"):
+        return False
     # Reserve before entering the shim: crash, timeout and manual review must
     # not ask the same owner-policy question again on the next cron tick.
     if not managed.policy_attempt(home, room):
         return False
     if not _shim_allowed(home, gate, session_id, call_id, operation, arguments):
         managed.policy_refused(home, room)
+        return False
+    if not managed.post_village_allowed(home, "zzz_pairs"):
         return False
     managed.policy_allowed(home, room)
     return True
@@ -399,6 +403,8 @@ def _run_turn(home: Path, bridge, managed, job_id: str, gate) -> None:
 
 def run(home: Path) -> None:
     bridge, managed = _bridge(home)
+    if not managed.post_village_allowed(home, "zzz_pairs"):
+        return
     job_id = _job(managed, home)
     if not managed.participation_on(home) or not bridge.installed(home, "zzzbot", "zzz.list_rooms"):
         return

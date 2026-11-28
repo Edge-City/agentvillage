@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed } from "./post-village-policy";
 /**
  * DATA-357: the resident's first welcome, grounded in their own Index intents.
  *
@@ -896,7 +897,7 @@ async function seedLines(home: string, target: IndexMcpTarget, clock: Clock, lin
   const mode = seedMode(home);
   // F-28: the welcome's own tag on each create, only while AV_WELCOME_SEED_TAG is on.
   const tagged = seedTagOn(home);
-  const made = (await Promise.allSettled(lines.map((line) => seedOne(target, clock, mode, line.text, tagged ? SEED_SOURCE_ID : undefined)))).map((r) =>
+  const made = (await Promise.allSettled(lines.map((line) => seedOne(home, target, clock, mode, line.text, tagged ? SEED_SOURCE_ID : undefined)))).map((r) =>
     r.status === "fulfilled" ? r.value : { out: null, code: "error" },
   );
   const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
@@ -949,6 +950,7 @@ async function seedWelcome(
   welcomed: boolean,
 ): Promise<{ read: IntentsRead; seed: SeedCounts }> {
   const unchanged = { read: first.read, seed: NO_SEED };
+  if (!postVillageAllowed(home, "welcome_seed", now)) return unchanged;
   if (welcomed) return unchanged;
   if (first.read.kind !== "listed") return unchanged;
   // The marker before the active count: another run's creates may already be partly listed (DATA-416 race 1).
@@ -966,6 +968,7 @@ async function seedWelcome(
   }
   if (lines.length === 0) return unchanged;
   try {
+    if (!postVillageAllowed(home, "welcome_seed")) return unchanged;
     if (!claimSeed(home, selected.length, now)) return awaitSeed(home, target, first, clock);
   } catch {
     return unchanged;
@@ -1039,12 +1042,13 @@ export const CREATE_BAD_URL = "create-bad-url";
  */
 export const CREATE_NO_ID = "create-no-id";
 
-async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string, sourceId?: string): Promise<SeedLine> {
+async function seedOne(home: string, target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string, sourceId?: string): Promise<SeedLine> {
   // `description` is the resident's line exactly as selectedIntentions read it: never rewritten, trimmed or composed.
   try {
     // One create per line, inside the run's budget and timeout, the second list's reserve kept back, no retry.
     const createTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!createTarget) return { out: null, code: BUDGET_EXHAUSTED };
+    if (!postVillageAllowed(home, "welcome_seed")) return { out: null, code: "post-village-disabled" };
     const created = await createIntentDirect(createTarget, description, sourceId);
     if (!created.ok) return created.refusal ? { out: created.refusal, code: created.refusal.code } : { out: null, code: createFailureCode(created) };
     const made = { id: created.id, title: null };
@@ -1052,6 +1056,7 @@ async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, des
     if (made.id === null) return { out: null, code: "pause-no-id" };
     const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!pauseTarget) return { out: null, code: BUDGET_EXHAUSTED };
+    if (!postVillageAllowed(home, "welcome_seed")) return { out: made, code: "post-village-disabled" };
     return writeRefused(await callIndexTool(pauseTarget, "pause_intent", { intentId: made.id }))
       ? { out: null, code: "pause-refused" }
       : { out: made, code: null };
@@ -1119,11 +1124,11 @@ export function welcomeText(name: string, read: IntentsRead, intentsUrl: string,
 
 /** The welcome's text with `listed` as the intent lines (the listed branch only); `context` as welcomeText's. */
 function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, listed: string[], context = false): string {
-  const intro = `I'm ${name}, your personal agent for Edge City India. It's a pleasure to meet you.`;
+  const intro = `I'm ${name}, your personal agent in Agent Village. It's a pleasure to meet you.`;
   const questions = [
     "What can you ask me?",
-    "• What events are happening tomorrow?",
-    "• Please RSVP me to [event name] on the calendar.",
+    "• Help me follow up with someone I met.",
+    "• Help me find people for what I want to do now.",
     "You can also send me Telegram voice notes.",
   ].join("\n");
   const appHomeUrl = new URL("/", intentsUrl).href;
@@ -1135,7 +1140,7 @@ function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, lis
     "2) Send someone a gold star to show gratitude (three per day).",
     "3) Skylight: make an avatar for me in the virtual village.",
   ].join("\n");
-  const parts = ["Welcome to Edge City India ☀️", intro, questions, onboarding];
+  const parts = ["Welcome to Agent Village ☀️", intro, questions, onboarding];
   if (read.kind === "unreachable") {
     parts.push(
       "Your intents\nI can't load your intents right now. Tell me what you're looking for, and I'll still help you find relevant people and events.",
@@ -1153,17 +1158,17 @@ function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, lis
       ["Your intents", copy.lead, "", ...listed.map((t) => `- ${t}`)].join("\n"),
       read.seeded === "paused"
         ? `${listed.length === 1 ? "This intent" : "These intents"} will stay paused until you tell me to publish ${listed.length === 1 ? "it" : "them"}.`
-        : `I'll use ${listed.length === 1 ? "this" : "these"} to look for relevant people and events. ${copy.close}`,
+        : `${listed.length === 1 ? "Is this intent" : "Which of these are"} still current for you? ${copy.close}`,
       ...(read.seeded === "paused" ? [copy.close] : []),
     );
   } else {
     const lead = read.titles.length > MAX_LISTED ? "Your intents\nHere are three of them:" : "Your intents";
     parts.push(
       [lead, "", ...listed.map((t) => `- ${t}`)].join("\n"),
-      `I'll use ${listed.length === 1 ? "this" : "these"} to look for relevant people and events. Tell me if you'd like to add, change, or pause an intent.`,
+      `${listed.length === 1 ? "Is this intent" : "Which of these are"} still current for you? Tell me if you'd like to add, change, or pause an intent.`,
     );
   }
-  parts.push("I'm excited for our time at Edge City India together!");
+  parts.push("I'm here to help with what matters to you now.");
   return parts.join("\n\n");
 }
 
@@ -1235,6 +1240,7 @@ function residentHolds(context: ContextTags | "absent", line: string): boolean {
  * once, ever, and a write that fails prints nothing. Never throws.
  */
 export async function surfaceRefusedSeeds(home: string, now: Date = new Date()): Promise<string | null> {
+  if (!postVillageAllowed(home, "welcome_seed", now)) return null;
   try {
     const first = refusedMarker(home);
     if (!first || pendingRefused(first.refused).length === 0) return null;
@@ -1456,6 +1462,7 @@ export function reseedPlan(home: string): { lines: string[]; cut: number } {
 export async function reseedRun(home: string, options: WelcomeOptions = {}, flags: { dryRun?: boolean; again?: boolean } = {}): Promise<WelcomeBranch> {
   const now = options.now ?? new Date();
   const alone = (code: string): WelcomeBranch => ({ ...welcomeBranch(UNREACHABLE), seed_codes: [code] });
+  if (!postVillageAllowed(home, "welcome_seed", now)) return alone("post-village-disabled");
   let claim: HeldLock | null = null;
   try {
     if (!flags.dryRun && !flags.again && reseedRan(home)) return alone(RESEED_ALREADY_RAN);

@@ -22,12 +22,10 @@ export const EDGE_SKILL_NAMES = [
   "rolodex",
   "gold-stars",
   "skylight",
-  // Edge City India public village knowledge (the current event): read from the
+  // Historical Edge City India public village knowledge (the event has ended): read from the
   // local copy the "Edge — knowledge sync" job keeps (K1), with the snapshot
   // installed here as the fallback; never fetched in a turn.
   "edge-india",
-  // The previous popup, background only.
-  "edge-esmeralda",
   "token-usage-audit",
   "agent-plaza",
   "agent-commons",
@@ -58,6 +56,8 @@ export const RETIRED_SKILL_DIRS = [
   // DATA-360: left EDGE_SKILL_NAMES in rc16 (9adff7a6); the Geo CLI it
   // pointed the agent at is unused.
   "geo-esmeralda",
+  // Keep the historical archive in source, not the installed skill list.
+  "edge-esmeralda",
 ] as const;
 
 // A name on both lists would be copied in and removed again on every run.

@@ -1,3 +1,4 @@
+import { postVillageRuntimeAllowed } from "../skills/index-network/scripts/post-village-policy";
 /** Installer-owned Hermes job for enabled zzzbot projections. No resident-created cron. */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -31,7 +32,8 @@ export const ZZZ_SHIPPED_SHA256 = {
   shim: ["1db538dc9d5d602bfbc71bbb8da0b49b4fee0280b603f75222df94e43ef82eff"],
   runner: ["7986413386089ff3cfa6934999e949ad3cb14d3d35e4214ee9809fe19919c5e0",
     "db049dbca131fce6cd63f67d40bb15d4ead37b8f62aa159f360dc7d2814f1765",
-    "ec5b5b3332891048ff1270757af105877d0e84f7d3222f5a0ec76e2b2930aa02"],
+    "ec5b5b3332891048ff1270757af105877d0e84f7d3222f5a0ec76e2b2930aa02",
+    "f3a85594da0020f7a4bbf28ec52878591ba1e7bababfdac727386ed21af35c41"],
   prompt: ["f5d0d69e6af8a9076e92d31114fc7ff8ec6f99b54a0b980c7a308f5e8b7f42d2",
     "d62b2354eda4702795472a89ca163225c6c2d9979b0cdce3afa023b792a4c133"],
 } as const;
@@ -90,10 +92,16 @@ else:
             and old.get('enabled_toolsets') == r['toolsets'] and not old.get('workdir')
             and old.get('deliver') == 'local' and old.get('failure_deliver') == 'local'
             and isinstance(schedule, dict) and schedule.get('kind') == 'cron'
-            and schedule.get('expr') == r['schedule']
+            and (schedule.get('expr') in r.get('accepted_schedules', [r['schedule']]) if r.get('post_village') else schedule.get('expr') == r['schedule'])
             and isinstance(repeat, dict) and repeat.get('times') is None
             and not old.get('skills') and not old.get('skill') and not old.get('context_from')
             and not old.get('monitor_script') and not old.get('monitor_url'))
+        if r.get('post_village'):
+            paused = get_job(r['id'])
+            if not paused or paused.get('enabled') is not False:
+                raise RuntimeError('zzz_policy_pause_unconfirmed')
+            if not safe:
+                raise RuntimeError('zzz_policy_existing_shape_refused')
         if safe:
             job = update_job(r['id'], {'prompt': r['prompt'], 'script': r['script'],
                 'enabled_toolsets': r['toolsets'], 'no_agent': True,
@@ -112,10 +120,15 @@ else:
             failure_deliver='local', paused=True, paused_reason='Configuring ZZZ tool scope')
     if not job or job.get('enabled_toolsets') != r['toolsets'] or job.get('enabled'):
         raise RuntimeError('zzz_job_scope_failed')
-    resumed = resume_job(job['id'])
-    if not resumed or resumed.get('enabled_toolsets') != r['toolsets'] or resumed.get('enabled') is not True:
-        pause_job(job['id'])
-        raise RuntimeError('zzz_job_resume_failed')
+    if not r.get('keep_paused'):
+        resumed = resume_job(job['id'])
+        if not resumed or resumed.get('enabled_toolsets') != r['toolsets'] or resumed.get('enabled') is not True:
+            pause_job(job['id'])
+            raise RuntimeError('zzz_job_resume_failed')
+    else:
+        saved = get_job(job['id'])
+        if not saved or saved.get('enabled') is not False:
+            raise RuntimeError('zzz_policy_pause_unconfirmed')
 `;
 
 export function jobPython(bin: string): string {
@@ -302,8 +315,8 @@ function lingeringJobs(home: string): Job[] {
 const emptyJobField = (value: unknown): boolean => value == null || value === ""
   || (Array.isArray(value) && value.length === 0);
 
-function confirmed(list: Job[], prompt: string): boolean {
-  return list.length === 1 && list[0].script === ZZZ_JOB_SCRIPT && list[0].enabled === true
+function confirmed(list: Job[], prompt: string, policyOn = true): boolean {
+  return list.length === 1 && list[0].script === ZZZ_JOB_SCRIPT && (policyOn ? typeof list[0].enabled === "boolean" : list[0].enabled === false)
     && list[0].no_agent === true && !list[0].workdir
     && JSON.stringify(list[0].enabled_toolsets) === JSON.stringify(ZZZ_JOB_TOOLSETS)
     && list[0].deliver === "local" && list[0].failure_deliver === "local"
@@ -324,7 +337,7 @@ function confirmed(list: Job[], prompt: string): boolean {
 export function verifyZzzManagedJob(home: string, installed: boolean, script: Buffer | null): void {
   if (installed) {
     stateDirUsable(home);
-    if (!confirmed(jobs(home), readFileSync(join(home, PROMPT), "utf8").trimEnd())) throw new Error("zzz_job_not_confirmed");
+    if (!confirmed(jobs(home), readFileSync(join(home, PROMPT), "utf8").trimEnd(), postVillageRuntimeAllowed(home, "zzz_pairs"))) throw new Error("zzz_job_not_confirmed");
     const dir = realScriptsDir(home);
     const shim = dir && join(dir, ZZZ_JOB_SCRIPT);
     if (!shim || !plainFile(shim) || !script || !readFileSync(shim).equals(script)) throw new Error("zzz_shim_mismatch");
@@ -380,9 +393,9 @@ export function reconcileZzzManagedJob(home: string, installed: boolean): void {
   if (id !== undefined && (typeof id !== "string" || !ID.test(id))) throw new Error("zzz_job_invalid");
   jobApi(python, home, { action: "install", ...(id ? { id } : {}), name: ZZZ_JOB_NAME,
     prompt, script: ZZZ_JOB_SCRIPT, schedule: ZZZ_JOB_SCHEDULE,
-    toolsets: [...ZZZ_JOB_TOOLSETS], home });
+    toolsets: [...ZZZ_JOB_TOOLSETS], home, post_village: true, accepted_schedules: [ZZZ_JOB_SCHEDULE], keep_paused: !postVillageRuntimeAllowed(home, "zzz_pairs") || current[0]?.enabled !== true });
   const installedJob = jobs(home);
-  if (!confirmed(installedJob, prompt)) throw new Error("zzz_job_not_confirmed");
+  if (!confirmed(installedJob, prompt, postVillageRuntimeAllowed(home, "zzz_pairs"))) throw new Error("zzz_job_not_confirmed");
   const confirmedId = installedJob[0].id;
   if (typeof confirmedId !== "string" || !ID.test(confirmedId)) throw new Error("zzz_job_invalid");
   syncZzzInstalledJobId(home, confirmedId);

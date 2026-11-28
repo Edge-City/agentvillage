@@ -1,0 +1,70 @@
+{
+  "files": {
+    "skills/index-network/scripts/post-village-policy.ts": "b4b403a6cd48a816bca61ae8feabee74961b238af98f25d8ed4d6f2afe41885e",
+    "skills/index-network/scripts/job-holds.ts": "bcf846504ca1eb6e1f1fca9a6e8027e736b8ea422d76e358b851d9bcd37f6803",
+    "skills/index-network/scripts/proactive.ts": "8b637de3c1a51e932a21e4e055440a49dfc9f526289147c49454cc3b21b5b957",
+    "skills/index-network/scripts/post-village-runnable.ts": "df4c6c2e0cbdc35cbffd8395b628d623580b1015acbf72c5913bc00f3cbc45b0",
+    "skills/index-network/scripts/send-daily-brief.ts": "fd151874e1b5be56286c94f5ecbcdaaf04d52d3dbc0331144afedc525d98d0d9",
+    "skills/index-network/scripts/drop-opportunity.ts": "1d697d3571ad36279c1c4dc9e9b3570b953689cffc217f679d0fc1129caf274d",
+    "skills/index-network/scripts/pending-alert.ts": "1b8285c32c331c2896cb3865408dbfe5a45dc37b97b007664a3ba55f4ed84c15",
+    "skills/index-network/scripts/summarize-negotiations.ts": "52850bcea09240155eb5f2aaf66b654de06a56ca8300ebb1bfb6946429d13dd9"
+  },
+  "jobs": {
+    "Edge — digest prepare": {
+      "script": "agentvillage_proactive_prefetch.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "e9e364d168215a3b4139d5e8c0534af65b0bdc940821d63afd443fd67be29cdf",
+      "noAgent": true,
+      "failureDeliver": "local"
+    },
+    "Edge — daily digest": {
+      "script": "agentvillage_proactive_brief.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "83bc10ee2f6585146476345ed4de5aabe801651d21a3e105e1a00e49dc33de50",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — negotiation summary": {
+      "script": "agentvillage_proactive_negotiation.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "eb9e1dd630ee0ec61d2fd7e5c040fe10c2977256da37f0838aaf32b9b2cd74fd",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — opportunity drop (midday)": {
+      "script": "agentvillage_proactive_drop-midday.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "2e55f629db30881a9a1c60cfe1816fdb0f8543e5e871b5245435dffcf7d99c45",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — opportunity drop (evening)": {
+      "script": "agentvillage_proactive_drop-evening.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "2e55f629db30881a9a1c60cfe1816fdb0f8543e5e871b5245435dffcf7d99c45",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — pending opportunity": {
+      "script": "agentvillage_proactive_pending.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "31f98acf10b5db5ded2ed1db1fe511625ae2924d0eca46c8bc900c4cd8bab316",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — template: brief": {
+      "script": "agentvillage_proactive_tpl-brief.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "83bc10ee2f6585146476345ed4de5aabe801651d21a3e105e1a00e49dc33de50",
+      "noAgent": false,
+      "failureDeliver": "local"
+    },
+    "Edge — template: digest-preview": {
+      "script": "agentvillage_proactive_tpl-digest-preview.sh",
+      "scriptSha256": "92289c315ddc9ff3173dcfd9e1a89b2452c2afec3d4b66e846143faf709892c7",
+      "promptSha256": "2e55f629db30881a9a1c60cfe1816fdb0f8543e5e871b5245435dffcf7d99c45",
+      "noAgent": false,
+      "failureDeliver": "local"
+    }
+  }
+}

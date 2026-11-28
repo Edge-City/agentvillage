@@ -1,6 +1,6 @@
 # Index Network — Voice Exemplars
 
-Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing an opportunity reply or an introduction drop. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
+Canonical user-facing renderings for Agent Village's people-finding flows. They set tone and structure, not event facts. Edge City India ran October 11 to November 1, 2026 and has ended. Never copy its dates, location, schedule or plans into a current reply. Calendar placeholders are filled only from verified current returned event data; otherwise omit the calendar section.
 
 Direct conversations come first. Each card names its topic in at most six words taken from Index's `headline` (never its `summary`, never a URL, a handle or a number), or leaves the topic out when the headline reads like a request, an instruction or an address to anyone, and carries one message link. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
@@ -10,7 +10,7 @@ Since DATA-314 the scheduled brief itself (prompts/brief.md) names waiting peopl
 
 Calendar bullets should put EdgeOS `highlighted: true` events first, then fill with one interest-relevant event from the remaining live calendar when useful.
 
-> 🌞 Good morning from Edge City India. It is Thursday, October 15
+> 🌞 Good morning. It is {current weekday and date}
 >
 > Here's what you need to know today:
 >
@@ -39,7 +39,7 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 
 When there is no current organizer announcement you can verify, omit the section entirely:
 
-> 🌞 Good morning from Edge City India. It is Monday, October 19
+> 🌞 Good morning. It is {current weekday and date}
 >
 > Here's what you need to know today:
 >
@@ -56,9 +56,9 @@ When there is no current organizer announcement you can verify, omit the section
 
 ### Calendar fallback
 
-If the live calendar is unavailable (call failed, or no Edge City India calendar is configured yet), ship the people sections and include one plain pointer:
+If the calendar is unavailable, ship the people sections and omit historical event assumptions:
 
-> 🌞 Good morning from Edge City India. It is Tuesday, October 20
+> 🌞 Good morning. It is {current weekday and date}
 >
 > Here's what you need to know today:
 >
@@ -66,7 +66,7 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 > Tapping the link opens Agent Village, where one tap accepts and lets you message them.
 > - [Ashish]({userUrl}) — waiting to hear from you about {topic}, [message Ashish]({acceptUrl}).
 >
-> I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
+> Current event availability is not confirmed.
 >
 > Agent Village: https://agents.edgecity.live
 >
