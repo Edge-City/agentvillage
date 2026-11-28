@@ -22,6 +22,7 @@ import time
 from typing import Any, Callable, Optional
 
 from . import _approval, _approvals_reminder, _edgeos, _edgeos_guard, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _setting_guard
 from ._ask_village import register_ask_village_tool
 from ._ask_odin import register_ask_odin_tool
 from ._search_village import register_search_village_tool
@@ -1246,6 +1247,15 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
             except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
                 pass
             return memory_block
+        # POST-VILLAGE SETTING GUARD (A79, review-b ov#632 S1): no agent tool call may change the operator's
+        # av-events/post-village-policy.json or run its operator command's `set` (`_setting_guard`). No switch.
+        setting_block = _setting_guard.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
+        if setting_block is not None:
+            try:
+                logger.info("av-events: setting_guard refused tool=%s", kwargs.get("tool_name"))
+            except BaseException:  # noqa: BLE001 - a log line must not cost the refusal
+                pass
+            return setting_block
         if result is not None:
             return result
         fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))

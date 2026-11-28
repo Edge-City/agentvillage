@@ -146,6 +146,13 @@ REFUSED = {
                                           "data": f"echo '{ALLOW_ALL}' > {SETTING}"}),
     "process_write": ("process_manage", {"action": "write", "session_id": "proc_1",
                                          "data": f"cp /tmp/x {HOME}/av-events/post-village-policy.json\n"}),
+    # Added with the guard (cases its first probe run turned up).
+    "bare_glob_into_xargs": t("echo * | xargs rm"),
+    "home_glob_remove": t("rm -rf $HERMES_HOME/*"),
+    "home_dot_glob_after_cd": t("cd ~/.hermes && rm -rf ./*"),
+    "copy_out_through_redirect": t(f"cat {SETTING} > /tmp/copy.json"),
+    "ts_reader_edit": t("sed -i 's/return false/return true/' skills/index-network/scripts/post-village-policy.ts"),
+    "py_reader_write": ("write_file", {"path": f"{HOME}/plugins/village-bridge/_post_village_policy.py", "content": "x"}),
 }
 
 #: Calls that must still pass: reads, the operator's status, other files, the word "policy", resident flows.
@@ -183,6 +190,12 @@ ALLOWED = {
     "process_poll": ("process_manage", {"action": "poll", "session_id": "proc_1"}),
     "process_submit_other": ("process_manage", {"action": "submit", "session_id": "proc_1", "data": "y"}),
     "memory_add_dm_free": ("memory", {"action": "add", "target": "memory", "content": "Likes tea."}),
+    # Added with the guard (cases its first probe run refused wrongly).
+    "glob_in_another_folder": t("rm -rf build/*"),
+    "read_other_av_events_file_jq": t(f"cat {HOME}/av-events/job-holds.json | jq ."),
+    "echo_bare_glob": t("echo *"),
+    "read_ts_reader": t("cat skills/index-network/scripts/post-village-policy.ts"),
+    "test_and_cat": t(f"[ -f $HERMES_HOME/av-events/post-village-policy.json ] && cat {SETTING}"),
 }
 
 

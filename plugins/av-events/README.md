@@ -37,6 +37,7 @@ plugins/av-events/
   _clock.py        the Now line on every turn, cron runs and subagents included: `Now: <Wkd YYYY-MM-DD HH:MM> IST (<h:mm AM/PM>)` (CLOCK-1)
   _prompt_refresh.py  a long session's system prompt follows USER.md / MEMORY.md / AGENTS.md / skills: wraps Hermes's build_turn_context (F1)
   _user_md_gate.py  the USER.md gate (the same block as village-memory): Private entries out of non-private prompts, memory results and writes
+  _setting_guard.py  pre_tool_call refuses any agent tool call that would change av-events/post-village-policy.json or run its operator command's set (A79; no switch)
   _miniapp_epoch.py   an open chat picks up a mini-app install or removal at its next turn: the installed-apps stamp and check (MINIAPP-PICKUP)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
