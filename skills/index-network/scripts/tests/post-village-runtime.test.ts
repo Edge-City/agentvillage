@@ -97,7 +97,9 @@ test("revocation during awaited pending action prevents action flags and day led
   mkdirSync(join(home, "av-events")); const policy = join(home, "av-events/post-village-policy.json"); writeFileSync(policy, '{"version":1,"enabled":["pending_alert"]}');
   const state = join(home, "memory/heartbeat-state.json"); mkdirSync(join(home, "memory")); writeFileSync(state, '{}');
   let calls = 0;
-  const result = await runProactive("pending", { home, pending: async () => { calls++; writeFileSync(policy, '{"version":1,"enabled":[]}'); return { silent: true, reason: "none" }; } });
+  // A fixed clock inside the pending alert's delivery window (08:00 to 22:00 Asia/Kolkata): on the real clock this
+  // test failed every day from 16:30Z to 02:30Z, when the run is "outside-window" before the action is ever called.
+  const result = await runProactive("pending", { home, now: () => new Date("2026-11-28T03:00:00Z"), pending: async () => { calls++; writeFileSync(policy, '{"version":1,"enabled":[]}'); return { silent: true, reason: "none" }; } });
   expect(calls).toBe(1); expect(result.reason).toBe("post-village-disabled"); expect(readFileSync(state, "utf8")).toBe('{}');
 });
 
