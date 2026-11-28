@@ -528,7 +528,11 @@ def _find_reaches(start: str, homes: frozenset, placed: tuple) -> bool:
     """A `find` start folder from which it walks down to the setting: `av-events`, the Hermes home, an ancestor
     of it, the user's home, or a relative start after a `cd`/`pushd` or `workdir` into the home or `av-events`."""
     path = _as_path(start)
-    if _in_folder(path) or _is_home(path, homes) or path in ("~", "$home", "${home}"):
+    user_home = _CALL_HOMES.get()[1]
+    # Coordinator A: `_as_path` turns `~`, $HOME, ${HOME} into the real user home, so that path (and the literal
+    # spellings, when HOME is unknown) both count.
+    if (_in_folder(path) or _is_home(path, homes) or path in ("~", "$home", "${home}")
+            or (user_home and path == user_home)):
         return True
     if path.startswith("/"):
         return _above_home(path, homes)
@@ -1040,10 +1044,22 @@ def _skill_manage_refuses(args: dict) -> bool:
         if skill not in _OVERLAY_SKILLS:
             continue
         action = str(entry.get("action") or "").strip().lower()
-        path = _as_path(str(entry.get("file_path") or ""))
-        if action in ("delete", "remove") or path == "scripts" or path.startswith("scripts/"):
+        if action in ("delete", "remove") or _skill_file_path_refuses(entry.get("file_path")):
             return True
     return False
+
+
+def _skill_file_path_refuses(raw: Any) -> bool:
+    """An overlay skill's `file_path` read the way Hermes reads it: the path itself (no `=` split), `.` parts and
+    doubled slashes dropped (pathlib `Path(file_path).parts`, tools/skill_manager_tool.py:322). Refused when any
+    part is `scripts` (case folded: boxes are Linux and case-sensitive, so `Scripts/` only over-refuses), or when it
+    is absolute or still holds `..` (Hermes rejects both itself: `..` at tools/path_security.py:17-19 via
+    skill_manager_tool.py:324, a first part outside references/templates/scripts/assets at :329)."""
+    path = str(raw or "").strip().lower()
+    if not path:
+        return False
+    parts = posixpath.normpath(path).split("/")
+    return path.startswith("/") or ".." in parts or "scripts" in parts
 
 
 def _writes_through_redirect(command: str) -> bool:
@@ -1126,13 +1142,76 @@ def _matches(tool_name: str, args: dict, environ: Mapping[str, str]) -> bool:
 #: What the matcher-error fallback (and an oversized call) looks for: any piece of the setting, of the code that
 #: enforces it, or a covered job's name.
 _FALLBACK_PIECES = FRAGMENTS + CODE_NAME_PIECES + tuple(job.lower() for job in COVERED_JOBS)
-#: A call whose text is longer than this is judged by the name pieces alone: no parse, no fold (review-a N3).
+#: Size cap (review-a N3, coordinator's correction: it fails closed). With the fold linear it is a safety net, not
+#: the main defence. A command or code string over MAX_TEXT is refused as too long to check. In the file and
+#: structured tools a content field over MAX_TEXT gets the piece check and is left out of the full rules; every
+#: other string (path, name, skill, action, job id, mode) is judged in full at any size, and refused over MAX_SHORT.
 MAX_TEXT = 256 * 1024
+MAX_SHORT = 4096
+REFUSAL_TOO_LONG = ("Refused by Agent Village: this call is too long to check against the operator's post-village "
+                    "setting (over 256 KB of command or code, or over 4 KB in a path, name or id). Split it into "
+                    "smaller calls.")
+#: The content fields of the structured tools (Hermes v0.21.5: write_file `content`, patch `old_string`/`new_string`/
+#: V4A `patch`, skill_manage `content`/`file_content`/`old_string`/`new_string`, cronjob_manage `prompt`).
+_BODY_KEYS = frozenset({"content", "file_content", "old_string", "new_string", "patch", "prompt"})
+
+
+class _TooLong(Exception):
+    pass
 
 
 def _pieces_hit(args: Any) -> bool:
-    return isinstance(args, dict) and any(any(piece in text.lower() for piece in _FALLBACK_PIECES)
-                                          or _NAMES.search(text.lower()) for text in _strings(args))
+    return isinstance(args, (dict, list, str)) and any(any(piece in text.lower() for piece in _FALLBACK_PIECES)
+                                                       or _NAMES.search(text.lower()) for text in _strings(args))
+
+
+def _sized(value: Any, key: str, bodies: List[str], depth: int = 0) -> Any:
+    """`value` with every content field over MAX_TEXT taken out into `bodies` (a V4A patch keeps its file header
+    lines, which name the paths it writes). Raises _TooLong for any other string over MAX_SHORT."""
+    if depth > 32:
+        raise _TooLong
+    if isinstance(value, str):
+        if key in _BODY_KEYS:
+            if len(value) <= MAX_TEXT:
+                return value
+            bodies.append(value)
+            return "\n".join(_v4a_headers(value)) if key == "patch" else ""
+        if len(value) > MAX_SHORT:
+            raise _TooLong
+        return value
+    if isinstance(value, dict):
+        return {k: _sized(v, k if isinstance(k, str) else "", bodies, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sized(v, key, bodies, depth + 1) for v in value]
+    return value
+
+
+def _v4a_headers(text: str) -> List[str]:
+    return [line for line in text.splitlines() if line.startswith("*** ")]
+
+
+def _size_directive(tool_name: Any, args: Any) -> Any:
+    """None when the call is within the caps; a block directive; or `(args, bodies)`: the args to judge in full
+    and the oversized content to piece-check."""
+    if not isinstance(tool_name, str) or not isinstance(args, dict):
+        return None
+    if tool_name in ("terminal", "process_manage", "execute_code"):
+        text = args.get("code") if tool_name == "execute_code" else _command_text(tool_name, args)
+        if isinstance(text, str) and len(text) > MAX_TEXT:
+            return {"action": "block", "message": REFUSAL_TOO_LONG}
+        return None
+    if tool_name not in ARG_TOOLS:
+        return None
+    bodies: List[str] = []
+    try:
+        reduced = _sized(args, "", bodies)
+    except _TooLong:
+        return {"action": "block", "message": REFUSAL_TOO_LONG}
+    if not bodies:
+        return None
+    if any(_pieces_hit(body) for body in bodies):
+        return {"action": "block", "message": REFUSAL}
+    return reduced, bodies
 
 
 def safe_directive(tool_name: Any, args: Any, environ: Optional[Mapping[str, str]] = None,
@@ -1143,9 +1222,10 @@ def safe_directive(tool_name: Any, args: Any, environ: Optional[Mapping[str, str
     (_FALLBACK_PIECES, NAMES), else allowed with one warning (no text). No switch turns it off. `matcher` is for
     tests."""
     try:
-        if isinstance(args, dict) and sum(len(text) for text in _strings(args)) > MAX_TEXT:
-            return {"action": "block", "message": REFUSAL} if _pieces_hit(args) else None
-        hit = (matcher or matches)(tool_name, args, environ)
+        sized = _size_directive(tool_name, args)
+        if isinstance(sized, dict):
+            return sized
+        hit = (matcher or matches)(tool_name, sized[0] if sized else args, environ)
         return {"action": "block", "message": REFUSAL} if hit else None
     except BaseException:  # noqa: BLE001 - a raise here would block every tool call
         try:
