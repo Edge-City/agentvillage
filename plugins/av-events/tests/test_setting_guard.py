@@ -139,7 +139,7 @@ REFUSED = {
                                               "p = pathlib.Path(os.environ['HERMES_HOME'], 'av-events', 'post-village-policy.json')\n"
                                               f"p.write_text('{ALLOW_ALL}')"}),
     "execute_code_pieces": ("execute_code", {"code": "import os\n"
-                                             "os.replace('/tmp/x', os.environ['HERMES_HOME'] + '/av-events/' + 'post-' + 'village' + '-policy.json')"}),
+                                             "os.replace('/tmp/x', os.environ['HERMES_HOME'] + '/av-events/' + 'post-village-' + 'policy.json')"}),
     "execute_code_operator": ("execute_code", {"code": "import subprocess\nsubprocess.run(['bun', 'install/post_village_policy.ts', "
                                                "'set', '--home', '/opt/data', '--job', 'zzz_pairs', '--enabled', 'true'])"}),
     "process_submit": ("process_manage", {"action": "submit", "session_id": "proc_1",
@@ -147,12 +147,22 @@ REFUSED = {
     "process_write": ("process_manage", {"action": "write", "session_id": "proc_1",
                                          "data": f"cp /tmp/x {HOME}/av-events/post-village-policy.json\n"}),
     # Added with the guard (cases its first probe run turned up).
-    "bare_glob_into_xargs": t("echo * | xargs rm"),
     "home_glob_remove": t("rm -rf $HERMES_HOME/*"),
     "home_dot_glob_after_cd": t("cd ~/.hermes && rm -rf ./*"),
-    "copy_out_through_redirect": t(f"cat {SETTING} > /tmp/copy.json"),
     "ts_reader_edit": t("sed -i 's/return false/return true/' skills/index-network/scripts/post-village-policy.ts"),
     "py_reader_write": ("write_file", {"path": f"{HOME}/plugins/village-bridge/_post_village_policy.py", "content": "x"}),
+    # Coordinator's narrowing (bare globs only where the command places them; find recurses; redirects read).
+    "glob_after_cd_into_folder": t(f"cd {HOME}/av-events && rm *.json"),
+    "glob_with_workdir_folder": t("rm *.json", workdir=f"{HOME}/av-events"),
+    "glob_in_folder_by_home_var": t("rm $HERMES_HOME/av-events/*.json"),
+    "glob_after_pushd_into_folder": t(f"pushd {HOME}/av-events && mv *.json /tmp/"),
+    "bare_glob_moves_folder_after_cd_home": t("cd ~/.hermes && mv * /tmp/x"),
+    "bare_glob_removes_folder_with_workdir_home": t("rm -rf *", workdir=HOME),
+    "find_recurses_from_above_the_home": t("find /opt -name 'post-village-*' -delete"),
+    "find_recurses_relative": t("find . -name 'post-village-polic*' -exec rm {} +"),
+    "redirect_copy_into_folder": t(f"cat {SETTING} > {HOME}/av-events/copy.json"),
+    "redirect_relative_after_cd_into_folder": t(f"cd {HOME}/av-events && cat post-village-policy.json > copy.json"),
+    "redirect_glob_target": t(f"cat {SETTING} > /tmp/*.json"),
 }
 
 #: Calls that must still pass: reads, the operator's status, other files, the word "policy", resident flows.
@@ -195,6 +205,22 @@ ALLOWED = {
     "read_other_av_events_file_jq": t(f"cat {HOME}/av-events/job-holds.json | jq ."),
     "echo_bare_glob": t("echo *"),
     "read_ts_reader": t("cat skills/index-network/scripts/post-village-policy.ts"),
+    # Coordinator's narrowing: a bare glob the command does not place in av-events or the home passes.
+    "bare_rm_json": t("rm *.json"),
+    "bare_git_add": t("git add *"),
+    "bare_cp_star": t("cp * /tmp/x"),
+    "bare_mv_txt": t("mv *.txt archive/"),
+    "bare_rm_json_other_workdir": t("rm *.json", workdir="/tmp/work"),
+    "bare_git_add_other_workdir": t("git add *", workdir="/srv/project"),
+    "bare_cp_star_other_workdir": t("cp * /tmp/x", workdir="/tmp/work"),
+    "bare_mv_txt_other_workdir": t("mv *.txt archive/", workdir="/tmp/work"),
+    "bare_glob_into_xargs": t("echo * | xargs rm"),
+    "cd_elsewhere_then_bare_glob": t(f"cd {HOME}/av-events && cd /tmp/work && rm *.json"),
+    "copy_out_through_redirect": t(f"cat {SETTING} > /tmp/copy.json"),
+    "copy_out_append_home": t(f"jq . {SETTING} >> $HERMES_HOME/notes/policy-copy.txt"),
+    "execute_code_reads_other_av_events_file": ("execute_code", {"code": "import json, os\nprint(json.load(open("
+                                                 "os.environ['HERMES_HOME'] + '/av-events/job-holds.json')))"}),
+    "execute_code_other_policy_json": ("execute_code", {"code": "import json\nprint(json.load(open('approval/policy.json')))"}),
     "test_and_cat": t(f"[ -f $HERMES_HOME/av-events/post-village-policy.json ] && cat {SETTING}"),
 }
 
