@@ -273,7 +273,7 @@ _BIG = "z" * 300_000
     (("write_file", {"path": "/tmp/notes.txt", "content": _BIG}), None),
     (("write_file", {"path": "plugins/av-events/x.py", "content": _BIG}), REFUSAL),
     (("write_file", {"path": "plugins/village-bridge/x.py", "content": _BIG}), REFUSAL),
-    (("write_file", {"path": "sub/../config.yaml", "content": _BIG}), REFUSAL),
+    (("write_file", {"path": "sub/../config.yaml", "content": _BIG}), TOO_LONG),
     (("write_file", {"path": "/tmp/notes.txt", "content": _BIG + " zzz_autonomy_runner.py"}), REFUSAL),
     (("write_file", {"path": "/tmp/" + "n" * 5000, "content": "x"}), TOO_LONG),
     (("patch", {"path": "/tmp/notes.txt", "old_string": "a", "new_string": _BIG}), None),
@@ -295,3 +295,34 @@ def test_large_content_keeps_the_short_fields_fully_checked(box, call, refusal):
     over 4 KB is refused."""
     expected = [] if refusal is None else [{"action": "block", "message": refusal}]
     assert fire(box, *call) == expected
+
+
+def _config_calls(path):
+    keeps = "plugins:\n  enabled:\n    - av-events\n# " + "z" * 300_000 + "\n"
+    return [("write_file", {"path": path, "content": keeps}),
+            ("patch", {"path": path, "old_string": "z" * 300_000, "new_string": "z" * 300_000}),
+            ("patch", {"path": path, "old_string": "  - av-events", "new_string": "  - other\n#" + "z" * 300_000}),
+            ("patch", {"mode": "patch", "patch": f"*** Begin Patch\n*** Update File: {path}\n@@\n-a\n+"
+                       + "z" * 300_000 + "\n*** End Patch\n"})]
+
+
+@pytest.mark.parametrize("where", ["$HERMES_HOME/config.yaml", "HERMES_REAL/config.yaml", "sub/../config.yaml",
+                                   "config.yaml"])
+def test_over_cap_body_whose_content_decides_is_refused_as_too_long(box, home, where):
+    """Coordinator, size cap: where the rule reads the content (config.yaml of the home), an oversized body is
+    refused as too long to check, never judged as if it were empty."""
+    path = where.replace("HERMES_REAL", str(home))
+    for call in _config_calls(path):
+        assert fire(box, *call) == [{"action": "block", "message": TOO_LONG}], (where, call[0])
+
+
+def test_over_cap_body_with_the_allow_shape_is_refused(box):
+    """The allow-list shape is a content rule on any path: an oversized body is checked for it."""
+    body = "z" * 300_000 + '\n{"enabled": ["daily_digest"]}\n'
+    assert fire(box, "write_file", {"path": "/tmp/notes.json", "content": body}) == [
+        {"action": "block", "message": REFUSAL}]
+
+
+def test_over_cap_body_to_an_ordinary_workspace_file_is_allowed(box):
+    assert fire(box, "write_file", {"path": "workspace/notes.md", "content": "z" * 300_000}) == []
+    assert fire(box, "patch", {"path": "workspace/notes.md", "old_string": "a", "new_string": "z" * 300_000}) == []
