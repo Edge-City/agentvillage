@@ -51,6 +51,22 @@ REFUSED = {
     "sm_ops_malformed_dict": ("skill_manage", {"operations": {"action": "patch", "name": "index-network",
                                                               "file_path": "scripts/proactive.ts"}}),
     "sm_ops_malformed_string": ("skill_manage", {"operations": "patch index-network scripts/proactive.ts"}),
+    # Coordinator B: file_path read as Hermes reads it (tools/skill_manager_tool.py:317-334): no `=` split, `./`
+    # dropped (pathlib), any `scripts` part; absolute or `..` paths refused (Hermes itself rejects them).
+    "sm_ops_equals_in_file_name": ops({"action": "write_file", "name": "index-network", "file_path": "scripts/a=b.ts",
+                                       "file_content": "x"}),
+    "sm_ops_dot_slash": ops({"action": "write_file", "name": "index-network", "file_path": "./scripts/a.ts",
+                             "file_content": "x"}),
+    "sm_ops_double_slash": ops({"action": "write_file", "name": "zzzbot", "file_path": "scripts//a.py",
+                                "file_content": "x"}),
+    "sm_ops_absolute": ops({"action": "write_file", "name": "index-network",
+                            "file_path": f"{HOME}/skills/index-network/scripts/a.ts", "file_content": "x"}),
+    "sm_ops_nested_scripts_part": ops({"action": "write_file", "name": "index-network",
+                                       "file_path": "references/scripts/a.ts", "file_content": "x"}),
+    "sm_ops_dotdot_left": ops({"action": "patch", "name": "zzzbot", "file_path": "../zzzbot/scripts/a.py",
+                               "old_string": "a", "new_string": "b"}),
+    "sm_ops_capital_scripts": ops({"action": "write_file", "name": "index-network", "file_path": "Scripts/a.ts",
+                                   "file_content": "x"}),
     # S1: the hermes CLI behind a global option's value, a wrapper, or another spelling.
     "cli_model_value_cron": t("hermes -m cron cron resume aut0001"),
     "cli_model_value_plugins": t("hermes -m plugins plugins disable av_events"),
@@ -97,6 +113,8 @@ ALLOWED = {
                                     "file_content": "print(1)\n"}),
     "sm_ops_own_skill_create": ops({"action": "create", "name": "garden", "content": "---\nname: garden\n---\n"}),
     "sm_ops_index_network_skill_md": ops({"action": "patch", "name": "index-network", "old_string": "a", "new_string": "b"}),
+    "sm_ops_index_network_reference_with_equals": ops({"action": "write_file", "name": "index-network",
+                                                       "file_path": "references/a=scripts.md", "file_content": "x"}),
     "cli_env_list": t("env hermes cron list"),
     "cli_timeout_pause_covered": t("timeout 30 hermes cron pause aut0001"),
     "cli_python_module_own_job": t("python3 -m hermes_cli.main cron resume rem0001"),
@@ -160,6 +178,25 @@ def test_home_climb_back_into_itself(box, home, monkeypatch):
         assert fire(box, *t(command)) == [{"action": "block", "message": REFUSAL}], command
 
 
+@pytest.mark.parametrize("start", ["~", "$HOME", "${HOME}", "/home/agent", "~/", "$HERMES_HOME", "${HERMES_HOME}",
+                                   "HERMES_REAL", "~/.hermes"])
+def test_find_from_a_home_after_home_spelling_rewrite(box, home, monkeypatch, start):
+    """Coordinator A: `_as_path` rewrites `~`/$HOME/$HERMES_HOME to the real paths; a `find` from the user's home
+    (literal or real path) or the Hermes home still reaches the setting, with HOME apart from HERMES_HOME."""
+    monkeypatch.setenv("HOME", "/home/agent")
+    start = str(home) if start == "HERMES_REAL" else start
+    assert fire(box, *t(f"find {start} -name '*.json' -delete")) == [{"action": "block", "message": REFUSAL}], start
+
+
+@pytest.mark.parametrize("command", ["rm -rf ~/plugins", "rm -rf $HOME/plugins", "rm -rf ${HOME}/skills",
+                                     "rm -rf HERMES_REAL/plugins", "find ~ -name '*.json' -delete"])
+def test_user_home_is_the_hermes_home(box, home, monkeypatch, command):
+    """Coordinator A: HOME equal to HERMES_HOME (as on a box): every spelling and the real path are the home."""
+    monkeypatch.setenv("HOME", str(home))
+    command = command.replace("HERMES_REAL", str(home))
+    assert fire(box, *t(command)) == [{"action": "block", "message": REFUSAL}], command
+
+
 def test_safe_target_layer_alone(plugin):
     """N2, layer one: a redirect of a read onto guarded code is never a safe target."""
     guard = sys.modules["hermes_plugins.av_events._setting_guard"]
@@ -197,14 +234,64 @@ def test_cost_is_linear_and_bounded(plugin, tool, args):
     assert spent < (TERMINAL_BOUND_S if tool == "terminal" else CPU_BOUND_S), (tool, spent)
 
 
-def test_oversized_call_is_judged_by_the_name_pieces_alone(plugin):
-    """A call text over MAX_TEXT is never folded or parsed: refused when it holds a guarded piece, else allowed."""
+TOO_LONG = ("Refused by Agent Village: this call is too long to check against the operator's post-village setting "
+            "(over 256 KB of command or code, or over 4 KB in a path, name or id). Split it into smaller calls.")
+_OVER = 256 * 1024 + 1
+_UNDER = 256 * 1024 - 64
+
+
+def _padded(size, tail):
+    return "echo " + "y" * (size - len(tail) - 7) + " ; " + tail
+
+
+@pytest.mark.parametrize("call", [
+    t(_padded(_OVER, "rm -rf plugins")),
+    t(_padded(_OVER, "hermes cron resume aut0001")),
+    t(_padded(_OVER, "echo hi")),
+    ("process_manage", {"action": "submit", "session_id": "p1", "data": _padded(_OVER, "echo hi")}),
+    ("execute_code", {"code": "x = 1  # " + "y" * _OVER}),
+], ids=["rm_plugins", "cron_resume_by_id", "harmless_echo", "process_submit", "execute_code"])
+def test_over_cap_command_or_code_is_refused_as_too_long(box, call):
+    """Coordinator, size cap: padding past the cap must not skip the structural rules; a command or code string
+    over 256 KB is not ordinary use and is refused outright, saying why."""
+    assert fire(box, *call) == [{"action": "block", "message": TOO_LONG}]
+
+
+def test_just_under_cap_is_judged_normally(box):
+    assert fire(box, *t(_padded(_UNDER, "rm -rf plugins"))) == [{"action": "block", "message": REFUSAL}]
+    assert fire(box, *t(_padded(_UNDER, "hermes cron resume aut0001"))) == [{"action": "block", "message": REFUSAL}]
+    harmless = t(_padded(_UNDER, "echo hi"))
+    assert fire(box, *harmless) == []
     guard = sys.modules["hermes_plugins.av_events._setting_guard"]
-    big = "z" * (guard.MAX_TEXT + 1)
-    assert guard.safe_directive("write_file", {"path": "/tmp/b.txt", "content": big}, {"HERMES_HOME": HOME}) is None
-    hit = big + f" {HOME}/plugins/av-events/__init__.py"
-    assert guard.safe_directive("write_file", {"path": "/tmp/b.txt", "content": hit}, {"HERMES_HOME": HOME}) == {
-        "action": "block", "message": REFUSAL}
-    assert guard.safe_directive("terminal", {"command": "echo " + big + " zzz_autonomy_runner.py"},
-                                {"HERMES_HOME": HOME}) == {"action": "block", "message": REFUSAL}
-    assert _cpu(lambda: guard.safe_directive("execute_code", {"code": big}, {"HERMES_HOME": HOME})) < CPU_BOUND_S
+    assert _cpu(lambda: guard.safe_directive(*harmless, {"HERMES_HOME": HOME})) < TERMINAL_BOUND_S
+
+
+_BIG = "z" * 300_000
+
+
+@pytest.mark.parametrize("call, refusal", [
+    (("write_file", {"path": "/tmp/notes.txt", "content": _BIG}), None),
+    (("write_file", {"path": "plugins/av-events/x.py", "content": _BIG}), REFUSAL),
+    (("write_file", {"path": "plugins/village-bridge/x.py", "content": _BIG}), REFUSAL),
+    (("write_file", {"path": "sub/../config.yaml", "content": _BIG}), REFUSAL),
+    (("write_file", {"path": "/tmp/notes.txt", "content": _BIG + " zzz_autonomy_runner.py"}), REFUSAL),
+    (("write_file", {"path": "/tmp/" + "n" * 5000, "content": "x"}), TOO_LONG),
+    (("patch", {"path": "/tmp/notes.txt", "old_string": "a", "new_string": _BIG}), None),
+    (("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: plugins/village-bridge/x.py\n@@\n-a\n+"
+                + _BIG + "\n*** End Patch\n"}), REFUSAL),
+    (("skill_manage", {"operations": [{"action": "write_file", "name": "garden", "file_path": "references/a.md",
+                                       "file_content": _BIG}]}), None),
+    (("skill_manage", {"operations": [{"action": "write_file", "name": "index-network",
+                                       "file_path": "scripts/a.ts", "file_content": _BIG}]}), REFUSAL),
+    (("cronjob_manage", {"action": "create", "name": "garden", "schedule": "every 1h", "prompt": _BIG}), None),
+    (("cronjob_manage", {"action": "resume", "job_id": "aut0001", "prompt": _BIG}), REFUSAL),
+    (("cronjob_manage", {"action": "resume", "job_id": "a" * 5000}), TOO_LONG),
+], ids=["write_ordinary", "write_plugin", "write_bridge", "write_config_traversal", "write_piece_in_content",
+        "write_long_path", "patch_ordinary", "patch_v4a_bridge", "skill_own_reference", "skill_overlay_script",
+        "cron_create_long_prompt", "cron_resume_covered_long_prompt", "cron_long_job_id"])
+def test_large_content_keeps_the_short_fields_fully_checked(box, call, refusal):
+    """Coordinator, size cap: large content is legitimate in the file and structured tools; every short field is
+    judged by the full rules at any size, a content field over the cap gets the piece check, and a path, name or id
+    over 4 KB is refused."""
+    expected = [] if refusal is None else [{"action": "block", "message": refusal}]
+    assert fire(box, *call) == expected
