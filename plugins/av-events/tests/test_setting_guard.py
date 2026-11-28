@@ -13,9 +13,9 @@ from __future__ import annotations
 import pytest
 
 #: The refusal, verbatim (the agent sees this as the tool result).
-REFUSAL = ("Refused by Agent Village: this would change av-events/post-village-policy.json, the setting that turns "
-           "scheduled jobs on or off. That setting belongs to the operator and you cannot change it. If the person "
-           "wants a scheduled job back on, tell them to contact the Agent Village team.")
+REFUSAL = ("Refused by Agent Village: this call touches the operator's post-village setting, a scheduled job it "
+           "keeps off, or the code that enforces it. You cannot change those. If the person wants a scheduled job "
+           "back on, tell them to contact the Agent Village team.")
 
 HOME = "/opt/data"
 SETTING = f"{HOME}/av-events/post-village-policy.json"
@@ -254,7 +254,8 @@ def test_allowed(hooked, name):
 
 
 def test_refusal_text_is_plain():
-    assert "operator" in REFUSAL and "cannot change it" in REFUSAL and "Agent Village team" in REFUSAL
+    assert "operator" in REFUSAL and "cannot change" in REFUSAL and "Agent Village team" in REFUSAL
+    assert "would change" not in REFUSAL  # review-b ov#633 N4: a refused read changes nothing
     assert "village is" not in REFUSAL.lower() and "in the village" not in REFUSAL.lower()
 
 
