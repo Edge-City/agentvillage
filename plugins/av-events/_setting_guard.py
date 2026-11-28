@@ -1190,9 +1190,27 @@ def _v4a_headers(text: str) -> List[str]:
     return [line for line in text.splitlines() if line.startswith("*** ")]
 
 
-def _size_directive(tool_name: Any, args: Any) -> Any:
+def _content_decides(tool_name: str, reduced: dict, environ: Mapping[str, str]) -> bool:
+    """A write_file or patch whose outcome reads the content: config.yaml of the Hermes home (by `path` or a V4A
+    file header). There an oversized body is never judged as if it were empty."""
+    if tool_name not in ("write_file", "patch"):
+        return False
+    homes = _home_words(environ)
+    token = _CALL_HOMES.set((str(environ.get("HERMES_HOME", "") or "").strip().rstrip("/").lower(),
+                             str(environ.get("HOME", "") or "").strip().rstrip("/").lower()))
+    try:
+        paths = [reduced[field] for field in PATH_FIELDS if isinstance(reduced.get(field), str)]
+        if isinstance(reduced.get("patch"), str):
+            paths += _v4a_paths(reduced["patch"])
+        return any(_home_config(_as_path(path), homes, False) for path in paths)
+    finally:
+        _CALL_HOMES.reset(token)
+
+
+def _size_directive(tool_name: Any, args: Any, environ: Mapping[str, str]) -> Any:
     """None when the call is within the caps; a block directive; or `(args, bodies)`: the args to judge in full
-    and the oversized content to piece-check."""
+    and the oversized content to piece-check. An oversized body is refused as too long where its content decides
+    the outcome (config.yaml of the home), and checked for the allow-list shape (a content rule on any path)."""
     if not isinstance(tool_name, str) or not isinstance(args, dict):
         return None
     if tool_name in ("terminal", "process_manage", "execute_code"):
@@ -1209,7 +1227,9 @@ def _size_directive(tool_name: Any, args: Any) -> Any:
         return {"action": "block", "message": REFUSAL_TOO_LONG}
     if not bodies:
         return None
-    if any(_pieces_hit(body) for body in bodies):
+    if _content_decides(tool_name, reduced, environ):
+        return {"action": "block", "message": REFUSAL_TOO_LONG}
+    if any(_pieces_hit(body) or _allow_shape(flat(body)) for body in bodies):
         return {"action": "block", "message": REFUSAL}
     return reduced, bodies
 
@@ -1222,7 +1242,7 @@ def safe_directive(tool_name: Any, args: Any, environ: Optional[Mapping[str, str
     (_FALLBACK_PIECES, NAMES), else allowed with one warning (no text). No switch turns it off. `matcher` is for
     tests."""
     try:
-        sized = _size_directive(tool_name, args)
+        sized = _size_directive(tool_name, args, os.environ if environ is None else environ)
         if isinstance(sized, dict):
             return sized
         hit = (matcher or matches)(tool_name, sized[0] if sized else args, environ)
