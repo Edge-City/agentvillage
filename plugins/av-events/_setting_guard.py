@@ -76,7 +76,9 @@ names is refused and any other passes (one warning, no text). No log carries tex
 
 from __future__ import annotations
 
+import contextvars
 import fnmatch
+import functools
 import logging
 import os
 import re
@@ -120,7 +122,7 @@ MUTATING = frozenset({"mv", "cp", "rm", "rmdir", "ln", "rsync", "install", "unli
 #: `$HOME` too when `$HOME` is the Hermes home.
 HOME_WORDS = frozenset({"$hermes_home", "${hermes_home}", "~/.hermes", "$home/.hermes", "${home}/.hermes", "/opt/data"})
 #: Opaque syntax: the name or the content may be made where the text does not show it.
-OPAQUE_SYNTAX = re.compile(r"\$\(|`|<\(|>\(|\$'|\$\"|\\[0-7xuU]"
+OPAQUE_SYNTAX = re.compile(r"\$\(|`|<\(|>\(|\$'|\$\"|\\[0-7xuU]|\$\{[A-Za-z_][A-Za-z0-9_]*[^A-Za-z0-9_}]"
                            r"|\$\{?(?!(?:HERMES_HOME|HOME)(?![A-Za-z0-9_]))[A-Za-z_0-9@*#?!$-]", re.IGNORECASE)
 #: Commands (at a command's position) that run other text, run another command, decode or transform text, or
 #: take a name from elsewhere; `python*` and `find` with an action flag count too.
@@ -340,6 +342,16 @@ def _glob_names_policy_script(word: str) -> bool:
 
 
 def _segments(command: str) -> List[List[str]]:
+    """Cached: one terminal call is read by several rules (review-a N3)."""
+    return [list(segment) for segment in _segments_cached(command)]
+
+
+@functools.lru_cache(maxsize=8)
+def _segments_cached(command: str) -> tuple:
+    return tuple(tuple(segment) for segment in _segments_uncached(command))
+
+
+def _segments_uncached(command: str) -> List[List[str]]:
     """The simple commands of `command` as shlex words (quotes honoured), split at ; & | ( ) and line breaks.
     Raises ValueError on text shlex cannot read (an unbalanced quote)."""
     text = command.replace("\\\r\n", " ").replace("\\\n", " ").replace("\r\n", "\n").replace("\n", " ; ")
@@ -463,8 +475,30 @@ def _as_path(word: str) -> str:
     Text alone cannot see a symlink: one made in an earlier call is not followed (state across calls)."""
     value = word.rsplit("=", 1)[-1].lower()
     if value:
-        value = posixpath.normpath(value)
+        value = posixpath.normpath(_home_spelled(value))
     return "" if value == "." else value
+
+
+#: The real homes of the call being judged (set by `matches`): $HERMES_HOME's value, and $HOME's.
+_CALL_HOMES: "contextvars.ContextVar[tuple]" = contextvars.ContextVar("av_setting_guard_homes", default=("", ""))
+_HOME_PARAM = re.compile(r"^\$\{hermes_home(?:[^a-z0-9_}][^}]*)?\}")
+_TILDE_USER = re.compile(r"^~[a-z0-9_.-]+(?=/|$)")
+
+
+def _home_spelled(value: str) -> str:
+    """S2 (review-a): a leading `//` is `/`; any `${HERMES_HOME...}` parameter form (`%/`, `:-x`, ...) is
+    $HERMES_HOME; `~user` is taken as the Hermes home; and $HERMES_HOME, `~` and $HOME are replaced by the real
+    paths when known, so `$HERMES_HOME/../<its name>` folds back onto the home."""
+    if value.startswith("//"):
+        value = "/" + value.lstrip("/")
+    value = _HOME_PARAM.sub("$hermes_home", value)
+    value = _TILDE_USER.sub("$hermes_home", value)
+    hermes_home, user_home = _CALL_HOMES.get()
+    for spelling, real in (("$hermes_home", hermes_home), ("~", user_home), ("$home", user_home),
+                           ("${home}", user_home)):
+        if real and (value == spelling or value.startswith(spelling + "/")):
+            return real + value[len(spelling):]
+    return value
 
 
 def _could_be_home(parent: str, homes: frozenset, in_home: bool) -> bool:
@@ -634,14 +668,22 @@ def _resolve(word: str, cwd: str) -> str:
     return path
 
 
-#: A path-like word with a `.` or `..` part, in free text (code, a file's content).
-_DOTTED_PATH = re.compile(r"[^\s'\"(),+;&|<>`=\[\]{}]*/\.\.?(?=/|[\s'\"(),+;&|<>`=\[\]{}]|$)(?:/[^\s'\"(),+;&|<>`=\[\]{}]*)?")
+#: What ends a path-like word in free text (code, a file's content).
+_TEXT_DELIMS = re.compile(r"([\s'\"(),+;&|<>`=\[\]{}]+)")
 
 
 def _folded(text: str) -> str:
     """`text` with every path-like word that holds a `.` or `..` part folded (bypass 1: `plugins/x/../av-events`
-    in code or in a file's content)."""
-    return _DOTTED_PATH.sub(lambda m: posixpath.normpath(m.group(0)), text)
+    in code or in a file's content). One split and one pass: linear in the text (review-a N3: the regex it
+    replaces was quadratic on a long token)."""
+    if "/." not in text and "./" not in text:
+        return text
+    out = []
+    for part in _TEXT_DELIMS.split(text):
+        if "/" in part and any(piece in (".", "..") for piece in part.split("/")):
+            part = posixpath.normpath(part)
+        out.append(part)
+    return "".join(out)
 
 
 def _home_config(path: str, homes: frozenset, cwd_known: bool) -> bool:
@@ -682,6 +724,20 @@ def _inline_code(name: str, args: List[str]) -> bool:
     return False
 
 
+def _is_hermes_word(word: str, previous: str) -> bool:
+    """`hermes` by any path, or the module after `-m` (`python -m hermes_cli...`)."""
+    base = word.rsplit("/", 1)[-1].lower()
+    return base == "hermes" or (previous == "-m" and base.startswith("hermes_cli"))
+
+
+def _hermes_anywhere(words: List[str], environ: Mapping[str, str]) -> bool:
+    """S1 (review-a): the hermes rules for every word that is hermes by any spelling, whatever wraps it (`env`,
+    `nice`, `command`, `nohup`, `timeout N`, `time`, `sudo -u x`, `uv run`, `python -m hermes_cli.main`, an
+    absolute or home path), on every word after it."""
+    return any(_is_hermes_word(word, words[i - 1] if i else "") and _hermes_refuses("hermes", words[i + 1:], environ)
+               for i, word in enumerate(words))
+
+
 def _hermes_refuses(name: str, args: List[str], environ: Mapping[str, str]) -> bool:
     """`hermes [global options] plugins disable|remove|rm|uninstall|update ...` naming av-events or av_events,
     `hermes config <verb> ...` naming CONFIG_WORDS, and `hermes cron resume|enable|update|edit|run ...` or
@@ -691,13 +747,19 @@ def _hermes_refuses(name: str, args: List[str], environ: Mapping[str, str]) -> b
     if name != "hermes":
         return False
     lowered = [arg.lower() for arg in args]
-    group_at = next((i for i, arg in enumerate(lowered) if arg in ("plugins", "config", "cron")), None)
-    if group_at is None:
-        return False
+    # Every occurrence of a group word is tried (review-a S1: `-m cron cron resume`, a global option's value).
+    for group_at, group in enumerate(lowered):
+        if group in ("plugins", "config", "cron") and _hermes_group_refuses(group, group_at, args, lowered, environ):
+            return True
+    return False
+
+
+def _hermes_group_refuses(group: str, group_at: int, args: List[str], lowered: List[str],
+                          environ: Mapping[str, str]) -> bool:
     verb_at = next((i for i in range(group_at + 1, len(args)) if not args[i].startswith("-")), None)
     if verb_at is None:
         return False
-    group, verb = lowered[group_at], lowered[verb_at]
+    verb = lowered[verb_at]
     words = []
     for arg in args[verb_at + 1:]:
         if arg == "--":
@@ -718,6 +780,57 @@ def _hermes_refuses(name: str, args: List[str], environ: Mapping[str, str]) -> b
     return False
 
 
+#: S3 (review-a): folder names that, joined in code (`os.path.join(h, 'plugins', 'av-events', ...)`), reach the code.
+_JOINED = (("plugins", "av-events"), ("plugins", "av_events"), ("plugins", "village-bridge"),
+           ("index-network", "scripts"), ("zzzbot", "scripts"))
+#: Pieces that make a variable or a link point at the home or a guarded folder.
+_GUARDED_PIECES = ("$hermes_home", "${hermes_home", "~", "/opt/data", ".hermes", "plugins", "skills", "scripts",
+                   "av-events", "village-bridge", "index-network", "zzzbot")
+_LINK_FLAGS = frozenset({"-s", "-l", "--symbolic-link", "--link"})
+
+
+def _joined_code_folder(text: str) -> bool:
+    return any(all(name in text for name in pair) for pair in _JOINED)
+
+
+def _guarded_place(path: str, homes: frozenset) -> bool:
+    """The home, a guarded folder, a folder above one, or anything inside them."""
+    hermes_home = _CALL_HOMES.get()[0]
+    return (_is_home(path, homes) or _code_path(path, homes) or _code_parent(path, homes) or _in_folder(path)
+            or bool(hermes_home) and path.startswith(hermes_home + "/")
+            or any(path.startswith(home + "/") for home in homes if home.startswith("/")))
+
+
+def _same_call_link_or_variable(segments: List[List[str]], homes: frozenset) -> bool:
+    """S3 (review-a): one command that makes a link (`ln`, `cp -s|-l`, `mount --bind`) from the home or a guarded
+    folder, or a variable from a piece of one, and also writes through that link's name or through a path that is
+    not literal (holds `$`). Cross-call stays not caught."""
+    made, risky = [], False
+    writes = []
+    for segment in segments:
+        redirects = [segment[i + 1] for i, token in enumerate(segment[:-1]) if ">" in token]
+        words = [token for i, token in enumerate(segment) if ">" not in token and token != "<"
+                 and not (i and ">" in segment[i - 1])]
+        name, args = _split_command(words)
+        operands = [arg for arg in args if not arg.startswith("-")]
+        linking = name == "ln" or (name == "cp" and _LINK_FLAGS & set(args)) or (
+            name == "mount" and ("--bind" in args or "-b" in args or "--rbind" in args))
+        if linking and len(operands) >= 2 and any(_guarded_place(_as_path(op), homes) for op in operands[:-1]):
+            risky = True
+            made.append(_as_path(operands[-1]))
+        for word in words:
+            if _ASSIGN.match(word) and any(piece in word.lower() for piece in _GUARDED_PIECES):
+                risky = True
+        writes += redirects + ([] if linking else _write_targets(name, args))  # making the link is not a write
+    if not risky:
+        return False
+    for target in writes:
+        path = _as_path(target)
+        if "$" in target or any(path == link or path.startswith(link + "/") for link in made if link):
+            return True
+    return False
+
+
 def _touches_code(command: str, environ: Mapping[str, str]) -> bool:
     """M1/M2/S1 in a terminal command: a write (redirect target or written argument) into the code that enforces
     the setting or onto the home's config.yaml, a removal or rename of a folder above that code, inline code that
@@ -729,6 +842,8 @@ def _touches_code(command: str, environ: Mapping[str, str]) -> bool:
     except ValueError:
         return any(piece in text for piece in CODE_NAME_PIECES)
     homes = _home_words(environ)
+    if _same_call_link_or_variable(segments, homes):
+        return True
     cwd = ""
     for segment in segments:
         redirects = [segment[i + 1] for i, token in enumerate(segment[:-1])
@@ -740,7 +855,7 @@ def _touches_code(command: str, environ: Mapping[str, str]) -> bool:
             target = _as_path(args[0])
             cwd = target if target.startswith(("/", "~", "$")) else _resolve(target, cwd)
             continue
-        if _hermes_refuses(name, args, environ):
+        if _hermes_anywhere(words, environ):
             return True
         targets = [_resolve(word, cwd) for word in redirects + _write_targets(name, args)]
         for path in targets:
@@ -750,7 +865,7 @@ def _touches_code(command: str, environ: Mapping[str, str]) -> bool:
                 whole = name in WRITE_ALL or name in WRITE_LAST or name == "dd" or path in [_resolve(r, cwd) for r in redirects]
                 if whole or any(word in text for word in CONFIG_WORDS):
                     return True
-        if _inline_code(name, args) and any(piece in text for piece in CODE_NAME_PIECES):
+        if _inline_code(name, args) and (any(piece in text for piece in CODE_NAME_PIECES) or _joined_code_folder(text)):
             return True
     return "hermes_safe_mode" in text and (not read_only(command, homes) or _writes_through_redirect(command))
 
@@ -901,14 +1016,34 @@ def _file_tool_refuses(tool_name: str, args: dict, environ: Mapping[str, str]) -
                 after = current.replace(old, new) if args.get("replace_all") else current.replace(old, new, 1)
                 if not _config_keeps_av_events(after):
                     return True
-    if tool_name == "skill_manage" and str(args.get("name") or "").strip().lower() in ("index-network", "zzzbot"):
-        action = str(args.get("action") or "").lower()
-        file_paths = [args.get("file_path")] + [op.get("file_path") for op in (args.get("operations") or [])
-                                                 if isinstance(op, dict)]
-        folded = [_as_path(str(path)) for path in file_paths if isinstance(path, str) and path]
-        if action in ("delete", "remove") or any(path == "scripts" or path.startswith("scripts/") for path in folded):
-            return True
+    if tool_name == "skill_manage" and _skill_manage_refuses(args):
+        return True
     return tool_name == "cronjob_manage" and _cron_tool_refuses(args, environ)
+
+
+_OVERLAY_SKILLS = ("index-network", "zzzbot")
+
+
+def _skill_manage_refuses(args: dict) -> bool:
+    """M1 (review-a): `skill_manage` as Hermes advertises it is an `operations` array, each op naming its skill
+    (an op without `name` takes the top-level one: tools/skill_manager_tool.py:769-771); the legacy flat shape is
+    the top level itself. Any entry on an overlay skill that deletes it, or touches its `scripts` (write_file,
+    patch, remove_file), is refused. An `operations` that is not a list is refused when it mentions an overlay
+    skill."""
+    top = str(args.get("name") or "")
+    raw = args.get("operations")
+    if raw is not None and not isinstance(raw, list):
+        return any(skill in text.lower() for text in _strings(raw) for skill in _OVERLAY_SKILLS)
+    entries = [args] + [op for op in (raw or []) if isinstance(op, dict)]
+    for entry in entries:
+        skill = str(entry.get("name") or top).strip().lower()
+        if skill not in _OVERLAY_SKILLS:
+            continue
+        action = str(entry.get("action") or "").strip().lower()
+        path = _as_path(str(entry.get("file_path") or ""))
+        if action in ("delete", "remove") or path == "scripts" or path.startswith("scripts/"):
+            return True
+    return False
 
 
 def _writes_through_redirect(command: str) -> bool:
@@ -960,6 +1095,15 @@ def matches(tool_name: Any, args: Any, environ: Optional[Mapping[str, str]] = No
     if not isinstance(tool_name, str) or not isinstance(args, dict):
         return False
     environ = os.environ if environ is None else environ
+    token = _CALL_HOMES.set((str(environ.get("HERMES_HOME", "") or "").strip().rstrip("/").lower(),
+                             str(environ.get("HOME", "") or "").strip().rstrip("/").lower()))
+    try:
+        return _matches(tool_name, args, environ)
+    finally:
+        _CALL_HOMES.reset(token)
+
+
+def _matches(tool_name: str, args: dict, environ: Mapping[str, str]) -> bool:
     if tool_name in ARG_TOOLS:
         if any(_NAMES.search(flat(text)) for text in _strings(args)):
             return True
@@ -973,14 +1117,22 @@ def matches(tool_name: Any, args: Any, environ: Optional[Mapping[str, str]] = No
             return False
         text = _folded(flat(code))
         return (any(piece in text for piece in CODE_PIECES + CODE_NAME_PIECES) or _allow_shape(text)
+                or _joined_code_folder(text)
                 or names_setting(text, _home_words(environ)))
     command = _command_text(tool_name, args)
     return command is not None and _terminal_refuses(command, environ)
 
 
-#: What the matcher-error fallback looks for: any piece of the setting, of the code that enforces it, or a
-#: covered job's name.
+#: What the matcher-error fallback (and an oversized call) looks for: any piece of the setting, of the code that
+#: enforces it, or a covered job's name.
 _FALLBACK_PIECES = FRAGMENTS + CODE_NAME_PIECES + tuple(job.lower() for job in COVERED_JOBS)
+#: A call whose text is longer than this is judged by the name pieces alone: no parse, no fold (review-a N3).
+MAX_TEXT = 256 * 1024
+
+
+def _pieces_hit(args: Any) -> bool:
+    return isinstance(args, dict) and any(any(piece in text.lower() for piece in _FALLBACK_PIECES)
+                                          or _NAMES.search(text.lower()) for text in _strings(args))
 
 
 def safe_directive(tool_name: Any, args: Any, environ: Optional[Mapping[str, str]] = None,
@@ -991,12 +1143,13 @@ def safe_directive(tool_name: Any, args: Any, environ: Optional[Mapping[str, str
     (_FALLBACK_PIECES, NAMES), else allowed with one warning (no text). No switch turns it off. `matcher` is for
     tests."""
     try:
+        if isinstance(args, dict) and sum(len(text) for text in _strings(args)) > MAX_TEXT:
+            return {"action": "block", "message": REFUSAL} if _pieces_hit(args) else None
         hit = (matcher or matches)(tool_name, args, environ)
         return {"action": "block", "message": REFUSAL} if hit else None
     except BaseException:  # noqa: BLE001 - a raise here would block every tool call
         try:
-            if isinstance(args, dict) and any(any(piece in text.lower() for piece in _FALLBACK_PIECES)
-                                              or _NAMES.search(text.lower()) for text in _strings(args)):
+            if _pieces_hit(args):
                 return {"action": "block", "message": REFUSAL}
         except BaseException:  # noqa: BLE001
             pass

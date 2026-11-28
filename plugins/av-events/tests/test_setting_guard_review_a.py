@@ -175,9 +175,12 @@ def _cpu(fn):
     return time.process_time() - start
 
 
-#: Process CPU seconds. Measured on the dev Mac at the fix, under load: about 0.03 s for each case below (see the
-#: report); the bound is roughly ten times that, and far below the quadratic regex's ~120 s for 200,000 characters.
-CPU_BOUND_S = 0.5
+#: Process CPU seconds, measured on the dev Mac at the fix under load average ~12 (see the report): file and code
+#: text 0.001-0.015 s, so the text bound is ~10x that; a terminal command is tokenised by shlex (linear, ~2 us a
+#: character): 0.47 s for one 200,000-character token, 0.13 s for 66,000 words, so its bound is ~10x the larger.
+#: The quadratic regex this replaces took 0.30 s at 10,000, 1.2 s at 20,000 and 4.2 s at 40,000 characters.
+CPU_BOUND_S = 0.15
+TERMINAL_BOUND_S = 5.0
 
 
 @pytest.mark.parametrize("tool, args", [
@@ -186,11 +189,12 @@ CPU_BOUND_S = 0.5
     ("terminal", {"command": "echo " + "y" * 200_000}),
     ("terminal", {"command": "echo " + " ".join(["ab"] * 66_000)}),
     ("write_file", {"path": "/tmp/blob.txt", "content": "/." * 100_000}),
+    ("write_file", {"path": "/tmp/blob.txt", "content": " a/../b" * 28_000}),
 ])
 def test_cost_is_linear_and_bounded(plugin, tool, args):
     guard = sys.modules["hermes_plugins.av_events._setting_guard"]
     spent = _cpu(lambda: guard.safe_directive(tool, args, {"HERMES_HOME": HOME}))
-    assert spent < CPU_BOUND_S, (tool, spent)
+    assert spent < (TERMINAL_BOUND_S if tool == "terminal" else CPU_BOUND_S), (tool, spent)
 
 
 def test_oversized_call_is_judged_by_the_name_pieces_alone(plugin):
