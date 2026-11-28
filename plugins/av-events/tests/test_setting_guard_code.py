@@ -197,6 +197,9 @@ ALLOWED = {
     "hermes_cron_list": t("hermes cron list"),
     "operator_status_glob_read": t("ls /srv/overlay/install/post_vill*.ts"),
     "enabled_word_alone": t("grep -n enabled ~/.hermes/config.yaml"),
+    "scripts_glob_elsewhere": t("rm -rf /tmp/build/scripts/*"),
+    "skill_script_read_with_sed": t("sed -n 1,40p skills/index-network/scripts/proactive.ts", workdir=HOME),
+    "own_skill_script_terminal": t("mkdir -p ~/.hermes/skills/garden/scripts && echo 'print(1)' > ~/.hermes/skills/garden/scripts/run.py"),
 }
 
 
