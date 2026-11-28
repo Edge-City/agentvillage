@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed, postVillageKeyForAction } from "./post-village-policy";
 /**
  * The trigger of every proactive job (DATA-314 brief-lite). Hermes runs it as
  * the cron job's pre-run script, through a no-argument shim in
@@ -950,7 +951,7 @@ async function briefAction(run: Run): Promise<Decision> {
 async function dropAction(run: Run): Promise<Decision> {
   let result: Awaited<ReturnType<typeof dropOpportunity>>;
   try {
-    result = await (run.options.drop ?? dropOpportunity)({ date: run.date, stateFile: run.stateFile });
+    result = await (run.options.drop ?? dropOpportunity)({ home: run.home, date: run.date, stateFile: run.stateFile, policyKey: run.action === "drop-evening" ? "opportunity_evening" : "opportunity_midday" });
   } catch {
     return { silent: "index-unavailable" };
   }
@@ -968,7 +969,7 @@ async function dropAction(run: Run): Promise<Decision> {
  * showing. The window was checked before this (deliveryGate).
  */
 async function pendingAction(run: Run): Promise<Decision> {
-  const result = await (run.options.pending ?? pendingAlert)({ stateFile: run.stateFile, now: run.now });
+  const result = await (run.options.pending ?? pendingAlert)({ home: run.home, stateFile: run.stateFile, now: run.now });
   if ("silent" in result) return { silent: result.reason };
   const shown = pendingView(result.cards, run.now);
   const { view, withheld } = shown;
@@ -1169,7 +1170,7 @@ async function eveningAction(run: Run): Promise<Decision> {
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
-  const result = await (run.options.followUp ?? followUp)({ date: run.date, stateFile: run.stateFile });
+  const result = await (run.options.followUp ?? followUp)({ home: run.home, date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason };
   const shown = followUpView(run.date, result);
   const { view, withheld } = shown;
@@ -1234,6 +1235,7 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   if (gated) return gated;
   const settings = delivery.settings ? { settings: delivery.settings } : {};
   const stateFile = stateFilePath(home);
+  const policyKey = postVillageKeyForAction(action);
   const run: Run = { home, action, date: villageDate(now), now, options, stateFile, preview: false };
   let healed = false;
   const read = (): Record<string, unknown> => {
@@ -1244,10 +1246,12 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   let result: TriggerResult;
   try {
     result = await withStateLock(stateFile, async () => {
+      if (policyKey && !postVillageAllowed(home, policyKey)) return silent("post-village-disabled");
       // An unreadable state file is renamed aside before anything is picked or written.
       const marked = !DAY_MARK_EXEMPT.has(action);
       if (doneToday(read(), action, run.date) && marked) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
+      if (policyKey && !postVillageAllowed(home, policyKey)) return silent("post-village-disabled");
       // DATA-487: every withheld or flagged headline this run saw, ids and codes only, whatever the run does next.
       const flagged = handOffFlags(home, decision, now);
       const extra = { ...(decision.detail ? { detail: decision.detail } : {}), ...flagged };
@@ -1427,8 +1431,10 @@ async function runPrefetch(options: ProactiveOptions): Promise<TriggerResult> {
   let result: TriggerResult;
   try {
     result = await withStateLock(stateFile, async () => {
+      if (!postVillageAllowed(home, "daily_digest")) return silent("post-village-disabled");
       healed = readStateHealing(stateFile, now).healed;
       const context = await (options.buildContext ?? buildDailyBriefContext)(contextOptions(home, date));
+      if (!postVillageAllowed(home, "daily_digest")) return silent("post-village-disabled");
       writePrivateJson(join(proactiveDir(home), PREFETCH_FILE), { date, builtAt: now.toISOString(), context });
       return silent("prefetched");
     }, options.lock);
@@ -1441,6 +1447,8 @@ async function runPrefetch(options: ProactiveOptions): Promise<TriggerResult> {
 /** Run one action and return what to print. Never throws. */
 export async function runProactive(action: ProactiveAction, options: ProactiveOptions = {}): Promise<TriggerResult> {
   let result: TriggerResult;
+  const policyKey = postVillageKeyForAction(action);
+  if (policyKey && !postVillageAllowed(homeDir(options), policyKey, (options.now ?? (() => new Date()))())) return silent("post-village-disabled");
   const preview = options.preview === true;
   try {
     if (preview) result = { ...(await runPreview(action, options)), preview: true };
@@ -1448,6 +1456,7 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
   } catch (err) {
     result = silent(errorCode(err), action === "prefetch" && !preview ? 1 : 0);
   }
+  if (policyKey && !postVillageAllowed(homeDir(options), policyKey)) result = silent("post-village-disabled");
   appendRunLog(homeDir(options), {
     action,
     decision: result.woke ? "woke" : "silent",

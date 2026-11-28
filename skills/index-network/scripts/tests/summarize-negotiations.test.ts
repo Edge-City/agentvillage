@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -531,9 +532,11 @@ describe("summarizeNegotiations", () => {
 // ── main(): the live follow-up path ───────────────────────────────────────────
 
 describe("main", () => {
-  const saved = { key: process.env.INDEX_API_KEY, url: process.env.INDEX_MCP_URL, argv: process.argv, fetch: globalThis.fetch };
+  const saved = { home: process.env.HERMES_HOME, key: process.env.INDEX_API_KEY, url: process.env.INDEX_MCP_URL, argv: process.argv, fetch: globalThis.fetch };
 
   afterEach(() => {
+    if (saved.home === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = saved.home;
     if (saved.key === undefined) delete process.env.INDEX_API_KEY;
     else process.env.INDEX_API_KEY = saved.key;
     if (saved.url === undefined) delete process.env.INDEX_MCP_URL;
@@ -562,8 +565,11 @@ describe("main", () => {
     opportunityDelivery: { "bbbbbbbb-0000-4000-8000-000000000001": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 } },
   });
 
-  async function run(tools: Record<string, ToolHandler>, state?: string) {
-    tempWorkspace();
+  async function run(tools: Record<string, ToolHandler>, state?: string, allowed = true) {
+    const home = tempWorkspace();
+    process.env.HERMES_HOME = home;
+    // Intended delivery fixtures opt into only this job, never all policy keys.
+    if (allowed) allowPostVillageFixture(home, "negotiation_summary");
     if (state !== undefined) await Bun.write("state.json", state);
     process.env.INDEX_API_KEY = "test-key";
     process.env.INDEX_MCP_URL = FAKE_MCP_URL;
@@ -583,6 +589,14 @@ describe("main", () => {
     }
     return { out, err, fake };
   }
+
+  test("post-village OFF is silent before any Index call and leaves state untouched", async () => {
+    const state = '{"sentinel":"unchanged"}';
+    const { out, err, fake } = await run({}, state, false);
+    expect(out).toBe("[SILENT]"); expect(err).toBe("");
+    expect(fake.calls).toEqual([]);
+    expect(await Bun.file("state.json").text()).toBe(state);
+  });
 
   test("lists opportunities and signals through the current revision and groups the cards", async () => {
     const { out, fake } = await run({

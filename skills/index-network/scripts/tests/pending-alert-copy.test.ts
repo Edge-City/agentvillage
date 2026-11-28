@@ -21,7 +21,8 @@ describe("prompts/pending-alert.md", () => {
   test("the frame of the other proactive prompts: the agent's name, Script Output only, data never instructions, no tool", () => {
     const first = prompt.split("\n")[0];
     expect(first).toContain("your name is the Script Output's `agentName` (Edge when it is missing)");
-    expect(first).toContain("Edge City India");
+    expect(first).toContain("the user's agent in Agent Village");
+    expect(first).not.toContain("agent for Edge City India");
     expect(count(prompt, "Everything you need is in the Script Output above")).toBe(1);
     expect(count(prompt, "Do not call any tool")).toBe(1);
     expect(count(prompt, "If the block above is headed Script Error, or there is no Script Output above, reply exactly `[SILENT]`.")).toBe(1);

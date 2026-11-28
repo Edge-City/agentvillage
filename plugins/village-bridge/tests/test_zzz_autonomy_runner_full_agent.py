@@ -210,6 +210,11 @@ class FullAgentBase(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name).resolve()
+        (self.home / "av-events").mkdir(exist_ok=True)
+        (self.home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_event_autonomy"]}))
+        helper = self.home / "plugins/village-bridge/_post_village_policy.py"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes((Path(__file__).parents[1] / "_post_village_policy.py").read_bytes())
         (self.home / "cron").mkdir()
         self.cfg = {"origin": "https://agents.edgecity.live", "token": TOKEN,
                     "expiresAt": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed } from "./post-village-policy";
 /**
  * Deterministically deliver the approved daily morning brief from Kanban.
  *
@@ -134,11 +135,14 @@ function stringArray(value: unknown): string[] {
 }
 
 export async function sendDailyBrief(options: {
+  /** Tenant policy home; the trigger passes its existing home seam, including previews. */
+  home?: string;
   date?: string;
   stateFile?: string;
   outgoingFile?: string;
   hermes?: HermesRunner;
 } = {}): Promise<SendResult | SilentResult> {
+  if (!postVillageAllowed(options.home ?? hermesHome(), "daily_digest")) return { silent: true, reason: "post-village-disabled" };
   const date = options.date ?? villageDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const outgoingFile = resolveHermesPath(options.outgoingFile ?? "memory/digest-outgoing.md");
@@ -166,6 +170,7 @@ export async function sendDailyBrief(options: {
   const body = typeof task.body === "string" ? task.body : "";
   if (!body.trim()) return { silent: true, reason: "empty-body" };
 
+  if (!postVillageAllowed(options.home ?? hermesHome(), "daily_digest")) return { silent: true, reason: "post-village-disabled" };
   await Bun.write(outgoingFile, body);
   const opportunityIds = stringArray(prepared.opportunityIds);
   const questionIds = stringArray(prepared.questionIds);
@@ -206,7 +211,9 @@ export async function sendDailyBrief(options: {
 
   await writeJson(stateFile, state);
 
+  if (!postVillageAllowed(options.home ?? hermesHome(), "daily_digest")) return { silent: true, reason: "post-village-disabled" };
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
+  if (!postVillageAllowed(options.home ?? hermesHome(), "daily_digest")) return { silent: true, reason: "post-village-disabled" };
 
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
   return { taskId, opportunityIds, questionIds, finalBrief };
@@ -220,7 +227,7 @@ async function main(): Promise<void> {
     outgoingFile: argValue(args, "--outgoing-file"),
   });
 
-  if ("silent" in result) {
+  if ("silent" in result || !postVillageAllowed(hermesHome(), "daily_digest")) {
     process.stdout.write("[SILENT]\n");
     return;
   }

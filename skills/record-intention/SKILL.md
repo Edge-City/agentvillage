@@ -5,6 +5,8 @@ description: The one front door for intentions in AgentVillage Hermes installs. 
 
 # Record intention
 
+An intent is what the resident wants now, after Edge City India ended on November 1, 2026. Never carry plans from India or any earlier village forward as current wants from old notes, signup answers or memories. Require current support from the resident, then follow the existing source, consent and approval rules. Do not automatically change existing intents.
+
 If `record_intention` is available (in your tool list, or found with
 `tool_search` and called through `tool_call`), this skill applies. It is
 switched on per agent. If `tool_search` does not find it, ignore this file and

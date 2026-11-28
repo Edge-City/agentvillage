@@ -98,3 +98,14 @@ export function recordModelAllowStatus(home: string, failed: string | null): boo
   renameSync(tmp, path);
   return true;
 }
+
+/** Record the separate read-only covered-job audit; never a remote-repeat or AGENTS-loaded receipt. */
+export function recordPostVillageAuditStatus(home: string, audit: import("./post_village_audit").PostVillageAudit): boolean {
+  const path = installStatusPath(home);
+  const previous: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!previous || typeof previous !== "object" || Array.isArray(previous)) return false;
+  const text = JSON.stringify({ ...previous, post_village_policy: audit }) + "\n";
+  const tmp = `${path}.${process.pid}.post-village.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600 }); chmodSync(tmp, 0o600); renameSync(tmp, path);
+  return true;
+}

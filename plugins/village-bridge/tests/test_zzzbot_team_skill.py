@@ -82,7 +82,8 @@ class ZzzbotTeamSkillTest(unittest.TestCase):
                       "reset time.", fails)
         # Product's corrected copy (ZZZ-BLOCKED-SETTING-COPY, L34791): a room link to read, never a compose claim.
         self.assertIn("Say \"Nothing was posted. The room is here: <web_url>. Ask me again in a moment.\"", fails)
-        self.assertIn("event room (slug `india`) in `zzz.list_rooms`", flat)
+        self.assertIn("community room for the ended event (slug `india`) in `zzz.list_rooms`", flat)
+        self.assertIn("the room name does not imply it is ongoing or that anyone is still there", flat)
 
     def test_blocked_post_copy_promises_no_retry_and_names_no_cause(self):
         # review-b ov#583 delta S2' (nothing retries an owner's chat post; zzz_rate_limited also covers 429s, capacity

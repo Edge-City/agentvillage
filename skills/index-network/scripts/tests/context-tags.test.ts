@@ -1,3 +1,4 @@
+import { runAllowedProactive } from "./post-village-fixtures";
 /**
  * The Context tags entry (`$HERMES_HOME/memories/USER.md`, kept by the Agent Village app) as the
  * scheduled jobs read it (context-tags.ts):
@@ -30,7 +31,7 @@ import {
   readContextTags,
   statedItems,
 } from "../context-tags";
-import { type AgentAction, type ProactiveOptions, contextInterestsFor, preferencesFor, runProactive } from "../proactive";
+import { type AgentAction, type ProactiveOptions, contextInterestsFor, preferencesFor } from "../proactive";
 
 const MORNING = new Date("2026-10-12T02:30:00Z"); // 08:00 IST
 const DATE = "2026-10-12";
@@ -313,7 +314,7 @@ function output(lines: string[]): Record<string, any> {
 async function run(action: AgentAction, over: Partial<ProactiveOptions> = {}, seen: Record<string, unknown>[] = []) {
   rmSync(join(home, "memory"), { recursive: true, force: true });
   mkdirSync(join(home, "memory"), { recursive: true });
-  return runProactive(action, options(seen, over));
+  return runAllowedProactive(action, options(seen, over));
 }
 
 beforeEach(() => {

@@ -95,7 +95,8 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(lena[0]).not.toMatch(/acceptUrl|messageUrl/);
     expect(lena[0]).toContain("your agents are still talking; nothing for you to do yet.");
     // The brief samples are no longer presented as the brief's own shape (DATA-314).
-    expect(count(exemplars, "Mimic these exactly when composing an opportunity reply or an introduction drop.")).toBe(1);
+    expect(count(exemplars, "They set tone and structure, not event facts.")).toBe(1);
+    expect(exemplars).toContain("Calendar placeholders are filled only from verified current returned event data");
     expect(exemplars).not.toContain("when composing the morning brief");
     expect(count(exemplars, "it carries no per-person link. The cards below are the voice for chat replies and introduction drops")).toBe(1);
   });

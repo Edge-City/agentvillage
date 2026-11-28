@@ -99,12 +99,14 @@ test("cron create args handle delivered and scripted specs", () => {
     "cron", "create", "0 2 * * *", "PREP_BODY",
     "--name", "Edge — digest prepare", "--failure-deliver", "local",
     "--script", "agentvillage_proactive_prefetch.sh", "--no-agent", "--workdir", home,
+    "--paused", "--paused-reason", "Post-village operator opt-in required",
   ]);
 
   expect(cronCreateArgs(send, "SEND_BODY", home)).toEqual([
     "cron", "create", "0 8 * * *", "SEND_BODY",
     "--name", "Edge — daily digest", "--deliver", "telegram", "--failure-deliver", "local",
     "--script", "agentvillage_proactive_brief.sh", "--workdir", home,
+    "--paused", "--paused-reason", "Post-village operator opt-in required",
   ]);
 
   const tokenAuditArgs = cronCreateArgs(tokenAudit, "AUDIT_PROMPT", home);
@@ -372,6 +374,7 @@ describe("DATA-430: the hourly pending-opportunity alert", () => {
       "cron", "create", "20 * * * *", "P", "--name", "Edge — pending opportunity",
       "--deliver", "telegram", "--failure-deliver", "local",
       "--script", "agentvillage_proactive_pending.sh", "--workdir", "/home/x",
+      "--paused", "--paused-reason", "Post-village operator opt-in required",
     ]);
   });
 

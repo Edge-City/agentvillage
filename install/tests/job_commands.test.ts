@@ -1,3 +1,5 @@
+import { allowPostVillageFixture } from "../../skills/index-network/scripts/tests/post-village-fixtures";
+import { postVillageKeyForAction } from "../../skills/index-network/scripts/post-village-policy";
 /**
  * J2: the per-tenant job commands (install/jobs.ts) and what a roll's
  * reconcile does to their results, end to end against a stand-in Hermes that
@@ -54,6 +56,12 @@ beforeEach(() => {
     }
   }
   copyFileSync(join(REPO_SKILLS, "index-network/prompts/ask-questions.md"), join(home, "skills", "index-network/prompts/ask-questions.md"));
+  // Exact current installed gate bytes; policy remains OFF until a test explicitly enables one key.
+  for (const file of ["post-village-policy.ts", "job-holds.ts", "post-village-runnable.ts", "post-village-runnable-pins.json", "proactive.ts", "send-daily-brief.ts", "drop-opportunity.ts", "pending-alert.ts", "summarize-negotiations.ts"]) {
+    const relative = join("index-network/scripts", file);
+    mkdirSync(dirname(join(home, "skills", relative)), { recursive: true });
+    copyFileSync(join(REPO_SKILLS, relative), join(home, "skills", relative));
+  }
 });
 
 afterEach(() => {
@@ -77,6 +85,12 @@ function ctx(over: Partial<JobsContext> = {}): JobsContext {
 }
 
 function run(...argv: string[]) {
+  // Positive explicit-enable/preview fixtures grant only the requested job's key.
+  if ((argv.includes("--enabled") && argv[argv.indexOf("--enabled") + 1] === "true") || argv[0] === "preview") {
+    const action = argv[argv.indexOf("--job") + 1];
+    const key = postVillageKeyForAction(action ?? "");
+    if (key) allowPostVillageFixture(home, key);
+  }
   return runJobsCommand(argv, ctx());
 }
 
@@ -233,7 +247,7 @@ describe("set: one job's schedule, window, zone and enabled state", () => {
   test("a window alone is a settings write and no Hermes call", () => {
     const before = cronCalls().length;
     const result = run("set", "--job", "brief", "--window", "06:00-09:30");
-    expect(result).toEqual({ code: 0, out: { ok: true, job: "brief", id: job(SEND.name)!.id, changed: ["settings"], schedule: staggeredSchedule(SEND, SEED), enabled: true, window: "06:00-09:30", tz: "Asia/Kolkata" } });
+    expect(result).toEqual({ code: 0, out: { ok: true, job: "brief", id: job(SEND.name)!.id, changed: ["settings"], schedule: staggeredSchedule(SEND, SEED), enabled: false, window: "06:00-09:30", tz: "Asia/Kolkata" } });
     expect(settingsFile()).toEqual({ v: 1, jobs: { brief: { window: "06:00-09:30" } } });
     expect(cronCalls().length).toBe(before);
   });
@@ -292,6 +306,7 @@ describe("set: one job's schedule, window, zone and enabled state", () => {
   });
 
   test("enabled is Hermes's pause state: pause, resume, and no call when already so", () => {
+    expect(run("set", "--job", "drop-midday", "--enabled", "true").code).toBe(0);
     const id = job(MIDDAY)!.id;
     expect(run("set", "--job", "drop-midday", "--enabled", "false").out).toMatchObject({ ok: true, changed: ["enabled"], enabled: false });
     expect(cronCalls().at(-1)).toEqual(["cron", "pause", id]);
@@ -447,6 +462,7 @@ describe("text the tenant can write is never echoed or passed on", () => {
 
 describe("resuming a job paused across its slot (Hermes keeps the missed run due)", () => {
   beforeEach(() => {
+    allowPostVillageFixture(home, "opportunity_midday");
     roll();
     run("set", "--job", "drop-midday", "--enabled", "false");
     // Paused across its slot: Hermes's stored next run is now in the past.
@@ -565,7 +581,7 @@ describe("add and remove: one job from a template, for one tenant", () => {
     const created = job("Edge — template: brief")!;
     expect(HERMES_ID_RE.test(created.id)).toBe(true);
     expect(added.out).toEqual({ ok: true, job: "tpl-brief", id: created.id, result: "created", changed: ["settings", "create"], schedule: "0 15 * * *", window: "14:00-16:00", tz: "Asia/Kolkata" });
-    expect(created).toMatchObject({ schedule: { expr: "0 15 * * *" }, script: "agentvillage_proactive_tpl-brief.sh", deliver: "telegram", failure_deliver: "local", enabled: true });
+    expect(created).toMatchObject({ schedule: { expr: "0 15 * * *" }, script: "agentvillage_proactive_tpl-brief.sh", deliver: "telegram", failure_deliver: "local", enabled: false });
     expect(created.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/brief.md"), "utf8").trim());
     expect(created.no_agent).toBeUndefined();
     expect(readFileSync(join(home, "scripts", "agentvillage_proactive_tpl-brief.sh"), "utf8")).toBe(readFileSync(join(REPO_SKILLS, PROACTIVE_SHIM), "utf8"));
@@ -684,16 +700,16 @@ describe("what a roll keeps", () => {
     expect(settingsFile()).toEqual({ v: 1, jobs: { brief: { window: "09:00-10:30", tz: "Asia/Kolkata" } }, adminSchedules: ["brief"] });
   });
 
-  test("an admin who sets the old synchronized default on purpose keeps it; without the mark it is migrated as before", () => {
+  test("a covered default schedule is preserved with or without an admin mark", () => {
     roll();
     run("set", "--job", "brief", "--schedule", "0 8 * * *");
     expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief"] });
     roll();
     expect(storedExpr(SEND.name)).toBe("0 8 * * *");
-    // Without the file (the legacy case the migration exists for): moved to the staggered slot.
+    // Post-village covered jobs preserve their schedule even without an admin mark.
     rmSync(jobSettingsPath(home));
     roll();
-    expect(storedExpr(SEND.name)).toBe(staggeredSchedule(SEND, SEED));
+    expect(storedExpr(SEND.name)).toBe("0 8 * * *");
   });
 
   test("an adminSchedules list that is not default job keys counts every job as managed", () => {
@@ -867,7 +883,7 @@ describe("list, and the zone Hermes reads schedules in", () => {
     expect(Object.keys(byKey).sort()).toEqual(["brief", "drop-evening", "drop-midday", "evening", "negotiation", "pending"]);
     // DATA-430: the hourly pending alert is a default job with its own default window, 08:00-22:00.
     expect(byKey.pending).toMatchObject({ window: "08:00-22:00", tz: "Asia/Kolkata", settings: "default", adminSchedule: false });
-    expect(byKey.brief).toEqual({ key: "brief", id: job(SEND.name)!.id, name: SEND.name, schedule: staggeredSchedule(SEND, SEED), enabled: true, window: "06:00-09:00", tz: "Asia/Kolkata", settings: "custom", adminSchedule: true });
+    expect(byKey.brief).toEqual({ key: "brief", id: job(SEND.name)!.id, name: SEND.name, schedule: staggeredSchedule(SEND, SEED), enabled: false, window: "06:00-09:00", tz: "Asia/Kolkata", settings: "custom", adminSchedule: true });
     // adminSchedule is reconcile's own rule: an entry (the brief's window) keeps the legacy migration off a job.
     expect(byKey.negotiation).toMatchObject({ window: null, settings: "default", adminSchedule: false });
   });
@@ -893,10 +909,16 @@ describe("list, and the zone Hermes reads schedules in", () => {
     expect(hermesZone(home)).toBe("Asia/Kolkata");
     writeFileSync(join(home, "config.yaml"), "timezone: ''\n");
     expect(hermesZone(home)).toBeNull();
-    for (const zone of ["Etc/UTC", "US/Eastern", "UTC", "Asia/Calcutta", "Etc/GMT+5", "EST5EDT", "America/Argentina/Buenos_Aires"]) {
+    for (const zone of ["Etc/UTC", "US/Eastern", "UTC", "Asia/Calcutta", "Etc/GMT+5", "America/Argentina/Buenos_Aires"]) {
       writeFileSync(join(home, "config.yaml"), `timezone: ${zone}\n`);
       expect({ zone, got: hermesZone(home) }).toEqual({ zone, got: canonicalZone(zone) });
     }
+    // This POSIX-style key is not present in every Bun/ICU zone database.
+    // The contract explicitly accepts only names this runtime knows.
+    let posixKnown = true;
+    try { new Intl.DateTimeFormat("en-US", { timeZone: "EST5EDT" }); } catch { posixKnown = false; }
+    writeFileSync(join(home, "config.yaml"), "timezone: EST5EDT\n");
+    expect(hermesZone(home)).toBe(posixKnown ? canonicalZone("EST5EDT") : null);
     expect([canonicalZone("Asia/Calcutta"), canonicalZone("UTC"), canonicalZone("US/Eastern")]).toEqual(["Asia/Kolkata", "Etc/UTC", "US/Eastern"]);
     for (const zone of ["Not/AZone", "asia/kolkata", "+05:30", "../etc/passwd"]) {
       writeFileSync(join(home, "config.yaml"), `timezone: "${zone}"\n`);
@@ -1073,7 +1095,8 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
       .toEqual({ brief: true, "drop-midday": false, "drop-evening": false, negotiation: false, evening: false, pending: false });
     expect(rollWarnings().filter((line) => line.includes("adminSchedules"))).toEqual([]);
     expect(storedExpr(SEND.name)).toBe("0 8 * * *");
-    expect(storedExpr(DEFAULT_NAMES.negotiation)).toBe(staggeredSchedule(specNamed(DEFAULT_NAMES.negotiation), SEED));
+    expect(storedExpr(DEFAULT_NAMES.negotiation)).toBe(specNamed(DEFAULT_NAMES.negotiation).schedule);
+    expect(storedExpr(DEFAULT_NAMES.evening)).toBe(staggeredSchedule(specNamed(DEFAULT_NAMES.evening), SEED));
   });
 
   test("a value that is not a list: list says so and counts every default job managed; reconcile warns and moves none; the next write keeps all six marked", () => {
@@ -1161,7 +1184,9 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
       const listed = Object.fromEntries(Object.keys(DEFAULT_NAMES).map((key) => [key, listedByKey()[key].adminSchedule]));
       roll();
       const kept = Object.fromEntries(Object.entries(DEFAULT_NAMES).map(([key, name]) => [key, storedExpr(name) === specNamed(name).schedule]));
-      expect({ file, listed }).toEqual({ file, listed: kept });
+      // Admin marks still describe settings; policy-covered schedules are additionally preserved.
+      const expectedKept = Object.fromEntries(Object.keys(DEFAULT_NAMES).map((key) => [key, Boolean(postVillageKeyForAction(key)) || listed[key]]));
+      expect({ file, kept }).toEqual({ file, kept: expectedKept });
     }
   });
 
@@ -1176,7 +1201,7 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     const staggered = staggeredSchedule(SEND, SEED);
     expect(run("set", "--job", "brief", "--schedule", "default")).toEqual({
       code: 0,
-      out: { ok: true, job: "brief", id, changed: ["schedule", "settings"], schedule: staggered, adminSchedule: false, enabled: true, window: "05:00-11:00", tz: "Asia/Kolkata" },
+      out: { ok: true, job: "brief", id, changed: ["schedule", "settings"], schedule: staggered, adminSchedule: false, enabled: false, window: "05:00-11:00", tz: "Asia/Kolkata" },
     });
     expect(cronCalls().at(-1)).toEqual(["cron", "edit", id, "--schedule", staggered]);
     expect(settingsFile()).toBeNull();
@@ -1186,12 +1211,16 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
       expect({ n, failed: roll() }).toEqual({ n, failed: [] });
       expect({ n, expr: storedExpr(SEND.name), calls: cronCalls().slice(before) }).toEqual({ n, expr: staggered, calls: [] });
     }
-    // The roll owns it again: put back on the old synchronized default by hand, the next roll migrates it as rc13 would.
+    // Only an explicit admin schedule command moves a covered job; a later roll preserves a hand edit.
     editJobs((all) => {
       all.find((entry) => entry.name === SEND.name)!.schedule = { expr: "0 8 * * *" };
     });
+    const beforeRoll = cronCalls().length;
     roll();
-    expect(storedExpr(SEND.name)).toBe(staggered);
+    expect(storedExpr(SEND.name)).toBe("0 8 * * *");
+    expect(cronCalls().slice(beforeRoll)).toEqual([]);
+    expect(run("set", "--job", "brief", "--schedule", "default").out).toMatchObject({ ok: true, changed: ["schedule"], schedule: staggered, adminSchedule: false });
+    expect(cronCalls().at(-1)).toEqual(["cron", "edit", id, "--schedule", staggered]);
     expect(run("set", "--job", "brief", "--schedule", "default").out).toMatchObject({ ok: true, changed: [], schedule: staggered, adminSchedule: false });
   });
 
@@ -1269,6 +1298,7 @@ describe("a hung Hermes CLI, and a lock that is no longer this command's (N-G)",
   });
 
   test("a Hermes command is not started unless it can end, at its timeout, before the lock goes stale", () => {
+    expect(run("set", "--job", "drop-midday", "--enabled", "true").code).toBe(0);
     let t = 1_000_000;
     const slow = ctx({ clock: () => t, hermes: (args) => {
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
@@ -1318,4 +1348,15 @@ describe("an unreadable jobs.json is never read as no jobs (N-H)", () => {
       expect(run("list").out).toMatchObject({ ok: true, store: "ok", jobs: [], missing: ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending"] });
     }
   });
+});
+
+
+test("covered enable is refused without an operator allow and without current gate bytes", () => {
+  roll(); const id = job(SEND.name)!.id; const before = cronCalls().length;
+  expect(runJobsCommand(["set", "--job", "brief", "--enabled", "true"], ctx()).out).toMatchObject({ error: "post-village-disabled" });
+  expect(cronCalls().length).toBe(before); expect(job(SEND.name)!.enabled).toBe(false);
+  allowPostVillageFixture(home, "daily_digest");
+  writeFileSync(join(home, "skills/index-network/scripts/proactive.ts"), "stale gate bytes");
+  expect(runJobsCommand(["set", "--job", "brief", "--enabled", "true"], ctx()).out).toMatchObject({ error: "post-village-gates-unverified" });
+  expect(cronCalls().length).toBe(before); expect(job(SEND.name)!.id).toBe(id); expect(job(SEND.name)!.enabled).toBe(false);
 });

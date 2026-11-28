@@ -1276,8 +1276,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     writeFileSync(join(home, "config.yaml"), YAML.stringify(doc));
     const jobsPath = join(home, "cron", "jobs.json");
     const jobs = (existsSync(jobsPath) ? JSON.parse(readFileSync(jobsPath, "utf8")).jobs : []).filter((job: { id: string }) => !job.id.startsWith("e2e0"));
-    jobs.push({ id: "e2e0morning0", name: MORNING_JOB, script: join(home, "scripts", MORNING_LAUNCHER), no_agent: true });
-    jobs.push({ id: "e2e0unrelate", name: "Edge — morning brief", script: "index-digest-send.py" });
+    jobs.push({ id: "e2e000000001", name: MORNING_JOB, script: join(home, "scripts", MORNING_LAUNCHER), no_agent: true });
+    jobs.push({ id: "e2e000000002", name: "Edge — morning brief", script: "index-digest-send.py" });
     mkdirSync(join(home, "cron"), { recursive: true });
     writeFileSync(jobsPath, JSON.stringify({ jobs }));
     mkdirSync(join(home, "scripts"), { recursive: true });
@@ -1299,8 +1299,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
       const run = install({ [MORALMOD_ARM_ENV]: "on", AV_APPROVAL_ENABLED: gate });
       expect([gate, run.code]).toEqual([gate, 0]);
       expect([gate, pluginCalls()]).toEqual([gate, []]);
-      expect([gate, cronCalls()]).toEqual([gate, [["cron", "remove", "e2e0morning0"]]]);
-      expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+      expect([gate, cronCalls()]).toEqual([gate, [["cron", "remove", "e2e000000001"]]]);
+      expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e000000002"]);
       expect(existsSync(join(home, "scripts", MORNING_LAUNCHER))).toBe(false);
       expect([gate, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([gate, false]);
       expect(plugins().enabled).toContain("av-events");
@@ -1319,8 +1319,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     const jobsPath = plantEnabled();
     const off = install({ [MORALMOD_ARM_ENV]: "off" });
     expect(off.code).toBe(0);
-    expect(cronCalls()).toEqual([["cron", "remove", "e2e0morning0"]]);
-    expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+    expect(cronCalls()).toEqual([["cron", "remove", "e2e000000001"]]);
+    expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e000000002"]);
     expect(existsSync(join(home, "scripts", MORNING_LAUNCHER))).toBe(false);
     expect(pluginCalls()).toEqual([]);
     expect(plugins().enabled).not.toContain(INDEX_PLUGIN);
@@ -1411,8 +1411,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
         const run = install({ [MORALMOD_ARM_ENV]: arm, ...moralmod }, { verified: true });
         expect([arm, run.code]).toEqual([arm, 0]);
         expect([arm, pluginCalls()]).toEqual([arm, []]);
-        expect([arm, cronCalls()]).toEqual([arm, [["cron", "remove", "e2e0morning0"]]]);
-        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+        expect([arm, cronCalls()]).toEqual([arm, [["cron", "remove", "e2e000000001"]]]);
+        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e000000002"]);
         expect([arm, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([arm, false]);
         expect([arm, status().index_plugin_failed, status().index_plugin_note]).toEqual([arm, null, "moralmod_arm_not_on"]);
         expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON; managed loader removed; MoralMod files cleaned up: index/negotiator.ts, active.json; removed from plugins.enabled");
@@ -1448,8 +1448,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
         const run = install({ [MORALMOD_ARM_ENV]: "on", ...moralmod }, { verified: true, args });
         expect([label, run.code]).toEqual([label, 0]);
         expect([label, pluginCalls()]).toEqual([label, []]);
-        expect([label, cronCalls()]).toEqual([label, [["cron", "remove", "e2e0morning0"]]]);
-        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+        expect([label, cronCalls()]).toEqual([label, [["cron", "remove", "e2e000000001"]]]);
+        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e000000002"]);
         expect([label, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([label, false]);
         expect([label, status().index_plugin_failed]).toEqual([label, "release_unpinned"]);
         expect(run.out.split("\n").filter((l) => l.includes("index_plugin_failed"))).toEqual(["agentvillage-install: index_plugin_failed=release_unpinned"]);

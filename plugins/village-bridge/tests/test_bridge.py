@@ -1595,6 +1595,9 @@ class BridgeTest(unittest.TestCase):
   # ov#599 N1 (review-b L37096, ruling L37099): the guard is in handle()'s shared write path, after each op's payload is
   # built and before any gate, card or send; every WRITE_OPERATIONS op but Kismet's own; reads are never inspected.
   home=Path(self.tmp.name);link='https://kismet-village.vercel.app/u/av-test-0000?next=chat';short='kismet-village.vercel.app/u/av'
+  # Only this positive-control family has current operator permission; link rejection still runs first.
+  policy=home/'av-events'/'post-village-policy.json';policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({'version':1,'enabled':['zzz_owner_repeating']}))
   apps=[{'id':'gold-stars',**mini.GOLD_STARS},{'id':'dizko','version':'1.0.0','skills':['dizko'],'operations':['mini-app.read','mini-app.context.read','mini-app.context.write']},
         {'id':'forkicks',**mini.FORKICKS},{'id':'slopfolio',**mini.SLOPFOLIO},{'id':'dreamstarter',**mini.DREAMSTARTER},{'id':'favorloop',**mini.FAVORLOOP},
         {'id':'eci-volunteers',**mini.ECI_VOLUNTEERS},{'id':'zzzbot',**mini.ZZZBOT},{'id':'kismet',**mini.KISMET_120}]
@@ -1939,12 +1942,46 @@ class BridgeTest(unittest.TestCase):
  # ---- J3 owner-set repeating posts (lead L36170): zzz.schedule_posts, one contract with app jlab-ui/owner-cron-app ----
  SCHEDULE_SET={'operation':'zzz.schedule_posts','arguments':{'every_minutes':60,'about':'fixture garden updates'}}
  SCHEDULE_STOP={'operation':'zzz.schedule_posts','arguments':{'every_minutes':None}}
+ def test_post_village_new_repeat_is_off_but_owner_stop_still_works(self):
+  self.zzz_home()
+  with self.gate():
+   result=self.call(self.SCHEDULE_SET)
+   self.assertEqual(result['error'],'post_village_disabled')
+   self.transport.assert_not_called()
+   self.assertIn('data',self.call(self.SCHEDULE_STOP))
+   self.assertEqual(self.transport.call_args.args[1],{'operation':'zzz.schedule_posts','every_minutes':None})
+ def test_owner_stop_works_under_every_post_village_setting(self):
+  # S2 (review-b on ov#632): whatever the operator allows, the owner can always stop a stored schedule.
+  self.zzz_home()
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  for enabled in (None,[],["zzz_event_autonomy"],["zzz_owner_repeating"],["zzz_event_autonomy","zzz_owner_repeating"]):
+   with self.subTest(enabled=enabled):
+    if enabled is None:policy.unlink(missing_ok=True)
+    else:policy.write_text(json.dumps({"version":1,"enabled":enabled}))
+    self.transport.reset_mock()
+    with self.gate():
+     self.assertIn('data',self.call(self.SCHEDULE_STOP))
+    self.assertEqual(self.transport.call_count,1)
+    self.assertEqual(self.transport.call_args.args[1],{'operation':'zzz.schedule_posts','every_minutes':None})
+ def test_post_village_repeat_revocation_before_write_is_rechecked(self):
+  self.zzz_home()
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
+  def codes():
+   policy.unlink();return ()
+  with patch.object(mini.importlib,'import_module',return_value=types.SimpleNamespace(switch=lambda:'on',current_codes=codes)):
+   self.assertEqual(self.call(self.SCHEDULE_SET)['error'],'post_village_disabled')
+  self.transport.assert_not_called()
  def test_schedule_contract_names_and_shape(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   # The one contract (J3 Phase B report): every_minutes integer 60..1440 or null (stop), about <= 300 characters
   # (required with a number), until optional ISO-8601 UTC. Forwarded as top-level keys beside operation, like every zzz op.
   self.assertEqual(bridge.ZZZ_ARGUMENTS['zzz.schedule_posts'],(('every_minutes',),('about','until')))
   self.assertEqual(bridge.ZZZ_SCHEDULE_MINUTES,(60,1440));self.assertEqual(bridge.ZZZ_SCHEDULE_ABOUT_CHARS,300)
  def test_schedule_borrows_create_thread_and_stays_out_of_the_catalog_and_the_managed_job(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   self.assertEqual(mini.ZZZ_TEAM_BORROWS['zzz.schedule_posts'],'zzz.create_thread')
   self.assertEqual(mini.ZZZ_TEAM_BORROWS['zzz.schedule_posts'],mini.ZZZ_TEAM_BORROWS['zzz.open_team_room'])
   self.assertIn('zzz.schedule_posts',mini.WRITE_OPERATIONS);self.assertNotIn('zzz.schedule_posts',mini.READ_OPERATIONS)
@@ -1974,6 +2011,8 @@ class BridgeTest(unittest.TestCase):
                     {'operation':'zzz.schedule_posts','every_minutes':1440,'about':'a'*300,'until':'2026-11-01T18:30:00Z'},
                     {'operation':'zzz.schedule_posts','every_minutes':180,'about':'x','until':'2026-11-01T18:30:00.250Z'}])
  def test_schedule_needs_the_verified_gate_and_exact_bounded_arguments(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   self.zzz_home()
   rule=bridge.ZZZ_SCHEDULE_INPUT['zzz.schedule_posts']
   self.assertTrue(rule.startswith('Only when the owner asks'));self.assertIn('from 60 to 1440',rule);self.assertIn('null to stop',rule)
@@ -2017,6 +2056,8 @@ class BridgeTest(unittest.TestCase):
   self.assertEqual(len(self.transport.call_args_list),3)
   self.assertEqual(self.transport.call_args_list[1].args[1],{'operation':'zzz.schedule_posts','every_minutes':60,'about':'a  '*100})
  def test_schedule_refusals_reach_the_agent_with_the_plugins_text_only(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   self.zzz_home()
   self.assertIn("aren't available yet",bridge.ZZZ_SCHEDULE_NOT_ON);self.assertIn('offer to post one now',bridge.ZZZ_SCHEDULE_NOT_ON)
   self.assertIn('never create a cron job for ZZZ',bridge.ZZZ_SCHEDULE_NOT_ON)
@@ -2038,6 +2079,8 @@ class BridgeTest(unittest.TestCase):
    self.assertEqual(answer['data'],ok)
    self.assertEqual(answer['handling'],bridge.ZZZ_HANDLING)
  def test_schedule_set_while_paused_passes_through_on_the_success_path(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   # Fold 1 (lead L36260, app#1076 824a46b8): a set while the owner's own Pause is on is saved and answers 200 with
   # paused:true and notice zzz_schedule_paused. It is a success, never an error: the bridge frames it as data, with
   # paused and notice intact, and nothing is retried (one send).
@@ -2054,6 +2097,8 @@ class BridgeTest(unittest.TestCase):
      self.assertNotIn('error',result);self.assertEqual(self.transport.call_count,1)
   self.assertNotIn('zzz_schedule_paused',bridge.ZZZ_ERRORS);self.assertNotIn('zzz_schedule_paused',bridge.ZZZ_SCHEDULE_ERRORS)
  def test_schedule_is_refused_in_a_cron_or_managed_run(self):
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  policy.write_text(json.dumps({"version":1,"enabled":["zzz_owner_repeating"]}))
   self.zzz_home()
   with self.gate(),patch.object(bridge,'bound_context',side_effect=ValueError('private_owner_chat_required')):
    for args in (self.SCHEDULE_SET,self.SCHEDULE_STOP):

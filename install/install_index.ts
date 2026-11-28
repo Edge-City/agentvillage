@@ -1,3 +1,4 @@
+import { postVillageRuntimeAllowed as postVillageAllowed, postVillageKeyForJob } from "../skills/index-network/scripts/post-village-policy";
 /**
  * Index Network backend installer for Hermes.
  *
@@ -35,7 +36,8 @@
  *     skills/edge-india/references/ in this repo) to
  *     `$HERMES_HOME/knowledge/edge-india/`
  *     (skills/edge-india/scripts/knowledge-sync.ts).
- *     New installs create enabled crons, except the hourly pending
+ *     New covered post-village crons are atomically paused; other jobs retain their
+ *     existing defaults. Historically new installs created enabled crons, except the hourly pending
  *     opportunity alert, which ships OFF in rc29 (below). Reconcile edits each
  *     existing job in
  *     place with one `hermes cron edit <id>` for its shape (prompt, script,
@@ -557,6 +559,7 @@ export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: s
   if (spec.scriptFile) args.push("--script", expectedCronScriptArg(spec)!);
   if (spec.noAgent) args.push("--no-agent");
   args.push("--workdir", home);
+  if (postVillageKeyForJob(spec.name)) args.push("--paused", "--paused-reason", "Post-village operator opt-in required");
   return args;
 }
 
@@ -1000,6 +1003,24 @@ export function reconcileDigestCronJobs(
   // rc29: the hourly pending alert ships off; this install's switch for it (pendingAlertStep).
   const pendingSwitch = pendingAlertSwitch(argv, env);
   const runHermes = hermesRunner(bin, env, hermesTimeoutMs);
+  const policyOff = (name: string) => {
+    const key = postVillageKeyForJob(name);
+    return key !== null && !postVillageAllowed(home, key);
+  };
+  // Failure preserves the job: no destructive fallback and no policy-safe success without readback.
+  const settlePolicyOff = (job: { id: string; name: string; enabled?: boolean; state?: string; paused_at?: string | null }): boolean => {
+    try {
+      if (storedJobEnabled(job)) runHermes(["cron", "pause", job.id]);
+      const fresh = readCronJobs().find((entry) => entry.id === job.id);
+      if (!fresh || storedJobEnabled(fresh)) throw new Error("pause-readback");
+      return true;
+    } catch {
+      failed.push(job.name);
+      console.warn("  warning: post-village pause could not be confirmed; existing job preserved");
+      return false;
+    }
+  };
+
   /** One settle result: a failure is named; a removed job's id leaves `installed`. */
   const settledPending = (result: PendingAlertSettled, id: string): void => {
     if (result !== "ok") failed.push(PENDING_ALERT_JOB);
@@ -1033,9 +1054,13 @@ export function reconcileDigestCronJobs(
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
 
   for (const job of existing) {
-    // The mini-app projection helper owns this Hermes job's install/removal.
-    // A routine Index reconcile must not retire an enabled zzzbot poller.
-    if (isExactZzzManagedJob(job)) continue;
+    // These two reserved names belong to the mini-app reconcilers, including old/custom shapes.
+    // Index may pause OFF work, but must not update, resume, retire or adopt it.
+    const reservedKey = postVillageKeyForJob(job.name);
+    if (reservedKey === "zzz_pairs" || reservedKey === "zzz_event_autonomy") {
+      if (policyOff(job.name)) settlePolicyOff(job);
+      continue;
+    }
     if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name) || templateNames.has(job.name)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
@@ -1061,9 +1086,10 @@ export function reconcileDigestCronJobs(
     const template = templateNames.get(job.name);
     if (!template) continue;
     const spec = templateCronSpec(template, storedSchedule(job));
+    installed.push(job.id);
+    if (policyOff(spec.name) && !settlePolicyOff(job)) continue;
     ensureCronScriptInstalled(spec, home, promptsDir);
     const stale = staleShapeFields(job, spec, readCronPromptBody(spec, promptsDir).trimEnd());
-    installed.push(job.id);
     const staleNames = Object.keys(stale);
     if (staleNames.length === 0) {
       console.log(`→ cron "${spec.name}" up to date`);
@@ -1088,19 +1114,16 @@ export function reconcileDigestCronJobs(
 
     if (job) {
       installed.push(job.id);
-      // rc29: the pending alert's pause state, before the shape edit (which keeps it).
-      if (spec.name === PENDING_ALERT_JOB) {
-        const result = settlePendingAlert(job, pendingSwitch, runHermes, home);
-        settledPending(result, job.id);
-        // Removed (it could not be confirmed paused): nothing left to edit; the next roll creates it paused.
-        if (result === "removed") continue;
+      // Explicit legacy OFF remains an additional gate. Legacy ON never auto-resumes under post-village policy.
+      if (policyOff(spec.name) || (spec.name === PENDING_ALERT_JOB && pendingSwitch === "off")) {
+        if (!settlePolicyOff(job)) continue;
       }
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
       // deliberate per-tenant schedule and is preserved. An admin-managed job
       // (J2: it has a settings entry) is never migrated, even when an admin
       // set it to the old default on purpose.
-      const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule && !adminManaged(spec);
+      const scheduleStale = !postVillageKeyForJob(spec.name) && storedSchedule(job) === spec.schedule && schedule !== spec.schedule && !adminManaged(spec);
       const stale = staleShapeFields(job, spec, promptBody);
       const staleNames = Object.keys(stale);
       if (staleNames.length === 0 && !scheduleStale) {
@@ -1142,7 +1165,7 @@ export function reconcileDigestCronJobs(
     try {
       const createArgs = cronCreateArgs(resolved, promptBody, home);
       // rc29: the pending alert is created paused in the one write, unless the switch is on.
-      if (spec.name === PENDING_ALERT_JOB) createArgs.push(...pendingAlertCreateFlags(pendingSwitch));
+      if (!postVillageKeyForJob(spec.name) && spec.name === PENDING_ALERT_JOB) createArgs.push(...pendingAlertCreateFlags(pendingSwitch));
       execFileSync(bin, createArgs, {
         stdio: ["ignore", "ignore", "inherit"],
         env,
@@ -1158,7 +1181,13 @@ export function reconcileDigestCronJobs(
     // Read back: one that should be off and reads back running (a Hermes that
     // took the create and not the pause) is removed at once; one that cannot
     // be read back at all counts as failed.
-    if (spec.name === PENDING_ALERT_JOB) {
+    if (postVillageKeyForJob(spec.name)) {
+      const fresh = created === undefined ? undefined : readCronJobs().find((entry) => entry.id === created);
+      if (!fresh || storedJobEnabled(fresh)) {
+        failed.push(spec.name);
+        console.warn("  warning: post-village atomic paused create could not be confirmed; job preserved");
+      }
+    } else if (spec.name === PENDING_ALERT_JOB) {
       const fresh = created === undefined ? undefined : readCronJobs().find((entry) => entry.id === created);
       if (fresh) {
         if (pendingSwitch !== "on" && storedJobEnabled(fresh)) {

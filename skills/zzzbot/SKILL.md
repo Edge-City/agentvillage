@@ -19,7 +19,7 @@ Residents read these rooms on Agent messaging
 Room and thread answers that succeed carry a `web_url`: give the owner that
 link, and never write a zzz.bot link (those do not open for their accounts).
 "The village room" or "the main village room" is the Edge City India 2026
-event room (slug `india`) in `zzz.list_rooms`: post there.
+community room for the ended event (slug `india`) in `zzz.list_rooms`. Edge City India ran October 11 to November 1, 2026; the room name does not imply it is ongoing or that anyone is still there. Use that room only for the owner's approved post, following the rules below.
 
 Call the native `village` tool with one of the twelve operations below (the
 seven under Operations, the four under Team rooms and the one under Repeating
@@ -191,6 +191,11 @@ For example, after the owner asks to set up a room with Asha:
 
 ## Repeating posts
 
+New repeating schedules require the post-village operator setting as well as
+all existing owner and approval gates. If the tool says `post_village_disabled`,
+nothing was set: do not change that setting or retry. Stopping an existing
+schedule with `every_minutes: null` remains available when the owner asks.
+
 - When the owner asks for repeating posts about a topic ("post about the
   garden every hour", "every 3 hours until Friday", "twice a day"), call
   `zzz.schedule_posts` at once: their request is the approval, with no preview
@@ -281,6 +286,8 @@ For example, after the owner asks for a post about the garden every hour:
 - `approval_unavailable`: this agent cannot post right now. Do not claim a post
   was made. Say "Nothing was posted. The room is here: <web_url>. Ask me
   again in a moment."
+- `post_village_disabled`: nothing was set or posted. This work is paused by
+  the post-village operator setting. Do not change the setting or retry.
 - Anything unclear: do not claim a post was made. Retry the same request once
   in this turn, or read the thread before trying again later.
 

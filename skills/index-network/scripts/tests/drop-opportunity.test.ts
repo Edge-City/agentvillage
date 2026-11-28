@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,16 +15,20 @@ const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
 const JON_OPP = "bbbbbbbb-0000-4000-8000-000000000002";
 
 const originalFetch = globalThis.fetch;
+const originalHermesHome = process.env.HERMES_HOME;
 const dirs: string[] = [];
 
 function stateFile(): string {
   const dir = mkdtempSync(join(tmpdir(), "drop-opportunity-"));
   dirs.push(dir);
+  process.env.HERMES_HOME = dir;
+  allowPostVillageFixture(dir, "opportunity_midday", "opportunity_evening");
   return join(dir, "state.json");
 }
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalHermesHome === undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME = originalHermesHome;
   while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
 });
 

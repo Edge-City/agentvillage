@@ -45,6 +45,16 @@ class _Client:
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message, finish_reason="stop")])
 
 
+POLICY_SPEC = importlib.util.spec_from_file_location("managed_runner_test_policy", Path(__file__).parents[1] / "_post_village_policy.py")
+post_policy = importlib.util.module_from_spec(POLICY_SPEC)
+POLICY_SPEC.loader.exec_module(post_policy)
+
+
+def allow_pair_fixture(home):
+    (home / "av-events").mkdir(exist_ok=True)
+    (home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_pairs"]}))
+
+
 class ManagedRunnerTest(unittest.TestCase):
     def provider(self, client):
         class Http:
@@ -65,6 +75,7 @@ class ManagedRunnerTest(unittest.TestCase):
     def test_actual_completion_request_excludes_every_private_context_source(self):
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             markers = ["MEMORY_PRIVATE", "USER_PRIVATE", "SOUL_PRIVATE", "AGENTS_PRIVATE",
                        "PROFILE_PRIVATE", "PREFILL_PRIVATE", "PLATFORM_PRIVATE", "PLUGIN_PRIVATE"]
             for name, marker in zip(("MEMORY.md", "USER.md", "SOUL.md", "AGENTS.md", "profile.md",
@@ -79,6 +90,9 @@ class ManagedRunnerTest(unittest.TestCase):
             class Managed:
                 @staticmethod
                 def participation_on(_home): return True
+
+                @staticmethod
+                def post_village_allowed(_home, key): return post_policy.runtime_allowed(_home, key)
 
                 @staticmethod
                 def budget_available(_home): return True
@@ -119,6 +133,7 @@ class ManagedRunnerTest(unittest.TestCase):
     def test_tool_call_and_unbounded_completion_cannot_become_native_reply(self):
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             self.config(home)
             for client in (_Client("reply", tool_calls=[{"name": "village"}]), _Client("x" * 8001), _Client("")):
                 with self.provider(client), patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}), self.assertRaises(ValueError):
@@ -128,6 +143,7 @@ class ManagedRunnerTest(unittest.TestCase):
     def test_external_agent_provider_is_rejected_before_client_construction(self):
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             self.config(home, "copilot-acp")
             client = _Client()
             with self.provider(client), self.assertRaises(ValueError):
@@ -137,6 +153,7 @@ class ManagedRunnerTest(unittest.TestCase):
     def test_provider_key_is_bound_to_this_home(self):
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             self.config(home)
             (home / ".env").write_text("OPENROUTER_API_KEY=profile-key\n")
             with patch.dict("os.environ", {"OPENROUTER_API_KEY": "other-profile-key"}):
@@ -147,6 +164,7 @@ class ManagedRunnerTest(unittest.TestCase):
     def test_control_plane_model_without_provider_uses_only_bound_openrouter_route(self):
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             (home / ".env").write_text("OPENROUTER_API_KEY=profile-key\n")
             for provider_line in ("", "  provider: auto\n"):
                 (home / "config.yaml").write_text(
@@ -173,6 +191,9 @@ class ManagedRunnerTest(unittest.TestCase):
             def participation_on(_home): return True
 
             @staticmethod
+            def post_village_allowed(_home, key): return post_policy.runtime_allowed(_home, key)
+
+            @staticmethod
             def budget_available(_home): return True
 
             @staticmethod
@@ -182,14 +203,17 @@ class ManagedRunnerTest(unittest.TestCase):
             @contextmanager
             def managed_runner_scope(_job, _session): yield
 
-        with (patch.object(runner, "_bridge", return_value=(fake_bridge, Managed)),
-              patch.object(runner, "_job", return_value="abcdef123456"),
-              patch.object(runner, "_config", return_value={}),
-              patch.object(runner, "_approval_gate", return_value=object()),
-              patch.object(runner, "_runner_turn", side_effect=lambda _home: self.accepted_turn()),
-              patch.object(runner, "_policy_allowed", return_value=True),
-              patch.object(runner, "_native", side_effect=lambda *args: calls.append(args[-1]) or {})):
-            runner.run(SAFE_TEMP_PARENT)
+        with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
+            home = Path(tmp)
+            allow_pair_fixture(home)
+            with (patch.object(runner, "_bridge", return_value=(fake_bridge, Managed)),
+                  patch.object(runner, "_job", return_value="abcdef123456"),
+                  patch.object(runner, "_config", return_value={}),
+                  patch.object(runner, "_approval_gate", return_value=object()),
+                  patch.object(runner, "_runner_turn", side_effect=lambda _home: self.accepted_turn()),
+                  patch.object(runner, "_policy_allowed", return_value=True),
+                  patch.object(runner, "_native", side_effect=lambda *args: calls.append(args[-1]) or {})):
+                runner.run(home)
         self.assertEqual(len(calls), 1)
         args = {"operation": calls[0]["operation"], "arguments": {
             key: value for key, value in calls[0].items() if key != "operation"}}
@@ -229,6 +253,7 @@ class ManagedRunnerTest(unittest.TestCase):
         repo = RUNNER.parents[3]
         with tempfile.TemporaryDirectory(dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             plugin = home / "plugins" / "av-approval"
             plugin.mkdir(parents=True)
             shutil.copyfile(repo / "plugins/av-approval/__init__.py", plugin / "__init__.py")
@@ -463,6 +488,7 @@ class ManagedRunnerTest(unittest.TestCase):
         repo = RUNNER.parents[3]
         with tempfile.TemporaryDirectory(prefix="za", dir=SAFE_TEMP_PARENT) as tmp:
             home = Path(tmp)
+            allow_pair_fixture(home)
             sock = home / "approval.sock"
             outcomes = [b'{"exit_code":0,"stdout":"{}","stderr":""}',
                         b'{"exit_code":2,"stdout":"{\\"action\\":\\"block\\"}","stderr":""}']

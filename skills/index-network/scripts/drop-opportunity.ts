@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed } from "./post-village-policy";
 /**
  * Deterministically pick and deliver ONE extra opportunity between morning briefs.
  *
@@ -104,12 +105,18 @@ function pickBest(opportunities: BriefOpportunity[], log: DeliveryLog): BriefOpp
 }
 
 export async function dropOpportunity(options: {
+  /** Tenant policy home; the trigger passes its existing home seam, including previews. */
+  home?: string;
+  policyKey?: "opportunity_midday" | "opportunity_evening";
   date?: string;
   stateFile?: string;
   apiKey?: string;
   mcpUrl?: string;
   listOpportunities?: typeof listOpportunitiesFromMcp;
 } = {}): Promise<DropResult | SilentResult> {
+  const policyKeys = options.policyKey ? [options.policyKey] : ["opportunity_midday", "opportunity_evening"] as const;
+  const policyOn = () => policyKeys.every((key) => postVillageAllowed(options.home ?? hermesHome(), key));
+  if (!policyOn()) return { silent: true, reason: "post-village-disabled" };
   const date = options.date ?? villageDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const apiKey = options.apiKey ?? resolveIndexApiKey();
@@ -139,6 +146,7 @@ export async function dropOpportunity(options: {
     return { silent: true, reason: "nothing-new" };
   }
 
+  if (!policyOn()) return { silent: true, reason: "post-village-disabled" };
   // Reserve the id in the shared per-day set BEFORE delivery so a retry or the
   // morning brief never double-sends it. This mirrors the daily send's bookkeeping.
   state.deliveredToday = {

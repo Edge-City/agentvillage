@@ -11,9 +11,9 @@
  * first seed with each outcome a create can have, the paused seed, the
  * default mode, the extra trailer keys, the runs that create nothing, and
  * `--reseed`) leaves exactly the requests, files, stdout and stderr that
- * origin/main 581056b7 left (fixtures/welcome-seed-tag-off.json). With
+ * the historical 581056b7 behavior baseline plus A79's welcome copy leave (fixtures/welcome-seed-tag-off.json). With
  * WELCOME_SCRIPT set, that block runs against another welcome.ts (581056b7's
- * own reproduces the fixture).
+ * own reproduces the original pre-A79 copy).
  *
  * Switch on: each create of the seed and of `--reseed` gains exactly
  * `"sourceId":"<SEED_SOURCE_ID>"` at the end of its body and nothing else
@@ -24,7 +24,7 @@
  * carries the tag, and the trailer never holds text.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -120,9 +120,10 @@ function tagged(name: string): Record_ {
 
 // ── Switch off ───────────────────────────────────────────────────────────────
 
-describe("switch off: every scenario leaves exactly main 581056b7's bytes (requests, markers, stdout, trailer)", () => {
-  test("the fixture is main's, and every scenario has its record", () => {
+describe("switch off: every scenario leaves exactly baseline behavior and A79 copy (requests, markers, stdout, trailer)", () => {
+  test("the fixture records its behavior base and A79 copy revision, with every scenario", () => {
     expect(fixture.base).toBe("581056b7cf35dc352fee5ec037f15aa04b4ed736");
+    expect(fixture.copy_revision).toBe("A79-past-village");
     expect(Object.keys(OFF).sort()).toEqual(Object.keys(SCENARIOS).sort());
     expect(Object.keys(EXPECTED_IDS).sort()).toEqual(Object.keys(SCENARIOS).sort());
   });
@@ -404,6 +405,8 @@ describe("as a process: the switch is read from the environment and from $HERMES
       },
     });
     const home = mkdtempSync(join(tmpdir(), "av-welcome-seed-tag-proc-"));
+    mkdirSync(join(home, "av-events"), { recursive: true });
+    writeFileSync(join(home, "av-events/post-village-policy.json"), JSON.stringify({ version: 1, enabled: ["welcome_seed"] }));
     try {
       writeFileSync(join(home, "USER.md"), ["# Participant profile", "", "## Selected intentions", ...LINES.map((l) => `- [meet] ${l}`), ""].join("\n"));
       if (dotenv !== undefined) writeFileSync(join(home, ".env"), dotenv);

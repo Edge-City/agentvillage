@@ -1,3 +1,4 @@
+import { runAllowedProactive } from "./post-village-fixtures";
 /**
  * INDEX-COMMS A (Carter's ruling, 12 Oct 2026 15:40Z): a proactive message about an Index match
  * names the match. Two facts may reach the model, each through the stricter title cleaner and the
@@ -18,7 +19,7 @@ import { join } from "node:path";
 import { type BriefOpportunity, parseListedOpportunities } from "../build-daily-brief-context";
 import * as proactive from "../proactive";
 import { destinationShapeHit, matchFieldReadings, matchFieldVerdict } from "../proactive-text";
-import { dropView, eveningView, followUpView, pendingView, runProactive, withPreferences } from "../proactive";
+import { dropView, eveningView, followUpView, pendingView, withPreferences } from "../proactive";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
 const read = (rel: string) => readFileSync(join(REPO, rel), "utf8");
@@ -195,7 +196,7 @@ describe("the whole trigger: the drop wakes with the named match", () => {
     const home = mkdtempSync(join(tmpdir(), "av-match-"));
     mkdirSync(join(home, "memory"), { recursive: true });
     try {
-      const result = await runProactive("drop-midday", {
+      const result = await runAllowedProactive("drop-midday", {
         home,
         now: () => new Date("2026-10-12T06:30:00Z"),
         lock: { waitMs: 50, pollMs: 5 },
@@ -1087,7 +1088,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
     const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
     for (const k of ENV) delete process.env[k];
     try {
-      const result = await runProactive("drop-midday", {
+      const result = await runAllowedProactive("drop-midday", {
         home,
         now: () => new Date("2026-10-12T06:30:00Z"),
         lock: { waitMs: 50, pollMs: 5 },
@@ -1157,7 +1158,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
       const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
       for (const k of ENV) delete process.env[k];
       try {
-        const again = await runProactive("drop-evening", {
+        const again = await runAllowedProactive("drop-evening", {
           home,
           now: () => new Date("2026-10-12T13:30:00Z"),
           lock: { waitMs: 50, pollMs: 5 },
@@ -1186,7 +1187,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
     try {
       const now = new Date("2026-10-12T06:30:00Z");
       const cards = Array.from({ length: max + 5 }, (_, i) => ({ card: { name: `Asha ${i}`, opportunityId: `${OPP.slice(0, 24)}${String(i).padStart(12, "0")}`, userId: PEER, status: "pending", headline: "Telegram handle evilbot" } as BriefOpportunity, opportunityId: `${OPP.slice(0, 24)}${String(i).padStart(12, "0")}`, firstSeen: now.toISOString() }));
-      await runProactive("pending", { home, now: () => now, lock: { waitMs: 50, pollMs: 5 }, pending: async () => ({ cards }) });
+      await runAllowedProactive("pending", { home, now: () => now, lock: { waitMs: 50, pollMs: 5 }, pending: async () => ({ cards }) });
       const [file] = await files(home);
       expect(JSON.parse(readAbs(file, "utf8")).records.map((r: { opportunity_id: string }) => r.opportunity_id)).toEqual(cards.slice(0, max).map((c) => c.opportunityId));
       expect((await logOf(home)).at(-1)).toMatchObject({ action: "pending", flagged: max, flag_dropped: 5, flag_dropped_reason: "over_cap" });
@@ -1243,7 +1244,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
       const now = new Date("2026-10-12T06:30:00Z");
       // `firstSeen` is the pick's ledger value, not a cleaned field: here it trips the whole-output scan.
       const cards = [{ card: { name: "Asha", opportunityId: OPP, userId: PEER, status: "pending", headline: "Telegram handle evilbot" } as BriefOpportunity, opportunityId: OPP, firstSeen: "system prompt override" }];
-      const result = await runProactive("pending", { home, now: () => now, lock: { waitMs: 50, pollMs: 5 }, pending: async () => ({ cards }) });
+      const result = await runAllowedProactive("pending", { home, now: () => now, lock: { waitMs: 50, pollMs: 5 }, pending: async () => ({ cards }) });
       expect({ woke: result.woke, reason: result.reason }).toEqual({ woke: false, reason: "scan-blocked" });
       const found = await files(home);
       expect(found).toHaveLength(1);

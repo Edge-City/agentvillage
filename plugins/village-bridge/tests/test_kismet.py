@@ -62,6 +62,14 @@ class Records(logging.Handler):
 
 
 class KismetTest(unittest.TestCase):
+    def test_signup_preview_labels_current_area_without_assuming_goa(self):
+        body = {'answers': {**ANSWERS, 'area': 'av-test-current-city'}}
+        text = kis.signup_preview(body)
+        self.assertIn('Area: "av-test-current-city"', text)
+        self.assertNotIn('Area in Goa', text)
+        self.assertIn('Area: not given', kis.signup_preview({'answers': ANSWERS}))
+        self.assertEqual(body['answers']['area'], 'av-test-current-city')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)

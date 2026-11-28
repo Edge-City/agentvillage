@@ -35,17 +35,29 @@ function box() {
   return {home,stage,jobs};
 }
 
+/** Direct owner reconcile: no CLI projection-revocation cleanup obscures fail-paused ID retention. */
+function reconcileOwner(home: string): void {
+  const oldHome=process.env.HERMES_HOME, oldBin=process.env.HERMES_BIN;
+  process.env.HERMES_HOME=home; process.env.HERMES_BIN=join(home,"bin/hermes");
+  try { reconcileAutonomyJob(home,true); }
+  finally {
+    if(oldHome===undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME=oldHome;
+    if(oldBin===undefined) delete process.env.HERMES_BIN; else process.env.HERMES_BIN=oldBin;
+  }
+}
+
 test("reviewed event gate is independent of the private-pair gate and owns one exact no-agent job",()=>{
   expect(autonomy).toEqual({id:AUTONOMY_GATE,version:"1.0.0",operations:[],skills:[]});
   const {home,stage,jobs}=box();
-  expect(stage([zzzbot]).status).toBe(0);
+  const initial = stage([zzzbot]);
+  expect(initial.status, initial.stderr).toBe(0);
   expect(existsSync(join(home,"cron/jobs.json"))).toBe(false);
   expect(stage([zzzbot,pair]).status).toBe(0);
   expect(jobs().map(job=>job.name)).toEqual(["Edge — zzz pairs"]);
   expect(stage([zzzbot,pair,autonomy]).status).toBe(0);
   expect(jobs().map(job=>job.name).sort()).toEqual(["Edge — zzz event autonomy","Edge — zzz pairs"]);
   const job=jobs().find(job=>job.name===AUTONOMY_JOB_NAME)!;
-  expect(job).toMatchObject({script:AUTONOMY_JOB_SCRIPT,no_agent:true,enabled:true,enabled_toolsets:["no_mcp"],
+  expect(job).toMatchObject({script:AUTONOMY_JOB_SCRIPT,no_agent:true,enabled:false,enabled_toolsets:["no_mcp"],
     schedule:{kind:"cron",expr:autonomySchedule(token)}});
   expect(readFileSync(join(home,"scripts",AUTONOMY_JOB_SCRIPT))).toEqual(readFileSync(join(repo,"skills/zzzbot/scripts",AUTONOMY_JOB_SCRIPT)));
   expect(autonomyMarkers(home)).toBe(true);
@@ -137,7 +149,7 @@ test("a box holding the previous runner bytes upgrades to the current bytes, the
   const v222=readFileSync(join(import.meta.dir,"fixtures/zzz_autonomy_runner.v222.py.fixture"));
   expect(digest(v222)).toBe("84fd99eae798c4f5447392781557565f4cc03e4ef2361f5bacb59815877caf59");
   expect(v222.equals(current)).toBe(false);
-  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(v222),digest(current)]);
+  expect(AUTONOMY_SHIPPED[AUTONOMY_FILES[0]]).toEqual([digest(previous),digest(v2119),digest(v2121),digest(ov548),digest(ov550),digest(v2122),digest(ov553),digest(v2124),digest(ov579),digest(v2127),digest(v222),"a99f640dc63014d7ffa9ec5ea5da7b5f2ded90da4edd8b203ca9294aaeb51317","287b31467c14c2d5a478617f13f4330241d61e32a6ee7cb7a860789875dd5c8d","8c3ec8dc765e46213fe0b5ee5bf4c28b348750162309d950cd7e22229778894e",digest(current)]);
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const shim=join(home,"scripts",AUTONOMY_JOB_SCRIPT);
@@ -196,7 +208,7 @@ test("the any-slot marker lines are in the shipped bytes, and v2.2.2's runner ha
 // re-stage left the job on the old phase, and the strict phase check failed every tick. The installer (and the runner)
 // now accept any of the five phases: verify passes a job on another phase, a stage over it leaves it as it is with no
 // Hermes job call, and only an absent or unconfirmed job is installed, on the current token's phase.
-test("any of the five phases: verify and a stage leave a job on another phase as it is; a malformed expr is repaired",()=>{
+test("any of the five phases stay unchanged; unsupported schedules fail paused without ID rotation",()=>{
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const own=autonomySchedule(token);
@@ -233,35 +245,33 @@ test("any of the five phases: verify and a stage leave a job on another phase as
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   expect(jobs()[0]).toMatchObject({id,schedule:{kind:"cron",expr:"3-59/5 * * * *"}});
   expect(count()).toBe(0);
-  // A malformed expr is not confirmed: verify fails and the next stage installs the job on the current token's phase
-  // (one Hermes job call: the counter's positive control).
+  // Unsupported schedules fail paused in place through the owning reconciler; no delete/recreate or re-phase.
   for (const bad of ["5-59/5 * * * *","3-59/10 * * * *","3-59/5 * * *","x","3-59/5 * * * *\n",null]) {
     setExpr(bad);
     expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
     const before=count();
-    expect(stage([zzzbot,autonomy]).status).toBe(0);
+    expect(()=>reconcileOwner(home)).toThrow();
     expect(count()).toBe(before+1);
-    expect(jobs()).toHaveLength(1);
-    expect(jobs()[0]).toMatchObject({name:AUTONOMY_JOB_NAME,schedule:{kind:"cron",expr:"0-59/5 * * * *"}});
-    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+    expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({id,enabled:false,schedule:{kind:"cron",expr:bad}});
+    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+    setExpr("3-59/5 * * * *"); // independent next hostile fixture, never a production repair
   }
   expect(count()).toBe(6);
-  // review-b ov#606 S1: confirmed() alone now decides whether a stage repairs anything, so a job on another phase that is
-  // disabled or carries another prompt (the runner refuses it) must fail verify and be repaired with one Hermes call.
   const prompt=readFileSync(join(repo,"skills/zzzbot",AUTONOMY_FILES[1]),"utf8").trimEnd();
-  for (const drift of [{enabled:false},{prompt:"another prompt"}]) {
-    const doc=JSON.parse(readFileSync(store,"utf8"));
-    Object.assign(doc.jobs[0],drift,{schedule:{...doc.jobs[0].schedule,expr:"3-59/5 * * * *"}});
-    writeFileSync(store,JSON.stringify(doc));
-    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
-    const before=count();
-    expect(stage([zzzbot,autonomy]).status).toBe(0);
-    expect(count()).toBe(before+1);
-    expect(jobs()).toHaveLength(1);
-    expect(jobs()[0]).toMatchObject({name:AUTONOMY_JOB_NAME,enabled:true,prompt,schedule:{kind:"cron",expr:"0-59/5 * * * *"}});
-    expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
-  }
-  expect(count()).toBe(8);
+  // A legitimate paused state is valid and retained; supported stale prompt repair preserves its old phase and ID.
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
+  expect(stage([zzzbot,autonomy]).status).toBe(0); expect(count()).toBe(6);
+  const doc=JSON.parse(readFileSync(store,"utf8")); doc.jobs[0].prompt="another prompt"; writeFileSync(store,JSON.stringify(doc));
+  expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(1);
+  expect(stage([zzzbot,autonomy]).status).toBe(0); expect(count()).toBe(7);
+  expect(jobs()[0]).toMatchObject({id,enabled:false,prompt,schedule:{kind:"cron",expr:"3-59/5 * * * *"}});
+  // Only this job's explicit current policy permits a pre-existing enabled state to remain enabled.
+  mkdirSync(join(home,"av-events"),{recursive:true});
+  const policy=join(home,"av-events/post-village-policy.json"); writeFileSync(policy,'{"version":1,"enabled":["zzz_event_autonomy"]}');
+  const enabled=JSON.parse(readFileSync(store,"utf8")); enabled.jobs[0].enabled=true; writeFileSync(store,JSON.stringify(enabled));
+  expect(stage([zzzbot,autonomy]).status).toBe(0); expect(count()).toBe(7); expect(jobs()[0]).toMatchObject({id,enabled:true,schedule:{expr:"3-59/5 * * * *"}});
+  unlinkSync(policy); expect(stage([zzzbot,autonomy]).status).toBe(0); expect(count()).toBe(8);
+  expect(jobs()[0]).toMatchObject({id,enabled:false,schedule:{expr:"3-59/5 * * * *"}}); expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
 }, 60_000);
 
 test("failed stage withdraws only the autonomy gate before tearing down its job",()=>{
@@ -297,7 +307,7 @@ test("failed Hermes teardown withdraws the gate, keeps the teardown pending, and
   expect(stage([zzzbot],["--verify"]).status).toBe(0);
 });
 
-test("a job under the reserved name with a drifted prompt or toolsets is still torn down, or updated in place",()=>{
+test("supported prompt drift updates in place; unsafe tool scope fails paused until explicit projection revocation",()=>{
   const {home,stage,jobs}=box();
   expect(stage([zzzbot,autonomy]).status).toBe(0);
   const path=join(home,"cron/jobs.json");
@@ -306,13 +316,17 @@ test("a job under the reserved name with a drifted prompt or toolsets is still t
     doc.jobs=doc.jobs.map((job:Record<string,unknown>)=>job.name===AUTONOMY_JOB_NAME?{...job,...change}:job);
     writeFileSync(path,JSON.stringify(doc));
   };
-  // An older release's prompt (or a resident edit) is updated in place, never a name conflict.
-  drift({prompt:"an older prompt",enabled_toolsets:["web"]});
+  const id=jobs()[0].id;
+  // A supported stale prompt updates without ID or schedule changes.
+  drift({prompt:"an older prompt"});
   expect(stage([zzzbot,autonomy]).status).toBe(0);
-  expect(jobs().filter(job=>job.name===AUTONOMY_JOB_NAME)).toHaveLength(1);
+  expect(jobs().filter(job=>job.name===AUTONOMY_JOB_NAME)).toHaveLength(1); expect(jobs()[0]).toMatchObject({id,enabled:false});
   expect(stage([zzzbot,autonomy],["--verify"]).status).toBe(0);
-  // Drifted again, then the gate is removed: the job still goes.
-  drift({prompt:"an older prompt",enabled_toolsets:["web"]});
+  // An unsafe toolset is never repaired by delete/recreate; fail paused through the owner first.
+  drift({enabled:true,enabled_toolsets:["web"]});
+  expect(()=>reconcileOwner(home)).toThrow();
+  expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({id,enabled:false,enabled_toolsets:["web"]});
+  // Only removal of participation authority then tears down that reserved job.
   expect(autonomyMarkers(home)).toBe(true);
   expect(stage([zzzbot]).status).toBe(0);
   expect(jobs()).toEqual([]);

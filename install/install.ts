@@ -7,7 +7,7 @@
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - `AV_PROFILE=odin` installs `workspace/odin/{SOUL,AGENTS}.md` instead (`profile.ts`, docs/odin-profile.md)
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
  *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
@@ -42,8 +42,8 @@
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
  *     is the failure the gate exists to prevent
- *   - an Index cron job that fails to update does not fail the install (exit
- *     0): every run writes `$HERMES_HOME/av-events/install-status.json`
+ *   - unrelated historical Index cron update failures remain warning-only; covered
+ *     post-village failures/readback uncertainty fail before automatic restart. Every run writes `$HERMES_HOME/av-events/install-status.json`
  *     (`install_status.ts`, `cron_failed` empty when none failed), and a run
  *     with failures prints one line, `agentvillage-install: cron_failed=<n>`
  *
@@ -114,6 +114,9 @@ import {
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
+import { auditPostVillageJobs } from "./post_village_audit";
+import { postVillageKeyForJob } from "../skills/index-network/scripts/post-village-policy";
+import { recordPostVillageAuditStatus } from "./install_status";
 import { cronFailedLine, recordSlashAccessStatus, slashAccessFailedLine, writeInstallStatus } from "./install_status";
 import { modelAllowFailedLine, recordModelAllowStatus } from "./install_status";
 
@@ -392,10 +395,9 @@ function main(): void {
   // D3: the memory provider (staged above with every plugin); a failure is logged, never fatal.
   safeConfigureVillageMemory();
 
-  // Index cron jobs that failed to reconcile. They do not fail the install:
-  // the control plane stops a roll on any non-zero exit, before its later
-  // steps (B1-fix2 R1). They are recorded in the status file, written on
-  // every run, and reported in one line at the end.
+  // Retain warning semantics for unrelated historical cron failures. Covered post-village
+  // failures are additionally fatal in the independent audit before any restart below.
+  // Every run records the complete cron failure list in the status file.
   let cronFailures: string[] = [];
   if (!resident) {
     console.log("→ index network: not installed (profile odin)");
@@ -433,6 +435,24 @@ function main(): void {
   copyPluginFiles("after-approval");
   const indexPluginFailed = installIndexHermesPlugin();
 
+  // Read-only even when reconciliation/context copying was skipped. Audit actual records, never infer OFF from a flag.
+  const postVillageAudit = auditPostVillageJobs(hermesHome());
+  if (cronFailures.some((name) => postVillageKeyForJob(name) !== null)) {
+    postVillageAudit.status = "unverified";
+    postVillageAudit.reasons.push("covered-reconciliation-failed");
+  }
+  try {
+    if (!recordPostVillageAuditStatus(hermesHome(), postVillageAudit)) throw new Error("status");
+  } catch {
+    postVillageAudit.status = "unverified";
+    postVillageAudit.reasons.push("audit-status-write-failed");
+  }
+  console.log(`agentvillage-install: post_village_policy=${JSON.stringify(postVillageAudit)}`);
+  if (postVillageAudit.status === "unverified") {
+    console.error("error: covered post-village job state is unverified; gateway not restarted; inspect the fixed audit reasons");
+    process.exitCode = 1;
+    return;
+  }
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
   }

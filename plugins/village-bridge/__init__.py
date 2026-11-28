@@ -46,6 +46,7 @@ from ._forkicks import save_preview, load_preview, authorize_order, is_flat, CAR
 from . import _forkicks_grant
 from . import _mini_app_card, _mini_app_grant
 from ._forkicks_media import materialize, menu_shape, JSON_BYTES as MENU_IMAGE_JSON_BYTES
+from ._post_village_policy import runtime_allowed as post_village_allowed
 from ._zzz_managed import managed_context, reserve_reply, reserve_bootstrap, allow_managed_read, INTRO_TITLE, INTRO_BODY
 
 SETTINGS = "https://agents.edgecity.live/connections/village"
@@ -1545,6 +1546,10 @@ def handle(args, **kwargs):
             if not installed(home, "forkicks", op):
                 return json.dumps({"error": "mini_app_not_installed"})
             payload["approval"] = authorization
+        if op == "zzz.schedule_posts" and payload.get("every_minutes") is not None and not post_village_allowed(home, "zzz_owner_repeating"):
+            return json.dumps({"error": "post_village_disabled", "instruction": "New repeating posts are paused by the post-village operator setting. Stopping an existing schedule remains available."})
+        if context.get("MANAGED_ZZZ") and not post_village_allowed(home, "zzz_pairs"):
+            return json.dumps({"error": "post_village_disabled"})
         try:
             result = transport(config, payload)
         except Exception:

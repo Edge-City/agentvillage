@@ -1,3 +1,4 @@
+import { allowPostVillageFixture, runAllowedProactive } from "./post-village-fixtures";
 /**
  * J2 per-job settings in the trigger (proactive.ts): rc13 parity with no
  * settings, each job's window and zone, fallbacks that never widen, the
@@ -11,7 +12,7 @@ import { join } from "node:path";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
 import { PREVIEW_MAX_AGE_MS, deliveryFor, jobSettingsPath, minuteOfDay, readJobSettings } from "../job-settings";
 import { stagePath } from "../outcome-ask";
-import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, runProactive, windowDecision } from "../proactive";
+import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, windowDecision } from "../proactive";
 import { pendingAlert } from "../pending-alert";
 import { lockPathFor } from "../state-lock";
 import { inBriefWindow, rc13WindowDecision, villageMinuteOfDay } from "./fixtures/rc13-decision";
@@ -127,13 +128,13 @@ describe("no settings file: rc13, unchanged", () => {
   });
 
   test("the same wake lines, state and log line as rc13: no settings field anywhere", async () => {
-    const brief = await runProactive("brief", options());
+    const brief = await runAllowedProactive("brief", options());
     expect(brief.woke).toBe(true);
     expect(brief.settings).toBeUndefined();
-    const outside = await runProactive("brief", options({ now: () => AFTERNOON }));
+    const outside = await runAllowedProactive("brief", options({ now: () => AFTERNOON }));
     expect(outside.lines).toEqual([JSON.stringify({ wakeAgent: false, reason: "outside-window" })]);
     expect(Object.keys(outside).sort()).toEqual(["exitCode", "lines", "reason", "woke"]);
-    const drop = await runProactive("drop-midday", options({ now: () => AFTERNOON }));
+    const drop = await runAllowedProactive("drop-midday", options({ now: () => AFTERNOON }));
     expect(drop.woke).toBe(true);
     expect(state()[RUNS_KEY]).toEqual({ brief: DATE, "drop-midday": DATE });
     for (const line of runLog()) expect(Object.keys(line).sort()).toEqual(["action", "decision", "reason", "source", "ts", "v"]);
@@ -145,24 +146,24 @@ describe("each job's window and zone", () => {
     settings({ "drop-midday": { window: "12:00-13:00" } });
     let picked = 0;
     const drop = async () => (picked++, { opportunity: card("Arjun", "op2") });
-    const outside = await runProactive("drop-midday", options({ now: () => AFTERNOON, drop }));
+    const outside = await runAllowedProactive("drop-midday", options({ now: () => AFTERNOON, drop }));
     expect(last(outside.lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
     expect(picked).toBe(0);
     expect(existsSync(stateFile())).toBe(false);
-    const inside = await runProactive("drop-midday", options({ now: () => new Date("2026-10-12T06:45:00Z"), drop })); // 12:15 IST
+    const inside = await runAllowedProactive("drop-midday", options({ now: () => new Date("2026-10-12T06:45:00Z"), drop })); // 12:15 IST
     expect(inside.woke).toBe(true);
     expect(runLog().map((line) => [line.reason, line.settings])).toEqual([["outside-window", "custom"], ["woke", "custom"]]);
   });
 
   test("the brief moved to the afternoon: silent at 08:00, delivered at 15:00", async () => {
     settings({ brief: { window: "14:00-16:00" } });
-    expect(last((await runProactive("brief", options())).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
-    expect((await runProactive("brief", options({ now: () => AFTERNOON }))).woke).toBe(true);
+    expect(last((await runAllowedProactive("brief", options())).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
+    expect((await runAllowedProactive("brief", options({ now: () => AFTERNOON }))).woke).toBe(true);
   });
 
   test("a window across midnight", async () => {
     settings({ negotiation: { window: "22:00-02:00" } });
-    const at = (utc: string) => runProactive("negotiation", options({ now: () => new Date(utc) }));
+    const at = (utc: string) => runAllowedProactive("negotiation", options({ now: () => new Date(utc) }));
     expect(last((await at("2026-10-12T16:29:00Z")).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 21:59 IST
     expect((await at("2026-10-12T20:29:00Z")).woke).toBe(true); // 01:59 IST on the 13th
     rmSync(stateFile());
@@ -171,7 +172,7 @@ describe("each job's window and zone", () => {
 
   test("a resident's own zone, across their DST change", async () => {
     settings({ "drop-evening": { window: "07:00-09:00", tz: "America/New_York" } });
-    const at = (utc: string) => runProactive("drop-evening", options({ now: () => new Date(utc) }));
+    const at = (utc: string) => runAllowedProactive("drop-evening", options({ now: () => new Date(utc) }));
     expect((await at("2026-10-12T11:30:00Z")).woke).toBe(true); // 07:30 EDT
     expect(last((await at("2026-11-02T11:30:00Z")).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 06:30 EST
     expect((await at("2026-11-02T12:30:00Z")).woke).toBe(true); // 07:30 EST
@@ -179,15 +180,15 @@ describe("each job's window and zone", () => {
 
   test("a bad zone never shifts the window by hours: the brief keeps 05:00-11:00 IST and logs why", async () => {
     settings({ brief: { window: "14:00-16:00", tz: "Mars/Olympus" } });
-    expect(last((await runProactive("brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
-    expect((await runProactive("brief", options())).woke).toBe(true);
+    expect(last((await runAllowedProactive("brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
     expect(runLog().map((line) => line.settings)).toEqual(["invalid:tz", "invalid:tz"]);
   });
 
   test("a malformed window on a job with no default is held silent, never run all day", async () => {
     settings({ "drop-midday": { window: "12:00-" } });
     let picked = 0;
-    const result = await runProactive("drop-midday", options({ drop: async () => (picked++, { opportunity: card("Arjun", "op2") }) }));
+    const result = await runAllowedProactive("drop-midday", options({ drop: async () => (picked++, { opportunity: card("Arjun", "op2") }) }));
     expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "settings-invalid" });
     expect(picked).toBe(0);
     expect(runLog().at(-1)).toMatchObject({ action: "drop-midday", reason: "settings-invalid", settings: "invalid:window" });
@@ -195,39 +196,39 @@ describe("each job's window and zone", () => {
 
   test("a corrupt file: the brief on its default, every job without a default held", async () => {
     settings("{not json");
-    expect((await runProactive("brief", options())).woke).toBe(true);
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
     for (const action of ["drop-midday", "drop-evening", "negotiation", "evening"] as const) {
-      const result = await runProactive(action, options({ now: () => AFTERNOON }));
+      const result = await runAllowedProactive(action, options({ now: () => AFTERNOON }));
       expect({ action, line: last(result.lines) }).toEqual({ action, line: { wakeAgent: false, reason: "settings-invalid" } });
     }
     expect(new Set(runLog().map((line) => line.settings))).toEqual(new Set(["invalid:file-not-json"]));
   });
 
   test("a settings change during the day never brings a second send: the day mark is unchanged", async () => {
-    expect((await runProactive("brief", options())).woke).toBe(true);
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
     settings({ brief: { window: "14:00-16:00", tz: "UTC" } });
     // 14:30 UTC is 20:00 IST, still the 12th in the village.
-    const again = await runProactive("brief", options({ now: () => new Date("2026-10-12T14:30:00Z") }));
+    const again = await runAllowedProactive("brief", options({ now: () => new Date("2026-10-12T14:30:00Z") }));
     expect(last(again.lines)).toEqual({ wakeAgent: false, reason: "done-today" });
     settings({ brief: { window: "14:00-16:00" } });
-    expect(last((await runProactive("brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "done-today" });
+    expect(last((await runAllowedProactive("brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "done-today" });
     expect(state()[RUNS_KEY]).toEqual({ brief: DATE });
   });
 });
 
 describe("the template actions", () => {
   test("each runs its base job's content path with its own day mark and its own settings", async () => {
-    expect((await runProactive("brief", options())).woke).toBe(true);
-    const tpl = await runProactive("tpl-brief", options());
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
+    const tpl = await runAllowedProactive("tpl-brief", options());
     expect(tpl.woke).toBe(true);
     expect(JSON.parse(tpl.lines.slice(0, -1).join("\n")).job).toBe("morning-brief");
-    expect(last((await runProactive("tpl-brief", options())).lines)).toEqual({ wakeAgent: false, reason: "done-today" });
+    expect(last((await runAllowedProactive("tpl-brief", options())).lines)).toEqual({ wakeAgent: false, reason: "done-today" });
     rmSync(stateFile());
     // The brief template inherits the brief's default window.
-    expect(last((await runProactive("tpl-brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
+    expect(last((await runAllowedProactive("tpl-brief", options({ now: () => AFTERNOON }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
     settings({ "tpl-brief": { window: "14:00-16:00" } });
-    expect((await runProactive("tpl-brief", options({ now: () => AFTERNOON }))).woke).toBe(true);
-    const digest = await runProactive("tpl-digest-preview", options({ now: () => AFTERNOON }));
+    expect((await runAllowedProactive("tpl-brief", options({ now: () => AFTERNOON }))).woke).toBe(true);
+    const digest = await runAllowedProactive("tpl-digest-preview", options({ now: () => AFTERNOON }));
     expect(JSON.parse(digest.lines.slice(0, -1).join("\n")).job).toBe("opportunity-drop");
     expect(state()[RUNS_KEY]).toEqual({ "tpl-brief": DATE, "tpl-digest-preview": DATE });
   });
@@ -237,14 +238,14 @@ describe("the template actions", () => {
     mkdirSync(join(home, "av-events", "proactive"), { recursive: true });
     writeFileSync(stagePath(home), '{"v":1,"from":"the real evening job"}');
     let listed = 0;
-    const result = await runProactive("tpl-evening-ask", options({ now: () => AFTERNOON, accepted: async () => (listed++, []) }));
+    const result = await runAllowedProactive("tpl-evening-ask", options({ now: () => AFTERNOON, accepted: async () => (listed++, []) }));
     expect(result.woke).toBe(true);
     expect(result.detail).toBe("outcome-ask-template-job");
     expect(listed).toBe(0);
     expect(readFileSync(stagePath(home), "utf8")).toBe('{"v":1,"from":"the real evening job"}');
     expect(state()[RUNS_KEY]).toEqual({ "tpl-evening-ask": DATE });
     // The installer's evening job still clears a stale stage, as on rc13.
-    await runProactive("evening", options({ now: () => AFTERNOON, accepted: async () => [] }));
+    await runAllowedProactive("evening", options({ now: () => AFTERNOON, accepted: async () => [] }));
     expect(existsSync(stagePath(home))).toBe(false);
   });
 });
@@ -255,7 +256,7 @@ describe("the preview: team tenants only, nothing written that the real run read
       if (value === undefined) delete process.env.AV_TEAM_TENANT;
       else process.env.AV_TEAM_TENANT = value;
       let built = 0;
-      const result = await runProactive("brief", options({ preview: true, buildContext: async () => (built++, context()) }));
+      const result = await runAllowedProactive("brief", options({ preview: true, buildContext: async () => (built++, context()) }));
       expect({ value, line: last(result.lines), built }).toEqual({ value, line: { wakeAgent: false, reason: "preview-refused" }, built: 0 });
     }
     expect(existsSync(stateFile())).toBe(false);
@@ -264,10 +265,10 @@ describe("the preview: team tenants only, nothing written that the real run read
 
   test("a team tenant's preview ignores the window and the day mark and leaves the state byte for byte", async () => {
     process.env.AV_TEAM_TENANT = "1";
-    expect((await runProactive("brief", options())).woke).toBe(true);
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
     const before = readFileSync(stateFile(), "utf8");
     // Outside the window, and the day already done.
-    const preview = await runProactive("brief", options({ now: () => AFTERNOON, preview: true }));
+    const preview = await runAllowedProactive("brief", options({ now: () => AFTERNOON, preview: true }));
     expect(preview.woke).toBe(true);
     expect(JSON.parse(preview.lines.slice(0, -1).join("\n")).job).toBe("morning-brief");
     expect(readFileSync(stateFile(), "utf8")).toBe(before);
@@ -277,11 +278,11 @@ describe("the preview: team tenants only, nothing written that the real run read
   test("a preview before the real run consumes nothing: the real run still delivers that day", async () => {
     process.env.AV_TEAM_TENANT = "1";
     for (const action of ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "tpl-brief", "tpl-digest-preview", "tpl-evening-ask"] as const) {
-      expect({ action, woke: (await runProactive(action, options({ preview: true }))).woke }).toEqual({ action, woke: true });
+      expect({ action, woke: (await runAllowedProactive(action, options({ preview: true }))).woke }).toEqual({ action, woke: true });
     }
     expect(existsSync(stateFile())).toBe(false);
-    expect((await runProactive("brief", options())).woke).toBe(true);
-    expect((await runProactive("drop-midday", options())).woke).toBe(true);
+    expect((await runAllowedProactive("brief", options())).woke).toBe(true);
+    expect((await runAllowedProactive("drop-midday", options())).woke).toBe(true);
     expect(state()[RUNS_KEY]).toEqual({ brief: DATE, "drop-midday": DATE });
   });
 
@@ -298,7 +299,7 @@ describe("the preview: team tenants only, nothing written that the real run read
       writeFileSync(path!, JSON.stringify({ deliveredToday: { date: DATE, ids: ["op0", "op2"] } }));
       return { opportunity: card("Arjun", "op2") };
     };
-    const result = await runProactive("drop-midday", options({ preview: true, drop: drop as ProactiveOptions["drop"] }));
+    const result = await runAllowedProactive("drop-midday", options({ preview: true, drop: drop as ProactiveOptions["drop"] }));
     expect(result.woke).toBe(true);
     expect(seen).not.toBe(stateFile());
     expect(seen.startsWith(join(home, "av-events", "proactive", "preview-"))).toBe(true);
@@ -312,11 +313,11 @@ describe("the preview: team tenants only, nothing written that the real run read
     process.env.AV_TEAM_TENANT = "1";
     const lock = lockPathFor(stateFile());
     writeFileSync(lock, JSON.stringify({ token: "held-by-a-real-run", pid: 1, at: Date.now() }));
-    const result = await runProactive("negotiation", options({ preview: true, lock: { waitMs: 1, pollMs: 1 } }));
+    const result = await runAllowedProactive("negotiation", options({ preview: true, lock: { waitMs: 1, pollMs: 1 } }));
     expect(result.woke).toBe(true);
     expect(JSON.parse(readFileSync(lock, "utf8")).token).toBe("held-by-a-real-run");
     // The real run, by contrast, waits on it.
-    expect(last((await runProactive("negotiation", options({ lock: { waitMs: 1, pollMs: 1 } }))).lines)).toEqual({ wakeAgent: false, reason: "state-locked" });
+    expect(last((await runAllowedProactive("negotiation", options({ lock: { waitMs: 1, pollMs: 1 } }))).lines)).toEqual({ wakeAgent: false, reason: "state-locked" });
   });
 
   test("an evening preview leaves a real run's outcome-ask stage byte for byte (only the real evening job clears it)", async () => {
@@ -326,7 +327,7 @@ describe("the preview: team tenants only, nothing written that the real run read
     const stage = '{"v":1,"opportunityId":"0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d","from":"the real evening job, its model still writing"}\n';
     writeFileSync(stagePath(home), stage);
     for (const accepted of [async () => [], async () => [{ ...card("Arjun Mehta", "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"), status: "accepted" }]]) {
-      const result = await runProactive("evening", options({ now: () => AFTERNOON, preview: true, accepted: accepted as ProactiveOptions["accepted"] }));
+      const result = await runAllowedProactive("evening", options({ now: () => AFTERNOON, preview: true, accepted: accepted as ProactiveOptions["accepted"] }));
       expect(result.preview).toBe(true);
       expect(readFileSync(stagePath(home), "utf8")).toBe(stage);
     }
@@ -341,7 +342,7 @@ describe("the preview: team tenants only, nothing written that the real run read
     writeFileSync(stateFile(), JSON.stringify({ negotiationSummary: { reportedCompletedIds: [OPP], announcedOn: { [OPP]: "2026-10-09" } } }));
     const before = readFileSync(stateFile(), "utf8");
     const accepted = async () => [{ ...card("Arjun Mehta", OPP), status: "accepted" }];
-    const result = await runProactive("evening", options({ now: () => AFTERNOON, preview: true, accepted }));
+    const result = await runAllowedProactive("evening", options({ now: () => AFTERNOON, preview: true, accepted }));
     expect(JSON.parse(result.lines.slice(0, -1).join("\n")).outcomeQuestion).toBe("Did you and Arjun Mehta meet? Reply met, not useful, or missed.");
     expect(existsSync(stagePath(home))).toBe(false);
     expect(readFileSync(stateFile(), "utf8")).toBe(before);
@@ -357,7 +358,7 @@ describe("the preview: team tenants only, nothing written that the real run read
       await new Promise<void>((resolve) => { release = resolve; });
       return { opportunity: card("Arjun", "op2") };
     };
-    const running = runProactive("drop-midday", options({ preview: true, drop: drop as ProactiveOptions["drop"] }));
+    const running = runAllowedProactive("drop-midday", options({ preview: true, drop: drop as ProactiveOptions["drop"] }));
     await inside;
     const copies = () => readdirSync(join(home, "av-events", "proactive")).filter((name) => name.startsWith("preview-"));
     expect(copies()).toHaveLength(1);
@@ -369,6 +370,7 @@ describe("the preview: team tenants only, nothing written that the real run read
   });
 
   test("main's hard deadline, run in a child process: the trigger-timeout line, and the preview's state copy is gone", async () => {
+    allowPostVillageFixture(home, "opportunity_midday");
     const proc = Bun.spawn([process.execPath, DEADLINE_CHILD, "drop-midday", home], {
       env: { ...process.env, AV_TEAM_TENANT: "1", HERMES_HOME: home },
       stdout: "pipe",
@@ -390,13 +392,13 @@ describe("the preview: team tenants only, nothing written that the real run read
     mkdirSync(join(dir, "preview-Recent"), { recursive: true });
     const old = new Date(Date.now() - PREVIEW_MAX_AGE_MS - 60_000);
     utimesSync(join(dir, "preview-Killed"), old, old);
-    expect((await runProactive("negotiation", options({ preview: true }))).woke).toBe(true);
+    expect((await runAllowedProactive("negotiation", options({ preview: true }))).woke).toBe(true);
     expect(readdirSync(dir).filter((name) => name.startsWith("preview-")).sort()).toEqual(["preview-Recent"]);
   });
 
   test("the prefetch has no preview", async () => {
     process.env.AV_TEAM_TENANT = "1";
-    const result = await runProactive("prefetch", options({ preview: true }));
+    const result = await runAllowedProactive("prefetch", options({ preview: true }));
     expect(result).toMatchObject({ exitCode: 0, woke: false, reason: "preview-not-agent-job" });
   });
 });
@@ -464,7 +466,7 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
     let picked = 0;
     const pending = (async () => (picked++, { silent: true, reason: "nothing-new" })) as ProactiveOptions["pending"];
     for (const utc of ["2026-10-12T02:29:00Z", "2026-10-12T16:30:00Z", "2026-10-12T20:00:00Z"]) { // 07:59, 22:00, 01:30 IST
-      const result = await runProactive("pending", options({ now: () => new Date(utc), pending }));
+      const result = await runAllowedProactive("pending", options({ now: () => new Date(utc), pending }));
       expect({ utc, line: last(result.lines) }).toEqual({ utc, line: { wakeAgent: false, reason: "outside-window" } });
     }
     expect(picked).toBe(0);
@@ -475,16 +477,16 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
     let cards = [pendingCard(1, "Asha")];
     const pending = realPick(() => cards);
     // Seeded on the evening before (21:20 IST).
-    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-11T15:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
+    expect(last((await runAllowedProactive("pending", options({ now: () => new Date("2026-10-11T15:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
     cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal")];
     // 23:20 and 07:20 IST: quiet hours; nothing written for the new card.
     for (const utc of ["2026-10-11T17:50:00Z", "2026-10-12T01:50:00Z"]) {
-      expect(last((await runProactive("pending", options({ now: () => new Date(utc), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
+      expect(last((await runAllowedProactive("pending", options({ now: () => new Date(utc), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
     }
     expect(Object.keys(state().pendingAlerts)).toEqual([PENDING_ID(1)]);
     // 08:20 IST: alerted.
     const at = new Date("2026-10-12T02:50:00Z");
-    const woke = await runProactive("pending", options({ now: () => at, pending }));
+    const woke = await runAllowedProactive("pending", options({ now: () => at, pending }));
     expect(woke.woke).toBe(true);
     const view = JSON.parse(woke.lines.slice(0, -1).join("\n"));
     expect(view).toEqual({
@@ -508,13 +510,13 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
     const calls: Array<{ stateFile?: string; now?: Date }> = [];
     const pending = realPick(() => cards, calls);
     writeFileSync(stateFile(), JSON.stringify({ [RUNS_KEY]: { pending: DATE, brief: DATE } }));
-    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
+    expect(last((await runAllowedProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
     cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal")];
-    expect((await runProactive("pending", options({ now: () => new Date("2026-10-12T03:50:00Z"), pending }))).woke).toBe(true); // 09:20 IST
+    expect((await runAllowedProactive("pending", options({ now: () => new Date("2026-10-12T03:50:00Z"), pending }))).woke).toBe(true); // 09:20 IST
     // A repeat poll sends nothing.
-    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-12T04:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
+    expect(last((await runAllowedProactive("pending", options({ now: () => new Date("2026-10-12T04:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
     cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal"), pendingCard(3, "Chen")];
-    expect((await runProactive("pending", options({ now: () => AFTERNOON, pending }))).woke).toBe(true);
+    expect((await runAllowedProactive("pending", options({ now: () => AFTERNOON, pending }))).woke).toBe(true);
     // The day marks are as they were: the pending alert neither reads nor writes one.
     expect(state()[RUNS_KEY]).toEqual({ pending: DATE, brief: DATE });
     expect(calls.map((call) => call.stateFile)).toEqual(Array(4).fill(stateFile()));
@@ -524,17 +526,17 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
   test("its own window from the settings file, like any job (J2)", async () => {
     settings({ pending: { window: "09:00-18:00" } });
     const pending = (async () => ({ silent: true, reason: "nothing-new" })) as ProactiveOptions["pending"];
-    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 08:00 IST
-    expect(last((await runProactive("pending", options({ now: () => AFTERNOON, pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
+    expect(last((await runAllowedProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 08:00 IST
+    expect(last((await runAllowedProactive("pending", options({ now: () => AFTERNOON, pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
     // A malformed entry falls back to its default window, never to all day.
     settings({ pending: { window: "9-18" } });
-    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-12T17:00:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 22:30 IST
+    expect(last((await runAllowedProactive("pending", options({ now: () => new Date("2026-10-12T17:00:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 22:30 IST
     expect(runLog().at(-1)).toMatchObject({ action: "pending", settings: "invalid:window" });
   });
 
   test("a corrupt state file follows the trigger's healing rule: renamed aside, the run starts from empty and seeds silently", async () => {
     writeFileSync(stateFile(), "{not json");
-    const result = await runProactive("pending", options({ pending: realPick(() => [pendingCard(1, "Asha")]) }));
+    const result = await runAllowedProactive("pending", options({ pending: realPick(() => [pendingCard(1, "Asha")]) }));
     expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "seeded" });
     expect(result.note).toBe("state-renamed-aside");
     expect(readdirSync(join(home, "memory")).filter((name) => name.includes(".corrupt-"))).toHaveLength(1);
@@ -546,7 +548,7 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
     writeFileSync(stateFile(), before);
     const pending = (async (opts: { stateFile?: string; now?: Date }) =>
       pendingAlert({ ...opts, apiKey: "fake-key", mcpUrl: "https://index-mcp.fake.test/mcp", listOpportunities: async () => { throw new Error("mcp-unparsed"); } })) as ProactiveOptions["pending"];
-    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "index-unavailable" });
+    expect(last((await runAllowedProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "index-unavailable" });
     expect(readFileSync(stateFile(), "utf8")).toBe(before);
   });
 
@@ -554,7 +556,7 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
     process.env.AV_TEAM_TENANT = "1";
     const before = JSON.stringify({ pendingAlerts: {} });
     writeFileSync(stateFile(), before);
-    const result = await runProactive("pending", options({ preview: true, now: () => new Date("2026-10-12T20:00:00Z"), pending: realPick(() => [pendingCard(1, "Asha")]) }));
+    const result = await runAllowedProactive("pending", options({ preview: true, now: () => new Date("2026-10-12T20:00:00Z"), pending: realPick(() => [pendingCard(1, "Asha")]) }));
     expect(result.woke).toBe(true);
     expect(readFileSync(stateFile(), "utf8")).toBe(before);
   });

@@ -26,6 +26,8 @@ class ManagedPairsTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
+        (self.home / "av-events").mkdir()
+        (self.home / "av-events/post-village-policy.json").write_text(json.dumps({"version": 1, "enabled": ["zzz_pairs"]}))
         (self.home / "mini-apps.json").write_text(json.dumps({"version": 1, "apps": [
             {"id": "zzzbot", **mini.ZZZBOT}, BRIDGE]}))
         self.pair = {"roomId": "room_a", "requestId": "req_a", "consentEpoch": 1,
@@ -33,6 +35,13 @@ class ManagedPairsTest(unittest.TestCase):
         self.items = []
         self.own = False
         self.own_ids = set()
+
+    def test_post_village_off_prevents_pair_polling_before_transport(self):
+        from unittest.mock import Mock
+        (self.home / "av-events/post-village-policy.json").unlink()
+        transport = Mock(side_effect=AssertionError("unexpected fetch"))
+        self.assertIsNone(managed.poll(self.home, transport, {}, lambda *_args: True))
+        transport.assert_not_called()
 
     def transport(self, _config, payload):
         operation = payload["operation"]

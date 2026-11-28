@@ -1,6 +1,6 @@
 ---
 name: edgeos
-description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event (all through the skill's own scripts, never a curl), search the attendee directory and read the person's own Edge City profile through the Agent Village control plane (the app reads EdgeOS with the person's own Edge City sign-in; the profile is read only). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
+description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event (all through the skill's own scripts, never a curl), search the attendee directory and read the person's own Edge City profile through the Agent Village control plane (the app reads EdgeOS with the person's own Edge City sign-in; the profile is read only). The configured popup id is `$AV_POPUP_ID`; Edge City India ran Oct 11 – Nov 1 2026 and has ended. Verify returned dates before describing current availability. Agents cannot create or edit village events.
 version: 1.8.0
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
@@ -12,7 +12,7 @@ required_environment_variables:
   - name: TENANT_ID
     required_for: directory, own profile (this agent's tenant on the control plane)
   - name: AV_POPUP_ID
-    required_for: events, venues, directory (the current village's popup id)
+    required_for: events, venues, directory (the configured popup id)
 metadata:
   openclaw:
     requires:
@@ -24,7 +24,7 @@ metadata:
 
 You have access to the **EdgeOS** popup-village platform. You reach it **only through this skill's scripts** (`bun skills/edgeos/scripts/…`), never with `curl`, `wget` or code of your own: each script reads the key, the popup id and the EdgeOS address (`$EDGEOS_API_BASE`, default `https://api.edgeos.world/api/v1`) itself and refuses any other host. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
 
-**The current village's popup id is `$AV_POPUP_ID`.** The current event is **Edge City India** (Mandrem, Goa, October 11 to November 1, 2026). The scripts use it for every event list, venue and directory call themselves; you never type it in. When a script exits 2 saying `AV_POPUP_ID is not set`, tell the person the village schedule isn't connected to their agent yet and point them to the Edge City portal or the organisers. Never substitute the previous popup's id (the `edge-esmeralda` skill carries Edge Esmeralda 2026's constant) and present the results as India; use that id only when the person explicitly asks about that previous popup.
+**The configured popup id is `$AV_POPUP_ID`.** Edge City India ran in Mandrem, Goa from October 11 to November 1, 2026 and has ended. A configured id is not proof a village is ongoing: verify returned event dates and never carry historical schedules, venues or attendance forward as current availability. The scripts use it for every event list, venue and directory call themselves; you never type it in. When a script exits 2 saying `AV_POPUP_ID is not set`, tell the person the village schedule isn't connected to their agent yet and point them to the Edge City portal or the organisers. Never substitute another popup's id or infer it from historical guides.
 
 ## 0. What you can and cannot do
 
@@ -78,7 +78,7 @@ Each event line ends with `link <url>`, its portal page: when asked for an event
 
 **The EdgeOS script** (`bun skills/edgeos/scripts/edgeos.ts <verb> …`) reads the key and the popup itself and makes one EdgeOS call per run (an `rsvp` without `--occurrence` reads the event first, §6), printing EdgeOS's JSON answer (exit codes in §2). Replace each `{…}` in the commands below with the literal value (an id from the schedule or a list, a time as an ISO-8601 UTC instant).
 
-**Every events list is the current village's published events.** The script always sends the popup id (`$AV_POPUP_ID`) and `event_status=published`; your API key is bound to that popup, and `--popup <id>` naming any other popup answers `403` ("This API key does not have access to this popup"), so pass `--popup` only when the person asks about the previous popup. (Without a popup id, any token that is not bound to a popup ignores every filter except `search` and gets at most the 100 most recently created events across every popup it can see, which is why the script never leaves it out.)
+**Every events list is the configured popup's published events; published does not mean happening now.** The script always sends the popup id (`$AV_POPUP_ID`) and `event_status=published`; your API key is bound to that popup, and `--popup <id>` naming any other popup answers `403` ("This API key does not have access to this popup"), so pass `--popup` only for an explicitly requested popup with a verified id. (Without a popup id, any token that is not bound to a popup ignores every filter except `search` and gets at most the 100 most recently created events across every popup it can see, which is why the script never leaves it out.)
 
 **Give every list a date window.** `--after` (required) and `--before` bound the event's start time, as literal ISO-8601 UTC instants (e.g. `2026-10-11T00:00:00Z`): compute them yourself, counting from the day in the newest message stamp, not via shell substitution. With a window, a recurring series comes back as one row per occurrence inside it; without `--before` the list runs to every future event, however far ahead. Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
@@ -170,7 +170,7 @@ This lists the participants of **one** event, the caller included if they RSVPed
 
 ## 7. Venues
 
-**List active venues for a popup (the script sends the current village's popup id, `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
+**List active venues for a popup (the script sends the configured popup id, `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
 ```sh
 bun skills/edgeos/scripts/edgeos.ts venues --limit 100
 ```
@@ -210,7 +210,7 @@ bun skills/edgeos/scripts/directory.ts --limit 100 --skip 100
 
 Call `terminal` with exactly `command` (plus `workdir` set to your absolute `HERMES_HOME` directory) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
-`--search` (1-120 characters) matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, list the directory and filter the rows yourself. Leave `--search` out to list everyone. `--hide-empty` sends `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. The script uses the current village (`$AV_POPUP_ID`); pass `--popup <id>` only when the person asks about the previous popup (the `edge-esmeralda` skill's id). Each line is one attendee, `hidden` where the attendee hid a field; `--json` prints the rows instead, as `{ results: Attendee[], paging: { offset, limit, total } }`.
+`--search` (1-120 characters) matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, list the directory and filter the rows yourself. Leave `--search` out to list everyone. `--hide-empty` sends `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. The script uses the configured popup (`$AV_POPUP_ID`); pass `--popup <id>` only for an explicitly requested popup with a verified id; never guess one from past-village material. Each line is one attendee, `hidden` where the attendee hid a field; `--json` prints the rows instead, as `{ results: Attendee[], paging: { offset, limit, total } }`.
 
 **Pagination:** `--skip` (up to 5000) + `--limit` (default 20, at most 100). Fetch again with a larger `--skip` only while `skip + results < total` (the last line says `more: --skip N`). There is no week, family or other per-popup filter. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed), newest first.
 

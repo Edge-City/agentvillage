@@ -750,7 +750,7 @@ describe("the AGENTS.md welcome gate", () => {
     const paragraphs = golden.unreachable.split("\n\n");
     expect(paragraphs).toHaveLength(7);
     expect(copy).toBe([paragraphs[0], paragraphs[1], paragraphs[5]].join("\n\n"));
-    expect(copy).toContain("Welcome to Edge City India");
+    expect(copy).toContain("Welcome to Agent Village");
     expect(copy).toContain("Your intents\nI can't load your intents right now.");
     // The one substitution is named by a phrase the copy holds exactly once, stated once in the welcome gate;
     // the name gate points at it (B-49: the sentence used to be repeated in both gates).
@@ -767,10 +767,10 @@ describe("the AGENTS.md welcome gate", () => {
   test("the agent never writes an intent as part of the welcome; the script's seed (DATA-412) is the only write, and only list, create and pause", () => {
     const flat = gate.replace(/\s+/g, " ");
     expect(flat).toContain(
-      "The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call an intent tool or record an intention as part of the welcome; later turns capture new wants as the \"Intentions\" red line says.",
+      "First-welcome automatic seeding is paused by the post-village operator setting. Historical signup answers do not prove a current want. Ask which intent is current; publish fresh confirmed words only through the ordinary Intentions rules. Never re-enable automatic seeding as part of the welcome.",
     );
     // B-49: the read sentence points at the seed sentence below instead of restating it (the script, once per box, never you).
-    expect(flat).toContain("reads the resident's own intents from Index (on the first welcome, after seeding them as below), and records the welcome as sent.");
+    expect(flat).toContain("reads the resident's own intents from Index (on the first welcome, without turning historical signup answers into current intents), and records the welcome as sent.");
     expect(flat).not.toContain("it never creates or changes one");
     // The gate names no intent tool: AGENTS.md speaks of them only on its one record_intention line (av-events test_index_contract.py, test_record_intention.py).
     expect(gate).not.toMatch(/create_intent|record_intention/);

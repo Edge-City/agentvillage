@@ -16,8 +16,8 @@
  *   - `stdout` and `stderr` as `main` wrote them.
  *
  * fixtures/welcome-seed-tag-off.json holds these records as main 581056b7
- * printed them, made by running these scenarios against that commit's
- * welcome.ts before the seed tag existed. Made-up lines and ids only.
+ * printed them, with only stdout updated for A79's past-village copy. Requests,
+ * memory files and stderr retain the original behavior baseline. Made-up lines and ids only.
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,7 +154,7 @@ function filesUnder(root: string, dir: string, out: Record<string, string>): voi
  * the environment) and `dotenv` written to `$HERMES_HOME/.env` when given.
  * Returns what the run left. Restores the environment; removes its home.
  */
-export async function runScenario(W: WelcomeModule, scenario: Scenario, vars: Record<string, string> = {}, dotenv?: string): Promise<Record_> {
+export async function runScenario(W: WelcomeModule, scenario: Scenario, vars: Record<string, string> = {}, dotenv?: string, operatorOptIn = true): Promise<Record_> {
   const saved: Record<string, string | undefined> = {};
   for (const key of SCENARIO_VARS) {
     saved[key] = process.env[key];
@@ -162,6 +162,8 @@ export async function runScenario(W: WelcomeModule, scenario: Scenario, vars: Re
   }
   const home = mkdtempSync(join(tmpdir(), "av-welcome-seed-tag-"));
   try {
+    mkdirSync(join(home, "av-events"), { recursive: true });
+    if (operatorOptIn) writeFileSync(join(home, "av-events/post-village-policy.json"), JSON.stringify({ version: 1, enabled: ["welcome_seed"] }));
     if (scenario.lines) writeFileSync(join(home, "USER.md"), profile(scenario.lines));
     for (const [path, body] of Object.entries(scenario.files ?? {})) {
       mkdirSync(dirname(join(home, path)), { recursive: true });

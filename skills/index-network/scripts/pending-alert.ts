@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { postVillageRuntimeAllowed as postVillageAllowed } from "./post-village-policy";
 /**
  * The pending-opportunity alert (DATA-430, overlay half): one Telegram line,
  * within the hour, for each opportunity that newly turned pending for the
@@ -324,6 +325,8 @@ function readStateObject(path: string): Record<string, unknown> {
 }
 
 export async function pendingAlert(options: {
+  /** Tenant policy home; the trigger passes its existing home seam, including previews. */
+  home?: string;
   stateFile?: string;
   now?: Date;
   apiKey?: string;
@@ -333,6 +336,7 @@ export async function pendingAlert(options: {
   readOnly?: boolean;
   max?: number;
 } = {}): Promise<PendingAlertResult | PendingSilentResult> {
+  if (!postVillageAllowed(options.home ?? hermesHome(), "pending_alert")) return { silent: true, reason: "post-village-disabled" };
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (!apiKey) return { silent: true, reason: "no-api-key" };
@@ -352,6 +356,7 @@ export async function pendingAlert(options: {
   const nowIso = (options.now ?? new Date()).toISOString();
   const before = state[PENDING_ALERTS_KEY];
   const plan = planPendingAlerts(readPendingLedger(state), read.cards, read.listing, nowIso, options.max);
+  if (!postVillageAllowed(options.home ?? hermesHome(), "pending_alert")) return { silent: true, reason: "post-village-disabled" };
   if (!options.readOnly && JSON.stringify(before) !== JSON.stringify(plan.ledger)) {
     writeStateFile(stateFile, { ...state, [PENDING_ALERTS_KEY]: plan.ledger });
   }

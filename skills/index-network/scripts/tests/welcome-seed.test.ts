@@ -197,6 +197,8 @@ const saved: Record<string, string | undefined> = {};
 let home: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-welcome-seed-"));
+  mkdirSync(join(home, "av-events"), { recursive: true });
+  writeFileSync(join(home, "av-events/post-village-policy.json"), JSON.stringify({ version: 1, enabled: ["welcome_seed"] }));
   for (const key of VARS) {
     saved[key] = process.env[key];
     delete process.env[key];
@@ -365,7 +367,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: KEPT[0].text, sourceType: SEED_SOURCE_TYPE }]);
     expect(text).toBe(golden.seededOne);
     expect(text).toContain(`\n${SEEDED_COPY_ONE.publish.lead}\n\n- ${KEPT[0].text}\n\n`);
-    expect(text).toContain(`people and events. ${SEEDED_COPY_ONE.publish.close}\n\n`);
+    expect(text).toContain(`Is this intent still current for you? ${SEEDED_COPY_ONE.publish.close}\n\n`);
     expect(text).not.toMatch(/these signals|any of them/);
     expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 });
   });
@@ -1148,7 +1150,7 @@ describe("the seeded texts", () => {
       lead: "Based on what you shared at signup, these intents are paused:",
       close: "Tell me when you'd like to publish, change, or drop one, or add a new intent.",
     });
-    expect(welcomeText("Edge", { kind: "listed", titles: ["One"], seeded: "publish" }, INTENTS_URL)).toContain("use this to look");
+    expect(welcomeText("Edge", { kind: "listed", titles: ["One"], seeded: "publish" }, INTENTS_URL)).toContain("Is this intent still current for you?");
   });
 
   test("DATA-416 Q3: exactly one listed title takes the singular sentences in both modes; two or more the plural ones", () => {
@@ -1166,12 +1168,12 @@ describe("the seeded texts", () => {
       expect(one).toContain(
         mode === "paused"
           ? `This intent will stay paused until you tell me to publish it.\n\n${SEEDED_COPY_ONE[mode].close}`
-          : `I'll use this to look for relevant people and events. ${SEEDED_COPY_ONE[mode].close}`,
+          : `Is this intent still current for you? ${SEEDED_COPY_ONE[mode].close}`,
       );
       for (const titles of [["One want", "Two want"], ["One want", "Two want", "Three want"], ["One want", "Two want", "Three want", "Four want"]]) {
         const parts = welcomeText("Mira", { kind: "listed", titles, seeded: mode }, INTENTS_URL).split("\n\n");
         expect(parts.join("\n\n")).toContain(`${SEEDED_COPY[mode].lead}\n\n- One want`);
-        expect(parts.join("\n\n")).toContain(mode === "paused" ? SEEDED_COPY[mode].close : `people and events. ${SEEDED_COPY[mode].close}`);
+        expect(parts.join("\n\n")).toContain(mode === "paused" ? SEEDED_COPY[mode].close : `Which of these are still current for you? ${SEEDED_COPY[mode].close}`);
       }
     }
   });

@@ -306,7 +306,7 @@ def signup_preview(body):
              show("interests", "Interests"),
              show("about", "One line about you"),
              show("availability", "When you are free"),
-             show("area", "Area in Goa"),
+             show("area", "Area"),
              show("telegram", "Telegram username (shown only to a match)"),
              show("agentProfile", "Profile your agent dates with")]
     if "telegram" in body:

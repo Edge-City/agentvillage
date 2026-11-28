@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "../../skills/index-network/scripts/tests/post-village-fixtures";
 /**
  * DATA-376: the pause script (skills/index-network/scripts/pause-job.ts) end
  * to end against the stand-in Hermes that keeps jobs.json (fake_hermes.ts),
@@ -59,6 +60,14 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-pause-job-"));
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.HERMES_HOME = home;
+  // These resident-control fixtures start from an operator-allowed installation;
+  // OFF/stale-gate refusal is separately exercised by post_village_enable.test.ts.
+  allowPostVillageFixture(home, "daily_digest", "opportunity_midday", "opportunity_evening", "negotiation_summary", "pending_alert");
+  for (const file of ["post-village-policy.ts", "job-holds.ts", "post-village-runnable.ts", "post-village-runnable-pins.json", "proactive.ts", "send-daily-brief.ts", "drop-opportunity.ts", "pending-alert.ts", "summarize-negotiations.ts"]) {
+    const relative = join("index-network/scripts", file);
+    mkdirSync(dirname(join(home, "skills", relative)), { recursive: true });
+    copyFileSync(join(REPO_SKILLS, relative), join(home, "skills", relative));
+  }
   process.env.INDEX_API_KEY = "ix_pause_job_seed";
   bin = join(home, "hermes");
   writeFileSync(bin, `#!/usr/bin/env bash\nexec "${process.execPath}" "${FAKE}" "$@"\n`);
@@ -88,6 +97,7 @@ afterEach(() => {
  * script's, so the call log starts after it.
  */
 function roll(): void {
+  const beforeIds = new Set(allJobs().map((job) => job.id));
   const log = console.log;
   const warn = console.warn;
   console.log = () => {};
@@ -98,6 +108,10 @@ function roll(): void {
     console.log = log;
     console.warn = warn;
   }
+  // Reconciliation deliberately creates paused now. Resident control tests begin
+  // with already-enabled eligible jobs, as before, rather than testing creation.
+  const defaults = new Map(DIGEST_CRON_SPECS.map((spec) => [spec.name, spec.name !== "Edge — pending opportunity" || process.env.PENDING_ALERT_ENABLED === "true"]));
+  editJobs((all) => { for (const job of all) if (!beforeIds.has(job.id) && defaults.get(job.name)) Object.assign(job, { enabled: true, state: "scheduled", paused_at: null }); });
   rmSync(join(home, "hermes-calls.jsonl"), { force: true });
 }
 

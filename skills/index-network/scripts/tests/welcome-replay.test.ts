@@ -1,3 +1,5 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
+import { postVillagePolicyPath } from "../post-village-policy";
 /**
  * DATA-416 W4 (was DATA-412): an end-to-end replay of the welcome, every
  * branch, through the real script as a subprocess.
@@ -172,6 +174,8 @@ function selected(texts: string[]): Intention[] {
 let home: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-welcome-replay-"));
+  // These legacy seed/reseed positives explicitly opt into the one welcome key.
+  allowPostVillageFixture(home, "welcome_seed");
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
@@ -1175,3 +1179,17 @@ describe("once per box: a seed marker that exists stops every later create, acro
     CASE_TIMEOUT_MS,
   );
 });
+
+
+test("post-village OFF replay lists only and writes no seed or pause claim", async () => {
+  rmSync(postVillagePolicyPath(home)); writeProfile("Mira"); writeUserMd([MEMORY, RUST, RAISE]);
+  for (const mode of ["publish", "paused"]) {
+    resetStub(); const before = snapshot();
+    const result = await draft("nothing", { env: { AV_WELCOME_SEED_MODE: mode } });
+    expect(result.code).toBe(0); expect(names(toolCalls())).toEqual(["list_intents"]);
+    expect(creates(toolCalls())).toEqual([]); expect(pauses(toolCalls())).toEqual([]);
+    expect(JSON.parse(result.stderr)).toMatchObject({ intents_seeded: 0, seed_failed: 0 });
+    expect(snapshot()).toEqual(before); expect(readOrNull(SEED_MARKER)).toBeNull(); expect(readOrNull(MARKER)).toBeNull();
+  }
+  expectDraftWrites();
+}, CASE_TIMEOUT_MS);

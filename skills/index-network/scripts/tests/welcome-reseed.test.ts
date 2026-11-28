@@ -1,3 +1,5 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
+import { postVillagePolicyPath } from "../post-village-policy";
 /**
  * The welcome's seed lines and `--reseed` (SEED-REJECT 3b, Carter's ruling
  * (4), 12 Oct 2026), since the direct create (lead's ruling, 13 Oct 06:03Z):
@@ -58,6 +60,8 @@ const saved: Record<string, string | undefined> = {};
 const VARS = ["INDEX_API_KEY", "INDEX_MCP_URL", "INDEX_API_URL", "HERMES_HOME", "AV_WELCOME_SEED_MODE", "AV_SEED_TRAILER_V2", "AV_CONNECTIONS_URL"];
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-welcome-reseed-"));
+  // These legacy seed/reseed positives explicitly opt into the one welcome key.
+  allowPostVillageFixture(home, "welcome_seed");
   for (const key of VARS) {
     saved[key] = process.env[key];
     delete process.env[key];
@@ -628,4 +632,18 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
       expect(reseedMarkers()).toHaveLength(2);
     });
   });
+});
+
+
+test("post-village OFF reseed and dry-run make no Index call or seed/reseed claim", async () => {
+  writeLines(LINES); rmSync(postVillagePolicyPath(home));
+  for (const argv of [[RESEED_FLAG], [RESEED_FLAG, DRY_RUN_FLAG]]) {
+    const index = fakeIndex(); const out = await run(index, argv);
+    expect(out.text).toBe(""); expect(index.fake.calls).toEqual([]); expect(index.urls).toEqual([]);
+    expect(out.branch).toMatchObject({ intents_seeded: 0, seed_failed: 0, seed_codes: ["post-village-disabled"] });
+    expect(existsSync(join(home, WELCOME_RESEED_LOCK))).toBe(false);
+    expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
+    expect(existsSync(join(home, WELCOME_STATE_FILE))).toBe(false);
+    expect(existsSync(join(home, "memory"))).toBe(false);
+  }
 });

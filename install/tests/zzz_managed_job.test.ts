@@ -78,7 +78,7 @@ test("installed ZZZ projection owns one script-only Hermes job; revocation remov
   expect(stage(projection).status).toBe(0);
   reconcileZzzManagedJob(home, true);
   expect(jobs()).toHaveLength(1);
-  expect(jobs()[0]).toMatchObject({ name: ZZZ_JOB_NAME, script: ZZZ_JOB_SCRIPT, enabled: true,
+  expect(jobs()[0]).toMatchObject({ name: ZZZ_JOB_NAME, script: ZZZ_JOB_SCRIPT, enabled: false,
     enabled_toolsets: [...ZZZ_JOB_TOOLSETS] });
   expect(jobs()[0].no_agent).toBe(true);
   expect(jobs()[0].workdir).toBeNull();
@@ -86,24 +86,18 @@ test("installed ZZZ projection owns one script-only Hermes job; revocation remov
   reconcileZzzManagedJob(home, true);
   expect(jobs()).toHaveLength(1);
   expect(jobs()[0].id).toBe(id);
-  // Installer repairs a stale, overbroad record before another run.
-  const widened = jobs();
-  widened[0].enabled_toolsets = ["all"];
-  writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs: widened }));
-  reconcileZzzManagedJob(home, true);
-  expect(jobs()[0].enabled_toolsets).toEqual([...ZZZ_JOB_TOOLSETS]);
-  expect(jobs()[0].id).not.toBe(id);
-  // An old agent job has already entered an unsafe runtime. Rotate its ID,
-  // leave no old shell entrypoint, and keep the new record script-only.
-  const previous = jobs()[0].id;
-  const legacy = jobs();
-  legacy[0] = { ...legacy[0], script: "agentvillage_zzz_pairs.sh", no_agent: false, workdir: home };
-  writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs: legacy }));
-  writeFileSync(join(home, "scripts", "agentvillage_zzz_pairs.sh"), SHIPPED_LEGACY_SHIM);
-  reconcileZzzManagedJob(home, true);
-  expect(jobs()[0].id).not.toBe(previous);
-  expect(jobs()[0]).toMatchObject({ script: ZZZ_JOB_SCRIPT, no_agent: true });
-  expect(existsSync(join(home, "scripts", "agentvillage_zzz_pairs.sh"))).toBe(false);
+  // Unsupported existing shapes fail paused in place; no destructive upgrade or ID rotation.
+  const safe = jobs()[0];
+  const widened = [{ ...safe, enabled: true, enabled_toolsets: ["all"] }];
+  writeFileSync(join(home, "cron/jobs.json"), JSON.stringify({ jobs: widened }));
+  expect(() => reconcileZzzManagedJob(home, true)).toThrow();
+  expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: false, enabled_toolsets: ["all"] });
+  const legacy = [{ ...safe, enabled: true, script: "agentvillage_zzz_pairs.sh", no_agent: false, workdir: home }];
+  writeFileSync(join(home, "cron/jobs.json"), JSON.stringify({ jobs: legacy }));
+  writeFileSync(join(home, "scripts/agentvillage_zzz_pairs.sh"), SHIPPED_LEGACY_SHIM);
+  expect(() => reconcileZzzManagedJob(home, true)).toThrow();
+  expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: false, script: "agentvillage_zzz_pairs.sh", no_agent: false, workdir: home });
+  expect(existsSync(join(home, "scripts/agentvillage_zzz_pairs.sh"))).toBe(true);
   mkdirSync(join(home, "zzzbot"));
   writeFileSync(join(home, "zzzbot", "managed-pairs.json"), "{}");
   writeFileSync(join(home, "zzzbot", "managed-pairs.lock"), "");
@@ -330,6 +324,8 @@ function pluginParticipation(home: string): string {
 
 test("S1 (nonav L17033): a malformed mini-apps.json with the job present is OFF, and the next install run removes the job", () => {
   const { home, stage, jobs } = fakeBox();
+  // This test probes projection permission with explicit current pair opt-in, not job execution.
+  mkdirSync(join(home, "av-events")); writeFileSync(join(home, "av-events/post-village-policy.json"), '{"version":1,"enabled":["zzz_pairs"]}');
   const next: { label: string; input: unknown; status: number }[] = [
     { label: "zzzbot alone", input: alone, status: 0 },
     { label: "nothing projected", input: { version: 1, apps: [] }, status: 0 },
@@ -392,6 +388,8 @@ function HERMES_GONE(home: string) {
 
 test("review-b S3: a failed job install keeps Gold Stars and For Kicks authorised and tears down only the zzz-managed items", () => {
   const { home, stage, jobs } = fakeBox();
+  // This test probes projection permission with explicit current pair opt-in, not job execution.
+  mkdirSync(join(home, "av-events")); writeFileSync(join(home, "av-events/post-village-policy.json"), '{"version":1,"enabled":["zzz_pairs"]}');
   const before = { version: 1, apps: [gold, forkicks, zzzbot] };
   const granted = { version: 1, apps: [gold, forkicks, zzzbot, bridge] };
   const others: [string, string][] = [["gold-stars", "rolodex.search"], ["forkicks", "forkicks.menu"]];
@@ -532,7 +530,8 @@ test("review-b N3: --verify checks the job record: exactly the installer's job w
   expect(verify(projection)).toBe(0);
   const job = jobs()[0];
   const variants: [string, unknown][] = [
-    ["job gone", { jobs: [] }], ["job disabled", { jobs: [{ ...job, enabled: false }] }],
+    ["job gone", { jobs: [] }], ["job enabled while policy OFF", { jobs: [{ ...job, enabled: true }] }],
+    ["job enabled malformed", { jobs: [{ ...job, enabled: "false" }] }],
     ["toolsets widened", { jobs: [{ ...job, enabled_toolsets: ["all"] }] }], ["no_agent", { jobs: [{ ...job, no_agent: false }] }],
     ["workdir", { jobs: [{ ...job, workdir: home }] }],
     ["another script", { jobs: [{ ...job, script: "other.sh" }] }], ["duplicate", { jobs: [job, { ...job, id: "bbbbbbbbbbbb" }] }],
@@ -749,15 +748,18 @@ test("S4-r (lead L17296): every job API call finds the job's shim on disk, and a
   // The fake job API refuses to run unless the shim (the marker that goes last) is already on disk.
   const python = join(home, "venv", "bin", "python");
   const guarded = readFileSync(python, "utf8").replace('if [ "$1" = "-c" ]; then\n',
-    `if [ "$1" = "-c" ]; then\n  [ -f "$HERMES_HOME/scripts/${ZZZ_JOB_SCRIPT}" ] || exit 7\n`);
+    `if [ "$1" = "-c" ]; then\n  [ -f "$HERMES_HOME/scripts/${ZZZ_JOB_SCRIPT}" ] || exit 7\n  printf 'called\\n' >> "$HERMES_HOME/guarded-job-api-calls"\n`);
   expect(guarded).toContain("|| exit 7");
   writeFileSync(python, guarded);
   expect(stage(projection).status).toBe(0);
   expect(jobs()).toHaveLength(1);
-  // The installer replaces an overbroad record (remove + create) through the same API.
-  writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs: [{ ...jobs()[0], enabled_toolsets: ["all"] }] }));
+  // A supported stale prompt is repaired in place; the guarded job API must actually run.
+  const id = jobs()[0].id, prompt = jobs()[0].prompt;
+  expect(readFileSync(join(home, "guarded-job-api-calls"), "utf8").trim().split("\n")).toHaveLength(1);
+  writeFileSync(join(home, "cron/jobs.json"), JSON.stringify({ jobs: [{ ...jobs()[0], prompt: "stale supported prompt" }] }));
   expect(stage(projection).status).toBe(0);
-  expect(jobs()).toHaveLength(1);
+  expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: false, prompt });
+  expect(readFileSync(join(home, "guarded-job-api-calls"), "utf8").trim().split("\n")).toHaveLength(2);
   seedState(home);
   // Revoked (and a failed stage) while Hermes is gone: the job cannot be removed, so the shim stays and so does the job.
   for (const input of [alone as unknown, "not json"]) {
@@ -900,8 +902,9 @@ test("N12 (nonav OWNER CALL, pick (a)): a resident's regular file at an installe
   }, INSTALLER_MARKERS);
 }, 20000);
 
-test("N12: an installer-written file (shipped sha) still marks a once-on box: each marker alone tears the job down, rc 0, verify 0", () => {
-  for (const keep of MARKER_PATHS) {
+// Independent marker controls each retain the default five-second test budget.
+for (const keep of MARKER_PATHS) {
+  test(`N12: an installer-written file (shipped sha) still marks a once-on box: ${keep} alone tears the job down, rc 0, verify 0`, () => {
     const { home, stage, jobs } = fakeBox();
     expect(stage(projection).status).toBe(0);
     expect(jobs()).toHaveLength(1);
@@ -920,8 +923,8 @@ test("N12: an installer-written file (shipped sha) still marks a once-on box: ea
     expect(zzzMarkerOnDisk(home)).toBe(false);
     const after = spiedStage(home, alone, ["--verify"]);
     expect(`${keep} verify: ${after.status} ${after.spawns}`).toBe(`${keep} verify: 0 `);
-  }
-});
+  });
+}
 
 for (const replaced of MARKER_PATHS) test(`N12: a once-on box's teardown preserves a resident's object at ${replaced}`, () => {
   const replacements: [string, (path: string, elsewhere: string, original: Buffer) => void][] = [
@@ -1089,4 +1092,24 @@ test("documented residual (review-b S4-r (b), N12): a job with NO genuine marker
   expect(spiedStage(home, projection).status).toBe(0);
   expect(jobs()).toHaveLength(1);
   expect(zzzMarkerOnDisk(home)).toBe(true);
+});
+
+test("post-village fresh stage stays paused and permitted reinstall preserves the existing state", () => {
+  const { home, stage, jobs } = fakeBox();
+  mkdirSync(join(home, "av-events"));
+  const registry = join(home, "av-events/installed_jobs.json");
+  writeFileSync(registry, JSON.stringify({ ids: ["cccccccccccc"] }));
+  expect(stage(projection).status).toBe(0);
+  expect(jobs()).toHaveLength(1); expect(jobs()[0].enabled).toBe(false);
+  const id = jobs()[0].id;
+  expect(JSON.parse(readFileSync(registry, "utf8"))).toEqual({ ids: [id, "cccccccccccc"].sort(), zzzJobId: id });
+  // A valid current operator allow preserves this existing paused job; it never auto-resumes.
+  writeFileSync(join(home, "av-events/post-village-policy.json"), '{"version":1,"enabled":["zzz_pairs"]}');
+  expect(stage(projection).status).toBe(0); expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: false });
+  // A deliberately pre-existing enabled state is preserved only with this explicit current allow.
+  writeFileSync(join(home, "cron/jobs.json"), JSON.stringify({ jobs: [{ ...jobs()[0], enabled: true, state: "scheduled", paused_at: null }] }));
+  expect(stage(projection).status).toBe(0); expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: true });
+  rmSync(join(home, "av-events/post-village-policy.json"));
+  expect(stage(projection).status).toBe(0); expect(jobs()).toHaveLength(1); expect(jobs()[0]).toMatchObject({ id, enabled: false });
+  expect(JSON.parse(readFileSync(registry, "utf8")).zzzJobId).toBe(id);
 });

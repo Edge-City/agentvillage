@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { postVillageRunnableGatesVerified } from "./post_village_audit";
+import { postVillageRuntimeAllowed as postVillageAllowed, postVillageKeyForAction } from "../skills/index-network/scripts/post-village-policy";
 /**
  * Per-tenant job commands (J2, overlay half): what the control plane runs
  * inside one tenant to change that tenant's proactive jobs without a roll.
@@ -691,9 +693,27 @@ function fleetDefaultCron(home: string, key: JobKey): ParsedCron {
 
 function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): CommandResult {
   const { key, window, tz } = req;
+  const policyKey = postVillageKeyForAction(key);
+  if (req.enabled === true && policyKey && !postVillageAllowed(ctx.home, policyKey)) return refused("post-village-disabled");
   const job = theJob(ctx.home, key);
   if (isResult(job)) return job;
+  // Hermes acts by ID alone; fresh proof must see exactly one raw row for that ID.
+  const freshEnableJob = (): Record<string, unknown> | undefined => {
+    const store = readJobsStore(ctx.home);
+    if ("unreadable" in store) return;
+    const matches = store.jobs.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry) && (entry as Record<string, unknown>).id === job.id);
+    if (matches.length !== 1 || matches[0]!.name !== specForKey(key).name) return;
+    return matches[0];
+  };
+  const enableVerified = (): boolean => {
+    if (req.enabled !== true || !policyKey) return true;
+    const latest = freshEnableJob();
+    return latest !== undefined && postVillageAllowed(ctx.home, policyKey) && postVillageRunnableGatesVerified(ctx.home, policyKey, latest, new Date());
+  };
+  if (!enableVerified()) return refused("post-village-gates-unverified");
   if (!ctx.hermesReady()) return failed("hermes-unavailable", { applied: [] });
+  // Recheck after readiness before schedule/settings/hold mutation.
+  if (!enableVerified()) return failed("post-village-gates-unverified", { applied: [] });
 
   const cron = req.cron ?? (req.scheduleDefault ? fleetDefaultCron(ctx.home, key) : undefined);
   const current = currentSettings(ctx.home);
@@ -740,8 +760,11 @@ function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): Co
   // 3. Enabled is Hermes's pause state, the only place it is kept.
   let enabled = storedJobEnabled(job);
   const resume: Record<string, unknown> = {};
+  if (req.enabled === true && policyKey && !postVillageAllowed(ctx.home, policyKey)) return failed("post-village-disabled", { applied: [...applied] });
+  if (!enableVerified()) return failed("post-village-gates-unverified", { applied: [...applied] });
   if (req.enabled !== undefined && req.enabled !== enabled) {
-    const latest = rereadJob(ctx.home, key, job.id) ?? job;
+    const latest = req.enabled === true && policyKey ? freshEnableJob() : rereadJob(ctx.home, key, job.id) ?? job;
+    if (!latest) return failed("post-village-gates-unverified", { applied: [...applied] });
     const missed = req.enabled && missedSlot(latest, new Date());
     try {
       ctx.hermes(["cron", req.enabled ? "resume" : "pause", job.id]);
@@ -877,6 +900,7 @@ function addCommand(ctx: GuardedContext, req: AddRequest, applied: string[]): Co
       if (!created) return failed("job-not-found-after-create", { applied: [...applied, "create"] });
       applied.push("create");
       id = created.id;
+      if (postVillageKeyForAction(key) && storedJobEnabled(created)) return failed("post-village-paused-readback-mismatch", { applied: [...applied] });
       if (rawSchedule(created) !== cron.expr) return failed("schedule-readback-mismatch", { applied: [...applied] });
       writeIds(ctx, [...readInstalledIds(ctx.home), id]);
       result = "created";
@@ -1002,6 +1026,8 @@ function validatePreview(ctx: JobsContext, flags: Map<string, string>): JobKey |
 }
 
 function previewCommand(ctx: GuardedContext, key: JobKey, applied: string[]): CommandResult {
+  const policyKey = postVillageKeyForAction(key);
+  if (policyKey && !postVillageAllowed(ctx.home, policyKey)) return refused("post-village-disabled");
   // Leftovers of earlier previews older than an hour (file times, so the real clock): state copies and shims. Earlier preview jobs go below.
   ctx.guard(0);
   prunePreviewFiles(ctx.home, Date.now());

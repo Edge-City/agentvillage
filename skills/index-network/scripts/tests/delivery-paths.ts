@@ -1,3 +1,4 @@
+import { allowPostVillageFixture } from "./post-village-fixtures";
 /**
  * Shared harness for the card-cooldown tests: runs each delivery path end to
  * end against the Index fake (never the network) on a temp state file, and
@@ -12,7 +13,7 @@
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
 import { buildDailyBriefContext, type DailyBriefContext } from "../build-daily-brief-context";
@@ -59,17 +60,22 @@ export const failing: ToolHandler = () => ({ result: { content: [{ type: "text",
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalArgv = process.argv;
+const originalHermesHome = process.env.HERMES_HOME;
 
 /** Call from afterEach. */
 export function cleanUp(): void {
   globalThis.fetch = originalFetch;
   process.argv = originalArgv;
+  if (originalHermesHome === undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME = originalHermesHome;
   while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
 }
 
 export function newStateFile(state?: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "delivery-cooldown-"));
   dirs.push(dir);
+  process.env.HERMES_HOME = dir;
+  // This integration harness explicitly exercises these four delivery paths, never ZZZ or welcome seeding.
+  allowPostVillageFixture(dir, "daily_digest", "opportunity_midday", "opportunity_evening", "negotiation_summary");
   const file = join(dir, "state.json");
   if (state) writeFileSync(file, JSON.stringify(state, null, 2));
   return file;
@@ -129,6 +135,7 @@ export function briefIds(context: DailyBriefContext): string[] {
 }
 
 export async function prepare(date: string, file: string, handler: ToolHandler): Promise<DailyBriefContext> {
+  process.env.HERMES_HOME = dirname(file);
   return withIndex(handler, () => buildDailyBriefContext({ date, stateFile: file, userFiles: [] }));
 }
 
@@ -138,6 +145,7 @@ export async function prepareIds(date: string, file: string, handler: ToolHandle
 }
 
 export async function briefAndSend(date: string, file: string, handler: ToolHandler): Promise<string[]> {
+  process.env.HERMES_HOME = dirname(file);
   const context = await prepare(date, file, handler);
   const ids = briefIds(context);
   const state = readState(file);
@@ -158,16 +166,19 @@ export async function briefAndSend(date: string, file: string, handler: ToolHand
 }
 
 export async function drop(date: string, file: string, handler: ToolHandler): Promise<string[]> {
+  process.env.HERMES_HOME = dirname(file);
   const result = await withIndex(handler, () => dropOpportunity({ date, stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL }));
   return "silent" in result ? [] : [result.opportunity.opportunityId ?? ""];
 }
 
 export async function evening(date: string, file: string, handler: ToolHandler): Promise<string[]> {
+  process.env.HERMES_HOME = dirname(file);
   const result = await withIndex(handler, () => askQuestions({ date, stateFile: file, apiKey: "test-key" }));
   return "name" in result ? [idFromUrl(result.opportunityUrl)] : [];
 }
 
 export async function followUpRaw(date: string, file: string, handler: ToolHandler): Promise<string> {
+  process.env.HERMES_HOME = dirname(file);
   process.argv = [...originalArgv.slice(0, 2), "--state-file", file, "--date", date];
   let out = "";
   const write = { out: process.stdout.write, err: process.stderr.write };
@@ -182,6 +193,7 @@ export async function followUpRaw(date: string, file: string, handler: ToolHandl
     process.stdout.write = write.out;
     process.stderr.write = write.err;
     process.argv = originalArgv;
+  if (originalHermesHome === undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME = originalHermesHome;
   }
   return out;
 }

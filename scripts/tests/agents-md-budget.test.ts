@@ -98,12 +98,14 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(agents).toContain("URL preservation rules in `skills/index-network/tools.md`.");
   });
 
-  test("the knowledge/ paragraph and the welcome gate's seeded-intents sentence stay in AGENTS.md", () => {
+  test("the knowledge/ paragraph and post-village welcome restriction stay in AGENTS.md", () => {
     expect(agents).toContain("- `knowledge/` holds what services wrote for you, one directory per provider");
     expect(agents).toContain("Never write under `knowledge/`;");
     expect(agents).toContain(
-      "The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box)",
+      "First-welcome automatic seeding is paused by the post-village operator setting.",
     );
+    expect(agents).toContain("Historical signup answers do not prove a current want.");
+    expect(agents).toContain("Never re-enable automatic seeding as part of the welcome.");
     expect(agents).toContain("### Welcome gate");
     expect(agents).toContain("**`edge-india`**");
   });
