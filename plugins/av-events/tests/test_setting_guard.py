@@ -117,7 +117,7 @@ REFUSED = {
                                   f"bun install/post_village_policy.ts set --home {HOME} --job zzz_pairs --enabled true"),
     "operator_imported": t("bun -e 'import(\"./install/post_village_policy.ts\").then(m => "
                            f"m.setPostVillageOptIn(\"{HOME}\", \"zzz_event_autonomy\", true))'"),
-    "operator_status_with_redirect": t(f"bun install/post_village_policy.ts status --home {HOME} > /tmp/out"),
+    "operator_status_redirect_into_folder": t(f"bun install/post_village_policy.ts status --home {HOME} > {HOME}/av-events/s.json"),
     # Opaque forms this guard catches.
     "opaque_eval": t(f"eval \"echo '{ALLOW_ALL}' > $HERMES_HOME/av-events/$NAME\""),
     "opaque_command_substitution": t(f"echo '{ALLOW_ALL}' > $HERMES_HOME/av-events/$(printf '%s-%s' post-village policy.json)"),
@@ -160,6 +160,7 @@ REFUSED = {
     "bare_glob_removes_folder_with_workdir_home": t("rm -rf *", workdir=HOME),
     "find_recurses_from_above_the_home": t("find /opt -name 'post-village-*' -delete"),
     "find_recurses_relative": t("find . -name 'post-village-polic*' -exec rm {} +"),
+    "find_generic_from_the_home": t("find $HERMES_HOME -name '*.json' -delete"),
     "redirect_copy_into_folder": t(f"cat {SETTING} > {HOME}/av-events/copy.json"),
     "redirect_relative_after_cd_into_folder": t(f"cd {HOME}/av-events && cat post-village-policy.json > copy.json"),
     "redirect_glob_target": t(f"cat {SETTING} > /tmp/*.json"),
@@ -215,8 +216,11 @@ ALLOWED = {
     "bare_cp_star_other_workdir": t("cp * /tmp/x", workdir="/tmp/work"),
     "bare_mv_txt_other_workdir": t("mv *.txt archive/", workdir="/tmp/work"),
     "bare_glob_into_xargs": t("echo * | xargs rm"),
+    "find_generic_unplaced": t("find . -name '*.json' -delete"),
+    "find_generic_elsewhere": t("find /tmp/work -name '*.json' -delete"),
     "cd_elsewhere_then_bare_glob": t(f"cd {HOME}/av-events && cd /tmp/work && rm *.json"),
     "copy_out_through_redirect": t(f"cat {SETTING} > /tmp/copy.json"),
+    "operator_status_with_redirect": t(f"bun install/post_village_policy.ts status --home {HOME} > /tmp/out"),
     "copy_out_append_home": t(f"jq . {SETTING} >> $HERMES_HOME/notes/policy-copy.txt"),
     "execute_code_reads_other_av_events_file": ("execute_code", {"code": "import json, os\nprint(json.load(open("
                                                  "os.environ['HERMES_HOME'] + '/av-events/job-holds.json')))"}),
