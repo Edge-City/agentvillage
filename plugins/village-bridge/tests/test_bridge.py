@@ -1950,6 +1950,19 @@ class BridgeTest(unittest.TestCase):
    self.transport.assert_not_called()
    self.assertIn('data',self.call(self.SCHEDULE_STOP))
    self.assertEqual(self.transport.call_args.args[1],{'operation':'zzz.schedule_posts','every_minutes':None})
+ def test_owner_stop_works_under_every_post_village_setting(self):
+  # S2 (review-b on ov#632): whatever the operator allows, the owner can always stop a stored schedule.
+  self.zzz_home()
+  policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
+  for enabled in (None,[],["zzz_event_autonomy"],["zzz_owner_repeating"],["zzz_event_autonomy","zzz_owner_repeating"]):
+   with self.subTest(enabled=enabled):
+    if enabled is None:policy.unlink(missing_ok=True)
+    else:policy.write_text(json.dumps({"version":1,"enabled":enabled}))
+    self.transport.reset_mock()
+    with self.gate():
+     self.assertIn('data',self.call(self.SCHEDULE_STOP))
+    self.assertEqual(self.transport.call_count,1)
+    self.assertEqual(self.transport.call_args.args[1],{'operation':'zzz.schedule_posts','every_minutes':None})
  def test_post_village_repeat_revocation_before_write_is_rechecked(self):
   self.zzz_home()
   policy=Path(self.tmp.name,"av-events/post-village-policy.json");policy.parent.mkdir(exist_ok=True)
